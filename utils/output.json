@@ -1,0 +1,902 @@
+[
+  {
+    "name": "Char.lean",
+    "path": "Mathlib/Data/Char.lean",
+    "repo": "leanprover-community/mathlib4",
+    "url": "https://api.github.com/repositories/365697493/contents/Mathlib/Data/Char.lean?ref=d16c7456432653fa32834b120aeede3e81e37f0b",
+    "html_url": "https://github.com/leanprover-community/mathlib4/blob/d16c7456432653fa32834b120aeede3e81e37f0b/Mathlib/Data/Char.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib.Data.Nat.Basic\npublic import Mathlib.Order.Defs.LinearOrder\n\n/-!\n# More `Char` instances"
+  },
+  {
+    "name": "Init.lean",
+    "path": "Cslib/Init.lean",
+    "repo": "leanprover/cslib",
+    "url": "https://api.github.com/repositories/1003510928/contents/Cslib/Init.lean?ref=f0d87b6e107dddfe4959dcd2f44ba985e3f1c0d2",
+    "html_url": "https://github.com/leanprover/cslib/blob/f0d87b6e107dddfe4959dcd2f44ba985e3f1c0d2/Cslib/Init.lean",
+    "score": 1.0,
+    "snippet": "\npublic import Cslib.Foundations.Lint.Basic\npublic import Mathlib.Init\npublic import Mathlib.Tactic.Common\n\n/-!\n# CSLib Initialization"
+  },
+  {
+    "name": "Qq.lean",
+    "path": "Foundation/Meta/Qq.lean",
+    "repo": "FormalizedFormalLogic/Foundation",
+    "url": "https://api.github.com/repositories/600521950/contents/Foundation/Meta/Qq.lean?ref=7013d6cdb2715ed75a42be516643ee5928eb607f",
+    "html_url": "https://github.com/FormalizedFormalLogic/Foundation/blob/7013d6cdb2715ed75a42be516643ee5928eb607f/Foundation/Meta/Qq.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib.Tactic.NormNum\n\n@[expose]\npublic meta section\n"
+  },
+  {
+    "name": "Counting.lean",
+    "path": "equational_theories/Counting.lean",
+    "repo": "teorth/equational_theories",
+    "url": "https://api.github.com/repositories/863611788/contents/equational_theories/Counting.lean?ref=c407f9066996c9f0fde31c0aa3b4925282b794ff",
+    "html_url": "https://github.com/teorth/equational_theories/blob/c407f9066996c9f0fde31c0aa3b4925282b794ff/equational_theories/Counting.lean",
+    "score": 1.0,
+    "snippet": "Released under Apache 2.0 license as described in the file LICENSE.\n-/\nimport equational_theories.FreeMagma\nimport Mathlib.Combinatorics.Enumerative.Catalan\n\nvariable {X : Type*}\n"
+  },
+  {
+    "name": "Defs.lean",
+    "path": "Ray/Analytic/Defs.lean",
+    "repo": "girving/ray",
+    "url": "https://api.github.com/repositories/518988838/contents/Ray/Analytic/Defs.lean?ref=0ca7b1e746b2911557ac76f56259068cfd1423ab",
+    "html_url": "https://github.com/girving/ray/blob/0ca7b1e746b2911557ac76f56259068cfd1423ab/Ray/Analytic/Defs.lean",
+    "score": 1.0,
+    "snippet": "module\npublic import Mathlib.Analysis.Analytic.Basic\npublic import Mathlib.Analysis.Calculus.DSlope\npublic import Mathlib.Analysis.Complex.Basic\n\n/-!\n## Analytic definitions, allowing minimal public imports"
+  },
+  {
+    "name": "Set.lean",
+    "path": "Groebner/ToMathlib/Set.lean",
+    "repo": "WuProver/groebner_proj",
+    "url": "https://api.github.com/repositories/966681402/contents/Groebner/ToMathlib/Set.lean?ref=5dd1aab650673ad8b2e757887c06d9317d7e9e23",
+    "html_url": "https://github.com/WuProver/groebner_proj/blob/5dd1aab650673ad8b2e757887c06d9317d7e9e23/Groebner/ToMathlib/Set.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib\n\npublic lemma Set.leftInverse_rangeFactorization {\u03b1 : Type*} {\u03b2 : Type*} (f : \u03b1 \u2192 \u03b2) :\n    Function.LeftInverse (Set.rangeSplitting f) (Set.rangeFactorization f) \u2194 f.Injective := by\n  constructor"
+  },
+  {
+    "name": "tag01HS.lean",
+    "path": "src/tag01HS.lean",
+    "repo": "kbuzzard/lean-stacks-project",
+    "url": "https://api.github.com/repositories/121941278/contents/src/tag01HS.lean?ref=b57be17aa917f1c3a23c59db5ee37b1aa21112c2",
+    "html_url": "https://github.com/kbuzzard/lean-stacks-project/blob/b57be17aa917f1c3a23c59db5ee37b1aa21112c2/src/tag01HS.lean",
+    "score": 1.0,
+    "snippet": "import tag00E4\nimport tag00E8 -- Spec(R) is compact\nimport Kenny_comm_alg.avoid_powers algebra.module\nimport mathlib_someday.topology\n\nuniverses u v\n"
+  },
+  {
+    "name": "Polynomial.lean",
+    "path": "PR'ed files/Polynomial.lean",
+    "repo": "mariainesdff/LocalClassFieldTheory",
+    "url": "https://api.github.com/repositories/703680841/contents/PR'ed%20files/Polynomial.lean?ref=9ebdafa0b464df096037c10a2597c40f7e046602",
+    "html_url": "https://github.com/mariainesdff/LocalClassFieldTheory/blob/9ebdafa0b464df096037c10a2597c40f7e046602/PR'ed%20files/Polynomial.lean",
+    "score": 1.0,
+    "snippet": "-- Authors: Mar\u00eda In\u00e9s de Frutos-Fern\u00e1ndez, Filippo A. E. Nuccio\n-- -/\n-- import Mathlib.FieldTheory.RatFunc.AsPolynomial\n-- import Mathlib.RingTheory.DedekindDomain.AdicValuation\n\n-- #align_import for_mathlib.polynomial\n"
+  },
+  {
+    "name": "Playground.lean",
+    "path": "Game/Playground.lean",
+    "repo": "chenjulang/Robo_Hidden",
+    "url": "https://api.github.com/repositories/823601117/contents/Game/Playground.lean?ref=91846adb96399826368f6417d6cda15d5caa7fdc",
+    "html_url": "https://github.com/chenjulang/Robo_Hidden/blob/91846adb96399826368f6417d6cda15d5caa7fdc/Game/Playground.lean",
+    "score": 1.0,
+    "snippet": "-- import Mathlib.Data.Set.Basic\n-- import Mathlib\n\n-- open Function Set\n\n-- example {A B : Type _ } (f : A \u2192 B) : f.Injective \u2194 \u2203 g : B \u2192 A, g \u2218 f = id := by\n--   constructor"
+  },
+  {
+    "name": "FinFold.lean",
+    "path": "Nfp/Linear/FinFold.lean",
+    "repo": "TheDarkchip/nfp",
+    "url": "https://api.github.com/repositories/1116487090/contents/Nfp/Linear/FinFold.lean?ref=3576f788ea2da7fe9d70c2a38ecdb762efaf541f",
+    "html_url": "https://github.com/TheDarkchip/nfp/blob/3576f788ea2da7fe9d70c2a38ecdb762efaf541f/Nfp/Linear/FinFold.lean",
+    "score": 1.0,
+    "snippet": "\nmodule\n\npublic import Mathlib.Algebra.BigOperators.Fin\npublic import Mathlib.Data.Matrix.Mul\npublic import Mathlib.Data.Rat.BigOperators\npublic import Batteries.Data.Fin.Fold"
+  },
+  {
+    "name": "GCD.lean",
+    "path": "Mathlib/Data/Int/GCD.lean",
+    "repo": "mkaratarakis/mathlibtest",
+    "url": "https://api.github.com/repositories/665887257/contents/Mathlib/Data/Int/GCD.lean?ref=16e4c581cfb39015d900072f2fd3b9bd3dea4c1c",
+    "html_url": "https://github.com/mkaratarakis/mathlibtest/blob/16e4c581cfb39015d900072f2fd3b9bd3dea4c1c/Mathlib/Data/Int/GCD.lean",
+    "score": 1.0,
+    "snippet": "-/\nmodule\n\npublic import Mathlib.Algebra.GroupWithZero.Semiconj\npublic import Mathlib.Algebra.Group.Commute.Units\npublic import Mathlib.Data.Set.Operations\npublic import Mathlib.Order.Basic"
+  },
+  {
+    "name": "Common.lean",
+    "path": "Mathlib/Tactic/Common.lean",
+    "repo": "JLimperg/aesop-script-evaluation",
+    "url": "https://api.github.com/repositories/857347114/contents/Mathlib/Tactic/Common.lean?ref=7d23d378e4f8f89ea64e6d6a365f1d3e7d2774f6",
+    "html_url": "https://github.com/JLimperg/aesop-script-evaluation/blob/7d23d378e4f8f89ea64e6d6a365f1d3e7d2774f6/Mathlib/Tactic/Common.lean",
+    "score": 1.0,
+    "snippet": "-- Now import all tactics defined in Mathlib that do not require theory files.\nimport Mathlib.Tactic.ApplyCongr\n-- ApplyFun imports `Mathlib.Order.Monotone.Basic`\n---\n-- import Mathlib.Tactic.Positivity\nimport Mathlib.Tactic.ProjectionNotation\nimport Mathlib.Tactic.Propose"
+  },
+  {
+    "name": "finsum_ncard.lean",
+    "path": "src/mathlib/finsum_ncard.lean",
+    "repo": "apnelson1/lean-matroids",
+    "url": "https://api.github.com/repositories/296408289/contents/src/mathlib/finsum_ncard.lean?ref=b70b75341d278dbea19339f7883dc1889caa2806",
+    "html_url": "https://github.com/apnelson1/lean-matroids/blob/b70b75341d278dbea19339f7883dc1889caa2806/src/mathlib/finsum_ncard.lean",
+    "score": 1.0,
+    "snippet": "\nimport algebra.big_operators.finprod\nimport mathlib.data.set.basic\nimport mathlib.data.set.sigma\nimport data.set.ncard\nimport data.setoid.partition \n"
+  },
+  {
+    "name": "SpectralTheorem.lean",
+    "path": "SpectralThm/SpectralTheorem.lean",
+    "repo": "oliver-butterley/SpectralThm",
+    "url": "https://api.github.com/repositories/932683701/contents/SpectralThm/SpectralTheorem.lean?ref=75aa3fd4e77dc686d08219b56d3b9a227afe6c92",
+    "html_url": "https://github.com/oliver-butterley/SpectralThm/blob/75aa3fd4e77dc686d08219b56d3b9a227afe6c92/SpectralThm/SpectralTheorem.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib\npublic import SpectralThm.RieszMarkovKakutani.Complex\npublic import SpectralThm.Resolutions\n-- public import SpectralThm.WStarAlgebra.BorelFunctionalCalculus\n"
+  },
+  {
+    "name": "Lt.lean",
+    "path": "Lemma/Real/LtCoeS/is/Lt.lean",
+    "repo": "math-proof/lemma",
+    "url": "https://api.github.com/repositories/1068554855/contents/Lemma/Real/LtCoeS/is/Lt.lean?ref=7efc0cc5e78ba8be8de64e8d0e3bf88cc2278d4b",
+    "html_url": "https://github.com/math-proof/lemma/blob/7efc0cc5e78ba8be8de64e8d0e3bf88cc2278d4b/Lemma/Real/LtCoeS/is/Lt.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Analysis.Real.Hyperreal\nimport sympy.Basic\n\n\n/--\n| attributes | lemma |\n| :---: | :---: |"
+  },
+  {
+    "name": "Basic.lean",
+    "path": "Pdfproof/Basic.lean",
+    "repo": "kashiwabarakenji/pdfproof",
+    "url": "https://api.github.com/repositories/873831197/contents/Pdfproof/Basic.lean?ref=6d97efd05562c697d125889ba552b6ff1b6f199c",
+    "html_url": "https://github.com/kashiwabarakenji/pdfproof/blob/6d97efd05562c697d125889ba552b6ff1b6f199c/Pdfproof/Basic.lean",
+    "score": 1.0,
+    "snippet": "--import Mathlib.Order.Basic\n--import Mathlib.Order.Defs\n\ndef hello := \"world\""
+  },
+  {
+    "name": "hw5_4.lean",
+    "path": "Homework5/hw5_4.lean",
+    "repo": "mohan57/CS511-MohanThota",
+    "url": "https://api.github.com/repositories/691250378/contents/Homework5/hw5_4.lean?ref=07075aa0ecea1abbe168542a9c0703ac7964660e",
+    "html_url": "https://github.com/mohan57/CS511-MohanThota/blob/07075aa0ecea1abbe168542a9c0703ac7964660e/Homework5/hw5_4.lean",
+    "score": 1.0,
+    "snippet": "  import Mathlib.Data.Real.Basic\n  import Mathlib.Tactic.IntervalCases\n  import Library.Theory.Comparison\n  import Library.Theory.Parity\n  import Library.Theory.Prime\n  import Library.Tactic.ModCases\n  import Library.Tactic.Extra"
+  },
+  {
+    "name": "definitions.lean",
+    "path": "CatalanNumbers/definitions.lean",
+    "repo": "timkalan/catalan-numbers",
+    "url": "https://api.github.com/repositories/788986954/contents/CatalanNumbers/definitions.lean?ref=b530e6e65a47aefed83a9fa45546a2fe80c27fe9",
+    "html_url": "https://github.com/timkalan/catalan-numbers/blob/b530e6e65a47aefed83a9fa45546a2fe80c27fe9/CatalanNumbers/definitions.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n\n-- SMALL TASKS\n\n-- 1. Catalan number definition\ndef catalan_number : \u2115 \u2192 \u2115\n| 0 => 1"
+  },
+  {
+    "name": "CoreM.lean",
+    "path": "Mathlib/Lean/CoreM.lean",
+    "repo": "leanprover-community/mathlib4",
+    "url": "https://api.github.com/repositories/365697493/contents/Mathlib/Lean/CoreM.lean?ref=d16c7456432653fa32834b120aeede3e81e37f0b",
+    "html_url": "https://github.com/leanprover-community/mathlib4/blob/d16c7456432653fa32834b120aeede3e81e37f0b/Mathlib/Lean/CoreM.lean",
+    "score": 1.0,
+    "snippet": "-/\nmodule\n\npublic import Mathlib.Init\n\n/-!\n# Additional functions using `CoreM` state."
+  },
+  {
+    "name": "nkat_z3_transpile.lean",
+    "path": "lean_nkat/nkat_z3_transpile.lean",
+    "repo": "zapabob/NKAT-Ultimate-Unification",
+    "url": "https://api.github.com/repositories/989016470/contents/lean_nkat/nkat_z3_transpile.lean?ref=71c6bc5b32afa2c10b9b27e5b48c3011240b0131",
+    "html_url": "https://github.com/zapabob/NKAT-Ultimate-Unification/blob/71c6bc5b32afa2c10b9b27e5b48c3011240b0131/lean_nkat/nkat_z3_transpile.lean",
+    "score": 1.0,
+    "snippet": "--! Lean4 v4.7.0\n\nimport Mathlib.Algebra.Ring.Basic\nimport Mathlib.Data.Complex.Basic\nimport Mathlib.LinearAlgebra.Matrix.Basic\nimport Mathlib.Tactic.Basic\nimport Mathlib.Tactic.FinCases"
+  },
+  {
+    "name": "run.lean",
+    "path": "sympy/printing/run.lean",
+    "repo": "meta-program/lemma",
+    "url": "https://api.github.com/repositories/603648668/contents/sympy/printing/run.lean?ref=b299030207cb0073d5a9dd263a08e5a3817a5e72",
+    "html_url": "https://github.com/meta-program/lemma/blob/b299030207cb0073d5a9dd263a08e5a3817a5e72/sympy/printing/run.lean",
+    "score": 1.0,
+    "snippet": "-- lake env lean sympy/printing/run.lean\nimport sympy.printing.json\nimport sympy.io\nimport Mathlib\n\n#eval do\n  let name := `Matrix.mul_apply"
+  },
+  {
+    "name": "bezout.lean",
+    "path": "lean/bezout.lean",
+    "repo": "Echoscd/Document",
+    "url": "https://api.github.com/repositories/833100477/contents/lean/bezout.lean?ref=41da54e3da33b75c7cce09fde234e234f89128b3",
+    "html_url": "https://github.com/Echoscd/Document/blob/41da54e3da33b75c7cce09fde234e234f89128b3/lean/bezout.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n#check Nat.gcd_zero_right\ntheorem bezout_theorem_of_one (n: \u2115 ) : \u2200 a b : \u2115 , a + b = n  \u2192 gcd a b = 1 \u2192  \u2203 x y : \u2124 , a * x + b * y = 1 := by\n  induction' n using Nat.strong_induction_on with n hn\n  intro a b habn coprime\n  by_cases hab : a > b\n  \u00b7 by_cases zerob : b = 0"
+  },
+  {
+    "name": "EqDivSDiv.lean",
+    "path": "Lemma/Tensor/EqDivSDiv.lean",
+    "repo": "meta-program/lemma",
+    "url": "https://api.github.com/repositories/603648668/contents/Lemma/Tensor/EqDivSDiv.lean?ref=b299030207cb0073d5a9dd263a08e5a3817a5e72",
+    "html_url": "https://github.com/meta-program/lemma/blob/b299030207cb0073d5a9dd263a08e5a3817a5e72/Lemma/Tensor/EqDivSDiv.lean",
+    "score": 1.0,
+    "snippet": "import sympy.tensor.Basic\nimport Mathlib.Data.Vector.MapLemmas\nimport Lemma.Algebra.EqDivSDiv\nopen Algebra\n\n\n@[main]"
+  },
+  {
+    "name": "PNat.lean",
+    "path": "OrderedSemigroups/PNat.lean",
+    "repo": "ericluap/OrderedSemigroups",
+    "url": "https://api.github.com/repositories/835559369/contents/OrderedSemigroups/PNat.lean?ref=d63c01ebf25eb0918dd2967629eadb49fce17fe8",
+    "html_url": "https://github.com/ericluap/OrderedSemigroups/blob/d63c01ebf25eb0918dd2967629eadb49fce17fe8/OrderedSemigroups/PNat.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib.Data.PNat.Basic\n\n/-!\n# Positive Naturals\n"
+  },
+  {
+    "name": "PS-deriv-subst.lean",
+    "path": "PS-deriv-subst.lean",
+    "repo": "rwst/lean-code",
+    "url": "https://api.github.com/repositories/792374572/contents/PS-deriv-subst.lean?ref=ab9298a87aef462e2ffdac968e594ce7e30afc91",
+    "html_url": "https://github.com/rwst/lean-code/blob/ab9298a87aef462e2ffdac968e594ce7e30afc91/PS-deriv-subst.lean",
+    "score": 1.0,
+    "snippet": "-/\nmodule\n\npublic import Mathlib.RingTheory.PowerSeries.Exp\npublic import Mathlib.RingTheory.PowerSeries.Derivative\npublic import Mathlib.RingTheory.PowerSeries.Substitution\npublic import Mathlib.Algebra.Polynomial.Derivation"
+  },
+  {
+    "name": "Predefs.lean",
+    "path": "Predefs.lean",
+    "repo": "KonjacSource/NumGR",
+    "url": "https://api.github.com/repositories/731575046/contents/Predefs.lean?ref=2c8926f4042d1f120a0288d39ef035b3d790915f",
+    "html_url": "https://github.com/KonjacSource/NumGR/blob/2c8926f4042d1f120a0288d39ef035b3d790915f/Predefs.lean",
+    "score": 1.0,
+    "snippet": "-- import Mathlib\n\nclass Zero (\u03b1 : Type u) where\n  zero : \u03b1\n\ninstance [Zero \u03b1] : OfNat \u03b1 0 where\n  ofNat := Zero.zero"
+  },
+  {
+    "name": "Vector.lean",
+    "path": "Discretion/Utils/Vector.lean",
+    "repo": "imbrem/discretion",
+    "url": "https://api.github.com/repositories/791417180/contents/Discretion/Utils/Vector.lean?ref=624b878a0e2a30c2bd01455f5db1e6e616c38a32",
+    "html_url": "https://github.com/imbrem/discretion/blob/624b878a0e2a30c2bd01455f5db1e6e616c38a32/Discretion/Utils/Vector.lean",
+    "score": 1.0,
+    "snippet": "-- import Mathlib.Data.Vector.Basic\n-- import Mathlib.Data.Vector.Zip\n-- import Mathlib.Order.Hom.Basic\n\n-- namespace Mathlib.Vector\n\n-- theorem get_ofFn' (f : Fin n \u2192 \u03b1) : (ofFn f).get = f := funext (get_ofFn f)"
+  },
+  {
+    "name": "Schreier.lean",
+    "path": "Gromov/Definitions/Schreier.lean",
+    "repo": "e-vergo/Gromov",
+    "url": "https://api.github.com/repositories/1120597460/contents/Gromov/Definitions/Schreier.lean?ref=081647e29698b723a34ddec5c305d772e5488764",
+    "html_url": "https://github.com/e-vergo/Gromov/blob/081647e29698b723a34ddec5c305d772e5488764/Gromov/Definitions/Schreier.lean",
+    "score": 1.0,
+    "snippet": "\nmodule\n\npublic import Mathlib.GroupTheory.Schreier\npublic import Mathlib.GroupTheory.Coset.Basic\npublic import Mathlib.GroupTheory.Index\npublic import Mathlib.Algebra.Group.Pointwise.Finset.Basic"
+  },
+  {
+    "name": "proof_part2.lean",
+    "path": "trainverify/proof_part2.lean",
+    "repo": "Tianshi-Xu/tainverify_lean",
+    "url": "https://api.github.com/repositories/1116542732/contents/trainverify/proof_part2.lean?ref=5eaadfbfd561423b7610fe8b43ea56fb54e17220",
+    "html_url": "https://github.com/Tianshi-Xu/tainverify_lean/blob/5eaadfbfd561423b7610fe8b43ea56fb54e17220/trainverify/proof_part2.lean",
+    "score": 1.0,
+    "snippet": "import trainverify.proof_def\nimport trainverify.proof_part1\nimport Mathlib.GroupTheory.Perm.Cycle.Basic\nimport Mathlib.GroupTheory.Perm.Cycle.Factors\nimport Mathlib.Algebra.BigOperators.Ring\nimport Mathlib.Data.Finset.Basic\nimport Mathlib.Algebra.Module.Basic"
+  },
+  {
+    "name": "Lecture7.lean",
+    "path": "Lecture7.lean",
+    "repo": "snowztail/learn-lean",
+    "url": "https://api.github.com/repositories/831446880/contents/Lecture7.lean?ref=7832c74a7e0ca47d46938d56468753e854d568f0",
+    "html_url": "https://github.com/snowztail/learn-lean/blob/7832c74a7e0ca47d46938d56468753e854d568f0/Lecture7.lean",
+    "score": 1.0,
+    "snippet": "/- We don't need to import Mathlib for this class!\nBut Lean only knows that the \u2115 character correspond to the Nat type\nif it has Mathlib, so our functions need to use Nat instead of \u2115\n---\n#eval molWeight water\n\n--import Mathlib"
+  },
+  {
+    "name": "0702.lean",
+    "path": "lean/0702.lean",
+    "repo": "Echoscd/Document",
+    "url": "https://api.github.com/repositories/833100477/contents/lean/0702.lean?ref=41da54e3da33b75c7cce09fde234e234f89128b3",
+    "html_url": "https://github.com/Echoscd/Document/blob/41da54e3da33b75c7cce09fde234e234f89128b3/lean/0702.lean",
+    "score": 1.0,
+    "snippet": "import MIL.common\nimport mathlib\nexample {G : Type*} [Group G] {g : G} (h : g ^ 2 = 1) : g = g\u207b\u00b9 := by\n  apply eq_inv_of_mul_eq_one_left\n  rw[\u2190pow_two]\n  apply h\n"
+  },
+  {
+    "name": "Lemmas.lean",
+    "path": "Bignum/Common/Basic/Lemmas.lean",
+    "repo": "atlas-computing-org/bignum",
+    "url": "https://api.github.com/repositories/1108008222/contents/Bignum/Common/Basic/Lemmas.lean?ref=f5a1c1f5793e4bf1d1627ea2833413620f76f08b",
+    "html_url": "https://github.com/atlas-computing-org/bignum/blob/f5a1c1f5793e4bf1d1627ea2833413620f76f08b/Bignum/Common/Basic/Lemmas.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Bignum.Common.Basic.Defs\npublic import Mathlib.Data.Finset.Basic\npublic import Mathlib.Data.Nat.Digits.Defs\npublic import Mathlib.Algebra.Group.Basic\n"
+  },
+  {
+    "name": "SimplexAlgorithm.lean",
+    "path": "src/SimplexAlgorithm.lean",
+    "repo": "Jun2M/Main-theorem-of-polytopes",
+    "url": "https://api.github.com/repositories/684469858/contents/src/SimplexAlgorithm.lean?ref=fb84f7409e05ca9db3a1bbfcd4d0a16001515fe8",
+    "html_url": "https://github.com/Jun2M/Main-theorem-of-polytopes/blob/fb84f7409e05ca9db3a1bbfcd4d0a16001515fe8/src/SimplexAlgorithm.lean",
+    "score": 1.0,
+    "snippet": "import src.MainTheorem\nimport Mathlib.Analysis.Convex.Cone.Proper\nimport Mathlib.LinearAlgebra.Matrix.FiniteDimensional\n\n\nstructure LinearProgram (p d : \u2115+) (R : Type*) [LinearOrderedField R]  where\n  minimize : Bool := true"
+  },
+  {
+    "name": "final.lean",
+    "path": "Cs2120f24/Exams/final.lean",
+    "repo": "kevinsullivan/cs2120f24",
+    "url": "https://api.github.com/repositories/844330626/contents/Cs2120f24/Exams/final.lean?ref=17ba9847a26e81ca4eca7b93db1b8530c7856db8",
+    "html_url": "https://github.com/kevinsullivan/cs2120f24/blob/17ba9847a26e81ca4eca7b93db1b8530c7856db8/Cs2120f24/Exams/final.lean",
+    "score": 1.0,
+    "snippet": "-- import Mathlib.Data.Set.Basic\n--import Mathlib.Logic.Relation\n-- import Mathlib.Data.Rel\n\n/-\n*************************\n#1. [30 points] Induction"
+  },
+  {
+    "name": "ProjectProposal.lean",
+    "path": "Frap/ProjectProposal.lean",
+    "repo": "andaraiwin/lean-formal-reasoning-program",
+    "url": "https://api.github.com/repositories/1021907841/contents/Frap/ProjectProposal.lean?ref=4a12da01571e50e52075d52808f76e029be0e7c9",
+    "html_url": "https://github.com/andaraiwin/lean-formal-reasoning-program/blob/4a12da01571e50e52075d52808f76e029be0e7c9/Frap/ProjectProposal.lean",
+    "score": 1.0,
+    "snippet": "-- import Mathlib\n-- #check (deriv : (real \u2192 real) \u2192 (real \u2192 real))\n\n-- namespace List\n\n-- -- Define a boolean variable as a string (variable name).\n-- def Var := String"
+  },
+  {
+    "name": "topo.lean",
+    "path": "Code/src/topo.lean",
+    "repo": "marcusrossel/bachelors-thesis",
+    "url": "https://api.github.com/repositories/306041494/contents/Code/src/topo.lean?ref=d1ec2c2b5c3c6700a506f2e3cc93f1160e44b422",
+    "html_url": "https://github.com/marcusrossel/bachelors-thesis/blob/d1ec2c2b5c3c6700a506f2e3cc93f1160e44b422/Code/src/topo.lean",
+    "score": 1.0,
+    "snippet": "import lgraph\nimport mathlib\n\nvariables {\u03b9 \u03b4 \u03b5 : Type*}\nvariables [decidable_eq \u03b9] [decidable_eq \u03b4] [lgraph.edge \u03b5 \u03b9]\n\n-- The definition of what it means for a given list to be a topological ordering for a given graph."
+  },
+  {
+    "name": "proof_part3.lean",
+    "path": "trainverify/proof_part3.lean",
+    "repo": "Tianshi-Xu/tainverify_lean",
+    "url": "https://api.github.com/repositories/1116542732/contents/trainverify/proof_part3.lean?ref=5eaadfbfd561423b7610fe8b43ea56fb54e17220",
+    "html_url": "https://github.com/Tianshi-Xu/tainverify_lean/blob/5eaadfbfd561423b7610fe8b43ea56fb54e17220/trainverify/proof_part3.lean",
+    "score": 1.0,
+    "snippet": "import trainverify.proof_def\nimport trainverify.proof_part1\nimport trainverify.proof_part2\nimport Mathlib.GroupTheory.Perm.Cycle.Basic\nimport Mathlib.GroupTheory.Perm.Cycle.Factors\nimport Mathlib.Algebra.BigOperators.Ring\nimport Mathlib.Data.Finset.Basic"
+  },
+  {
+    "name": "Reindex.lean",
+    "path": "LeanTQI/SVD/Reindex.lean",
+    "repo": "cadake/LeanTQI",
+    "url": "https://api.github.com/repositories/855643162/contents/LeanTQI/SVD/Reindex.lean?ref=31d5d60bd5a4aa4e2275a56a914042c19956d49e",
+    "html_url": "https://github.com/cadake/LeanTQI/blob/31d5d60bd5a4aa4e2275a56a914042c19956d49e/LeanTQI/SVD/Reindex.lean",
+    "score": 1.0,
+    "snippet": "-- Released under Apache 2.0 license as described in the file LICENSE.\n-- Authors: Mohanad Ahmed\n-- -/\n-- import Mathlib.Data.Matrix.Rank\n-- import Mathlib.LinearAlgebra.Matrix.PosDef\n-- import Mathlib.Data.Fin.Tuple.Sort\n"
+  },
+  {
+    "name": "Monads.lean",
+    "path": "Notes4/Monads.lean",
+    "repo": "UofSC-Spring-2023-SCHC-411-H01/notes",
+    "url": "https://api.github.com/repositories/588174356/contents/Notes4/Monads.lean?ref=72bc9ee3a0c93523fec747000cb89a6983f00afb",
+    "html_url": "https://github.com/UofSC-Spring-2023-SCHC-411-H01/notes/blob/72bc9ee3a0c93523fec747000cb89a6983f00afb/Notes4/Monads.lean",
+    "score": 1.0,
+    "snippet": "-- import Mathlib\n\nnamespace Notes\n\ndef myNat : \u2115 :=\n  let n := 37\n  let n := n+1"
+  },
+  {
+    "name": "0710.lean",
+    "path": "lean/0710.lean",
+    "repo": "Echoscd/Document",
+    "url": "https://api.github.com/repositories/833100477/contents/lean/0710.lean?ref=41da54e3da33b75c7cce09fde234e234f89128b3",
+    "html_url": "https://github.com/Echoscd/Document/blob/41da54e3da33b75c7cce09fde234e234f89128b3/lean/0710.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\ndef conj {G : Type*} [Group G] (S: Subgroup G) (g : G) :Set G := { p | \u2203 s : S, p = g * s * g\u207b\u00b9 }\n\ndef normaliser_carrier {G : Type*} [Group G] (S: Subgroup G): Set G := { g | (conj S g) = S }\n\ndef normaliser {G : Type*} [Group G] (S: Subgroup G): Subgroup G where\n  carrier := normaliser_carrier S"
+  },
+  {
+    "name": "attention_complex_2d.lean",
+    "path": "trainverify/old/attention_complex_2d.lean",
+    "repo": "Tianshi-Xu/tainverify_lean",
+    "url": "https://api.github.com/repositories/1116542732/contents/trainverify/old/attention_complex_2d.lean?ref=5eaadfbfd561423b7610fe8b43ea56fb54e17220",
+    "html_url": "https://github.com/Tianshi-Xu/tainverify_lean/blob/5eaadfbfd561423b7610fe8b43ea56fb54e17220/trainverify/old/attention_complex_2d.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Real.Basic\nimport Mathlib.Data.Fintype.Basic\nimport Mathlib.Algebra.BigOperators.Group.Finset.Basic\nimport Mathlib.Analysis.SpecialFunctions.Exp\nimport trainverify.attention_complex\n-- Add ext attribute for OnlineState\nattribute [ext] OnlineState"
+  },
+  {
+    "name": "250514.lean",
+    "path": "LeanStudy/250514.lean",
+    "repo": "chiyunhsu/LeanStudy",
+    "url": "https://api.github.com/repositories/971804422/contents/LeanStudy/250514.lean?ref=06225374684314bf59457aa0676eb7f4a2ddbe21",
+    "html_url": "https://github.com/chiyunhsu/LeanStudy/blob/06225374684314bf59457aa0676eb7f4a2ddbe21/LeanStudy/250514.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n\nvariable (a b : \u211d)\nvariable (f: \u211d \u2192 \u211d)\n\nexample (a b : \u211d)(h : a < b) : \u00acb < a := by\n  intro h'"
+  },
+  {
+    "name": "250507.lean",
+    "path": "LeanStudy/250507.lean",
+    "repo": "chiyunhsu/LeanStudy",
+    "url": "https://api.github.com/repositories/971804422/contents/LeanStudy/250507.lean?ref=06225374684314bf59457aa0676eb7f4a2ddbe21",
+    "html_url": "https://github.com/chiyunhsu/LeanStudy/blob/06225374684314bf59457aa0676eb7f4a2ddbe21/LeanStudy/250507.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n\ndef FnUb (f : \u211d \u2192 \u211d) (a : \u211d) : Prop :=\n  \u2200 x, f x \u2264 a\n\ndef FnLb (f : \u211d \u2192 \u211d) (a : \u211d) : Prop :=\n  \u2200 x, a \u2264 f x"
+  },
+  {
+    "name": "250430.lean",
+    "path": "LeanStudy/250430.lean",
+    "repo": "chiyunhsu/LeanStudy",
+    "url": "https://api.github.com/repositories/971804422/contents/LeanStudy/250430.lean?ref=06225374684314bf59457aa0676eb7f4a2ddbe21",
+    "html_url": "https://github.com/chiyunhsu/LeanStudy/blob/06225374684314bf59457aa0676eb7f4a2ddbe21/LeanStudy/250430.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n\ndef FnUb (f : \u211d \u2192 \u211d) (a : \u211d) : Prop :=\n  \u2200 x, f x \u2264 a\n\ndef FnLb (f : \u211d \u2192 \u211d) (a : \u211d) : Prop :=\n  \u2200 x, a \u2264 f x"
+  },
+  {
+    "name": "InducedOnGr.lean",
+    "path": "formal-conjecture/InducedOnGr.lean",
+    "repo": "jonwashburn/hodge",
+    "url": "https://api.github.com/repositories/1123320213/contents/formal-conjecture/InducedOnGr.lean?ref=49f24caf75bce0cd86cf852b46d3509a999a18fa",
+    "html_url": "https://github.com/jonwashburn/hodge/blob/49f24caf75bce0cd86cf852b46d3509a999a18fa/formal-conjecture/InducedOnGr.lean",
+    "score": 1.0,
+    "snippet": "\nmodule\n\npublic import Mathlib.CategoryTheory.Filtration.Opposed\n\n/-!\n## Induced filtrations on graded pieces"
+  },
+  {
+    "name": "Monads.lean",
+    "path": "LeanW26/Meta/Monads.lean",
+    "repo": "klavins/LeanW26",
+    "url": "https://api.github.com/repositories/1056670747/contents/LeanW26/Meta/Monads.lean?ref=f7a884872b352eaef6c366de1ab36f33dc61d257",
+    "html_url": "https://github.com/klavins/LeanW26/blob/f7a884872b352eaef6c366de1ab36f33dc61d257/LeanW26/Meta/Monads.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n\nnamespace LeanW26.Monads\n---\n\nimport mathlib\n"
+  },
+  {
+    "name": "CantorPairing.lean",
+    "path": "old/Utils/CantorPairing.lean",
+    "repo": "mik-jozef/etst",
+    "url": "https://api.github.com/repositories/532273664/contents/old/Utils/CantorPairing.lean?ref=454e799727b3abdfe27198e47d3bac3fd9bc2e22",
+    "html_url": "https://github.com/mik-jozef/etst/blob/454e799727b3abdfe27198e47d3bac3fd9bc2e22/old/Utils/CantorPairing.lean",
+    "score": 1.0,
+    "snippet": "-/\n\nimport Mathlib.Data.Nat.ModEq\nimport Mathlib.Tactic.Linarith\n\nimport old.WFC.Ch5_PairSalgebra\n"
+  },
+  {
+    "name": "Instruction.lean",
+    "path": "Bignum/Arm/Machine/Instruction.lean",
+    "repo": "atlas-computing-org/bignum",
+    "url": "https://api.github.com/repositories/1108008222/contents/Bignum/Arm/Machine/Instruction.lean?ref=f5a1c1f5793e4bf1d1627ea2833413620f76f08b",
+    "html_url": "https://github.com/atlas-computing-org/bignum/blob/f5a1c1f5793e4bf1d1627ea2833413620f76f08b/Bignum/Arm/Machine/Instruction.lean",
+    "score": 1.0,
+    "snippet": "\npublic import Bignum.Common\npublic import Bignum.Arm.Machine.State\npublic import Mathlib.Data.Nat.Notation\n\n@[expose] public section\n"
+  },
+  {
+    "name": "DependentTypes.lean",
+    "path": "DependentTypes.lean",
+    "repo": "boisgera/leap",
+    "url": "https://api.github.com/repositories/1027610790/contents/DependentTypes.lean?ref=02fb1f75aada7057882bc2629685f734eb30f5cb",
+    "html_url": "https://github.com/boisgera/leap/blob/02fb1f75aada7057882bc2629685f734eb30f5cb/DependentTypes.lean",
+    "score": 1.0,
+    "snippet": "\n-- import Mathlib\n\n/-\nDependent Types\n================================================================================\n"
+  },
+  {
+    "name": "Core.lean",
+    "path": "Gromov/Proofs/Harmonic/Core.lean",
+    "repo": "e-vergo/Gromov",
+    "url": "https://api.github.com/repositories/1120597460/contents/Gromov/Proofs/Harmonic/Core.lean?ref=081647e29698b723a34ddec5c305d772e5488764",
+    "html_url": "https://github.com/e-vergo/Gromov/blob/081647e29698b723a34ddec5c305d772e5488764/Gromov/Proofs/Harmonic/Core.lean",
+    "score": 1.0,
+    "snippet": "\npublic import Gromov.Proofs.Cayley.Graph\npublic import Gromov.Definitions.Harmonic\npublic import Mathlib.Analysis.Normed.Group.Basic\npublic import Mathlib.LinearAlgebra.Dimension.Finrank\npublic import Mathlib.Topology.Algebra.Module.Basic\n"
+  },
+  {
+    "name": "BasicUtils.lean",
+    "path": "old/Utils/BasicUtils.lean",
+    "repo": "mik-jozef/etst",
+    "url": "https://api.github.com/repositories/532273664/contents/old/Utils/BasicUtils.lean?ref=454e799727b3abdfe27198e47d3bac3fd9bc2e22",
+    "html_url": "https://github.com/mik-jozef/etst/blob/454e799727b3abdfe27198e47d3bac3fd9bc2e22/old/Utils/BasicUtils.lean",
+    "score": 1.0,
+    "snippet": "  doesn't fit anywhere else.\n-/\n\nimport Mathlib.Data.Set.Defs\nimport Mathlib.Data.Set.Basic\nimport Mathlib.Data.Fintype.EquivFin\n"
+  },
+  {
+    "name": "algebra_605624.lean",
+    "path": "algebra_605624.lean",
+    "repo": "ColorlessBoy/mathlib-inspector",
+    "url": "https://api.github.com/repositories/899996604/contents/algebra_605624.lean?ref=2a31b98f812ea1a00d7a71941f5ab7606b13b199",
+    "html_url": "https://github.com/ColorlessBoy/mathlib-inspector/blob/2a31b98f812ea1a00d7a71941f5ab7606b13b199/algebra_605624.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n\n/- Find all functions $f: \\mathbb{Q} \\rightarrow \\mathbb{Q}$ such that the equation\n\n$$\nf(x f(x)+y)=f(y)+x^{2}\n$$"
+  },
+  {
+    "name": "PeanoNat.lean",
+    "path": "PeanoNat.lean",
+    "repo": "julian1c2a/PeanoNat",
+    "url": "https://api.github.com/repositories/981508659/contents/PeanoNat.lean?ref=dab36752070c26b37b99ab0f8920e5d8edf43659",
+    "html_url": "https://github.com/julian1c2a/PeanoNat/blob/dab36752070c26b37b99ab0f8920e5d8edf43659/PeanoNat.lean",
+    "score": 1.0,
+    "snippet": "-- PeanoNat.lean\n-- import Mathlib.Tactic\n-- Definici\u00f3n inductiva del tipo PeanoNat\n-- (incluye el 0->zero)\n\ninductive PeanoNat : Type where\n  | zero : PeanoNat"
+  },
+  {
+    "name": "Monads.lean",
+    "path": "Lean_notes/LeanNotes/Monads.lean",
+    "repo": "omar826/Lean",
+    "url": "https://api.github.com/repositories/918400803/contents/Lean_notes/LeanNotes/Monads.lean?ref=a0a769dc04940cfff353a37d5b3c7600e624d140",
+    "html_url": "https://github.com/omar826/Lean/blob/a0a769dc04940cfff353a37d5b3c7600e624d140/Lean_notes/LeanNotes/Monads.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n/-\n  # Monads\n  functions\n-/\n--Diophantine equations\n"
+  },
+  {
+    "name": "WellFoundedOfLeast.lean",
+    "path": "old/Utils/WellFoundedOfLeast.lean",
+    "repo": "mik-jozef/etst",
+    "url": "https://api.github.com/repositories/532273664/contents/old/Utils/WellFoundedOfLeast.lean?ref=454e799727b3abdfe27198e47d3bac3fd9bc2e22",
+    "html_url": "https://github.com/mik-jozef/etst/blob/454e799727b3abdfe27198e47d3bac3fd9bc2e22/old/Utils/WellFoundedOfLeast.lean",
+    "score": 1.0,
+    "snippet": "  `Mathlib/Order/OrderIsoNat.lean`.\n-/\n\nimport Mathlib.Order.OrderIsoNat\nimport old.Utils.Chain\n\nset_option linter.unusedVariables false"
+  },
+  {
+    "name": "8_Trees.lean",
+    "path": "Lean_notes/LeanNotes/8_Trees.lean",
+    "repo": "omar826/Lean",
+    "url": "https://api.github.com/repositories/918400803/contents/Lean_notes/LeanNotes/8_Trees.lean?ref=a0a769dc04940cfff353a37d5b3c7600e624d140",
+    "html_url": "https://github.com/omar826/Lean/blob/a0a769dc04940cfff353a37d5b3c7600e624d140/Lean_notes/LeanNotes/8_Trees.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\ninductive BoolTree (\u03b1: Type) where\n  | leaf: \u03b1 \u2192 BoolTree \u03b1\n  | node: (Bool \u2192 BoolTree \u03b1) \u2192 BoolTree \u03b1\n-- (function from Bool to BoolTree \u03b1) to BoolTree\nnamespace BoolTree\n"
+  },
+  {
+    "name": "MathLean.lean",
+    "path": "MathLean.lean",
+    "repo": "trongdx2003/MathLean",
+    "url": "https://api.github.com/repositories/1117004685/contents/MathLean.lean?ref=fb6063c742f87ed2318335e26114a13f1b6a0878",
+    "html_url": "https://github.com/trongdx2003/MathLean/blob/fb6063c742f87ed2318335e26114a13f1b6a0878/MathLean.lean",
+    "score": 1.0,
+    "snippet": "-- -- This module serves as the root of the `MathLean` library.\n-- -- Import modules here that should be built as part of the library.\n-- import Mathlib.Tactic\n\n-- theorem identical_seq (u v : \u2115 \u2192 \u2115) (h1 : u 0 = v 0) (h2 : u 1 = v 1)\n--   (h3 : \u2200 n, u (n + 2) = u (n + 1) + u n) (h4 : \u2200 n, v (n + 2) = v (n + 1) + v n) :\n--     \u2200 n, u n = v n := by"
+  },
+  {
+    "name": "Lfp.lean",
+    "path": "old/Utils/Lfp.lean",
+    "repo": "mik-jozef/etst",
+    "url": "https://api.github.com/repositories/532273664/contents/old/Utils/Lfp.lean?ref=454e799727b3abdfe27198e47d3bac3fd9bc2e22",
+    "html_url": "https://github.com/mik-jozef/etst/blob/454e799727b3abdfe27198e47d3bac3fd9bc2e22/old/Utils/Lfp.lean",
+    "score": 1.0,
+    "snippet": "  https://web.archive.org/web/20210507014028/https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.53.1267&rep=rep1&type=pdf\n-/\n\nimport Mathlib.SetTheory.Ordinal.Family\n\nimport old.Utils.Chain\n"
+  },
+  {
+    "name": "Chapter_32.lean",
+    "path": "FormalBook/Chapter_32.lean",
+    "repo": "mo271/FormalBook",
+    "url": "https://api.github.com/repositories/537006181/contents/FormalBook/Chapter_32.lean?ref=842bcbbeb3b0930fb0a37f285ab03d22b0ae8104",
+    "html_url": "https://github.com/mo271/FormalBook/blob/842bcbbeb3b0930fb0a37f285ab03d22b0ae8104/FormalBook/Chapter_32.lean",
+    "score": 1.0,
+    "snippet": "Released under Apache 2.0 license as described in the file LICENSE.\nAuthors: Moritz Firsching, Christopher Schmidt\n-/\nimport Mathlib.Tactic\n/-\nimport data.rel\nimport data.list.defs"
+  },
+  {
+    "name": "Ch5_PairSalgebra.lean",
+    "path": "old/WFC/Ch5_PairSalgebra.lean",
+    "repo": "mik-jozef/etst",
+    "url": "https://api.github.com/repositories/532273664/contents/old/WFC/Ch5_PairSalgebra.lean?ref=454e799727b3abdfe27198e47d3bac3fd9bc2e22",
+    "html_url": "https://github.com/mik-jozef/etst/blob/454e799727b3abdfe27198e47d3bac3fd9bc2e22/old/WFC/Ch5_PairSalgebra.lean",
+    "score": 1.0,
+    "snippet": "    mind removing `condFull` from the signature.\n-/\n\nimport Mathlib.Order.MinMax\n\nimport old.Utils.BasicUtils\nimport old.WFC.Ch4_Operators"
+  },
+  {
+    "name": "C02_relations.lean",
+    "path": "src/sav/C02_relations.lean",
+    "repo": "kevinsullivan/dmtl4",
+    "url": "https://api.github.com/repositories/917435749/contents/src/sav/C02_relations.lean?ref=da57f6620b4390f573964fb434bff9b3417387d0",
+    "html_url": "https://github.com/kevinsullivan/dmtl4/blob/da57f6620b4390f573964fb434bff9b3417387d0/src/sav/C02_relations.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Rel\nimport Mathlib.Data.Set.Basic\nimport Mathlib.Logic.Relation\nimport Mathlib.Data.Real.Basic\n\nnamespace DMT1.Lectures.setsRelationsFunctions.relations\n"
+  },
+  {
+    "name": "PredLogProofs.lean",
+    "path": "Content/PredLogProofs.lean",
+    "repo": "txa/IFR-notes",
+    "url": "https://api.github.com/repositories/1042758457/contents/Content/PredLogProofs.lean?ref=3371c57972ce4f568d7443390d01564fbb2f8987",
+    "html_url": "https://github.com/txa/IFR-notes/blob/3371c57972ce4f568d7443390d01564fbb2f8987/Content/PredLogProofs.lean",
+    "score": 1.0,
+    "snippet": "--import Content.ClassicalProofs\n--import Mathlib.Tactic\n--open ClassicalProofs\nnotation \"\u2115\" => Nat\n\nvariable {P Q R : Prop}\n"
+  },
+  {
+    "name": "CFinsupp.lean",
+    "path": "GB/CFinsupp.lean",
+    "repo": "Hyun2023/GBLean",
+    "url": "https://api.github.com/repositories/878335547/contents/GB/CFinsupp.lean?ref=bf99ce460ba678a8373509a1d7e336c293684a2f",
+    "html_url": "https://github.com/Hyun2023/GBLean/blob/bf99ce460ba678a8373509a1d7e336c293684a2f/GB/CFinsupp.lean",
+    "score": 1.0,
+    "snippet": "-- import Mathlib.Algebra.MvPolynomial.Basic\n-- import Mathlib.Algebra.Ring.Defs\n-- import Mathlib.Data.Finsupp.Pointwise\n-- import Mathlib.Data.Finset.Basic\n-- import Mathlib.Data.Finsupp.Lex\n\n-- -- Computable version of Finsupp"
+  },
+  {
+    "name": "Basic_101.lean",
+    "path": "Lean4/Basic_101.lean",
+    "repo": "Nishikapa/Lean4",
+    "url": "https://api.github.com/repositories/1125754827/contents/Lean4/Basic_101.lean?ref=bc950a40e0276ee7c7117f91a22d4086de8b50c1",
+    "html_url": "https://github.com/Nishikapa/Lean4/blob/bc950a40e0276ee7c7117f91a22d4086de8b50c1/Lean4/Basic_101.lean",
+    "score": 1.0,
+    "snippet": "-- \u5c11\u3057\u7cfb\u7d71\u306e\u9055\u3046\u3082\u306e\u3082\u6df7\u305c\u3066\u3044\u307e\u3059\u3002\n-- \u203b import Mathlib \u306a\u3057\u3067\u3082OK\u306a\u7bc4\u56f2\u3067\u51fa\u984c\u3057\u3066\u3044\u307e\u3059\u3002\n--------------------------------------------------------------------------------\n---\n-- \u91cf\u5316\u5b50\u00d7\u5426\u5b9a\uff0818\u30fb84\u7cfb\uff09\u3092\u5c11\u3057\u3072\u306d\u308b + \u53e4\u5178\u8ad6\u7406\u30d1\u30ba\u30eb + Nat\u306erw + funext + List\u5e30\u7d0d\n-- \u203b import Mathlib \u306a\u3057\u60f3\u5b9a\uff08Lean4\u6a19\u6e96\uff09\u3067\u89e3\u3051\u308b\u547d\u984c\u3060\u3051\u3067\u3059\u3002\n--------------------------------------------------------------------------------"
+  },
+  {
+    "name": "H83.lean",
+    "path": "LeanExercises/H83.lean",
+    "repo": "Lacitpille/LeanExercises",
+    "url": "https://api.github.com/repositories/1118448896/contents/LeanExercises/H83.lean?ref=55011c10907b7efb29e81d5455d97e025ae94d4d",
+    "html_url": "https://github.com/Lacitpille/LeanExercises/blob/55011c10907b7efb29e81d5455d97e025ae94d4d/LeanExercises/H83.lean",
+    "score": 1.0,
+    "snippet": "\ufeffimport Mathlib\n\n/-- Torsion-free is a local property for modules over an integral domain (part 1) -/\nlemma torsion_free_of_maximal_localizations\n    {R M : Type*} [CommRing R] [IsDomain R] [AddCommGroup M] [Module R M]\n    (h : \u2200 (P : Ideal R), [P.IsMaximal] \u2192\n    NoZeroSMulDivisors (Localization.AtPrime P) (LocalizedModule P.primeCompl M)) :"
+  },
+  {
+    "name": "Goal.lean",
+    "path": "MyProject/Sample/Goal.lean",
+    "repo": "unaoya/Tsudoi6",
+    "url": "https://api.github.com/repositories/875423435/contents/MyProject/Sample/Goal.lean?ref=f9c2579bd1f5ab3dc7b3a1495abfe3b811235598",
+    "html_url": "https://github.com/unaoya/Tsudoi6/blob/f9c2579bd1f5ab3dc7b3a1495abfe3b811235598/MyProject/Sample/Goal.lean",
+    "score": 1.0,
+    "snippet": "-- \u30e9\u30a4\u30d6\u30e9\u30ea\u306e\u8aad\u307f\u8fbc\u307f\nimport mathlib\n\n-- \u5909\u6570\u306e\u5c0e\u5165\u3002\n-- Continuous f\u306ff\u304c\u9023\u7d9a\u3067\u3042\u308b\u3068\u3044\u3046\u547d\u984c\u3002\n-- Continuous f\u304c\u578b\u3001\u3053\u306e\u578b\u3092\u6301\u3064\u9805\uff08\u5909\u6570\uff09\u304ch\n-- h\u304cf\u304c\u9023\u7d9a\u3067\u3042\u308b\u3068\u3044\u3046\u547d\u984c\u306e\u8a3c\u660e\u3068\u89e3\u91c8\u3067\u304d\u308b\u3002"
+  },
+  {
+    "name": "Stage.lean",
+    "path": "MyProject/Stage.lean",
+    "repo": "Lorisparisot/Weil_representations_associated_to_finite_fields",
+    "url": "https://api.github.com/repositories/962793848/contents/MyProject/Stage.lean?ref=4b017126447ff4904257193baab383585b24f754",
+    "html_url": "https://github.com/Lorisparisot/Weil_representations_associated_to_finite_fields/blob/4b017126447ff4904257193baab383585b24f754/MyProject/Stage.lean",
+    "score": 1.0,
+    "snippet": "/-import Mathlib\n\nvariable (V k : Type*) [Field k] [Fintype k] [AddCommGroup V] [Module k V]\n\nlocal notation \"q\" => Fintype.card k\n\n"
+  },
+  {
+    "name": "GrindPanic.lean",
+    "path": "MathlibMinimizer/GrindPanic.lean",
+    "repo": "kim-em/mathlib-minimizer",
+    "url": "https://api.github.com/repositories/1119919118/contents/MathlibMinimizer/GrindPanic.lean?ref=c044bf2449be49f2e9600c0cacd3ac3745c97b89",
+    "html_url": "https://github.com/kim-em/mathlib-minimizer/blob/c044bf2449be49f2e9600c0cacd3ac3745c97b89/MathlibMinimizer/GrindPanic.lean",
+    "score": 1.0,
+    "snippet": "-/\nmodule\n\npublic import Mathlib.Data.Bool.Basic\npublic import Mathlib.Order.Monotone.Basic\npublic import Mathlib.Order.ULift\n"
+  },
+  {
+    "name": "EulerComb.lean",
+    "path": "SummerResearch2025/EulerComb.lean",
+    "repo": "chiyunhsu/SummerResearch2025",
+    "url": "https://api.github.com/repositories/1002533189/contents/SummerResearch2025/EulerComb.lean?ref=c4120c5e27ba3e526874ebaeee609e474f49fc99",
+    "html_url": "https://github.com/chiyunhsu/SummerResearch2025/blob/c4120c5e27ba3e526874ebaeee609e474f49fc99/SummerResearch2025/EulerComb.lean",
+    "score": 1.0,
+    "snippet": "-/\nmodule\n\npublic import Mathlib.Data.Nat.BitIndices\npublic import Mathlib.Data.Nat.Factorization.Basic\npublic import Mathlib.Data.Finset.Pairwise\npublic import Mathlib.Combinatorics.Enumerative.Partition.Basic"
+  },
+  {
+    "name": "Header.lean",
+    "path": "Mathlib/Tactic/Linter/Header.lean",
+    "repo": "zzhisthebest/mathlib4",
+    "url": "https://api.github.com/repositories/1112111236/contents/Mathlib/Tactic/Linter/Header.lean?ref=d6c6bfc120c90b907d9587648a56ddc545f4bc1c",
+    "html_url": "https://github.com/zzhisthebest/mathlib4/blob/d6c6bfc120c90b907d9587648a56ddc545f4bc1c/Mathlib/Tactic/Linter/Header.lean",
+    "score": 1.0,
+    "snippet": "-/\nimport Lean.Elab.Command\nimport Lean.Elab.ParseImportsFast\nimport Mathlib.Tactic.Linter.DirectoryDependency\n\n/-!\n# The \"header\" linter"
+  },
+  {
+    "name": "GlaisherBij.lean",
+    "path": "SummerResearch2025/GlaisherBij.lean",
+    "repo": "chiyunhsu/SummerResearch2025",
+    "url": "https://api.github.com/repositories/1002533189/contents/SummerResearch2025/GlaisherBij.lean?ref=c4120c5e27ba3e526874ebaeee609e474f49fc99",
+    "html_url": "https://github.com/chiyunhsu/SummerResearch2025/blob/c4120c5e27ba3e526874ebaeee609e474f49fc99/SummerResearch2025/GlaisherBij.lean",
+    "score": 1.0,
+    "snippet": "-/\nmodule\n\npublic import Mathlib.Data.Nat.BitIndices\npublic import Mathlib.Data.Nat.Factorization.Basic\npublic import Mathlib.Data.Finset.Pairwise\npublic import Mathlib.Combinatorics.Enumerative.Partition.Basic"
+  },
+  {
+    "name": "MultiaryElementwiseSIMD.lean",
+    "path": "trainverify/old/MultiaryElementwiseSIMD.lean",
+    "repo": "Tianshi-Xu/tainverify_lean",
+    "url": "https://api.github.com/repositories/1116542732/contents/trainverify/old/MultiaryElementwiseSIMD.lean?ref=5eaadfbfd561423b7610fe8b43ea56fb54e17220",
+    "html_url": "https://github.com/Tianshi-Xu/tainverify_lean/blob/5eaadfbfd561423b7610fe8b43ea56fb54e17220/trainverify/old/MultiaryElementwiseSIMD.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Vector.Basic\nimport Mathlib.Data.Real.Basic\nimport Mathlib.Data.List.Basic\nimport Mathlib.Data.Fin.Basic\nimport Mathlib.Data.Finset.Basic\nimport Mathlib.Analysis.SpecialFunctions.Pow.Real\n"
+  },
+  {
+    "name": "Sign.lean",
+    "path": "OrderedSemigroups/Sign.lean",
+    "repo": "ericluap/OrderedSemigroups",
+    "url": "https://api.github.com/repositories/835559369/contents/OrderedSemigroups/Sign.lean?ref=d63c01ebf25eb0918dd2967629eadb49fce17fe8",
+    "html_url": "https://github.com/ericluap/OrderedSemigroups/blob/d63c01ebf25eb0918dd2967629eadb49fce17fe8/OrderedSemigroups/Sign.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import OrderedSemigroups.Basic\npublic import Mathlib.Tactic.Order\npublic import OrderedSemigroups.PNat\n\n/-!"
+  },
+  {
+    "name": "QState.lean",
+    "path": "QuantumInfo/InfiniteDim/QState.lean",
+    "repo": "Timeroot/Lean-QuantumInfo",
+    "url": "https://api.github.com/repositories/788545251/contents/QuantumInfo/InfiniteDim/QState.lean?ref=f0afd62826bccc4fdb7e63aae7a71a225581ab69",
+    "html_url": "https://github.com/Timeroot/Lean-QuantumInfo/blob/f0afd62826bccc4fdb7e63aae7a71a225581ab69/QuantumInfo/InfiniteDim/QState.lean",
+    "score": 1.0,
+    "snippet": "--Copyright 2024: https://github.com/dupuisf/LFTCM2024TraceClass\n-- import Mathlib\n-- -- import QuantumInfo.InfiniteDim.TraceClass\n\n-- variable (H : Type*)\n-- variable [NormedAddCommGroup H] [InnerProductSpace \u2102 H] [CompleteSpace H]\n"
+  },
+  {
+    "name": "primitives.lean",
+    "path": "Code/src/inst/primitives.lean",
+    "repo": "marcusrossel/bachelors-thesis",
+    "url": "https://api.github.com/repositories/306041494/contents/Code/src/inst/primitives.lean?ref=d1ec2c2b5c3c6700a506f2e3cc93f1160e44b422",
+    "html_url": "https://github.com/marcusrossel/bachelors-thesis/blob/d1ec2c2b5c3c6700a506f2e3cc93f1160e44b422/Code/src/inst/primitives.lean",
+    "score": 1.0,
+    "snippet": "import data.finset\nimport order.lexicographic\nimport mathlib\n\n-- The type of opaque values that can be passed between reactors and processed by reactions.\n-- Their equality has to be decidable, but beyond that their values are of no interest.\nvariables (\u03c5 : Type*) [decidable_eq \u03c5]"
+  },
+  {
+    "name": "SolutionAlgorithm.lean",
+    "path": "RubiksCube/SolutionAlgorithm.lean",
+    "repo": "chenjulang/rubikcubegroup",
+    "url": "https://api.github.com/repositories/742273762/contents/RubiksCube/SolutionAlgorithm.lean?ref=48460a1a541a61d918d0faf289a579122f7fda93",
+    "html_url": "https://github.com/chenjulang/rubikcubegroup/blob/48460a1a541a61d918d0faf289a579122f7fda93/RubiksCube/SolutionAlgorithm.lean",
+    "score": 1.0,
+    "snippet": "-- import RubiksCube.RubiksCubeFunc\n-- import Mathlib.GroupTheory.Perm.Basic\n-- import Mathlib.GroupTheory.Perm.Fin\n\n-- set_option autoImplicit true\n-- -- set_option trace.Meta.synthInstance true\n"
+  },
+  {
+    "name": "FamilyLemma.lean",
+    "path": "rooted/FamilyLemma.lean",
+    "repo": "kashiwabarakenji/ideal_frankl",
+    "url": "https://api.github.com/repositories/842264988/contents/rooted/FamilyLemma.lean?ref=9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57",
+    "html_url": "https://github.com/kashiwabarakenji/ideal_frankl/blob/9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57/rooted/FamilyLemma.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Finset.Basic\nimport Mathlib.Data.Finset.Card\nimport Mathlib.Data.Finset.Powerset\nimport Mathlib.Data.Finset.Sum\nimport Mathlib.Data.Finset.Defs\nimport Mathlib.Data.Fintype.Basic\nimport Mathlib.Algebra.BigOperators.Group.Finset.Defs"
+  },
+  {
+    "name": "Graph.lean",
+    "path": "Gromov/Proofs/Cayley/Graph.lean",
+    "repo": "e-vergo/Gromov",
+    "url": "https://api.github.com/repositories/1120597460/contents/Gromov/Proofs/Cayley/Graph.lean?ref=081647e29698b723a34ddec5c305d772e5488764",
+    "html_url": "https://github.com/e-vergo/Gromov/blob/081647e29698b723a34ddec5c305d772e5488764/Gromov/Proofs/Cayley/Graph.lean",
+    "score": 1.0,
+    "snippet": "public import Gromov.Proofs.Growth.GromovMain\npublic import Gromov.Definitions.WordMetric\npublic import Gromov.Definitions.GrowthDegree\npublic import Mathlib.Data.Nat.Lattice\n\nnamespace Gromov\n"
+  },
+  {
+    "name": "Abelian.lean",
+    "path": "Gromov/Proofs/Growth/Abelian.lean",
+    "repo": "e-vergo/Gromov",
+    "url": "https://api.github.com/repositories/1120597460/contents/Gromov/Proofs/Growth/Abelian.lean?ref=081647e29698b723a34ddec5c305d772e5488764",
+    "html_url": "https://github.com/e-vergo/Gromov/blob/081647e29698b723a34ddec5c305d772e5488764/Gromov/Proofs/Growth/Abelian.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Gromov.Proofs.Growth.Polynomial\npublic import Mathlib.GroupTheory.FiniteAbelian.Basic\n\n/-!\n# Polynomial Growth for Abelian Groups"
+  },
+  {
+    "name": "Main.lean",
+    "path": "Gromov/Proofs/Poincare/Main.lean",
+    "repo": "e-vergo/Gromov",
+    "url": "https://api.github.com/repositories/1120597460/contents/Gromov/Proofs/Poincare/Main.lean?ref=081647e29698b723a34ddec5c305d772e5488764",
+    "html_url": "https://github.com/e-vergo/Gromov/blob/081647e29698b723a34ddec5c305d772e5488764/Gromov/Proofs/Poincare/Main.lean",
+    "score": 1.0,
+    "snippet": "public import Gromov.Definitions.Poincare\npublic import Gromov.Proofs.Cayley.Graph\npublic import Mathlib.Analysis.InnerProductSpace.Basic\npublic import Mathlib.Algebra.BigOperators.Finprod\n\nnamespace Gromov\n"
+  },
+  {
+    "name": "functionalSPO2.lean",
+    "path": "rooted/functionalSPO2.lean",
+    "repo": "kashiwabarakenji/ideal_frankl",
+    "url": "https://api.github.com/repositories/842264988/contents/rooted/functionalSPO2.lean?ref=9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57",
+    "html_url": "https://github.com/kashiwabarakenji/ideal_frankl/blob/9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57/rooted/functionalSPO2.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Finset.Basic\nimport Mathlib.Data.Finset.Card\nimport Mathlib.Data.Finset.Powerset\nimport Mathlib.Data.Set.Function\nimport Mathlib.Data.Fintype.Basic\nimport Init.Data.Fin.Lemmas\nimport Mathlib.Order.Defs.PartialOrder"
+  },
+  {
+    "name": "FPP_Basics.lean",
+    "path": "percolation/FPP/FPP_Basics.lean",
+    "repo": "njimaMath/Lean",
+    "url": "https://api.github.com/repositories/1118321157/contents/percolation/FPP/FPP_Basics.lean?ref=23f0db718c0f3ace279f0f68acc032053da34c38",
+    "html_url": "https://github.com/njimaMath/Lean/blob/23f0db718c0f3ace279f0f68acc032053da34c38/percolation/FPP/FPP_Basics.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib\n\nimport percolation.PercolationZd\nimport KignmanSubadditiveErgodic.KSE\n\nopen scoped BigOperators\nopen scoped ENNReal"
+  },
+  {
+    "name": "FindHome.lean",
+    "path": "ImportGraph/Tools/FindHome.lean",
+    "repo": "leanprover-community/import-graph",
+    "url": "https://api.github.com/repositories/733661380/contents/ImportGraph/Tools/FindHome.lean?ref=b5908dbac486279f1133cb937648c63c30b455af",
+    "html_url": "https://github.com/leanprover-community/import-graph/blob/b5908dbac486279f1133cb937648c63c30b455af/ImportGraph/Tools/FindHome.lean",
+    "score": 1.0,
+    "snippet": "Find locations as high as possible in the import hierarchy\nwhere the named declaration could live.\nUsing `#find_home!` will forcefully remove the current file.\nNote that this works best if used in a file with `import Mathlib`.\n\nThe current file could still be the only suggestion, even using `#find_home! lemma`.\nThe reason is that `#find_home!` scans the import graph below the current file,"
+  },
+  {
+    "name": "functionalExcess.lean",
+    "path": "rooted/functionalExcess.lean",
+    "repo": "kashiwabarakenji/ideal_frankl",
+    "url": "https://api.github.com/repositories/842264988/contents/rooted/functionalExcess.lean?ref=9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57",
+    "html_url": "https://github.com/kashiwabarakenji/ideal_frankl/blob/9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57/rooted/functionalExcess.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Finset.Basic\nimport Mathlib.Data.Finset.Powerset\nimport Mathlib.Data.Finset.Card\nimport Mathlib.Data.Set.Function\nimport Mathlib.Data.Fintype.Basic\nimport Init.Data.Fin.Lemmas\nimport Mathlib.Order.Defs.PartialOrder"
+  },
+  {
+    "name": "RootedImplication.lean",
+    "path": "rooted/RootedImplication.lean",
+    "repo": "kashiwabarakenji/ideal_frankl",
+    "url": "https://api.github.com/repositories/842264988/contents/rooted/RootedImplication.lean?ref=9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57",
+    "html_url": "https://github.com/kashiwabarakenji/ideal_frankl/blob/9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57/rooted/RootedImplication.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Finset.Basic\nimport Mathlib.Data.Finset.Card\nimport Mathlib.Data.Finset.Powerset\nimport Mathlib.Data.Fintype.Basic\nimport Mathlib.Logic.Function.Defs\nimport rooted.ClosureOperator\nimport rooted.RootedSets"
+  },
+  {
+    "name": "Archimedean.lean",
+    "path": "OrderedSemigroups/Archimedean.lean",
+    "repo": "ericluap/OrderedSemigroups",
+    "url": "https://api.github.com/repositories/835559369/contents/OrderedSemigroups/Archimedean.lean?ref=d63c01ebf25eb0918dd2967629eadb49fce17fe8",
+    "html_url": "https://github.com/ericluap/OrderedSemigroups/blob/d63c01ebf25eb0918dd2967629eadb49fce17fe8/OrderedSemigroups/Archimedean.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import OrderedSemigroups.Sign\npublic import Mathlib.Tactic\n\n/-!\n# Archimedean Ordered Semigroups and Anomalous Pairs"
+  },
+  {
+    "name": "BandwidthConstraints.lean",
+    "path": "legacy/archives/snapshot-20250816-182339-tree/gravity/Core/BandwidthConstraints.lean",
+    "repo": "jonwashburn/gravity",
+    "url": "https://api.github.com/repositories/1005830007/contents/legacy/archives/snapshot-20250816-182339-tree/gravity/Core/BandwidthConstraints.lean?ref=4f58192feb59c6dcf25346e25f72dc8508f93d13",
+    "html_url": "https://github.com/jonwashburn/gravity/blob/4f58192feb59c6dcf25346e25f72dc8508f93d13/legacy/archives/snapshot-20250816-182339-tree/gravity/Core/BandwidthConstraints.lean",
+    "score": 1.0,
+    "snippet": "-/\n\nimport Mathlib.Data.Real.Basic\nimport Mathlib.Analysis.SpecialFunctions.Log.Basic\nimport ledger.LedgerState\n\nnamespace RecognitionScience.Gravity"
+  },
+  {
+    "name": "5_Tactics.lean",
+    "path": "Lean_notes/LeanNotes/5_Tactics.lean",
+    "repo": "omar826/Lean",
+    "url": "https://api.github.com/repositories/918400803/contents/Lean_notes/LeanNotes/5_Tactics.lean?ref=a0a769dc04940cfff353a37d5b3c7600e624d140",
+    "html_url": "https://github.com/omar826/Lean/blob/a0a769dc04940cfff353a37d5b3c7600e624d140/Lean_notes/LeanNotes/5_Tactics.lean",
+    "score": 1.0,
+    "snippet": "import mathlib\n/-\nby - tactic mode\n-/\nexample (a b c: \u211d ): a*b*c = b*(c*a) := by\n  -- goal: a*b*c = b*(c*a)\n  rw [mul_comm a b]"
+  },
+  {
+    "name": "Dominant.lean",
+    "path": "rooted/Dominant.lean",
+    "repo": "kashiwabarakenji/ideal_frankl",
+    "url": "https://api.github.com/repositories/842264988/contents/rooted/Dominant.lean?ref=9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57",
+    "html_url": "https://github.com/kashiwabarakenji/ideal_frankl/blob/9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57/rooted/Dominant.lean",
+    "score": 1.0,
+    "snippet": "--\u9802\u70b9\u306edominant\u306e\u95a2\u4fc2\u306b\u3064\u3044\u3066\nimport Mathlib.Data.Finset.Basic\nimport Mathlib.Data.Finset.Card\nimport Mathlib.Data.Finset.Powerset\nimport Mathlib.Data.Fintype.Basic\nimport Mathlib.Logic.Function.Defs\nimport rooted.ClosureOperator"
+  },
+  {
+    "name": "\u7b14\u8bb05_file.lean",
+    "path": "\u7b14\u8bb05_file.lean",
+    "repo": "chenjulang/LeanCourse_Learning",
+    "url": "https://api.github.com/repositories/727975773/contents/%E7%AC%94%E8%AE%B05_file.lean?ref=9928aeb2a861153bce205c4e5f6920aa3de1969f",
+    "html_url": "https://github.com/chenjulang/LeanCourse_Learning/blob/9928aeb2a861153bce205c4e5f6920aa3de1969f/%E7%AC%94%E8%AE%B05_file.lean",
+    "score": 1.0,
+    "snippet": "-- Released under Apache 2.0 license as described in the file LICENSE.\n-- Authors: Johan Commelin\n-- -/\n-- import Mathlib.Algebra.CharP.Two\n-- import Mathlib.Algebra.NeZero\n-- import Mathlib.Algebra.GCDMonoid.IntegrallyClosed\n-- import Mathlib.Data.Polynomial.RingDivision"
+  },
+  {
+    "name": "ENat.lean",
+    "path": "Foundation/Vorspiel/ENat.lean",
+    "repo": "FormalizedFormalLogic/Foundation",
+    "url": "https://api.github.com/repositories/600521950/contents/Foundation/Vorspiel/ENat.lean?ref=7013d6cdb2715ed75a42be516643ee5928eb607f",
+    "html_url": "https://github.com/FormalizedFormalLogic/Foundation/blob/7013d6cdb2715ed75a42be516643ee5928eb607f/Foundation/Vorspiel/ENat.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib.Data.ENat.Basic\n\n\n@[expose]\npublic section"
+  },
+  {
+    "name": "DerivFalse.lean",
+    "path": "examples/DerivFalse.lean",
+    "repo": "VTrelat/BARReL",
+    "url": "https://api.github.com/repositories/1102948061/contents/examples/DerivFalse.lean?ref=b1d6badb688e47d042d24fe84ce2909523799d46",
+    "html_url": "https://github.com/VTrelat/BARReL/blob/b1d6badb688e47d042d24fe84ce2909523799d46/examples/DerivFalse.lean",
+    "score": 1.0,
+    "snippet": "import Barrel\nimport Mathlib.Util.AssertNoSorry\n\nset_option barrel.atelierb \"/Applications/atelierb-free-arm64-24.04.2.app/Contents/Resources\"\n\nimport machine DerivFalse from \"specs\"\n"
+  },
+  {
+    "name": "functionalTreeIdeal.lean",
+    "path": "rooted/functionalTreeIdeal.lean",
+    "repo": "kashiwabarakenji/ideal_frankl",
+    "url": "https://api.github.com/repositories/842264988/contents/rooted/functionalTreeIdeal.lean?ref=9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57",
+    "html_url": "https://github.com/kashiwabarakenji/ideal_frankl/blob/9ff02cfd49ed5b261c1cf8f6c680f28ffc8a5f57/rooted/functionalTreeIdeal.lean",
+    "score": 1.0,
+    "snippet": "import Mathlib.Data.Finset.Basic\nimport Mathlib.Data.Finset.Powerset\nimport Mathlib.Data.Set.Function\nimport Mathlib.Data.Fintype.Basic\nimport Init.Data.Fin.Lemmas\nimport Mathlib.Order.Defs.PartialOrder\nimport Mathlib.Order.Cover"
+  },
+  {
+    "name": "IsEmpty.lean",
+    "path": "Foundation/Vorspiel/IsEmpty.lean",
+    "repo": "FormalizedFormalLogic/Foundation",
+    "url": "https://api.github.com/repositories/600521950/contents/Foundation/Vorspiel/IsEmpty.lean?ref=7013d6cdb2715ed75a42be516643ee5928eb607f",
+    "html_url": "https://github.com/FormalizedFormalLogic/Foundation/blob/7013d6cdb2715ed75a42be516643ee5928eb607f/Foundation/Vorspiel/IsEmpty.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib.Logic.IsEmpty\n\n@[expose] public section\n\nnamespace IsEmpty"
+  },
+  {
+    "name": "TriagePrinciple.lean",
+    "path": "legacy/archives/snapshot-20250816-182339-tree/gravity/Core/TriagePrinciple.lean",
+    "repo": "jonwashburn/gravity",
+    "url": "https://api.github.com/repositories/1005830007/contents/legacy/archives/snapshot-20250816-182339-tree/gravity/Core/TriagePrinciple.lean?ref=4f58192feb59c6dcf25346e25f72dc8508f93d13",
+    "html_url": "https://github.com/jonwashburn/gravity/blob/4f58192feb59c6dcf25346e25f72dc8508f93d13/legacy/archives/snapshot-20250816-182339-tree/gravity/Core/TriagePrinciple.lean",
+    "score": 1.0,
+    "snippet": "-/\n\nimport Mathlib.Data.Real.Basic\nimport Mathlib.Order.Basic\nimport gravity.Core.BandwidthConstraints\nimport ledger.LedgerState\n"
+  },
+  {
+    "name": "FinFun.lean",
+    "path": "Cslib/Foundations/Data/FinFun.lean",
+    "repo": "leanprover/cslib",
+    "url": "https://api.github.com/repositories/1003510928/contents/Cslib/Foundations/Data/FinFun.lean?ref=f0d87b6e107dddfe4959dcd2f44ba985e3f1c0d2",
+    "html_url": "https://github.com/leanprover/cslib/blob/f0d87b6e107dddfe4959dcd2f44ba985e3f1c0d2/Cslib/Foundations/Data/FinFun.lean",
+    "score": 1.0,
+    "snippet": "\npublic import Cslib.Init\npublic import Mathlib.Data.Finset.Filter\npublic import Mathlib.Data.Finset.Lattice.Basic\n\n@[expose] public section\n"
+  },
+  {
+    "name": "Fin.lean",
+    "path": "Foundation/Vorspiel/Set/Fin.lean",
+    "repo": "FormalizedFormalLogic/Foundation",
+    "url": "https://api.github.com/repositories/600521950/contents/Foundation/Vorspiel/Set/Fin.lean?ref=7013d6cdb2715ed75a42be516643ee5928eb607f",
+    "html_url": "https://github.com/FormalizedFormalLogic/Foundation/blob/7013d6cdb2715ed75a42be516643ee5928eb607f/Foundation/Vorspiel/Set/Fin.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib.Data.Set.Insert\n\n\n@[expose] public section\n"
+  },
+  {
+    "name": "Defs.lean",
+    "path": "Sandbox/Defs.lean",
+    "repo": "James-Oswald/ars-logicae",
+    "url": "https://api.github.com/repositories/776303614/contents/Sandbox/Defs.lean?ref=b4a811777727723f0c9c0b765f10743228b19972",
+    "html_url": "https://github.com/James-Oswald/ars-logicae/blob/b4a811777727723f0c9c0b765f10743228b19972/Sandbox/Defs.lean",
+    "score": 1.0,
+    "snippet": "\n-- import Mathlib.Data.Finset.Basic\n\n-- import ArsLogicae.ALC.Language\n\n-- open ALC\n"
+  },
+  {
+    "name": "Denumerable.lean",
+    "path": "Foundation/Vorspiel/Denumerable.lean",
+    "repo": "FormalizedFormalLogic/Foundation",
+    "url": "https://api.github.com/repositories/600521950/contents/Foundation/Vorspiel/Denumerable.lean?ref=7013d6cdb2715ed75a42be516643ee5928eb607f",
+    "html_url": "https://github.com/FormalizedFormalLogic/Foundation/blob/7013d6cdb2715ed75a42be516643ee5928eb607f/Foundation/Vorspiel/Denumerable.lean",
+    "score": 1.0,
+    "snippet": "module\n\npublic import Mathlib.Logic.Denumerable\npublic import Mathlib.Logic.Equiv.List\n\n@[expose] public section\n"
+  },
+  {
+    "name": "ProvabilityToy.lean",
+    "path": "ProvabilityToy.lean",
+    "repo": "SnO2WMaN/provability-toy",
+    "url": "https://api.github.com/repositories/1137091728/contents/ProvabilityToy.lean?ref=fdf51dd065fe60e3c6b60c49afffe5c395bcfb5f",
+    "html_url": "https://github.com/SnO2WMaN/provability-toy/blob/fdf51dd065fe60e3c6b60c49afffe5c395bcfb5f/ProvabilityToy.lean",
+    "score": 1.0,
+    "snippet": "module\n\n-- public import Mathlib\npublic import Mathlib.Logic.Nonempty\npublic import Mathlib.Order.Defs.PartialOrder\npublic import Mathlib.Order.Notation\npublic import Mathlib.Tactic.Contrapose"
+  }
+]

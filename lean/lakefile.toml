@@ -1,0 +1,39 @@
+# Lake package for the proof-tree harness: a self-owned wrapper around
+# paperproof's BetterParser that emits NDJSON for the web visualizer.
+name = "ppharness"
+defaultTargets = ["ppharness"]
+
+# --- Paperproof's Lean library (contains `Services.BetterParser`) -------------
+# Track the latest parser via `main`; `lake update` records the resolved commit
+# in lake-manifest.json (commit it to freeze). The library is core-only — it
+# parses InfoTrees and needs no Mathlib to *build*.
+[[require]]
+name = "Paperproof"
+git = "https://github.com/Paper-Proof/paperproof.git"
+subDir = "lean"
+rev = "main"
+
+# --- Mathlib --------------------------------------------------------------
+# Required only so Mathlib's oleans land on LEAN_PATH (via `lake env`): that is
+# what lets `processHeader` elaborate real `import Mathlib` proofs. Pinned to
+# v4.27.0 to match the toolchain. The toolchain is v4.27.0 (not newer) because
+# Paperproof's harness path here — `IO.processCommands` then reading
+# `infoState.trees` — relies on pre-v4.29 synchronous tactic elaboration; on
+# v4.29 tactic subtrees elaborate asynchronously and aren't attached, so the
+# parser yields empty proofs. Keep parser + Mathlib on the same v4.27.0.
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.27.0"
+
+# --- Our reusable parsing library (file: Ppharness.lean) ---
+[[lean_lib]]
+name = "Ppharness"
+
+# --- Our CLI executable (file: Main.lean, provides `def main`) ---
+# `supportInterpreter` is required so the binary can run Mathlib's `@[init]`
+# declarations when it loads an `import Mathlib` environment at runtime.
+[[lean_exe]]
+name = "ppharness"
+root = "Main"
+supportInterpreter = true

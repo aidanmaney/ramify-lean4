@@ -1,0 +1,14 @@
+# Node / web
+**/node_modules/
+web/dist/
+
+# Lean / Lake build artifacts (Mathlib cache lives here — multi-GB)
+**/.lake/
+**/build/
+*.olean
+*.ilean
+*.trace
+
+# OS / editor
+.DS_Store
+*.log
