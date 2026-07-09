@@ -1,4 +1,4 @@
-import type { GoalInfo, Proof, ProofStep } from "./paperproof";
+import type { GoalInfo, Proof, ProofStep, ProofStepPosition } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import type { TreeNode } from "./types";
 
@@ -84,8 +84,15 @@ export function proofToTree(proof: Proof): TreeNode[] {
   const nodes: TreeNode[] = [];
   const emittedGoals = new Set<string>();
 
-  // DFS from a goal, given the parent edge that reaches it (root edge is empty).
-  function visitGoal(goalId: string, parents: TreeNode["parents"]): void {
+  // DFS from a goal, given the parent edge that reaches it and the source span
+  // of the tactic that produced it — the same step that introduced any hyps on
+  // that edge (see `newHyps`). Root goals get neither: they're the theorem's
+  // original goal(s), not produced by any tactic.
+  function visitGoal(
+    goalId: string,
+    parents: TreeNode["parents"],
+    producedAt?: ProofStepPosition,
+  ): void {
     if (emittedGoals.has(goalId)) return; // a proof tree is acyclic, but be safe
     emittedGoals.add(goalId);
 
@@ -95,6 +102,9 @@ export function proofToTree(proof: Proof): TreeNode[] {
       label: goal?.type ?? goalId,
       type: "goal",
       parents,
+      // The producing tactic's source span, for the widget's node↔source link
+      // (see types.ts `TreeNode.position`).
+      position: producedAt,
     });
 
     const step = stepByGoal.get(goalId);
@@ -106,12 +116,17 @@ export function proofToTree(proof: Proof): TreeNode[] {
       label: step.tacticString,
       type: "tactic",
       parents: [{ id: goalId }],
+      // Carry the tactic's source span so the widget can link this node back to
+      // the `.lean` source (see types.ts `TreeNode.position`).
+      position: step.position,
     });
 
     for (const child of stepGoalsAfter(step)) {
-      visitGoal(child.id, [
-        { id: tId, hyps: newHyps(step.goalBefore, child) },
-      ]);
+      visitGoal(
+        child.id,
+        [{ id: tId, hyps: newHyps(step.goalBefore, child) }],
+        step.position,
+      );
     }
   }
 

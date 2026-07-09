@@ -30,6 +30,31 @@ rev = "v4.27.0"
 [[lean_lib]]
 name = "Ppharness"
 
+# --- The infoview widget's bundled JS (built by `npm run build:widget`) -------
+# `include_str` (used below) is a bare file read at elaboration time — Lake
+# cannot see it as a dependency on its own, so a `lake build` after only the JS
+# changed is a silent no-op that keeps serving the OLD bundle (hit this for
+# real: ProofTreeWidget.lean's own source never changed, so Lake never noticed
+# `web/dist/proofTreeWidget.js` had). Declaring it as a tracked `input_file` and
+# wiring it into the library below via `needs` closes that gap — confirmed with
+# a real edit-rebuild cycle (the deprecated `extraDepTargets` field looked
+# equivalent on paper but silently failed to propagate the change; `needs` is
+# the one that actually forces re-elaboration).
+[[input_file]]
+name = "proofTreeWidgetJs"
+path = "../web/dist/proofTreeWidget.js"
+text = true
+
+# --- The Lean infoview user-widget (file: ProofTreeWidget.lean) ---
+# Renders the proof tree in the VS Code infoview over RPC, reusing the same
+# `BetterParser_Tree` as the CLI. Imports ProofWidgets (available transitively via
+# Mathlib) and `include_str`s the bundled renderer, so run `npm run build:widget`
+# in `web/` before `lake build` (see CLAUDE.md). `needs` makes that second step
+# actually pick up the change (see the `input_file` comment above).
+[[lean_lib]]
+name = "ProofTreeWidget"
+needs = ["proofTreeWidgetJs"]
+
 # --- Our CLI executable (file: Main.lean, provides `def main`) ---
 # `supportInterpreter` is required so the binary can run Mathlib's `@[init]`
 # declarations when it loads an `import Mathlib` environment at runtime.

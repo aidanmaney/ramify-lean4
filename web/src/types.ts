@@ -1,3 +1,5 @@
+import type { ProofStepPosition } from "./paperproof";
+
 // An edge to a parent node, optionally carrying the local hypotheses
 // (Lean context, e.g. "A B : Prop\nh : A ∧ B") introduced along that connection.
 export interface ParentEdge {
@@ -16,6 +18,12 @@ export interface TreeNode {
   label: string;
   type: NodeType;
   parents: ParentEdge[];
+  // Source span this node maps back to. For a tactic node, its own range; for
+  // a goal node, the range of the tactic that PRODUCED it (root goals have
+  // none — they aren't produced by any tactic, just the theorem statement).
+  // Used by the infoview widget for the node↔source link (reveal on click,
+  // and highlighting the node under the editor cursor).
+  position?: ProofStepPosition;
 }
 
 // A visible node enriched with fold state and computed box geometry; this is the
