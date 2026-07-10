@@ -1,6 +1,7 @@
 # Node / web
 **/node_modules/
 web/dist/
+web/dist-app/
 
 # Lean / Lake build artifacts (Mathlib cache lives here — multi-GB)
 **/.lake/

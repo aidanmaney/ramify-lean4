@@ -1,4 +1,10 @@
-import type { GoalInfo, Proof, ProofStep, ProofStepPosition } from "./paperproof";
+import type {
+  GoalInfo,
+  Hypothesis,
+  Proof,
+  ProofStep,
+  ProofStepPosition,
+} from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import type { TreeNode } from "./types";
 
@@ -27,15 +33,22 @@ const tacticId = (goalId: string): string => `tactic:${goalId}`;
 // Hypotheses a child goal gained relative to the goal its tactic consumed. We
 // show only the *delta* on the edge (matching Paperproof's "introduced here"
 // semantics) rather than the full, ever-growing context. Identity is by fvarId.
-function newHyps(parent: GoalInfo, child: GoalInfo): string | undefined {
+// Exported (with `hypLine`) so the widget's tagged renderer can recompute the
+// exact same per-line hyp list from a goal id and swap in interactive types.
+export function newHypList(parent: GoalInfo, child: GoalInfo): Hypothesis[] {
   const seen = new Set(parent.hyps.map((h) => h.id));
-  const added = child.hyps
-    .filter((h) => !seen.has(h.id))
-    .map((h) =>
-      h.value != null
-        ? `${h.username} : ${h.type} := ${h.value}`
-        : `${h.username} : ${h.type}`,
-    );
+  return child.hyps.filter((h) => !seen.has(h.id));
+}
+
+/** The edge-label line for one hypothesis, e.g. `h : p ∧ q` (`:= v` for lets). */
+export function hypLine(h: Hypothesis): string {
+  return h.value != null
+    ? `${h.username} : ${h.type} := ${h.value}`
+    : `${h.username} : ${h.type}`;
+}
+
+function newHyps(parent: GoalInfo, child: GoalInfo): string | undefined {
+  const added = newHypList(parent, child).map(hypLine);
   return added.length > 0 ? added.join("\n") : undefined;
 }
 

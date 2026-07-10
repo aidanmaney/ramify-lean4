@@ -1,4 +1,4 @@
-import { useContext, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import {
   EditorContext,
   useRpcSession,
@@ -8,6 +8,13 @@ import {
 } from "@leanprover/infoview";
 import type { Proof, ProofStepPosition } from "./paperproof";
 import ProofTreeView from "./ProofTreeView";
+import { makeTaggedRenderers, type TaggedGoalEntry } from "./taggedRender";
+
+// The RPC payload: the CLI's `Proof` shape plus `taggedGoals`, each goal's
+// interactive (tagged) pretty-print. The tags hold live RPC references — valid
+// only within this session, which is why they ride the RPC path and never the
+// NDJSON one.
+type ProofTreeData = Proof & { taggedGoals?: TaggedGoalEntry[] };
 
 // The Lean infoview user-widget entry point. This is the default export bundled
 // into `web/dist/proofTreeWidget.js` and loaded by `ProofTreeWidget`
@@ -25,23 +32,43 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // is cheap, and it is what makes the tree "follow the cursor". The server
   // returns an EMPTY proof (`steps: []`) when the cursor isn't inside a tactic
   // proof — that's a normal outcome, not an error (see getProofTree).
-  const st = useAsyncPersistent<Proof>(
-    () => rs.call<{ pos: typeof pos }, Proof>("ProofTree.getProofTree", { pos }),
+  const st = useAsyncPersistent<ProofTreeData>(
+    () =>
+      rs.call<{ pos: typeof pos }, ProofTreeData>("ProofTree.getProofTree", {
+        pos,
+      }),
     [rs, pos.uri, pos.line, pos.character],
   );
 
-  // Hold the last rendered NON-EMPTY proof, keyed by the full payload, so
-  // re-highlighting on cursor moves within a proof doesn't churn the layout or
-  // fold state, and moving the cursor out of the proof keeps the tree up. We
-  // adjust this during render (React's sanctioned pattern, cf. `prevEngine` in
-  // ProofTreeView) rather than via a ref, which mustn't be read during render.
-  const [stable, setStable] = useState<{ sig: string; proof: Proof } | null>(null);
+  // Hold the last rendered NON-EMPTY proof, keyed by the payload's TEXT parts,
+  // so re-highlighting on cursor moves within a proof doesn't churn the layout
+  // or fold state, and moving the cursor out of the proof keeps the tree up.
+  // The tagged goals are excluded from the signature on purpose: their RPC
+  // references are freshly allocated on every call, so keying on them would
+  // treat every cursor move as a new proof. Within one RPC session the old
+  // references stay valid, so keeping the first response's tags is correct.
+  // We adjust this during render (React's sanctioned pattern, cf. `prevEngine`
+  // in ProofTreeView) rather than via a ref, which mustn't be read during render.
+  const [stable, setStable] = useState<{
+    sig: string;
+    proof: Proof;
+    taggedGoals: TaggedGoalEntry[];
+  } | null>(null);
   if (st.state === "resolved" && st.value.steps.length > 0) {
-    const sig = JSON.stringify(st.value);
+    const proof: Proof = { steps: st.value.steps, allGoals: st.value.allGoals };
+    const sig = JSON.stringify(proof);
     if (!stable || stable.sig !== sig) {
-      setStable({ sig, proof: st.value });
+      setStable({ sig, proof, taggedGoals: st.value.taggedGoals ?? [] });
     }
   }
+
+  // The tagged (hover-interactive) label renderers for this proof; see
+  // taggedRender.tsx. Rebuilt only when the stable proof actually changes.
+  const renderers = useMemo(
+    () =>
+      stable ? makeTaggedRenderers(stable.proof, stable.taggedGoals) : null,
+    [stable],
+  );
 
   // tree→source: clicking a tactic node reveals its span in the editor.
   const reveal = (p: ProofStepPosition) => {
@@ -76,6 +103,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onReveal={reveal}
         highlightPos={{ line: pos.line, character: pos.character }}
         height="70vh"
+        renderTaggedGoal={renderers?.renderTaggedGoal}
+        renderTaggedHyps={renderers?.renderTaggedHyps}
       />
     </details>
   );

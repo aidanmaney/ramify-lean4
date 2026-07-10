@@ -83,21 +83,30 @@ function positionContains(
 // comes from the shared hypSize so it matches the room the layout reserved.
 // `onClick`/`accent` wire the widget's tree→source and source→tree link for the
 // tactic that introduced these hypotheses (see the links loop below).
+// `taggedLines` (widget only) swaps individual lines for interactive content
+// with hover type tooltips; null entries keep the plain text for that line.
 function HypLabel({
   x,
   y,
   text,
   onClick,
   accent,
+  taggedLines,
 }: {
   x: number;
   y: number;
   text: string;
   onClick?: () => void;
   accent?: boolean;
+  taggedLines?: (ReactNode | null)[] | null;
 }) {
   const lines = text.split("\n");
   const { w, h } = hypSize(text);
+  // Native hover tooltip: the full (un-wrapped) hyp text, plus a reveal hint
+  // when this label is clickable. With tagged content it moves onto the box
+  // rect only (padding/border), so it doesn't stack on the interactive type
+  // tooltips the HTML lines pop on hover.
+  const tooltip = onClick ? `${text}\n\n· click to reveal in source` : text;
 
   return (
     <g
@@ -105,9 +114,7 @@ function HypLabel({
       onClick={onClick}
       style={{ cursor: onClick ? "pointer" : "default" }}
     >
-      {/* Native hover tooltip: the full (un-wrapped) hyp text, plus a reveal
-          hint when this label is clickable. */}
-      <title>{onClick ? `${text}\n\n· click to reveal in source` : text}</title>
+      {!taggedLines && <title>{tooltip}</title>}
       <rect
         x={-w / 2}
         y={-h / 2}
@@ -117,27 +124,60 @@ function HypLabel({
         fill="#fffbe6"
         stroke={accent ? SEQ_STROKE : "#d6b656"}
         strokeWidth={accent ? 2.5 : 1}
-      />
-      <text
-        textAnchor="start"
-        fontSize={HYP_FONT_PX}
-        fontFamily="monospace"
-        fill="#7a6000"
-        // Drop the page's inherited letter-spacing: it isn't counted by the
-        // width measurer in layout.ts, so leaving it on overflows the box.
-        style={{ letterSpacing: 0 }}
       >
-        {lines.map((line, j) => (
-          <tspan
-            key={j}
-            x={-w / 2 + HYP_PAD}
-            y={(j - (lines.length - 1) / 2) * HYP_LINE_H}
-            dy="0.32em"
+        {taggedLines && <title>{tooltip}</title>}
+      </rect>
+      {taggedLines ? (
+        // HTML overlay in the exact geometry the tspans below would use: the
+        // padded content area, one fixed-height line box per label line. The
+        // text is identical to the measured plain lines (taggedRender.tsx
+        // guarantees it), so nothing wraps — hence white-space: pre.
+        <foreignObject
+          x={-w / 2 + HYP_PAD}
+          y={-h / 2 + HYP_PAD}
+          width={w - 2 * HYP_PAD}
+          height={lines.length * HYP_LINE_H}
+          style={{ overflow: "visible" }}
+        >
+          <div
+            style={{
+              fontFamily: "monospace",
+              fontSize: HYP_FONT_PX,
+              lineHeight: `${HYP_LINE_H}px`,
+              letterSpacing: 0,
+              whiteSpace: "pre",
+              color: "#7a6000",
+            }}
           >
-            {line}
-          </tspan>
-        ))}
-      </text>
+            {lines.map((line, j) => (
+              <div key={j} style={{ height: HYP_LINE_H }}>
+                {taggedLines[j] ?? line}
+              </div>
+            ))}
+          </div>
+        </foreignObject>
+      ) : (
+        <text
+          textAnchor="start"
+          fontSize={HYP_FONT_PX}
+          fontFamily="monospace"
+          fill="#7a6000"
+          // Drop the page's inherited letter-spacing: it isn't counted by the
+          // width measurer in layout.ts, so leaving it on overflows the box.
+          style={{ letterSpacing: 0 }}
+        >
+          {lines.map((line, j) => (
+            <tspan
+              key={j}
+              x={-w / 2 + HYP_PAD}
+              y={(j - (lines.length - 1) / 2) * HYP_LINE_H}
+              dy="0.32em"
+            >
+              {line}
+            </tspan>
+          ))}
+        </text>
+      )}
     </g>
   );
 }
@@ -167,6 +207,24 @@ export interface ProofTreeViewProps {
    * (with its pinned toolbars) stays inside the panel instead of escaping it.
    */
   height?: string | number;
+  /**
+   * Widget-only: take over a goal node's label with interactive content (the
+   * infoview's hover type tooltips). Called with the goal's id and its wrapped
+   * label lines; returns one ReactNode per line (rendered in the same line
+   * geometry as the plain text), or null to keep the plain SVG text. The view
+   * stays infoview-agnostic — widget.tsx implements this with InteractiveCode
+   * (see taggedRender.tsx); the standalone app leaves it unset.
+   */
+  renderTaggedGoal?: (goalId: string, lines: string[]) => ReactNode[] | null;
+  /**
+   * Widget-only, same idea for the hypotheses on the edge into goal `goalId`
+   * (the child goal whose context gained them). Null entries in the returned
+   * array keep that line plain; null overall keeps the whole label plain.
+   */
+  renderTaggedHyps?: (
+    goalId: string,
+    lines: string[],
+  ) => (ReactNode | null)[] | null;
 }
 
 export default function ProofTreeView({
@@ -175,6 +233,8 @@ export default function ProofTreeView({
   highlightPos,
   headerExtra,
   height = "100vh",
+  renderTaggedGoal,
+  renderTaggedHyps,
 }: ProofTreeViewProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Accordion: expanding a node collapses its sibling branches, so only one
@@ -598,6 +658,12 @@ export default function ProofTreeView({
                         onReveal && hypPos ? () => onReveal(hypPos) : undefined
                       }
                       accent={hypAccent}
+                      taggedLines={
+                        renderTaggedHyps?.(
+                          link.target.data.id,
+                          hyps.split("\n"),
+                        ) ?? null
+                      }
                     />
                   )}
                 </g>
@@ -638,6 +704,12 @@ export default function ProofTreeView({
                   ? "· click » to reveal in source"
                   : null;
               const nodeTooltip = revealHint ? `${label}\n\n${revealHint}` : label;
+              // Widget-only interactive label (hover type tooltips) for goal
+              // nodes; null keeps the plain SVG text (always, for tactics).
+              const taggedLines =
+                type === "goal" && renderTaggedGoal
+                  ? renderTaggedGoal(id, lines)
+                  : null;
 
               const handleClick = () => {
                 // In the widget, clicking a positioned tactic reveals its source
@@ -656,7 +728,10 @@ export default function ProofTreeView({
                   onClick={clickable ? handleClick : undefined}
                   style={{ cursor: clickable ? "pointer" : "default" }}
                 >
-                  <title>{nodeTooltip}</title>
+                  {/* With a tagged label, the native tooltip retreats to the box
+                      rect (padding/border) so it doesn't stack on the hover
+                      type-tooltips the interactive text pops itself. */}
+                  {!taggedLines && <title>{nodeTooltip}</title>}
                   <rect
                     x={-w / 2}
                     y={-h / 2}
@@ -666,7 +741,9 @@ export default function ProofTreeView({
                     stroke={accent ? SEQ_STROKE : style.stroke}
                     strokeWidth={accent ? 3 : 1.5}
                     fill={style.fill}
-                  />
+                  >
+                    {taggedLines && <title>{nodeTooltip}</title>}
+                  </rect>
 
                   {foldable && !seqActive && !revealable && (
                     <text
@@ -701,25 +778,57 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  <text
-                    textAnchor="start"
-                    fontSize={NODE_FONT_PX}
-                    fontFamily="monospace"
-                    // Match the width measurer in layout.ts, which doesn't include
-                    // the page's inherited letter-spacing.
-                    style={{ letterSpacing: 0 }}
-                  >
-                    {lines.map((line, j) => (
-                      <tspan
-                        key={j}
-                        x={-w / 2 + NODE_PAD}
-                        y={(j - (lines.length - 1) / 2) * LINE_H}
-                        dy="0.32em"
+                  {taggedLines ? (
+                    // HTML overlay in the exact line geometry of the tspans
+                    // below: block top at the centered stack's top, one
+                    // LINE_H-high box per wrapped line. Line texts equal the
+                    // measured plain lines (taggedRender.tsx guarantees it),
+                    // so nothing wraps — hence white-space: pre.
+                    <foreignObject
+                      x={-w / 2 + NODE_PAD}
+                      y={-(lines.length * LINE_H) / 2}
+                      width={w - 2 * NODE_PAD}
+                      height={lines.length * LINE_H}
+                      style={{ overflow: "visible" }}
+                    >
+                      <div
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: NODE_FONT_PX,
+                          lineHeight: `${LINE_H}px`,
+                          letterSpacing: 0,
+                          whiteSpace: "pre",
+                          color: "#000",
+                        }}
                       >
-                        {line}
-                      </tspan>
-                    ))}
-                  </text>
+                        {taggedLines.map((line, j) => (
+                          <div key={j} style={{ height: LINE_H }}>
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    </foreignObject>
+                  ) : (
+                    <text
+                      textAnchor="start"
+                      fontSize={NODE_FONT_PX}
+                      fontFamily="monospace"
+                      // Match the width measurer in layout.ts, which doesn't include
+                      // the page's inherited letter-spacing.
+                      style={{ letterSpacing: 0 }}
+                    >
+                      {lines.map((line, j) => (
+                        <tspan
+                          key={j}
+                          x={-w / 2 + NODE_PAD}
+                          y={(j - (lines.length - 1) / 2) * LINE_H}
+                          dy="0.32em"
+                        >
+                          {line}
+                        </tspan>
+                      ))}
+                    </text>
+                  )}
                 </g>
               );
             })}

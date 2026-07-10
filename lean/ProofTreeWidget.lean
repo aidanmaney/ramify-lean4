@@ -34,14 +34,27 @@ open Lean Elab Meta Server RequestM ProofWidgets
 
 namespace ProofTree
 
-/-- The wire payload sent to the renderer: mirrors the CLI's `resultToJson`
-(`{ steps, allGoals }`). Like Paperproof's `OutputParams`, deriving `FromJson`/`ToJson`
-is enough — the RPC layer picks up `RpcEncodable` from those. The document `uri`
-is *not* included: the panel widget already receives it in `props.pos`. -/
+/-- A goal's `Widget.InteractiveGoal` (tagged pretty-printed type + hypotheses),
+keyed by the same mvarId string as `GoalInfo.id`. This is what powers the
+infoview-style hover tooltips: each subterm tag carries a `WithRpcRef InfoWithCtx`
+that the JS `<InteractiveCode>` resolves on hover via `infoToInteractive`. -/
+structure TaggedGoalEntry where
+  goalId : String
+  goal   : Widget.InteractiveGoal
+  deriving Server.RpcEncodable
+
+/-- The wire payload sent to the renderer: the CLI's `{ steps, allGoals }` shape
+plus `taggedGoals`, the interactive (tagged) rendering of each goal. The tagged
+half contains live RPC references, so the whole payload derives
+`Server.RpcEncodable` rather than `ToJson` (the Paperproof structs still encode
+via their derived `FromJson`/`ToJson` through the blanket instance) — and it is
+exactly the part that can never ride the CLI's NDJSON. The document `uri` is
+*not* included: the panel widget already receives it in `props.pos`. -/
 structure ProofTreeData where
-  steps    : List Paperproof.Services.ProofStep
-  allGoals : List Paperproof.Services.GoalInfo
-  deriving Inhabited, FromJson, ToJson
+  steps       : List Paperproof.Services.ProofStep
+  allGoals    : List Paperproof.Services.GoalInfo
+  taggedGoals : Array TaggedGoalEntry := #[]
+  deriving Server.RpcEncodable
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
 whole `DocumentPosition`; the extra `uri` field is ignored when decoding as an
@@ -49,6 +62,34 @@ whole `DocumentPosition`; the extra `uri` field is ignored when decoding as an
 structure GetProofTreeParams where
   pos : Lsp.Position
   deriving FromJson, ToJson
+
+/-- Collect an `InteractiveGoal` for every goal mentioned by any tactic in the
+info tree, keyed by mvarId string (= `GoalInfo.id` on the wire).
+
+This is the additive counterpart of the vendored parser's `printGoalInfo`, which
+computes the very same tagged pretty-print (`ppExprWithInfos`) and then discards
+the tags with `.fmt.pretty`. Rather than forking the parser, we re-walk the tree
+here and keep them: for each `TacticInfo` print its goals with `mctxAfter` —
+matching `BetterParser`'s `printCtx`, so the tagged text and the plain `GoalInfo`
+strings agree — first-wins per goal. A goal that fails to print (e.g. not in
+this `mctx`) is simply skipped; the client falls back to plain text. -/
+def collectTaggedGoals (infoTree : InfoTree) : IO (Array TaggedGoalEntry) := do
+  let tacticNodes := infoTree.foldInfo (init := #[]) fun ctx info acc =>
+    if let .ofTacticInfo ti := info then acc.push (ctx, ti) else acc
+  let mut seen : Std.HashSet String := {}
+  let mut out : Array TaggedGoalEntry := #[]
+  for (ctx, ti) in tacticNodes do
+    let printCtx := { ctx with mctx := ti.mctxAfter }
+    for mvarId in ti.goalsBefore ++ ti.goalsAfter do
+      let key := mvarId.name.toString
+      unless seen.contains key do
+        seen := seen.insert key
+        let goal? ← try
+            some <$> printCtx.runMetaM {} (Widget.goalToInteractive mvarId)
+          catch _ => pure none
+        if let some goal := goal? then
+          out := out.push { goalId := key, goal }
+  return out
 
 /-- Parse the proof tree for the theorem under the cursor.
 
@@ -65,9 +106,11 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let some parsedTree ← RequestM.runTermElabM snap
       (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree)
       | return { steps := [], allGoals := [] }
+    let taggedGoals ← collectTaggedGoals snap.infoTree
     return {
-      steps    := parsedTree.steps,
-      allGoals := parsedTree.allGoals.toList
+      steps       := parsedTree.steps,
+      allGoals    := parsedTree.allGoals.toList,
+      taggedGoals
     }
 
 end ProofTree
