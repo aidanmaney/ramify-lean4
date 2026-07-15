@@ -1,4 +1,4 @@
-import type { ParentEdge, TreeNode } from "./types";
+import type { EdgeHyps, ParentEdge, TreeNode } from "./types";
 
 // Deterministic PRNG (mulberry32) so a given seed always builds the SAME tree.
 // Reproducibility matters here: you want to compare layout options on an
@@ -52,7 +52,17 @@ function hash(s: string): number {
   return h >>> 0;
 }
 
-const pickHyp = (childId: string): string => HYPS[hash(childId) % HYPS.length];
+// Structured like a real edge label (see types.ts EdgeHyps): line texts plus a
+// deterministic "used by this tactic" flag so the marker gutter is exercised.
+const pickHyp = (childId: string): EdgeHyps => {
+  const n = hash(childId);
+  return {
+    lines: HYPS[n % HYPS.length]
+      .split("\n")
+      .map((text, i) => ({ text, used: (n >> i) % 3 === 0 })),
+    goalId: childId,
+  };
+};
 
 /**
  * Build an alternating goal/tactic tree.

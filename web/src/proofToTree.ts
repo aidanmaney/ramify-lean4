@@ -1,12 +1,6 @@
-import type {
-  GoalInfo,
-  Hypothesis,
-  Proof,
-  ProofStep,
-  ProofStepPosition,
-} from "./paperproof";
+import type { GoalInfo, Hypothesis, Proof, ProofStep } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import type { TreeNode } from "./types";
+import type { EdgeHypLine, EdgeHyps, TreeNode } from "./types";
 
 // Adapter: Paperproof `Proof` → the renderer's `TreeNode[]`.
 //
@@ -30,26 +24,38 @@ import type { TreeNode } from "./types";
 // at most one tactic in a tree proof), so the id is stable across re-parses.
 const tacticId = (goalId: string): string => `tactic:${goalId}`;
 
-// Hypotheses a child goal gained relative to the goal its tactic consumed. We
-// show only the *delta* on the edge (matching Paperproof's "introduced here"
-// semantics) rather than the full, ever-growing context. Identity is by fvarId.
-// Exported (with `hypLine`) so the widget's tagged renderer can recompute the
-// exact same per-line hyp list from a goal id and swap in interactive types.
-export function newHypList(parent: GoalInfo, child: GoalInfo): Hypothesis[] {
-  const seen = new Set(parent.hyps.map((h) => h.id));
-  return child.hyps.filter((h) => !seen.has(h.id));
-}
-
-/** The edge-label line for one hypothesis, e.g. `h : p ∧ q` (`:= v` for lets). */
+/** The edge-label line for one hypothesis, e.g. `h : p ∧ q` (`:= v` for lets).
+Exported so the widget's tagged renderer can match label lines back to a goal's
+hyps and swap in interactive types (see taggedRender.tsx). */
 export function hypLine(h: Hypothesis): string {
   return h.value != null
     ? `${h.username} : ${h.type} := ${h.value}`
     : `${h.username} : ${h.type}`;
 }
 
-function newHyps(parent: GoalInfo, child: GoalInfo): string | undefined {
-  const added = newHypList(parent, child).map(hypLine);
-  return added.length > 0 ? added.join("\n") : undefined;
+// The context label shown above a tactic: the hypotheses of the goal it
+// consumes, each flagged with whether the tactic actually uses it
+// (`tacticDependsOn`, fvarIds — same ids as `Hypothesis.id`).
+//
+// In full mode that's the whole context. In delta mode it's the hypotheses the
+// goal GAINED over the goal its own producing tactic consumed (Paperproof's
+// "introduced here" semantics; for a root goal, its binders — gained from the
+// theorem statement), PLUS any older hypotheses this tactic uses: usage is the
+// point of the label, so a used hyp is shown even when it isn't new. Context
+// order is preserved.
+function contextFor(
+  step: ProofStep,
+  producedBy: ProofStep | undefined,
+  fullHyps: boolean,
+): EdgeHypLine[] {
+  const goal = step.goalBefore;
+  const used = new Set(step.tacticDependsOn);
+  let shown = goal.hyps;
+  if (!fullHyps) {
+    const inherited = new Set(producedBy?.goalBefore.hyps.map((h) => h.id));
+    shown = goal.hyps.filter((h) => !inherited.has(h.id) || used.has(h.id));
+  }
+  return shown.map((h) => ({ text: hypLine(h), used: used.has(h.id) }));
 }
 
 // All goals referenced by a proof, indexed by mvarId. `allGoals` is
@@ -85,7 +91,18 @@ export function proofTitle(proof: Proof): string {
   return (root && goals.get(root)?.type) || "(proof)";
 }
 
-export function proofToTree(proof: Proof): TreeNode[] {
+export interface ProofToTreeOptions {
+  /**
+   * Label each tactic with its goal's FULL local context instead of the delta
+   * the goal gained (plus used) — contexts read additively down the tree.
+   */
+  fullHyps?: boolean;
+}
+
+export function proofToTree(
+  proof: Proof,
+  { fullHyps = false }: ProofToTreeOptions = {},
+): TreeNode[] {
   const goals = goalIndex(proof);
 
   // Each goal is consumed by at most one tactic → index steps by goalBefore.
@@ -97,14 +114,13 @@ export function proofToTree(proof: Proof): TreeNode[] {
   const nodes: TreeNode[] = [];
   const emittedGoals = new Set<string>();
 
-  // DFS from a goal, given the parent edge that reaches it and the source span
-  // of the tactic that produced it — the same step that introduced any hyps on
-  // that edge (see `newHyps`). Root goals get neither: they're the theorem's
-  // original goal(s), not produced by any tactic.
+  // DFS from a goal, given the parent edge that reaches it and the step that
+  // produced it. Root goals get neither: they're the theorem's original
+  // goal(s), not produced by any tactic.
   function visitGoal(
     goalId: string,
     parents: TreeNode["parents"],
-    producedAt?: ProofStepPosition,
+    producedBy?: ProofStep,
   ): void {
     if (emittedGoals.has(goalId)) return; // a proof tree is acyclic, but be safe
     emittedGoals.add(goalId);
@@ -117,29 +133,35 @@ export function proofToTree(proof: Proof): TreeNode[] {
       parents,
       // The producing tactic's source span, for the widget's node↔source link
       // (see types.ts `TreeNode.position`).
-      position: producedAt,
+      position: producedBy?.position,
     });
 
     const step = stepByGoal.get(goalId);
     if (!step) return; // leaf: this goal was closed by its tactic
+
+    // The context the tactic runs in sits on the goal→tactic edge, drawn ABOVE
+    // the tactic node — reading order goal, context, tactic — with the hyps
+    // this tactic uses marked. Introduced by the step that produced this goal,
+    // hence that step's span for the label's source link.
+    const context = contextFor(step, producedBy, fullHyps);
+    const hyps: EdgeHyps | undefined =
+      context.length > 0
+        ? { lines: context, goalId, pos: producedBy?.position }
+        : undefined;
 
     const tId = tacticId(goalId);
     nodes.push({
       id: tId,
       label: step.tacticString,
       type: "tactic",
-      parents: [{ id: goalId }],
+      parents: [{ id: goalId, hyps }],
       // Carry the tactic's source span so the widget can link this node back to
       // the `.lean` source (see types.ts `TreeNode.position`).
       position: step.position,
     });
 
     for (const child of stepGoalsAfter(step)) {
-      visitGoal(
-        child.id,
-        [{ id: tId, hyps: newHyps(step.goalBefore, child) }],
-        step.position,
-      );
+      visitGoal(child.id, [{ id: tId }], step);
     }
   }
 

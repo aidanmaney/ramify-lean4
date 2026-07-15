@@ -11,15 +11,21 @@ import {
   createLayoutEngine,
   hypSize,
   HYP_FONT_PX,
+  HYP_GAP,
   HYP_LINE_H,
+  HYP_MARK_W,
   HYP_PAD,
   LINE_H,
   NODE_FONT_PX,
   NODE_PAD,
-  HYP_GAP,
   ARROW_GAP,
+  TRUNK_INSET,
+  CONT_INDENT,
+  getCodeFontFamily,
+  refreshCodeFontFamily,
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
+import type { EdgeHyps } from "./types";
 import { proofToTree } from "./proofToTree";
 
 // The interactive proof tree: layout, folding, zoom/scroll, and the SVG render.
@@ -48,9 +54,12 @@ type Seq =
   | { mode: "view"; from: string; to: string };
 
 const MARGIN = { top: 80, right: 90, bottom: 40, left: 90 };
+// Goals cool blue, tactics warm green — both several steps more saturated than
+// the old near-white pastels so the two node kinds read apart at a glance (the
+// yellow hyp labels and the orange accent stay distinct from both).
 const NODE_STYLES = {
-  goal: { fill: "#eef6ff", stroke: "#2b6cb0" },
-  tactic: { fill: "#f0fff4", stroke: "#2f855a" },
+  goal: { fill: "#dbeafe", stroke: "#1d6fd8" },
+  tactic: { fill: "#d3f8df", stroke: "#15803d" },
   default: { fill: "#fff", stroke: "#999" },
 };
 // Accent outline for the chosen sequence endpoints, and for the tactic node the
@@ -79,34 +88,56 @@ function positionContains(
   return beforeOrEq(range.start, p) && beforeOrEq(p, range.stop);
 }
 
-// A small context box centered at (x, y), listing its hypotheses. Box geometry
-// comes from the shared hypSize so it matches the room the layout reserved.
-// `onClick`/`accent` wire the widget's tree→source and source→tree link for the
-// tactic that introduced these hypotheses (see the links loop below).
+// Colors of the context label's lines: hyps the tactic below actually uses
+// keep the full-strength ink (plus a marker in the gutter); the rest recede.
+const HYP_USED_FILL = "#7a6000";
+const HYP_UNUSED_FILL = "#a89557";
+const HYP_MARK_FILL = "#c05621";
+const HYP_MARK = "▸";
+
+// A small context box centered at (x, y), listing the hypotheses in scope for
+// the tactic drawn below it — the ones the tactic uses are marked with a
+// gutter `▸` and full-strength ink. Box geometry comes from the shared hypSize
+// so it matches the room the layout folded into the tactic's band.
+// `onClick`/`accent` wire the widget's tree→source and source→tree link for
+// the tactic that introduced these hypotheses (see the links loop below).
 // `taggedLines` (widget only) swaps individual lines for interactive content
 // with hover type tooltips; null entries keep the plain text for that line.
 function HypLabel({
   x,
   y,
-  text,
+  hyps,
   onClick,
   accent,
   taggedLines,
 }: {
   x: number;
   y: number;
-  text: string;
+  hyps: EdgeHyps;
   onClick?: () => void;
   accent?: boolean;
   taggedLines?: (ReactNode | null)[] | null;
 }) {
-  const lines = text.split("\n");
-  const { w, h } = hypSize(text);
-  // Native hover tooltip: the full (un-wrapped) hyp text, plus a reveal hint
-  // when this label is clickable. With tagged content it moves onto the box
-  // rect only (padding/border), so it doesn't stack on the interactive type
-  // tooltips the HTML lines pop on hover.
-  const tooltip = onClick ? `${text}\n\n· click to reveal in source` : text;
+  const lines = hyps.lines;
+  const { w, h } = hypSize(hyps);
+  const anyUsed = lines.some((l) => l.used);
+  // Marker gutter (reserved by hypSize only when something is marked), and the
+  // left edge text starts at.
+  const gutterX = -w / 2 + HYP_PAD;
+  const textX = gutterX + (anyUsed ? HYP_MARK_W : 0);
+  // Dim only as contrast: when nothing is marked, everything keeps full ink.
+  const lineFill = (used: boolean) =>
+    anyUsed && !used ? HYP_UNUSED_FILL : HYP_USED_FILL;
+  // Native hover tooltip: the full hyp text (markers inlined), plus a legend
+  // and a reveal hint when this label is clickable. With tagged content it
+  // moves onto the box rect only (padding/border), so it doesn't stack on the
+  // interactive type tooltips the HTML lines pop on hover.
+  const titleText =
+    lines.map((l) => (l.used ? `${HYP_MARK} ${l.text}` : l.text)).join("\n") +
+    (anyUsed ? `\n\n${HYP_MARK} = used by this tactic` : "");
+  const tooltip = onClick
+    ? `${titleText}\n· click to reveal in source`
+    : titleText;
 
   return (
     <g
@@ -127,31 +158,57 @@ function HypLabel({
       >
         {taggedLines && <title>{tooltip}</title>}
       </rect>
+      {/* Gutter markers for used hyps are plain SVG in both render paths, so
+          the tagged overlay only replaces the line text. */}
+      {anyUsed && (
+        <text
+          textAnchor="start"
+          fontSize={HYP_FONT_PX}
+          fontFamily={getCodeFontFamily()}
+          fill={HYP_MARK_FILL}
+          style={{ letterSpacing: 0 }}
+        >
+          {lines.map((line, j) =>
+            line.used ? (
+              <tspan
+                key={j}
+                x={gutterX}
+                y={(j - (lines.length - 1) / 2) * HYP_LINE_H}
+                dy="0.32em"
+              >
+                {HYP_MARK}
+              </tspan>
+            ) : null,
+          )}
+        </text>
+      )}
       {taggedLines ? (
         // HTML overlay in the exact geometry the tspans below would use: the
         // padded content area, one fixed-height line box per label line. The
         // text is identical to the measured plain lines (taggedRender.tsx
         // guarantees it), so nothing wraps — hence white-space: pre.
         <foreignObject
-          x={-w / 2 + HYP_PAD}
+          x={textX}
           y={-h / 2 + HYP_PAD}
-          width={w - 2 * HYP_PAD}
+          width={w - HYP_PAD - (textX + w / 2)}
           height={lines.length * HYP_LINE_H}
           style={{ overflow: "visible" }}
         >
           <div
             style={{
-              fontFamily: "monospace",
+              fontFamily: getCodeFontFamily(),
               fontSize: HYP_FONT_PX,
               lineHeight: `${HYP_LINE_H}px`,
               letterSpacing: 0,
               whiteSpace: "pre",
-              color: "#7a6000",
             }}
           >
             {lines.map((line, j) => (
-              <div key={j} style={{ height: HYP_LINE_H }}>
-                {taggedLines[j] ?? line}
+              <div
+                key={j}
+                style={{ height: HYP_LINE_H, color: lineFill(line.used) }}
+              >
+                {taggedLines[j] ?? line.text}
               </div>
             ))}
           </div>
@@ -160,8 +217,7 @@ function HypLabel({
         <text
           textAnchor="start"
           fontSize={HYP_FONT_PX}
-          fontFamily="monospace"
-          fill="#7a6000"
+          fontFamily={getCodeFontFamily()}
           // Drop the page's inherited letter-spacing: it isn't counted by the
           // width measurer in layout.ts, so leaving it on overflows the box.
           style={{ letterSpacing: 0 }}
@@ -169,11 +225,12 @@ function HypLabel({
           {lines.map((line, j) => (
             <tspan
               key={j}
-              x={-w / 2 + HYP_PAD}
+              x={textX}
               y={(j - (lines.length - 1) / 2) * HYP_LINE_H}
               dy="0.32em"
+              fill={lineFill(line.used)}
             >
-              {line}
+              {line.text}
             </tspan>
           ))}
         </text>
@@ -217,9 +274,10 @@ export interface ProofTreeViewProps {
    */
   renderTaggedGoal?: (goalId: string, lines: string[]) => ReactNode[] | null;
   /**
-   * Widget-only, same idea for the hypotheses on the edge into goal `goalId`
-   * (the child goal whose context gained them). Null entries in the returned
-   * array keep that line plain; null overall keeps the whole label plain.
+   * Widget-only, same idea for a tactic's context label: `goalId` is the goal
+   * whose local context the lines come from (the tactic's goalBefore — see
+   * types.ts EdgeHyps). Null entries in the returned array keep that line
+   * plain; null overall keeps the whole label plain.
    */
   renderTaggedHyps?: (
     goalId: string,
@@ -240,6 +298,13 @@ export default function ProofTreeView({
   // Accordion: expanding a node collapses its sibling branches, so only one
   // branch is open per level (the "view one branch at a time" mode).
   const [accordion, setAccordion] = useState(true);
+  // Edge hyp labels: the delta a goal gained (default), or its full context
+  // ("all hyps"), so contexts read additively down the tree.
+  const [fullHyps, setFullHyps] = useState(false);
+  // Layout mode: the compact trunk outline (default — every node gets its own
+  // vertical slot, branches indent off a left trunk, read by scrolling), or
+  // the wide Sugiyama tree (same-depth nodes share a band).
+  const [compact, setCompact] = useState(true);
   // Zoom factor applied to the whole SVG (1 = 100%). Lets you fit a wide/tall
   // tree into the slice and zoom back into a region.
   const [zoom, setZoom] = useState(1);
@@ -247,11 +312,17 @@ export default function ProofTreeView({
   // selecting two endpoints (first click sets `from`); `view` renders only the
   // path between them — a single chain of goals/tactics with no branching.
   const [seq, setSeq] = useState<Seq>({ mode: "off" });
+  // Focus mode: a goal id whose subtree becomes the whole tree (that goal is
+  // the new layout root); null shows the full proof. Folding still works
+  // within the focused subtree.
+  const [focusId, setFocusId] = useState<string | null>(null);
 
-  // The engine + view we've already centered on; lets the init effect re-center
+  // The proof + view we've already centered on; lets the init effect re-center
   // once per loaded proof (and once per sequence switch) without writing a ref
-  // during render. One ref: the pair is only ever written and compared together.
-  const centeredOn = useRef<{ engine: unknown; viewKey: string } | null>(null);
+  // during render. Keyed on the PROOF, not the engine: the engine also rebuilds
+  // on a hyp-label mode toggle, which re-anchors on the root instead of
+  // re-centering. One ref: the pair is only ever written and compared together.
+  const centeredOn = useRef<{ proof: Proof; viewKey: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<Anchor | null>(null);
   // A zoom-change wants to keep some content point fixed on screen; this carries
@@ -269,23 +340,49 @@ export default function ProofTreeView({
   // cursor anchor is always computed against what's actually on screen.
   const zoomRef = useRef(zoom);
 
-  // One layout engine per proof; rebuilding it is how the data swaps. Keep the
-  // proof reference stable across cursor moves (widget) so the fold/zoom reset
-  // below only fires on an actual proof change, not on every re-highlight.
+  // The code font FAMILY follows the editor live: VS Code doesn't reload the
+  // webview on a font-setting change, it rewrites the CSS variables on the
+  // root element's style attribute in place — so watch that attribute (the
+  // same trick the infoview's own components use) and re-resolve. A change
+  // clears layout.ts's width cache and, via this state, rebuilds the engine
+  // so all geometry is re-measured in the new family. Inert outside the
+  // webview: nothing rewrites the root style attribute there.
+  const [codeFont, setCodeFont] = useState(getCodeFontFamily);
+  useEffect(() => {
+    const obs = new MutationObserver(() => setCodeFont(refreshCodeFontFamily()));
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style"],
+    });
+    return () => obs.disconnect();
+  }, []);
+
+  // One layout engine per (proof, hyp-label mode, code font); rebuilding it is
+  // how the data swaps. Keep the proof reference stable across cursor moves
+  // (widget) so the fold/zoom reset below only fires on an actual proof
+  // change, not on every re-highlight.
   const engine = useMemo(
-    () => createLayoutEngine(proofToTree(proof)),
-    [proof],
+    // `codeFont` isn't read here, but the engine measures every label in it
+    // via layout.ts module state — the dep is what forces a re-measure when
+    // the editor font changes (hence the lint suppression: the dependency is
+    // real, just invisible to the linter).
+    () => createLayoutEngine(proofToTree(proof, { fullHyps })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [proof, fullHyps, codeFont],
   );
 
-  // When a new proof loads, reset to "everything collapsed" and re-center. This
-  // is derived-from-engine state, so we adjust it during render on change rather
-  // than in an effect (avoids a cascading re-render).
-  const [prevEngine, setPrevEngine] = useState(engine);
-  if (engine !== prevEngine) {
-    setPrevEngine(engine);
+  // When a new proof loads, reset to "everything collapsed" and re-center.
+  // Keyed on the proof, NOT the engine: a hyp-label mode toggle rebuilds the
+  // engine too, but node ids are unchanged, so fold/zoom/sequence state stays
+  // valid and should survive. This is derived state, so we adjust it during
+  // render on change rather than in an effect (avoids a cascading re-render).
+  const [prevProof, setPrevProof] = useState(proof);
+  if (proof !== prevProof) {
+    setPrevProof(proof);
     setCollapsed(engine.foldableIds());
     setZoom(1);
     setSeq({ mode: "off" });
+    setFocusId(null);
   }
 
   // In `view` mode, restrict the layout to the chosen path's nodes (or null if
@@ -297,9 +394,16 @@ export default function ProofTreeView({
     return path ? new Set(path) : null;
   }, [engine, seq]);
 
+  // The focused subtree's id set (null = the whole proof). Scopes the layout
+  // world; folding keeps working inside it (see computeLayout).
+  const focusSet = useMemo(
+    () => (focusId ? engine.subtreeIds(focusId) : null),
+    [engine, focusId],
+  );
+
   const { nodes, links, extent } = useMemo(
-    () => engine.computeLayout(collapsed, only),
-    [engine, collapsed, only],
+    () => engine.computeLayout(collapsed, only, focusSet, compact),
+    [engine, collapsed, only, focusSet, compact],
   );
 
   // Capture a re-anchor on node `id` (or the root) before a relayout, so the
@@ -405,15 +509,35 @@ export default function ProofTreeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes]);
 
-  // The current view: the full tree, or one linearized path. Re-centering keys
-  // off this so switching into/out of a sequence re-centers on the new top node.
-  const viewKey = seq.mode === "view" ? `seq:${seq.from}>${seq.to}` : "tree";
+  // The current view: the full tree, a focused subtree, or one linearized
+  // path — in either layout mode. Re-centering keys off this, so entering/
+  // leaving a focus or sequence (or switching layout mode, which repositions
+  // everything) re-centers on that view's top node.
+  const viewKey =
+    (compact ? "compact:" : "wide:") +
+    (seq.mode === "view"
+      ? `seq:${seq.from}>${seq.to}`
+      : focusId
+        ? `focus:${focusId}`
+        : "tree");
+
+  // Focus a goal's subtree. Un-collapse the new root so the subtree actually
+  // unfolds (it may have been collapsed when its icon was clicked).
+  const focusOn = (id: string) => {
+    setFocusId(id);
+    setCollapsed((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (
       !el ||
-      (centeredOn.current?.engine === engine &&
+      (centeredOn.current?.proof === proof &&
         centeredOn.current?.viewKey === viewKey) ||
       viewport.w === 0 ||
       nodes.length === 0
@@ -421,22 +545,28 @@ export default function ProofTreeView({
       return;
 
     // Sugiyama centers the root horizontally over the WHOLE (sub)tree, so root.x
-    // is generally far from 0. Center the top node: its content position in the
-    // middle of the viewport horizontally, top edge just under MARGIN.top. The
-    // SVG is scaled by `zoom`, so content units convert to scroll px via *zoom.
+    // is generally far from 0 — center the top node in the viewport. The compact
+    // trunk is left-aligned at content x=0 instead, so pin the content's left
+    // edge just inside the viewport. Vertically both put the root's band top
+    // just under MARGIN.top. The SVG is scaled by `zoom`, so content units
+    // convert to scroll px via *zoom.
     const root = nodes.find((n) => n.data.parents.length === 0) ?? nodes[0];
     const maxX = el.scrollWidth - el.clientWidth;
     const maxY = el.scrollHeight - el.clientHeight;
     el.scrollLeft = clampScroll(
-      (MARGIN.left + PAD_X + root.x) * zoom - viewport.w / 2,
+      compact
+        ? PAD_X * zoom
+        : (MARGIN.left + PAD_X + root.x) * zoom - viewport.w / 2,
       maxX,
     );
     el.scrollTop = clampScroll(
-      (MARGIN.top + PAD_Y + root.y - root.data.h / 2) * zoom - MARGIN.top,
+      (MARGIN.top + PAD_Y + root.y - (root.data.h + root.data.hypBlockH) / 2) *
+        zoom -
+        MARGIN.top,
       maxY,
     );
-    centeredOn.current = { engine, viewKey };
-  }, [viewport, nodes, engine, viewKey, zoom, PAD_X, PAD_Y]);
+    centeredOn.current = { proof, viewKey };
+  }, [viewport, nodes, proof, viewKey, zoom, PAD_X, PAD_Y, compact]);
 
   // After a zoom change re-renders the (resized) SVG, restore scroll so the
   // intended point stays put: an explicit target (fit) wins, else the anchor
@@ -482,13 +612,24 @@ export default function ProofTreeView({
   };
 
   // Fit the tree's actual content (ignoring the viewport-sized padding) to the
-  // scroll box width, then centre it horizontally and scroll to its top.
+  // scroll box width, then centre it horizontally and scroll to its top. A
+  // node's extent includes its context label: the band (hypBlockH + h)
+  // vertically, and the label box when it's wider than the node box.
   const fitWidth = () => {
     const el = scrollRef.current;
     if (!el || nodes.length === 0) return;
-    const minLeft = Math.min(...nodes.map((n) => n.x - n.data.w / 2));
-    const maxRight = Math.max(...nodes.map((n) => n.x + n.data.w / 2));
-    const topY = Math.min(...nodes.map((n) => n.y - n.data.h / 2));
+    // A node's horizontal extent includes its context label. Wide mode centers
+    // label and box on n.x; compact left-aligns both at the box's left edge,
+    // so the wider of the two extends right from there.
+    const effW = (n: (typeof nodes)[number]) =>
+      Math.max(n.data.w, hypSize(n.data.incHyp).w);
+    const leftOf = (n: (typeof nodes)[number]) =>
+      compact ? n.x - n.data.w / 2 : n.x - effW(n) / 2;
+    const minLeft = Math.min(...nodes.map(leftOf));
+    const maxRight = Math.max(...nodes.map((n) => leftOf(n) + effW(n)));
+    const topY = Math.min(
+      ...nodes.map((n) => n.y - (n.data.h + n.data.hypBlockH) / 2),
+    );
     const contentW = maxRight - minLeft + 2 * MARGIN.left;
     const z = clampZoom(el.clientWidth / contentW);
     const cx = (minLeft + maxRight) / 2;
@@ -560,6 +701,17 @@ export default function ProofTreeView({
         }}
         accordion={accordion}
         onAccordionChange={setAccordion}
+        compact={compact}
+        onCompactChange={setCompact}
+        fullHyps={fullHyps}
+        onFullHypsChange={(v) => {
+          // Every layer's hyp label resizes, so hold the root fixed on screen
+          // (same treatment as expand/collapse-all).
+          anchorRoot();
+          setFullHyps(v);
+        }}
+        focused={focusId !== null}
+        onExitFocus={() => setFocusId(null)}
         seq={seq}
         onToggleSequence={() =>
           setSeq((s) =>
@@ -620,20 +772,53 @@ export default function ProofTreeView({
           {/* Coords originate at top-left */}
           <g transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}>
             {links.map((link, i) => {
-              const startX = link.source.x;
-              const endX = link.target.x;
-              const startY = link.source.y + link.source.data.h / 2; // bottom of THIS parent
-              const childTop = link.target.y - link.target.data.h / 2; // top of THIS child
-              const endY = childTop - ARROW_GAP; // arrowhead lands just above the node
+              // A node's band is hypBlockH (context label) + h (box), box at
+              // the bottom: edges leave a box's bottom edge and land above the
+              // target's whole band, so the arrow points at the context label
+              // when there is one — reading order goal → context → tactic.
+              const startY =
+                link.source.y +
+                (link.source.data.h + link.source.data.hypBlockH) / 2;
+              const bandTop =
+                link.target.y -
+                (link.target.data.h + link.target.data.hypBlockH) / 2;
+              const endY = bandTop - ARROW_GAP; // arrowhead just above the band
 
-              const k = (endY - startY) * 0.7;
-              const hyps = link.data; // hypotheses introduced on this edge, if any
-              // The introducing tactic is the same step that produced the child
-              // goal, so its position already lives on the target node (see
-              // proofToTree.ts `visitGoal`) — no separate threading needed.
-              const hypPos = link.target.data.position;
+              const hyps = link.data; // the tactic's input context, if labeled
+              const hypPos = hyps?.pos;
               const hypAccent =
                 !!highlightPos && !!hypPos && positionContains(hypPos, highlightPos);
+
+              const sLeft = link.source.x - link.source.data.w / 2;
+              const tLeft = link.target.x - link.target.data.w / 2;
+              let d: string;
+              let labelX: number;
+              if (compact) {
+                // Orthogonal connector dropped from a column just inside the
+                // parent box's left edge: straight down into a same-indent
+                // (trunk) child, or │└▶ into an indented branch — landing at
+                // the vertical middle of the first thing in the child's band
+                // (its context label if any, else its box).
+                const col = sLeft + TRUNK_INSET;
+                if (Math.abs(tLeft - sLeft) < 0.5) {
+                  d = `M${col},${startY} L${col},${endY}`;
+                } else {
+                  const landY =
+                    bandTop +
+                    (hyps ? hypSize(hyps).h / 2 : link.target.data.h / 2);
+                  d = `M${col},${startY} L${col},${landY} L${tLeft - ARROW_GAP},${landY}`;
+                }
+                labelX = hyps ? tLeft + hypSize(hyps).w / 2 : link.target.x;
+              } else {
+                const startX = link.source.x;
+                const endX = link.target.x;
+                const k = (endY - startY) * 0.7;
+                d = `M${startX},${startY}
+                    C${startX},${(startY + endY) / 2}
+                     ${endX},${endY - k}
+                     ${endX},${endY}`;
+                labelX = endX;
+              }
 
               return (
                 <g key={i}>
@@ -642,26 +827,22 @@ export default function ProofTreeView({
                     stroke="#555"
                     strokeWidth={1.5}
                     markerEnd="url(#arrow)"
-                    d={`M${startX},${startY}
-                    C${startX},${(startY + endY) / 2}
-                     ${endX},${endY - k}
-                     ${endX},${endY}`}
+                    d={d}
                   />
                   {hyps && (
                     <HypLabel
-                      x={endX}
-                      // Box bottom sits HYP_GAP above the node top (not just above
-                      // the arrowhead), so the context label clears the goal box.
-                      y={childTop - HYP_GAP - hypSize(hyps).h / 2}
-                      text={hyps}
+                      x={labelX}
+                      // At the top of the target's band; the box sits below it.
+                      y={bandTop + hypSize(hyps).h / 2}
+                      hyps={hyps}
                       onClick={
                         onReveal && hypPos ? () => onReveal(hypPos) : undefined
                       }
                       accent={hypAccent}
                       taggedLines={
                         renderTaggedHyps?.(
-                          link.target.data.id,
-                          hyps.split("\n"),
+                          hyps.goalId,
+                          hyps.lines.map((l) => l.text),
                         ) ?? null
                       }
                     />
@@ -671,6 +852,11 @@ export default function ProofTreeView({
             })}
             {nodes.map((node) => {
               const { w, h, lines, label, type, id, foldable, position } = node.data;
+              // The node's band is hypBlockH + h with the box pinned at the
+              // bottom (the context label, drawn by the links loop, occupies
+              // the top). All box geometry hangs off boxTop / boxCy.
+              const boxTop = (node.data.hypBlockH - h) / 2;
+              const boxCy = node.data.hypBlockH / 2;
               const style = NODE_STYLES[type] ?? NODE_STYLES.default;
               const isCollapsed = collapsed.has(id);
               const seqActive = seq.mode !== "off";
@@ -693,22 +879,33 @@ export default function ProofTreeView({
               const canReveal = seq.mode === "off" && !!onReveal && !!position;
               const revealable = canReveal && type === "tactic";
               const iconRevealable = canReveal && type === "goal";
+              // A goal with descendants can become the root of a focused view
+              // (its ◎ corner icon); pointless for the current focus root.
+              const focusable =
+                type === "goal" && foldable && !seqActive && id !== focusId;
               const clickable = seqActive || foldable || revealable;
               // Native hover tooltip: the full (un-wrapped) label — useful even
               // though the box already shows it, since long types get pixel-
-              // wrapped across lines — plus a hint on how to reveal the source,
-              // since a hyp-label-style click isn't otherwise discoverable.
-              const revealHint = revealable
-                ? "· click to reveal in source"
-                : iconRevealable
-                  ? "· click » to reveal in source"
-                  : null;
-              const nodeTooltip = revealHint ? `${label}\n\n${revealHint}` : label;
+              // wrapped across lines — plus hints on the corner-icon actions,
+              // which aren't otherwise discoverable.
+              const hints = [
+                revealable
+                  ? "· click to reveal in source"
+                  : iconRevealable
+                    ? "· click » to reveal in source"
+                    : null,
+                focusable ? "· click ◎ to focus this subtree" : null,
+              ].filter(Boolean);
+              const nodeTooltip =
+                hints.length > 0 ? `${label}\n\n${hints.join("\n")}` : label;
               // Widget-only interactive label (hover type tooltips) for goal
               // nodes; null keeps the plain SVG text (always, for tactics).
               const taggedLines =
                 type === "goal" && renderTaggedGoal
-                  ? renderTaggedGoal(id, lines)
+                  ? renderTaggedGoal(
+                      id,
+                      lines.map((l) => l.text),
+                    )
                   : null;
 
               const handleClick = () => {
@@ -732,12 +929,34 @@ export default function ProofTreeView({
                       rect (padding/border) so it doesn't stack on the hover
                       type-tooltips the interactive text pops itself. */}
                   {!taggedLines && <title>{nodeTooltip}</title>}
+                  {/* Context label → box connector: the label (drawn by the
+                      links loop) ends HYP_GAP above the box; a short arrow
+                      bridges that gap so the "context feeds into the tactic"
+                      flow stays visible. Wide mode centers label over box;
+                      compact left-aligns them, so the arrow sits in the
+                      connector column both overlap. */}
+                  {node.data.hypBlockH > 0 &&
+                    (() => {
+                      const cx = compact ? -w / 2 + TRUNK_INSET : 0;
+                      return (
+                        <path
+                          fill="none"
+                          stroke="#555"
+                          strokeWidth={1.5}
+                          markerEnd="url(#arrow)"
+                          d={`M${cx},${boxTop - HYP_GAP + 1} L${cx},${boxTop - ARROW_GAP}`}
+                        />
+                      );
+                    })()}
                   <rect
                     x={-w / 2}
-                    y={-h / 2}
+                    y={boxTop}
                     width={w}
                     height={h}
-                    rx={6}
+                    // Shape doubles the color cue: tactics get pill-ish corners,
+                    // goals stay squared. Capped so multi-line tactic boxes
+                    // don't curve into their first/last text lines.
+                    rx={type === "tactic" ? Math.min(h / 2, 14) : 6}
                     stroke={accent ? SEQ_STROKE : style.stroke}
                     strokeWidth={accent ? 3 : 1.5}
                     fill={style.fill}
@@ -748,10 +967,10 @@ export default function ProofTreeView({
                   {foldable && !seqActive && !revealable && (
                     <text
                       x={w / 2 - 8}
-                      y={-h / 2 + 12}
+                      y={boxTop + 12}
                       textAnchor="middle"
                       fontSize={NODE_FONT_PX}
-                      fontFamily="monospace"
+                      fontFamily={getCodeFontFamily()}
                       fill={style.stroke}
                     >
                       {isCollapsed ? "+" : "−"}
@@ -761,10 +980,10 @@ export default function ProofTreeView({
                   {iconRevealable && (
                     <text
                       x={-w / 2 + 10}
-                      y={-h / 2 + 12}
+                      y={boxTop + 12}
                       textAnchor="middle"
                       fontSize={NODE_FONT_PX}
-                      fontFamily="monospace"
+                      fontFamily={getCodeFontFamily()}
                       fill={style.stroke}
                       onClick={(e) => {
                         // Reveal, not fold: stop the click from reaching the
@@ -778,6 +997,27 @@ export default function ProofTreeView({
                     </text>
                   )}
 
+                  {focusable && (
+                    <text
+                      // Next to the » when both are shown, else in its corner.
+                      x={-w / 2 + (iconRevealable ? 24 : 10)}
+                      y={boxTop + 12}
+                      textAnchor="middle"
+                      fontSize={NODE_FONT_PX}
+                      fontFamily={getCodeFontFamily()}
+                      fill={style.stroke}
+                      onClick={(e) => {
+                        // Focus, not fold: stop the click from reaching the
+                        // box's own onClick (toggle).
+                        e.stopPropagation();
+                        focusOn(id);
+                      }}
+                      style={{ cursor: "pointer" }}
+                    >
+                      <title>Focus this subtree</title>◎
+                    </text>
+                  )}
+
                   {taggedLines ? (
                     // HTML overlay in the exact line geometry of the tspans
                     // below: block top at the centered stack's top, one
@@ -786,14 +1026,14 @@ export default function ProofTreeView({
                     // so nothing wraps — hence white-space: pre.
                     <foreignObject
                       x={-w / 2 + NODE_PAD}
-                      y={-(lines.length * LINE_H) / 2}
+                      y={boxCy - (lines.length * LINE_H) / 2}
                       width={w - 2 * NODE_PAD}
                       height={lines.length * LINE_H}
                       style={{ overflow: "visible" }}
                     >
                       <div
                         style={{
-                          fontFamily: "monospace",
+                          fontFamily: getCodeFontFamily(),
                           fontSize: NODE_FONT_PX,
                           lineHeight: `${LINE_H}px`,
                           letterSpacing: 0,
@@ -802,7 +1042,15 @@ export default function ProofTreeView({
                         }}
                       >
                         {taggedLines.map((line, j) => (
-                          <div key={j} style={{ height: LINE_H }}>
+                          <div
+                            key={j}
+                            style={{
+                              height: LINE_H,
+                              // Hanging indent for width-wrapped continuation
+                              // lines — same offset the layout budgeted.
+                              paddingLeft: lines[j].cont ? CONT_INDENT : 0,
+                            }}
+                          >
                             {line}
                           </div>
                         ))}
@@ -812,7 +1060,7 @@ export default function ProofTreeView({
                     <text
                       textAnchor="start"
                       fontSize={NODE_FONT_PX}
-                      fontFamily="monospace"
+                      fontFamily={getCodeFontFamily()}
                       // Match the width measurer in layout.ts, which doesn't include
                       // the page's inherited letter-spacing.
                       style={{ letterSpacing: 0 }}
@@ -820,11 +1068,13 @@ export default function ProofTreeView({
                       {lines.map((line, j) => (
                         <tspan
                           key={j}
-                          x={-w / 2 + NODE_PAD}
-                          y={(j - (lines.length - 1) / 2) * LINE_H}
+                          // Continuation lines hang-indent by the same offset
+                          // the layout budgeted for them.
+                          x={-w / 2 + NODE_PAD + (line.cont ? CONT_INDENT : 0)}
+                          y={boxCy + (j - (lines.length - 1) / 2) * LINE_H}
                           dy="0.32em"
                         >
-                          {line}
+                          {line.text}
                         </tspan>
                       ))}
                     </text>
@@ -848,6 +1098,12 @@ function Toolbar({
   onCollapseAll,
   accordion,
   onAccordionChange,
+  compact,
+  onCompactChange,
+  fullHyps,
+  onFullHypsChange,
+  focused,
+  onExitFocus,
   seq,
   onToggleSequence,
 }: {
@@ -856,6 +1112,12 @@ function Toolbar({
   onCollapseAll: () => void;
   accordion: boolean;
   onAccordionChange: (v: boolean) => void;
+  compact: boolean;
+  onCompactChange: (v: boolean) => void;
+  fullHyps: boolean;
+  onFullHypsChange: (v: boolean) => void;
+  focused: boolean;
+  onExitFocus: () => void;
   seq: Seq;
   onToggleSequence: () => void;
 }) {
@@ -896,6 +1158,43 @@ function Toolbar({
         />
         accordion
       </label>
+      <label
+        style={{ display: "flex", alignItems: "center", gap: 4, color: "#4a5568" }}
+        title="Outline layout: every node on its own line, branches indent off a left trunk (scroll vertically). Unchecked: the wide layered tree."
+      >
+        <input
+          type="checkbox"
+          checked={compact}
+          onChange={(e) => onCompactChange(e.target.checked)}
+        />
+        compact
+      </label>
+      <label
+        style={{ display: "flex", alignItems: "center", gap: 4, color: "#4a5568" }}
+        title="Show each goal's full context instead of only the hypotheses its tactic introduced"
+      >
+        <input
+          type="checkbox"
+          checked={fullHyps}
+          onChange={(e) => onFullHypsChange(e.target.checked)}
+        />
+        all hyps
+      </label>
+      {focused && (
+        <button
+          type="button"
+          onClick={onExitFocus}
+          title="Back to the whole proof (◎ on a goal node focuses its subtree)"
+          style={{
+            ...barButton,
+            background: NODE_STYLES.goal.stroke,
+            color: "#fff",
+            borderColor: NODE_STYLES.goal.stroke,
+          }}
+        >
+          ◎ exit focus
+        </button>
+      )}
       <button
         type="button"
         onClick={onToggleSequence}

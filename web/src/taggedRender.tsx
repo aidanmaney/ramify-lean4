@@ -7,7 +7,7 @@ import {
 } from "@leanprover/infoview";
 import type { GoalInfo, Proof } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import { hypLine, newHypList } from "./proofToTree";
+import { hypLine } from "./proofToTree";
 import { flattenTaggedText, lineOffsets, sliceTaggedText } from "./taggedText";
 
 // Widget-land composition of the tagged (hover-interactive) rendering: builds
@@ -32,7 +32,8 @@ export interface TaggedGoalEntry {
 // InteractiveCode wraps its output in <span class="font-code">, which the
 // infoview styles with the EDITOR's font (family/size/line-height, plus the
 // theme foreground color). Our boxes are measured in the tree's own font
-// (layout.ts), so left alone the rich text renders bigger than the box it was
+// (layout.ts — same FAMILY as the editor's, via getCodeFontFamily, but our own
+// size/line-height), so left alone the rich text renders bigger than the box it was
 // measured for (and near-invisible on our light boxes in dark themes). Undo it
 // inside our labels only: every tagged line is wrapped in .ptw-tagged, and
 // this injected rule makes .font-code inherit the surrounding div's font —
@@ -82,15 +83,14 @@ export function makeTaggedRenderers(
   ensureTaggedStyle();
   const tagged = new Map(entries.map((e) => [e.goalId, e.goal]));
 
-  // For hyp deltas we need each produced goal and the goal its tactic consumed
-  // (the same pairing proofToTree turns into an edge).
+  // Edge hyp labels show a tactic's input context — the hyps of its
+  // goalBefore (root goals included), whichever subset the label mode picked —
+  // so index every goal we know of.
   const goalById = new Map<string, GoalInfo>();
-  const parentOf = new Map<string, GoalInfo>();
+  for (const g of proof.allGoals) goalById.set(g.id, g);
   for (const step of proof.steps) {
-    for (const g of stepGoalsAfter(step)) {
-      goalById.set(g.id, g);
-      parentOf.set(g.id, step.goalBefore);
-    }
+    goalById.set(step.goalBefore.id, step.goalBefore);
+    for (const g of stepGoalsAfter(step)) goalById.set(g.id, g);
   }
 
   const renderTaggedGoal = (goalId: string, lines: string[]) => {
@@ -100,27 +100,22 @@ export function makeTaggedRenderers(
 
   // Edge labels aren't pixel-wrapped (the box grows to the widest line), so
   // each line is rebuilt as plain `name : ` + interactive type — no slicing.
+  // Lines are matched back to the child goal's hyps BY TEXT, one at a time:
+  // this covers both label modes (the delta and the full context are each a
+  // subset of the child's hyps) and degrades per-line, not wholesale.
   const renderTaggedHyps = (goalId: string, lines: string[]) => {
     const ig = tagged.get(goalId);
     const child = goalById.get(goalId);
-    const parent = parentOf.get(goalId);
-    if (!ig || !child || !parent) return null;
+    if (!ig || !child) return null;
 
-    const delta = newHypList(parent, child);
-    // The lines must be exactly this delta's lines, or the label predates a
-    // wire-format drift we shouldn't paper over — fall back wholesale.
-    if (
-      delta.length !== lines.length ||
-      delta.some((h, i) => hypLine(h) !== lines[i])
-    )
-      return null;
-
+    const byLine = new Map(child.hyps.map((h) => [hypLine(h), h]));
     const byFvar = new Map<string, InteractiveHypothesisBundle>();
     for (const b of ig.hyps) for (const fv of b.fvarIds ?? []) byFvar.set(fv, b);
 
-    return delta.map((h) => {
-      const b = byFvar.get(h.id);
-      if (!b || flattenTaggedText(b.type) !== h.type) return null;
+    return lines.map((line) => {
+      const h = byLine.get(line);
+      const b = h && byFvar.get(h.id);
+      if (!h || !b || flattenTaggedText(b.type) !== h.type) return null;
       if (h.value != null && (!b.val || flattenTaggedText(b.val) !== h.value))
         return null;
       return (
