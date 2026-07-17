@@ -54,9 +54,12 @@ export function refreshCodeFontFamily(): string {
 // Exported so the render draws at the very sizes the geometry was measured for.
 export const NODE_FONT_PX = 12;
 export const HYP_FONT_PX = 11;
-// Inner padding of a node box. Exported so the render can left-inset its text by
-// the same amount the geometry reserves.
+// Inner padding of a node box. NODE_PAD is the HORIZONTAL text inset (render
+// left-insets by the same amount the geometry reserves); NODE_PAD_Y is the
+// vertical one, deliberately tighter so a box reads like a line of text with
+// a border, not a card.
 export const NODE_PAD = 12;
+export const NODE_PAD_Y = 5;
 // Wrap node labels at a modern ~100-column line before growing the box; the box
 // width is still content-driven (MIN_W..MAX_W), this is just the wrap point.
 const MAX_CHARS = 100;
@@ -101,8 +104,11 @@ export const LINE_H = 16;
 // of the tactic box it annotates (both live in the same node band — see
 // LayoutNode.hypBlockH), and between an arrowhead and the band it points at.
 // Shared with the render so the geometry reserved matches what's drawn.
-export const HYP_GAP = 22;
-export const ARROW_GAP = 8;
+export const HYP_GAP = 16;
+// Air between a connector's end and the thing it runs into. Connectors are
+// bare lines (no arrowheads), so this stays small — just enough that a line
+// doesn't touch a border.
+export const ARROW_GAP = 3;
 
 // Hypothesis (local-context) label geometry. Shared with the render so the box
 // the layout reserves room for matches the box actually drawn.
@@ -137,8 +143,8 @@ export function hypSize(hyps: EdgeHyps | undefined): { w: number; h: number } {
 // inside the parent box's left edge.
 export const TRUNK_INDENT = 56; // horizontal shift of a branched-off subtree
 export const TRUNK_INSET = 16; // connector column, from a box's left edge
-const TRUNK_GAP_STEP = 20; // goal → the tactic consuming it (one step, tight)
-const TRUNK_GAP_BRANCH = 34; // tactic → what it generates; between siblings
+const TRUNK_GAP_STEP = 14; // goal → the tactic consuming it (one step, tight)
+const TRUNK_GAP_BRANCH = 24; // tactic → what it generates; between siblings
 
 // Position visible nodes as a trunk-and-branches outline. A branching
 // tactic's FIRST child (Paperproof lists the main continuation first —
@@ -168,9 +174,15 @@ function trunkLayout(visible: LayoutNode[]): {
     const already = placed.get(n.id);
     if (already) return already; // DAG guard: extra parents just link to it
     const band = n.commentBlockH + n.hypBlockH + n.h;
-    // Comment strip, label, and box are all left-aligned at x0; any may be
-    // the widest.
-    const eff = Math.max(n.w, hypSize(n.incHyp).w, n.commentW);
+    // Label and box are left-aligned at x0; the comment strip too, except
+    // parented nodes' strips hang indented off the incoming lane
+    // (COMMENT_INDENT). Any of the three may be the widest.
+    const eff = Math.max(
+      n.w,
+      hypSize(n.incHyp).w,
+      (n.parents.length > 0 && n.commentW > 0 ? COMMENT_INDENT : 0) +
+        n.commentW,
+    );
     const pn: PlacedNode = { x: x0 + n.w / 2, y: cursor + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
@@ -329,6 +341,12 @@ function wrapText(
 export const COMMENT_FONT_PX = 11;
 export const COMMENT_LINE_H = 15;
 export const COMMENT_GAP = 10;
+// Compact mode draws a parented node's incoming connector as a continuous
+// lane straight down to the node's content (below the comment strip), and
+// hangs the strip to the RIGHT of that lane, git-graph style — so the strip
+// is indented past the connector column plus some air. Root comments (no
+// incoming lane) stay flush-left.
+export const COMMENT_INDENT = TRUNK_INSET + 8;
 function commentSize(
   text: string | undefined,
 ): Pick<LayoutNode, "commentLines" | "commentBlockH" | "commentW"> {
@@ -361,7 +379,7 @@ function sizeOf(text: string): Pick<LayoutNode, "lines" | "w" | "h"> {
   return {
     lines,
     w: Math.max(MIN_W, Math.min(MAX_W, widest + 2 * NODE_PAD)),
-    h: lines.length * LINE_H + 2 * NODE_PAD,
+    h: lines.length * LINE_H + 2 * NODE_PAD_Y,
   };
 }
 
@@ -552,13 +570,13 @@ export function createLayoutEngine(data: TreeNode[]) {
       .nodeSize((node: GraphNode<LayoutNode, LinkDatum>) => {
         // The hyp label and comment strip live INSIDE this node's band, so the
         // vertical reservation is exact by construction: band = comment strip
-        // + label block + box + a constant 56 layer gap (room for the arrow +
+        // + label block + box + a constant 42 layer gap (room for the arrow +
         // a breath). Horizontally, widen to the widest of the three so
         // siblings clear them.
         const hb = hypSize(node.data.incHyp);
         return [
           Math.max(node.data.w, hb.w, node.data.commentW) + 40,
-          node.data.commentBlockH + node.data.hypBlockH + node.data.h + 56,
+          node.data.commentBlockH + node.data.hypBlockH + node.data.h + 42,
         ] as const;
       })
       .decross(stableDecross) // fixed sibling order, immune to folding

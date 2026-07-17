@@ -57,3 +57,102 @@ theorem my_zero_add (n : ℕ) : 0 + n = n := by
   induction n with
   | zero => rw [Nat.zero_add]
   | succ d hd => rw [Nat.add_succ, hd]
+
+
+example
+    (P Q R S T U V W X Y : Prop)
+    (h1 : P ∧ Q)
+    (h2 : R ∨ S)
+    (h3 : T ∧ U)
+    (h4 : V ∨ W)
+    (h5 : X ∧ Y) :
+    (((P ∧ R) ∨ (Q ∧ S)) ∧ ((T ∧ V) ∨ (U ∧ W))) ∨
+    (((P ∧ S) ∨ (Q ∧ R)) ∧ ((T ∧ W) ∨ (U ∧ V))) := by
+
+  cases h1 with
+  | intro hp hq =>
+    cases h3 with
+    | intro ht hu =>
+      cases h5 with
+      | intro hx hy =>
+
+        cases h2 with
+
+        | inl hr =>
+
+          cases h4 with
+
+          | inl hv =>
+            left
+            constructor
+
+            · left
+              constructor
+              · exact hp
+              · exact hr
+
+            · left
+              constructor
+              · exact ht
+              · exact hv
+
+          | inr hw =>
+            right
+            constructor
+
+            · right
+              constructor
+              · exact hq
+              · exact hr
+
+            · left
+              constructor
+              · exact ht
+              · exact hw
+
+        | inr hs =>
+
+          cases h4 with
+
+          | inl hv =>
+            right
+            constructor
+
+            · left
+              constructor
+              · exact hp
+              · exact hs
+
+            · right
+              constructor
+              · exact hu
+              · exact hv
+
+          | inr hw =>
+            left
+            constructor
+
+            · right
+              constructor
+              · exact hq
+              · exact hs
+
+            · right
+              constructor
+              · exact hu
+              · exact hw
+
+
+open Classical
+
+theorem two_div_square : ∀ (n : ℤ), 2 ∣ n * n -> 2 ∣ n := by
+  intro n h
+
+
+
+
+theorem no_coprime_square_eq_double_square :
+    ¬ ∃ m n : ℤ, Int.gcd m n = 1 ∧ m * m = 2 * n * n := by
+  by_contra!
+  have hdiv : (2 : ℤ) ∣ m := by
+    sorry

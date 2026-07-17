@@ -97,8 +97,11 @@ function ProofPicker({
         style={{
           fontFamily: "monospace",
           fontSize: 13,
-          maxWidth: "50vw",
-          minWidth: 160,
+          // A compact floater now (the view floats headerExtra at top-left
+          // instead of a full-width bar), so keep it narrow; the option text
+          // still shows in full in the dropdown itself.
+          maxWidth: 260,
+          minWidth: 120,
           flexShrink: 1,
         }}
       >

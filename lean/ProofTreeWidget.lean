@@ -58,6 +58,9 @@ structure ProofTreeData where
   -- The command's source comments (parser trivia, so re-lexed from the raw
   -- source — see ProofTreeComments.lean); the client attributes them to nodes.
   comments    : Array SourceComment := #[]
+  -- Per-tactic tight ranges + verbatim text for in-place editing (see
+  -- TacticEdit). Widget-only, like taggedGoals: the CLI has no editor.
+  tacticEdits : Array TacticEdit := #[]
   deriving Server.RpcEncodable
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
@@ -117,11 +120,30 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let comments := match snap.stx.getRange? with
       | some range => commentsInRange fileMap.source fileMap range
       | none => #[]
+    -- The editing seam: per distinct step range, the tactic's tight span and
+    -- verbatim text (see TacticEdit).
+    let src := fileMap.source
+    let mut seen : Std.HashSet (Nat × Nat) := {}
+    let mut tacticEdits : Array TacticEdit := #[]
+    for s in parsedTree.steps do
+      let key := (s.position.start.line, s.position.start.character)
+      unless seen.contains key do
+        seen := seen.insert key
+        let b := fileMap.lspPosToUtf8Pos s.position.start
+        let e := fileMap.lspPosToUtf8Pos s.position.stop
+        let raw := String.Pos.Raw.extract src b e
+        let tight := trimmedEnd raw
+        tacticEdits := tacticEdits.push {
+          start := s.position.start
+          stop  := fileMap.utf8PosToLspPos ⟨b.byteIdx + tight.byteIdx⟩
+          text  := String.Pos.Raw.extract raw ⟨0⟩ tight
+        }
     return {
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
       taggedGoals,
-      comments
+      comments,
+      tacticEdits
     }
 
 end ProofTree

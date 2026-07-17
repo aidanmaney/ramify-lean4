@@ -19,11 +19,13 @@ import {
   LINE_H,
   NODE_FONT_PX,
   NODE_PAD,
+  NODE_PAD_Y,
   ARROW_GAP,
   TRUNK_INSET,
   CONT_INDENT,
   COMMENT_FONT_PX,
   COMMENT_LINE_H,
+  COMMENT_INDENT,
   getCodeFontFamily,
   refreshCodeFontFamily,
 } from "./layout";
@@ -102,8 +104,10 @@ const HYP_MARK = "▸";
 // the tactic drawn below it — the ones the tactic uses are marked with a
 // gutter `▸` and full-strength ink. Box geometry comes from the shared hypSize
 // so it matches the room the layout folded into the tactic's band.
-// `onClick`/`accent` wire the widget's tree→source and source→tree link for
-// the tactic that introduced these hypotheses (see the links loop below).
+// `onClick` wires the widget's tree→source link for the tactic that
+// introduced these hypotheses (see the links loop below); the label takes no
+// cursor accent — its span is the producing tactic's, so an accent here would
+// only duplicate that node's (see cursorNodeId).
 // `taggedLines` (widget only) swaps individual lines for interactive content
 // with hover type tooltips; null entries keep the plain text for that line.
 function HypLabel({
@@ -111,14 +115,12 @@ function HypLabel({
   y,
   hyps,
   onClick,
-  accent,
   taggedLines,
 }: {
   x: number;
   y: number;
   hyps: EdgeHyps;
   onClick?: () => void;
-  accent?: boolean;
   taggedLines?: (ReactNode | null)[] | null;
 }) {
   const lines = hyps.lines;
@@ -145,7 +147,15 @@ function HypLabel({
   return (
     <g
       transform={`translate(${x},${y})`}
-      onClick={onClick}
+      onClick={
+        onClick
+          ? (e) => {
+              // Interaction, not a background click (see the scroll div).
+              e.stopPropagation();
+              onClick();
+            }
+          : undefined
+      }
       style={{ cursor: onClick ? "pointer" : "default" }}
     >
       {!taggedLines && <title>{tooltip}</title>}
@@ -156,8 +166,8 @@ function HypLabel({
         height={h}
         rx={4}
         fill="#fffbe6"
-        stroke={accent ? SEQ_STROKE : "#d6b656"}
-        strokeWidth={accent ? 2.5 : 1}
+        stroke="#d6b656"
+        strokeWidth={1}
       >
         {taggedLines && <title>{tooltip}</title>}
       </rect>
@@ -252,6 +262,21 @@ export interface ProofTreeViewProps {
    */
   onReveal?: (pos: ProofStepPosition) => void;
   /**
+   * Widget-only, the in-place editing seam: resolve a tactic step's TIGHT
+   * source range and verbatim text (the step's own `position`/label are
+   * trivia-inflated/prettified and unsafe to edit with — see TacticEdit in
+   * ProofTreeComments.lean). Double-clicking a tactic node opens an editing
+   * overlay pre-filled with `text`; both hooks must be set for that.
+   */
+  getTacticEdit?: (
+    pos: ProofStepPosition,
+  ) => { pos: ProofStepPosition; text: string } | null;
+  /**
+   * Commit an in-place edit: replace `pos` (the tight range from
+   * getTacticEdit) with `newText` in the source document.
+   */
+  onEditTactic?: (pos: ProofStepPosition, newText: string) => void;
+  /**
    * The editor's current cursor position. The tactic node whose source range
    * contains it gets an accent outline — the source→tree half of the link.
    */
@@ -291,6 +316,8 @@ export interface ProofTreeViewProps {
 export default function ProofTreeView({
   proof,
   onReveal,
+  getTacticEdit,
+  onEditTactic,
   highlightPos,
   headerExtra,
   height = "100vh",
@@ -323,6 +350,38 @@ export default function ProofTreeView({
   // focus-subtree buttons). The bar renders inside the node's own <g>, so
   // pointer travel from box to bar never leaves the hover region (no flicker).
   const [hoverId, setHoverId] = useState<string | null>(null);
+  // Clicking the widget BACKGROUND dismisses the editor-cursor accent: in the
+  // infoview, any click focuses the panel while the editor cursor (and hence
+  // highlightPos) stays put — this lets the user declutter without touching
+  // the editor. Cleared whenever the cursor actually moves (below).
+  const [hlDismissed, setHlDismissed] = useState(false);
+  // In-place tactic editing (widget only — needs getTacticEdit/onEditTactic):
+  // double-clicking a tactic node swaps its box for a textarea pre-filled
+  // with the tactic's verbatim source. `original` is what the source says
+  // now; committing (Enter on a single-line tactic, ⌘/Ctrl-Enter always,
+  // or blur) applies the replacement only when the text actually changed.
+  const [editing, setEditing] = useState<{
+    id: string;
+    pos: ProofStepPosition;
+    original: string;
+    value: string;
+  } | null>(null);
+  // Commit goes through the editor's own edit pipeline (undoable there); a
+  // no-op edit just closes the box. The ref mirrors `editing` and is nulled
+  // SYNCHRONOUSLY on commit: committing via Enter unmounts the textarea,
+  // whose blur then calls commitEdit again from the same render's (stale)
+  // closure — without the ref that would apply the edit twice.
+  const editingRef = useRef(editing);
+  useEffect(() => {
+    editingRef.current = editing;
+  }, [editing]);
+  const commitEdit = () => {
+    const cur = editingRef.current;
+    editingRef.current = null;
+    if (!cur) return;
+    if (cur.value !== cur.original) onEditTactic?.(cur.pos, cur.value);
+    setEditing(null);
+  };
 
   // The proof + view we've already centered on; lets the init effect re-center
   // once per loaded proof (and once per sequence switch) without writing a ref
@@ -400,6 +459,9 @@ export default function ProofTreeView({
     setZoom(1);
     setSeq({ mode: "off" });
     setFocusId(null);
+    // A shape change means the source changed under the edit box (usually
+    // OUR own committed edit coming back); stale ranges must not be applied.
+    setEditing(null);
   }
 
   // In `view` mode, restrict the layout to the chosen path's nodes (or null if
@@ -422,6 +484,42 @@ export default function ProofTreeView({
     () => engine.computeLayout(collapsed, only, focusSet, compact),
     [engine, collapsed, only, focusSet, compact],
   );
+
+  // A cursor move re-arms the dismissed accent (derived state, adjusted
+  // during render like prevShape above).
+  const hlKey = highlightPos
+    ? `${highlightPos.line}:${highlightPos.character}`
+    : "";
+  const [prevHlKey, setPrevHlKey] = useState(hlKey);
+  if (hlKey !== prevHlKey) {
+    setPrevHlKey(hlKey);
+    setHlDismissed(false);
+  }
+
+  // source→tree: the ONE node the editor cursor accents. Every recorded range
+  // overlaps by construction — a goal carries its PRODUCER's range, a
+  // structured tactic (induction/have) contains everything nested inside it,
+  // and Paperproof ranges include trailing trivia — so the naive "accent
+  // whatever contains the cursor" lights up half a branch at once. Instead:
+  // the innermost (smallest-span) TACTIC containing the cursor, and nothing
+  // else — goals and hyp labels never take the cursor accent, theirs being
+  // the producing tactic's span, i.e. always redundant with it.
+  const cursorNodeId = useMemo(() => {
+    if (hlKey === "" || hlDismissed || !highlightPos) return null;
+    const span = (p: ProofStepPosition) =>
+      (p.stop.line - p.start.line) * 1e4 +
+      (p.stop.character - p.start.character);
+    let best: { id: string; s: number } | null = null;
+    for (const n of nodes) {
+      const d = n.data;
+      if (d.type !== "tactic" || !d.position) continue;
+      if (!positionContains(d.position, highlightPos)) continue;
+      const s = span(d.position);
+      if (!best || s < best.s) best = { id: d.id, s };
+    }
+    return best?.id ?? null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, hlKey, hlDismissed]);
 
   // Capture a re-anchor on node `id` (or the root) before a relayout, so the
   // post-render `[nodes]` effect can hold that node fixed on screen. `sx/sy` are
@@ -637,12 +735,22 @@ export default function ProofTreeView({
   // vertically, and the label box when it's wider than the node box.
   const fitWidth = () => {
     const el = scrollRef.current;
-    if (!el || nodes.length === 0) return;
+    // clientWidth is 0 while the view is hidden/unmeasured — fitting then
+    // would just clamp zoom to the minimum.
+    if (!el || el.clientWidth === 0 || nodes.length === 0) return;
     // A node's horizontal extent includes its context label and comment
-    // strip. Wide mode centers them on n.x; compact left-aligns all three at
-    // the box's left edge, so the widest extends right from there.
+    // strip. Wide mode centers them on n.x; compact left-aligns them at the
+    // box's left edge — except parented nodes' comment strips, which hang
+    // indented off the incoming lane (COMMENT_INDENT) — so the widest
+    // extends right from there.
     const effW = (n: (typeof nodes)[number]) =>
-      Math.max(n.data.w, hypSize(n.data.incHyp).w, n.data.commentW);
+      Math.max(
+        n.data.w,
+        hypSize(n.data.incHyp).w,
+        (compact && n.data.parents.length > 0 && n.data.commentW > 0
+          ? COMMENT_INDENT
+          : 0) + n.data.commentW,
+      );
     const leftOf = (n: (typeof nodes)[number]) =>
       compact ? n.x - n.data.w / 2 : n.x - effW(n) / 2;
     const minLeft = Math.min(...nodes.map(leftOf));
@@ -681,15 +789,38 @@ export default function ProofTreeView({
     let px = 0;
     let py = 0;
     let raf: number | null = null;
+    // Scroll-axis lock: a wheel gesture that STARTS vertical stays vertical —
+    // dropping its horizontal component keeps a long read anchored to the
+    // branch under the eye instead of drifting sideways. Gestures that start
+    // horizontal are left entirely to native scrolling (diagonal allowed).
+    // A gesture is a burst of wheel events with < LOCK_IDLE ms between them
+    // (trackpad momentum keeps a gesture, and its lock, alive).
+    const LOCK_IDLE = 180;
+    let lockVertical = false;
+    let lastWheelT = 0;
     const onWheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!(e.ctrlKey || e.metaKey)) {
+        const now = performance.now();
+        if (now - lastWheelT > LOCK_IDLE)
+          lockVertical = Math.abs(e.deltaY) > Math.abs(e.deltaX);
+        lastWheelT = now;
+        if (lockVertical) {
+          e.preventDefault();
+          // deltaMode 1 = lines (plain mouse wheels on some platforms).
+          el.scrollTop += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+        }
+        return;
+      }
       e.preventDefault();
       const rect = el.getBoundingClientRect();
       px = e.clientX - rect.left;
       py = e.clientY - rect.top;
       // Re-base on the live zoom each frame so button/reset zooms aren't fought.
       if (raf === null) target = zoomRef.current;
-      target = clampZoom(target * Math.exp(-e.deltaY * 0.0015));
+      // Sensitivity tuned to feel like the browser's own page zoom
+      // (ctrl-wheel/pinch): ~exp(-Δ/125). The old 0.0015 felt sluggish —
+      // a full pinch barely moved the scale.
+      target = clampZoom(target * Math.exp(-e.deltaY * 0.008));
       if (raf === null)
         raf = requestAnimationFrame(() => {
           raf = null;
@@ -711,8 +842,51 @@ export default function ProofTreeView({
     // so the whole view is bounded by `height` — full viewport on the page, a
     // panel-sized box in the infoview.
     <div style={{ position: "relative", width: "100%", height, overflow: "hidden" }}>
-      <Toolbar
-        headerExtra={headerExtra}
+      {/* No top bar: the top edge stays empty so the eye falls straight from
+          the infoview's expected-type block onto the tree's root. Everything
+          lives on the floating icon rail at the right; the only top-left
+          floaters are the caller's slot (the standalone app's proof picker —
+          the widget passes none) and the transient sequence-mode hint. */}
+      {headerExtra && (
+        <div
+          style={{
+            position: "absolute",
+            top: 8,
+            left: 8,
+            zIndex: 10,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontFamily: "monospace",
+            fontSize: 12,
+          }}
+        >
+          {headerExtra}
+        </div>
+      )}
+      {seq.mode !== "off" && (
+        <div
+          style={{
+            position: "absolute",
+            top: headerExtra ? 44 : 8,
+            left: 8,
+            zIndex: 10,
+            fontFamily: "monospace",
+            fontSize: 12,
+            color: "#fff",
+            background: SEQ_STROKE,
+            padding: "3px 10px",
+            borderRadius: 999,
+          }}
+        >
+          {seq.mode === "view"
+            ? "linear path · click a node to start over"
+            : seq.from !== null
+              ? "click the end node"
+              : "click the start node"}
+        </div>
+      )}
+      <ControlRail
         onExpandAll={() => {
           anchorRoot();
           setCollapsed(new Set());
@@ -734,25 +908,21 @@ export default function ProofTreeView({
         }}
         focused={focusId !== null}
         onExitFocus={() => setFocusId(null)}
-        seq={seq}
+        seqActive={seq.mode !== "off"}
         onToggleSequence={() =>
           setSeq((s) =>
             s.mode === "off" ? { mode: "pick", from: null } : { mode: "off" },
           )
         }
-      />
-      <ZoomControls
-        zoom={zoom}
         onZoomIn={() => zoomBy(1.25)}
         onZoomOut={() => zoomBy(1 / 1.25)}
-        onReset={() => zoomBy(1 / zoom)}
         onFit={fitWidth}
       />
       {nodes.length === 0 && (
         <div
           style={{
             position: "absolute",
-            top: 48,
+            top: 12,
             left: 12,
             zIndex: 10,
             fontFamily: "monospace",
@@ -763,6 +933,25 @@ export default function ProofTreeView({
           Nothing to display for this proof.
         </div>
       )}
+      {/* Headroom veil: a short strip the content scrolls UNDER, fading it
+          out before it reaches the top edge — so the floating overlays (the
+          sequence hint, the standalone picker) sit on calm ground instead of
+          on top of node text. Theme-correct by construction: it fades from
+          the page's own background (the editor's in the webview, the app's
+          standalone). Non-interactive; sits under the controls (zIndex). */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 44,
+          zIndex: 9,
+          pointerEvents: "none",
+          background:
+            "linear-gradient(to bottom, var(--vscode-editor-background, var(--bg, #fff)) 40%, transparent)",
+        }}
+      />
       <div
         ref={scrollRef}
         className="no-scrollbar"
@@ -771,26 +960,20 @@ export default function ProofTreeView({
           height: "100%",
           overflow: "auto",
         }}
+        // A background click dismisses the editor-cursor accent (node and
+        // label clicks stopPropagation, so they never land here): clicking
+        // the widget focuses the infoview without moving the editor cursor,
+        // and the lingering accent is just clutter at that point.
+        onClick={() => setHlDismissed(true)}
       >
         <svg
           width={svgW * zoom}
           height={svgH * zoom}
           viewBox={`0 0 ${svgW} ${svgH}`}
         >
-          <defs>
-            <marker
-              id="arrow"
-              viewBox="0 0 10 10"
-              refX="0"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M0,0 L10,5 L0,10 z" fill="#555" />
-            </marker>
-          </defs>
-
+          {/* Connectors are bare lines — no arrowheads: flow reads
+              consistently down/right, so triangles were noise (and their
+              tips poked into boxes and comment strips). */}
           {/* Coords originate at top-left */}
           <g transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}>
             {links.map((link, i) => {
@@ -813,12 +996,10 @@ export default function ProofTreeView({
               // The comment strip is narrative, not dataflow: labels and
               // landing points sit below it.
               const contentTop = bandTop + link.target.data.commentBlockH;
-              const endY = bandTop - ARROW_GAP; // arrowhead just above the band
+              const endY = bandTop - ARROW_GAP; // line ends just above the band
 
               const hyps = link.data; // the tactic's input context, if labeled
               const hypPos = hyps?.pos;
-              const hypAccent =
-                !!highlightPos && !!hypPos && positionContains(hypPos, highlightPos);
 
               const sLeft = link.source.x - link.source.data.w / 2;
               const tLeft = link.target.x - link.target.data.w / 2;
@@ -832,7 +1013,10 @@ export default function ProofTreeView({
                 // (its context label if any, else its box).
                 const col = sLeft + TRUNK_INSET;
                 if (Math.abs(tLeft - sLeft) < 0.5) {
-                  d = `M${col},${startY} L${col},${endY}`;
+                  // Straight trunk lane: run CONTINUOUSLY past the comment
+                  // strip (which hangs indented to the lane's right — see the
+                  // strip render) down to the node's content proper.
+                  d = `M${col},${startY} L${col},${contentTop - ARROW_GAP}`;
                 } else {
                   const landY =
                     contentTop +
@@ -853,13 +1037,7 @@ export default function ProofTreeView({
 
               return (
                 <g key={i}>
-                  <path
-                    fill="none"
-                    stroke="#555"
-                    strokeWidth={1.5}
-                    markerEnd="url(#arrow)"
-                    d={d}
-                  />
+                  <path fill="none" stroke="#555" strokeWidth={1.5} d={d} />
                   {hyps && (
                     <HypLabel
                       x={labelX}
@@ -870,7 +1048,6 @@ export default function ProofTreeView({
                       onClick={
                         onReveal && hypPos ? () => onReveal(hypPos) : undefined
                       }
-                      accent={hypAccent}
                       taggedLines={
                         renderTaggedHyps?.(
                           hyps.goalId,
@@ -899,12 +1076,10 @@ export default function ProofTreeView({
               const isEndpoint =
                 (seq.mode === "pick" && seq.from === id) ||
                 (seq.mode === "view" && (seq.from === id || seq.to === id));
-              // The tactic node the editor cursor is currently inside gets the
-              // same accent (source→tree half of the link).
-              const isCursor =
-                !!highlightPos &&
-                !!position &&
-                positionContains(position, highlightPos);
+              // The tactic node the editor cursor selects gets the same
+              // accent (source→tree half of the link; see cursorNodeId for
+              // why it's exactly one node).
+              const isCursor = id === cursorNodeId;
               const accent = isEndpoint || isCursor;
               // A positioned node can reveal its source (widget only, outside
               // sequence mode). For a tactic node the whole box reveals; goal
@@ -914,6 +1089,14 @@ export default function ProofTreeView({
               const canReveal = seq.mode === "off" && !!onReveal && !!position;
               const revealable = canReveal && type === "tactic";
               const goalRevealable = canReveal && type === "goal";
+              // Double-click on a tactic edits it in place (widget only).
+              const editable =
+                seq.mode === "off" &&
+                type === "tactic" &&
+                !!position &&
+                !!getTacticEdit &&
+                !!onEditTactic;
+              const isEditing = editing?.id === id;
               // A goal with descendants can become the root of a focused view
               // (⌥-click, or the hover bar's ◎); pointless for the current
               // focus root.
@@ -934,6 +1117,7 @@ export default function ProofTreeView({
                   : goalRevealable
                     ? `· ${CMD}-click to reveal in source`
                     : null,
+                editable ? "· double-click to edit" : null,
                 focusable ? "· ⌥-click to focus this subtree" : null,
               ].filter(Boolean);
               const nodeTooltip =
@@ -949,6 +1133,9 @@ export default function ProofTreeView({
                   : null;
 
               const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
+                // A node click is an interaction, not a background click — it
+                // must not dismiss the cursor accent (see the scroll div).
+                e.stopPropagation();
                 // In the widget, clicking a positioned tactic reveals its source
                 // rather than folding; fold via goal nodes / the sequence tools.
                 if (revealable) {
@@ -973,14 +1160,31 @@ export default function ProofTreeView({
                 <g
                   key={id}
                   transform={`translate(${node.x},${node.y})`}
-                  onClick={clickable ? handleClick : undefined}
+                  onClick={clickable && !isEditing ? handleClick : undefined}
+                  onDoubleClick={
+                    editable && !isEditing
+                      ? (e) => {
+                          e.stopPropagation();
+                          const q = getTacticEdit!(position!);
+                          if (q)
+                            setEditing({
+                              id,
+                              pos: q.pos,
+                              original: q.text,
+                              value: q.text,
+                            });
+                        }
+                      : undefined
+                  }
                   onMouseEnter={hasBar ? () => setHoverId(id) : undefined}
                   onMouseLeave={
                     hasBar
                       ? () => setHoverId((cur) => (cur === id ? null : cur))
                       : undefined
                   }
-                  style={{ cursor: clickable ? "pointer" : "default" }}
+                  style={{
+                    cursor: clickable && !isEditing ? "pointer" : "default",
+                  }}
                 >
                   {/* With a tagged label, the native tooltip retreats to the box
                       rect (padding/border) so it doesn't stack on the hover
@@ -1006,9 +1210,16 @@ export default function ProofTreeView({
                       {node.data.commentLines.map((line, j) => (
                         <tspan
                           key={j}
+                          // Compact: flush with the box, or hanging off the
+                          // incoming lane (indented past the connector
+                          // column) when one runs through this band — the
+                          // lane passes the strip on its left, unbroken.
                           x={
                             (compact
-                              ? -w / 2
+                              ? -w / 2 +
+                                (node.data.parents.length > 0
+                                  ? COMMENT_INDENT
+                                  : 0)
                               : -node.data.commentW / 2) +
                             (line.cont ? CONT_INDENT : 0)
                           }
@@ -1039,7 +1250,6 @@ export default function ProofTreeView({
                           fill="none"
                           stroke="#555"
                           strokeWidth={1.5}
-                          markerEnd="url(#arrow)"
                           d={`M${cx},${boxTop - HYP_GAP + 1} L${cx},${boxTop - ARROW_GAP}`}
                         />
                       );
@@ -1054,7 +1264,7 @@ export default function ProofTreeView({
                     // don't curve into their first/last text lines.
                     rx={type === "tactic" ? Math.min(h / 2, 14) : 6}
                     stroke={accent ? SEQ_STROKE : style.stroke}
-                    strokeWidth={accent ? 3 : 1.5}
+                    strokeWidth={accent ? 2 : 1.5}
                     fill={style.fill}
                   >
                     {taggedLines && <title>{nodeTooltip}</title>}
@@ -1135,6 +1345,75 @@ export default function ProofTreeView({
                     </text>
                   )}
 
+                  {/* In-place tactic editor: a textarea in the box's exact
+                      spot (grown to a comfortable minimum), pre-filled with
+                      the tactic's verbatim source (getTacticEdit). Esc
+                      cancels; Enter commits single-line tactics (Shift+Enter
+                      for a newline); ⌘/Ctrl-Enter always commits; so does
+                      clicking away. */}
+                  {isEditing && editing && (
+                    <foreignObject
+                      x={-w / 2}
+                      y={boxTop}
+                      width={Math.max(w, 320)}
+                      height={Math.max(
+                        h,
+                        editing.value.split("\n").length * LINE_H +
+                          2 * NODE_PAD_Y +
+                          6,
+                      )}
+                      style={{ overflow: "visible" }}
+                    >
+                      <textarea
+                        autoFocus
+                        value={editing.value}
+                        spellCheck={false}
+                        onChange={(e) =>
+                          setEditing(
+                            (cur) => cur && { ...cur, value: e.target.value },
+                          )
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            setEditing(null);
+                          } else if (
+                            e.key === "Enter" &&
+                            (e.metaKey ||
+                              e.ctrlKey ||
+                              (!e.shiftKey &&
+                                !editing.original.includes("\n")))
+                          ) {
+                            e.preventDefault();
+                            commitEdit();
+                          }
+                        }}
+                        onBlur={commitEdit}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          boxSizing: "border-box",
+                          fontFamily: getCodeFontFamily(),
+                          fontSize: NODE_FONT_PX,
+                          lineHeight: `${LINE_H}px`,
+                          letterSpacing: 0,
+                          padding: `${NODE_PAD_Y - 1}px ${NODE_PAD - 2}px`,
+                          background: "#fff",
+                          color: "#111",
+                          border: `2px solid ${NODE_STYLES.tactic.stroke}`,
+                          borderRadius: 10,
+                          outline: "none",
+                          resize: "none",
+                          whiteSpace: "pre",
+                          overflow: "auto",
+                        }}
+                      />
+                    </foreignObject>
+                  )}
+
                   {/* Hover action bar (last, so it paints over the label): the
                       goal's secondary actions with real button targets. */}
                   {hasBar && hoverId === id && (
@@ -1173,11 +1452,59 @@ export default function ProofTreeView({
   );
 }
 
-// The pinned top bar: the tree controls (expand/collapse/accordion/sequence),
-// with an optional caller-supplied slot at the left (the standalone app's proof
-// picker). The widget passes no slot.
-function Toolbar({
-  headerExtra,
+// All controls live on ONE floating rail of icon buttons pinned to the view's
+// top-right; the top edge stays empty so the eye falls from the infoview's
+// expected-type block straight onto the tree (see the render). Icons over
+// text — the tooltips carry the words — and toggles render "pressed" while
+// on. Zoom lives here too (no % readout; ⌘/Ctrl-scroll is the precise path).
+const RAIL_BTN: CSSProperties = {
+  width: 26,
+  height: 26,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+  fontFamily: "monospace",
+  fontSize: 14,
+  lineHeight: 1,
+  cursor: "pointer",
+  background: "rgba(255,255,255,0.92)",
+  border: "1px solid #cbd5e0",
+  borderRadius: 5,
+  color: "#2d3748",
+};
+
+function RailButton({
+  glyph,
+  title,
+  onClick,
+  pressed,
+  pressedColor,
+}: {
+  glyph: string;
+  title: string;
+  onClick: () => void;
+  pressed?: boolean;
+  pressedColor?: string;
+}) {
+  const color = pressedColor ?? "#4a5568";
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      style={
+        pressed
+          ? { ...RAIL_BTN, background: color, borderColor: color, color: "#fff" }
+          : RAIL_BTN
+      }
+    >
+      {glyph}
+    </button>
+  );
+}
+
+function ControlRail({
   onExpandAll,
   onCollapseAll,
   accordion,
@@ -1188,10 +1515,12 @@ function Toolbar({
   onFullHypsChange,
   focused,
   onExitFocus,
-  seq,
+  seqActive,
   onToggleSequence,
+  onZoomIn,
+  onZoomOut,
+  onFit,
 }: {
-  headerExtra?: ReactNode;
   onExpandAll: () => void;
   onCollapseAll: () => void;
   accordion: boolean;
@@ -1202,107 +1531,74 @@ function Toolbar({
   onFullHypsChange: (v: boolean) => void;
   focused: boolean;
   onExitFocus: () => void;
-  seq: Seq;
+  seqActive: boolean;
   onToggleSequence: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onFit: () => void;
 }) {
   return (
     <div
       style={{
         position: "absolute",
-        top: 0,
-        left: 0,
-        right: 0,
+        top: 8,
+        right: 8,
         zIndex: 10,
         display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 12px",
-        background: "rgba(255,255,255,0.92)",
-        borderBottom: "1px solid #e2e8f0",
-        fontFamily: "monospace",
-        fontSize: 13,
-        boxSizing: "border-box",
+        flexDirection: "column",
+        gap: 4,
       }}
     >
-      {headerExtra}
-      <button type="button" onClick={onExpandAll} style={barButton}>
-        expand all
-      </button>
-      <button type="button" onClick={onCollapseAll} style={barButton}>
-        collapse all
-      </button>
-      <label
-        style={{ display: "flex", alignItems: "center", gap: 4, color: "#4a5568" }}
-        title="Expanding a node collapses its sibling branches"
-      >
-        <input
-          type="checkbox"
-          checked={accordion}
-          onChange={(e) => onAccordionChange(e.target.checked)}
-        />
-        accordion
-      </label>
-      <label
-        style={{ display: "flex", alignItems: "center", gap: 4, color: "#4a5568" }}
-        title="Outline layout: every node on its own line, branches indent off a left trunk (scroll vertically). Unchecked: the wide layered tree."
-      >
-        <input
-          type="checkbox"
-          checked={compact}
-          onChange={(e) => onCompactChange(e.target.checked)}
-        />
-        compact
-      </label>
-      <label
-        style={{ display: "flex", alignItems: "center", gap: 4, color: "#4a5568" }}
-        title="Show each goal's full context instead of only the hypotheses its tactic introduced"
-      >
-        <input
-          type="checkbox"
-          checked={fullHyps}
-          onChange={(e) => onFullHypsChange(e.target.checked)}
-        />
-        all hyps
-      </label>
-      {focused && (
-        <button
-          type="button"
-          onClick={onExitFocus}
-          title="Back to the whole proof (◎ on a goal node focuses its subtree)"
-          style={{
-            ...barButton,
-            background: NODE_STYLES.goal.stroke,
-            color: "#fff",
-            borderColor: NODE_STYLES.goal.stroke,
-          }}
-        >
-          ◎ exit focus
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={onToggleSequence}
+      <RailButton glyph="⊞" title="Expand all" onClick={onExpandAll} />
+      <RailButton glyph="⊟" title="Collapse all" onClick={onCollapseAll} />
+      <div style={{ height: 6 }} />
+      <RailButton
+        glyph="⇅"
+        title="Accordion: expanding a node collapses its sibling branches"
+        pressed={accordion}
+        onClick={() => onAccordionChange(!accordion)}
+      />
+      <RailButton
+        glyph="≡"
+        title="Compact outline layout — every node on its own line, branches indent off a left trunk (off: the wide layered tree)"
+        pressed={compact}
+        onClick={() => onCompactChange(!compact)}
+      />
+      <RailButton
+        glyph="∀"
+        title="Show each goal's full context (off: only the hypotheses its tactic introduced or uses)"
+        pressed={fullHyps}
+        onClick={() => onFullHypsChange(!fullHyps)}
+      />
+      <div style={{ height: 6 }} />
+      <RailButton
+        glyph="⇝"
         title="Linearize one path: pick a start node, then an end node"
-        style={
-          seq.mode === "off"
-            ? barButton
-            : { ...barButton, background: SEQ_STROKE, color: "#fff", borderColor: SEQ_STROKE }
-        }
-      >
-        {seq.mode === "off" ? "sequence" : "exit sequence"}
-      </button>
-      {seq.mode !== "off" && (
-        <span style={{ color: SEQ_STROKE, whiteSpace: "nowrap", flexShrink: 0 }}>
-          {seq.mode === "view"
-            ? "linear path · click a node to start over"
-            : seq.from !== null
-              ? "click the end node"
-              : "click the start node"}
-        </span>
+        pressed={seqActive}
+        pressedColor={SEQ_STROKE}
+        onClick={onToggleSequence}
+      />
+      {focused && (
+        <RailButton
+          glyph="◎"
+          title="Back to the whole proof (◎ on a goal node focuses its subtree)"
+          pressed
+          pressedColor={NODE_STYLES.goal.stroke}
+          onClick={onExitFocus}
+        />
       )}
+      <div style={{ height: 6 }} />
+      <RailButton
+        glyph="+"
+        title={`Zoom in (${CMD}-scroll zooms at the cursor)`}
+        onClick={onZoomIn}
+      />
+      <RailButton glyph="−" title="Zoom out" onClick={onZoomOut} />
+      <RailButton glyph="⛶" title="Fit width" onClick={onFit} />
     </div>
   );
 }
+
 
 // Platform label for the reveal fast-path modifier (⌘ on mac, Ctrl elsewhere),
 // used in tooltips and button titles.
@@ -1389,72 +1685,5 @@ function NodeActionBar({
         );
       })}
     </g>
-  );
-}
-
-const barButton: CSSProperties = {
-  fontFamily: "monospace",
-  fontSize: 12,
-  padding: "2px 8px",
-  cursor: "pointer",
-  background: "#fff",
-  border: "1px solid #cbd5e0",
-  borderRadius: 4,
-  color: "#2d3748",
-  whiteSpace: "nowrap",
-  flexShrink: 0,
-};
-
-// A small fixed cluster for zoom: out / level / in / fit / 100%. Zooming is also
-// available via ⌘/Ctrl-scroll toward the cursor.
-function ZoomControls({
-  zoom,
-  onZoomIn,
-  onZoomOut,
-  onReset,
-  onFit,
-}: {
-  zoom: number;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onReset: () => void;
-  onFit: () => void;
-}) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        bottom: 16,
-        right: 16,
-        zIndex: 10,
-        display: "flex",
-        alignItems: "center",
-        gap: 4,
-        padding: 4,
-        background: "rgba(255,255,255,0.92)",
-        border: "1px solid #e2e8f0",
-        borderRadius: 6,
-        fontFamily: "monospace",
-        fontSize: 12,
-      }}
-      title="⌘/Ctrl-scroll to zoom toward the cursor"
-    >
-      <button type="button" onClick={onZoomOut} style={barButton}>
-        −
-      </button>
-      <button
-        type="button"
-        onClick={onReset}
-        style={{ ...barButton, minWidth: 48, border: "none" }}
-      >
-        {Math.round(zoom * 100)}%
-      </button>
-      <button type="button" onClick={onZoomIn} style={barButton}>
-        +
-      </button>
-      <button type="button" onClick={onFit} style={barButton}>
-        fit
-      </button>
-    </div>
   );
 }

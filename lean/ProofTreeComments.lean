@@ -47,16 +47,18 @@ private def mkComment (src : String) (fileMap : FileMap) (b e : String.Pos.Raw) 
     start := fileMap.utf8PosToLspPos b
     stop  := fileMap.utf8PosToLspPos e }
 
-/-- Lex `src` between `startPos` and `stopPos`, collecting every comment.
-Line comments end at the newline (exclusive); block comments nest. String and
-char literals are skipped so their contents can't fake a comment opener. -/
-partial def extractComments (src : String) (fileMap : FileMap)
-    (startPos stopPos : String.Pos.Raw) : Array SourceComment := Id.run do
+/-- Lex `src` between `startPos` and `stopPos`, returning every comment's
+raw span. Line comments end at the newline (exclusive); block comments nest.
+String and char literals are skipped so their contents can't fake a comment
+opener. The core of `extractComments`, also reused by `trimTrailingTrivia`. -/
+partial def commentSpans (src : String)
+    (startPos stopPos : String.Pos.Raw) :
+    Array (String.Pos.Raw × String.Pos.Raw) := Id.run do
   let atEnd := (String.Pos.Raw.atEnd src)
   let next  := (String.Pos.Raw.next src)
   let getc  := (String.Pos.Raw.get src)
   let get! (p : String.Pos.Raw) : Char := if atEnd p then ' ' else getc p
-  let mut out : Array SourceComment := #[]
+  let mut out : Array (String.Pos.Raw × String.Pos.Raw) := #[]
   let mut p := startPos
   let mut prev : Char := ' '
   while p < stopPos && !atEnd p do
@@ -66,7 +68,7 @@ partial def extractComments (src : String) (fileMap : FileMap)
       let b := p
       while !atEnd p && getc p != '\n' do
         p := next p
-      out := out.push (mkComment src fileMap b p)
+      out := out.push (b, p)
       prev := '\n'
     else if c == '/' && get! (next p) == '-' then
       -- `/- -/` block comment (nested; also matches `/--` doc comments).
@@ -83,7 +85,7 @@ partial def extractComments (src : String) (fileMap : FileMap)
           p := next (next p)
         else
           p := next p
-      out := out.push (mkComment src fileMap b p)
+      out := out.push (b, p)
       prev := ' '
     else if c == '"' then
       -- String literal: skip to the closing quote, honoring escapes.
@@ -106,6 +108,52 @@ partial def extractComments (src : String) (fileMap : FileMap)
       prev := c
       p := next p
   return out
+
+/-- Lex `src` between `startPos` and `stopPos`, collecting every comment. -/
+def extractComments (src : String) (fileMap : FileMap)
+    (startPos stopPos : String.Pos.Raw) : Array SourceComment :=
+  commentSpans src startPos stopPos |>.map fun (b, e) =>
+    mkComment src fileMap b e
+
+/-- The in-place editing seam for one tactic: the TIGHT source range of the
+tactic text proper and that text, verbatim. Paperproof's `ProofStep.position`
+includes trailing trivia (comments, the newline + indentation up to the next
+token) and its `tacticString` is prettified for display (first line only,
+`rw` re-synthesized) — so neither is safe to edit with. The server, which has
+the real source, re-extracts the range's text and trims trailing trivia
+(`trimmedEnd`), so replacing `[start, stop)` with edited text can never eat a
+trailing comment. Keyed client-side by `start` (= the step's
+`position.start`). -/
+structure TacticEdit where
+  start : Lsp.Position
+  stop  : Lsp.Position
+  text  : String
+  deriving ToJson, FromJson
+
+/-- The end of `s` with all trailing TRIVIA removed: whitespace, and any
+comments that (after whitespace) close the string — iterated, so
+`tac  -- a\n  -- b\n` trims to just `tac`. Interior comments stay. Used to
+tighten a tactic's Paperproof range (which includes trailing trivia) down to
+the tactic text proper for in-place editing: replacing the tight range can't
+eat a trailing comment. -/
+def trimmedEnd (s : String) : String.Pos.Raw := Id.run do
+  let spans := commentSpans s ⟨0⟩ s.rawEndPos
+  let bytes := s.toUTF8
+  let isWs (b : UInt8) : Bool :=
+    b == 32 || b == 9 || b == 10 || b == 13
+  let mut e := bytes.size
+  let mut go := true
+  while go do
+    while e > 0 && isWs (bytes.get! (e - 1)) do
+      e := e - 1
+    -- A comment closing exactly at the trimmed end is trailing trivia too.
+    match spans.find? (fun (_, stop) => stop.byteIdx == e) with
+    | some (b, _) => e := b.byteIdx
+    | none => go := false
+  -- `e` is a char boundary: either a comment start or the byte after a
+  -- non-whitespace char we stopped at (whitespace is ASCII, so stripping it
+  -- byte-wise can't split a multibyte char).
+  return ⟨e⟩
 
 /-- End of the line containing `p` (the newline itself, or end of string). -/
 private def lineEnd (src : String) (p : String.Pos.Raw) : String.Pos.Raw := Id.run do

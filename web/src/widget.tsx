@@ -10,11 +10,26 @@ import type { Proof, ProofStepPosition } from "./paperproof";
 import ProofTreeView from "./ProofTreeView";
 import { makeTaggedRenderers, type TaggedGoalEntry } from "./taggedRender";
 
+// One tactic's in-place editing seam, computed server-side (mirror of
+// ProofTreeComments.lean's TacticEdit): the TIGHT range of the tactic text
+// proper (trailing trivia trimmed — Paperproof step ranges include it) and
+// that text verbatim. Keyed by `start`, which equals the step's
+// `position.start`.
+interface TacticEditEntry {
+  start: { line: number; character: number };
+  stop: { line: number; character: number };
+  text: string;
+}
+
 // The RPC payload: the CLI's `Proof` shape plus `taggedGoals`, each goal's
-// interactive (tagged) pretty-print. The tags hold live RPC references — valid
-// only within this session, which is why they ride the RPC path and never the
-// NDJSON one.
-type ProofTreeData = Proof & { taggedGoals?: TaggedGoalEntry[] };
+// interactive (tagged) pretty-print, plus `tacticEdits`. The tags hold live
+// RPC references — valid only within this session, which is why they ride the
+// RPC path and never the NDJSON one; the edits need an editor to apply to, so
+// they're RPC-only too.
+type ProofTreeData = Proof & {
+  taggedGoals?: TaggedGoalEntry[];
+  tacticEdits?: TacticEditEntry[];
+};
 
 // The Lean infoview user-widget entry point. This is the default export bundled
 // into `web/dist/proofTreeWidget.js` and loaded by `ProofTreeWidget`
@@ -53,6 +68,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     sig: string;
     proof: Proof;
     taggedGoals: TaggedGoalEntry[];
+    tacticEdits: TacticEditEntry[];
   } | null>(null);
   if (st.state === "resolved" && st.value.steps.length > 0) {
     const proof: Proof = {
@@ -62,7 +78,16 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     };
     const sig = JSON.stringify(proof);
     if (!stable || stable.sig !== sig) {
-      setStable({ sig, proof, taggedGoals: st.value.taggedGoals ?? [] });
+      setStable({
+        sig,
+        proof,
+        taggedGoals: st.value.taggedGoals ?? [],
+        // Edits derive from the same source text as the steps, so refreshing
+        // them exactly when the proof signature changes keeps their ranges
+        // in sync with the document (positions live in the steps → any shift
+        // changes the sig).
+        tacticEdits: st.value.tacticEdits ?? [],
+      });
     }
   }
 
@@ -79,6 +104,31 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     void ec.revealLocation({
       uri: pos.uri,
       range: { start: p.start, end: p.stop },
+    });
+  };
+
+  // In-place editing: resolve a step's tight edit seam (double-click opens
+  // the editor overlay pre-filled with `text`)…
+  const editByStart = useMemo(
+    () =>
+      new Map(
+        (stable?.tacticEdits ?? []).map((e): [string, TacticEditEntry] => [
+          `${e.start.line}:${e.start.character}`,
+          e,
+        ]),
+      ),
+    [stable],
+  );
+  const getTacticEdit = (p: ProofStepPosition) => {
+    const e = editByStart.get(`${p.start.line}:${p.start.character}`);
+    return e ? { pos: { start: e.start, stop: e.stop }, text: e.text } : null;
+  };
+  // …and commit by replacing the tight range in the document. Goes through
+  // the editor's own edit pipeline (applyEdit), so it lands on the undo
+  // stack and triggers re-elaboration; the tree redraws off the next RPC.
+  const editTactic = (p: ProofStepPosition, newText: string) => {
+    void ec.api.applyEdit({
+      changes: { [pos.uri]: [{ range: { start: p.start, end: p.stop }, newText }] },
     });
   };
 
@@ -105,6 +155,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       <ProofTreeView
         proof={stable.proof}
         onReveal={reveal}
+        getTacticEdit={getTacticEdit}
+        onEditTactic={editTactic}
         highlightPos={{ line: pos.line, character: pos.character }}
         height="70vh"
         renderTaggedGoal={renderers?.renderTaggedGoal}
