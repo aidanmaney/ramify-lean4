@@ -76,14 +76,16 @@ const measureText = (() => {
     typeof document !== "undefined"
       ? document.createElement("canvas").getContext("2d")
       : null;
-  // Keys are size+text only, no family: a family change clears the whole
-  // cache (refreshCodeFontFamily), so stale-family entries can't survive.
-  return (text: string, fontPx: number): number => {
-    const key = `${fontPx}:${text}`;
+  // Keys are style+size+text only, no family: a family change clears the
+  // whole cache (refreshCodeFontFamily), so stale-family entries can't
+  // survive. `italic` exists for comment strips, which render italicized —
+  // italics are wider, so the measurer must match the paint.
+  return (text: string, fontPx: number, italic = false): number => {
+    const key = `${italic ? "i" : ""}${fontPx}:${text}`;
     const hit = measureCache.get(key);
     if (hit !== undefined) return hit;
     const w = ctx
-      ? ((ctx.font = `${fontPx}px ${codeFontFamily}`),
+      ? ((ctx.font = `${italic ? "italic " : ""}${fontPx}px ${codeFontFamily}`),
         ctx.measureText(text).width)
       : [...text].length * (fontPx <= HYP_FONT_PX ? HYP_CHAR_W : CHAR_W);
     measureCache.set(key, w);
@@ -165,9 +167,10 @@ function trunkLayout(visible: LayoutNode[]): {
   function place(n: LayoutNode, x0: number): PlacedNode {
     const already = placed.get(n.id);
     if (already) return already; // DAG guard: extra parents just link to it
-    const band = n.hypBlockH + n.h;
-    // Label and box are both left-aligned at x0; either may be the wider.
-    const eff = Math.max(n.w, hypSize(n.incHyp).w);
+    const band = n.commentBlockH + n.hypBlockH + n.h;
+    // Comment strip, label, and box are all left-aligned at x0; any may be
+    // the widest.
+    const eff = Math.max(n.w, hypSize(n.incHyp).w, n.commentW);
     const pn: PlacedNode = { x: x0 + n.w / 2, y: cursor + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
@@ -203,12 +206,17 @@ function trunkLayout(visible: LayoutNode[]): {
 // Prefix width is monotone in length, so binary-search the cut point — a linear
 // scan would measure O(len) growing prefixes per over-wide token, and Lean type
 // expressions are exactly the long space-free tokens that triggers on.
-function fitPrefix(text: string, maxW: number): number {
+function fitPrefix(
+  text: string,
+  maxW: number,
+  fontPx: number,
+  italic: boolean,
+): number {
   let lo = 1;
   let hi = text.length;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    if (measureText(text.slice(0, mid), NODE_FONT_PX) <= maxW) lo = mid;
+    if (measureText(text.slice(0, mid), fontPx, italic) <= maxW) lo = mid;
     else hi = mid - 1;
   }
   return lo;
@@ -249,7 +257,12 @@ function seamRank(left: string, right: string | undefined): number {
 // space-free token, and without this they'd overflow the box (whose width is
 // capped at MAX_W) instead of wrapping. Every line after the first is a
 // continuation (`cont`), indented by CONT_INDENT out of its budget.
-function wrapLine(text: string, maxW: number): WrappedLine[] {
+function wrapLine(
+  text: string,
+  maxW: number,
+  fontPx = NODE_FONT_PX,
+  italic = false,
+): WrappedLine[] {
   const out: WrappedLine[] = [];
   const words = text.split(" ");
   let i = 0;
@@ -257,8 +270,8 @@ function wrapLine(text: string, maxW: number): WrappedLine[] {
     const cont = out.length > 0;
     const budget = maxW - (cont ? CONT_INDENT : 0);
     // Over-wide token: peel off the widest prefix that fits and go around.
-    if (measureText(words[i], NODE_FONT_PX) > budget) {
-      const cut = fitPrefix(words[i], budget);
+    if (measureText(words[i], fontPx, italic) > budget) {
+      const cut = fitPrefix(words[i], budget, fontPx, italic);
       out.push({ text: words[i].slice(0, cut), cont });
       words[i] = words[i].slice(cut);
       continue;
@@ -270,7 +283,7 @@ function wrapLine(text: string, maxW: number): WrappedLine[] {
     let j = i + 1;
     for (; j < words.length; j++) {
       const cand = cur + " " + words[j];
-      if (measureText(cand, NODE_FONT_PX) > budget) break;
+      if (measureText(cand, fontPx, italic) > budget) break;
       cur = cand;
       seamEnd[seamRank(words[j], words[j + 1])] = cur;
     }
@@ -282,7 +295,7 @@ function wrapLine(text: string, maxW: number): WrappedLine[] {
     // as the seam doesn't waste most of the line (an early comma shouldn't
     // force a 10%-full line).
     const usable = (s: string | null): s is string =>
-      s !== null && measureText(s, NODE_FONT_PX) >= 0.4 * budget;
+      s !== null && measureText(s, fontPx, italic) >= 0.4 * budget;
     const chosen = usable(seamEnd[2])
       ? seamEnd[2]
       : usable(seamEnd[1])
@@ -297,8 +310,42 @@ function wrapLine(text: string, maxW: number): WrappedLine[] {
 // Honor explicit newlines in the label first, then width-wrap each segment.
 // Lines opened by an explicit newline are NOT continuations — only the
 // wrapper's own breaks get the hanging indent.
-function wrapText(text: string, maxW: number): WrappedLine[] {
-  return text.split("\n").flatMap((segment) => wrapLine(segment, maxW));
+function wrapText(
+  text: string,
+  maxW: number,
+  fontPx = NODE_FONT_PX,
+  italic = false,
+): WrappedLine[] {
+  return text
+    .split("\n")
+    .flatMap((segment) => wrapLine(segment, maxW, fontPx, italic));
+}
+
+// Source-comment strip geometry: an italic block drawn at the very TOP of the
+// node's band (comment → context label → box, mirroring source order where the
+// comment precedes the whole invocation). Wrapped with the same machinery as
+// labels — measured italic, because italics are wider. COMMENT_GAP separates
+// the strip from whatever sits below it (the hyp label or the box).
+export const COMMENT_FONT_PX = 11;
+export const COMMENT_LINE_H = 15;
+export const COMMENT_GAP = 10;
+function commentSize(
+  text: string | undefined,
+): Pick<LayoutNode, "commentLines" | "commentBlockH" | "commentW"> {
+  if (!text)
+    return { commentLines: [], commentBlockH: 0, commentW: 0 };
+  const commentLines = wrapText(text, WRAP_W, COMMENT_FONT_PX, true);
+  const commentW = Math.max(
+    ...commentLines.map(
+      (l) =>
+        (l.cont ? CONT_INDENT : 0) + measureText(l.text, COMMENT_FONT_PX, true),
+    ),
+  );
+  return {
+    commentLines,
+    commentBlockH: commentLines.length * COMMENT_LINE_H + COMMENT_GAP,
+    commentW,
+  };
 }
 
 // Compute the wrapped label lines and box geometry for a node label. Every line
@@ -344,11 +391,19 @@ export function createLayoutEngine(data: TreeNode[]) {
       (CHILDREN.get(p.id) ?? CHILDREN.set(p.id, []).get(p.id)!).push(n.id);
   const NODE = new Map(data.map((n): [string, TreeNode] => [n.id, n]));
 
-  // Wrapped label lines + box geometry, per node. A label never changes for the
-  // lifetime of an engine, so measure once here — computeLayout runs on every
-  // fold toggle, and re-wrapping every visible label there is pure waste.
+  // Wrapped label lines + box geometry (and the comment strip's), per node. A
+  // label never changes for the lifetime of an engine, so measure once here —
+  // computeLayout runs on every fold toggle, and re-wrapping every visible
+  // label there is pure waste.
   const SIZE = new Map(
-    data.map((n): [string, ReturnType<typeof sizeOf>] => [n.id, sizeOf(n.label)]),
+    data.map(
+      (
+        n,
+      ): [string, ReturnType<typeof sizeOf> & ReturnType<typeof commentSize>] => [
+        n.id,
+        { ...sizeOf(n.label), ...commentSize(n.comment) },
+      ],
+    ),
   );
 
   // Foldable siblings of `id`: nodes sharing a parent with it, excluding itself.
@@ -495,14 +550,15 @@ export function createLayoutEngine(data: TreeNode[]) {
     )(visible);
     const layout = sugiyama()
       .nodeSize((node: GraphNode<LayoutNode, LinkDatum>) => {
-        // The hyp label lives INSIDE this node's band (hypBlockH), so the
-        // vertical reservation is exact by construction: band = label block +
-        // box + a constant 56 layer gap (room for the arrow + a breath).
-        // Horizontally, widen to the label so siblings clear it.
+        // The hyp label and comment strip live INSIDE this node's band, so the
+        // vertical reservation is exact by construction: band = comment strip
+        // + label block + box + a constant 56 layer gap (room for the arrow +
+        // a breath). Horizontally, widen to the widest of the three so
+        // siblings clear them.
         const hb = hypSize(node.data.incHyp);
         return [
-          Math.max(node.data.w, hb.w) + 40,
-          node.data.hypBlockH + node.data.h + 56,
+          Math.max(node.data.w, hb.w, node.data.commentW) + 40,
+          node.data.commentBlockH + node.data.hypBlockH + node.data.h + 56,
         ] as const;
       })
       .decross(stableDecross) // fixed sibling order, immune to folding

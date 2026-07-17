@@ -1,4 +1,10 @@
-import type { GoalInfo, Hypothesis, Proof, ProofStep } from "./paperproof";
+import type {
+  GoalInfo,
+  Hypothesis,
+  Proof,
+  ProofStep,
+  SourceComment,
+} from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import type { EdgeHypLine, EdgeHyps, TreeNode } from "./types";
 
@@ -91,6 +97,112 @@ export function proofTitle(proof: Proof): string {
   return (root && goals.get(root)?.type) || "(proof)";
 }
 
+// ---- Source comments → node attribution -------------------------------------
+
+type LspPos = { line: number; character: number };
+const cmpPos = (a: LspPos, b: LspPos): number =>
+  a.line - b.line || a.character - b.character;
+
+// Display form of a raw comment: delimiters stripped, block-comment lines
+// trimmed (they carry the source indentation), blank edge lines dropped.
+function stripComment(raw: string): string {
+  let t = raw.trim();
+  if (t.startsWith("--")) t = t.slice(2);
+  else if (t.startsWith("/-")) {
+    t = t.replace(/^\/-[-!]?/, "");
+    t = t.replace(/-\/$/, "");
+  }
+  const lines = t.split("\n").map((l) => l.trim());
+  while (lines.length > 0 && lines[0] === "") lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n");
+}
+
+// Attribute each comment to a tree node id (tactic node, or a root goal),
+// joining multiple comments per node in source order.
+//
+// The one wrinkle: Paperproof's step ranges include TRAILING TRIVIA — a
+// tactic's range runs past its trailing comment up to the next token. That
+// makes containment the reliable trailing test (`simp -- trivial case` puts
+// the comment inside `simp`'s range) where a naive same-line check misfires.
+// The rules, in order:
+//
+// 1. CONTAINED in some step's range → that step (innermost, i.e. latest
+//    start, when nested)… UNLESS another step starts between the comment and
+//    the container's end — then the comment PRECEDES code inside the same
+//    construct (`have := by` + comment + inner tactic) and reads as that
+//    inner step's LEADING comment instead.
+// 2. Entirely BEFORE the first tactic (between `by` and step 1 — including
+//    the theorem's docstring, which the command range covers) → the ROOT
+//    goal: that's the "here's the plan" narrative slot.
+// 3. LEADING — the next tactic starting at/after it (the common
+//    `-- explain, then do` shape; bullet lines land here too, since the
+//    consumed goal's tactic starts past the `·`).
+// 4. Dangling after everything (rare) → the last tactic before it.
+function attributeComments(
+  comments: SourceComment[],
+  steps: ProofStep[],
+  rootId: string | undefined,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  if (comments.length === 0 || steps.length === 0) return out;
+  const byStart = [...steps].sort((a, b) =>
+    cmpPos(a.position.start, b.position.start),
+  );
+  const first = byStart[0];
+  const add = (nodeId: string, text: string) =>
+    out.set(nodeId, out.has(nodeId) ? `${out.get(nodeId)}\n${text}` : text);
+  const sorted = [...comments].sort((a, b) => cmpPos(a.start, b.start));
+  for (const c of sorted) {
+    const text = stripComment(c.text);
+    if (text === "") continue;
+    const container = byStart
+      .filter(
+        (s) =>
+          cmpPos(s.position.start, c.start) < 0 &&
+          cmpPos(c.start, s.position.stop) < 0,
+      )
+      .pop(); // byStart order → last = innermost
+    if (container) {
+      const inner = byStart.find(
+        (s) =>
+          cmpPos(s.position.start, c.stop) >= 0 &&
+          cmpPos(s.position.start, container.position.stop) < 0,
+      );
+      add(tacticId((inner ?? container).goalBefore.id), text);
+      continue;
+    }
+    if (rootId && cmpPos(c.stop, first.position.start) <= 0) {
+      add(rootId, text);
+      continue;
+    }
+    const next = byStart.find((s) => cmpPos(s.position.start, c.stop) >= 0);
+    if (next) {
+      add(tacticId(next.goalBefore.id), text);
+      continue;
+    }
+    const prev = [...byStart]
+      .reverse()
+      .find((s) => cmpPos(s.position.start, c.start) <= 0);
+    if (prev) add(tacticId(prev.goalBefore.id), text);
+  }
+  return out;
+}
+
+// Tactic labels are raw source text of the step's range — which, because the
+// range includes trailing trivia, can carry the very comments we now draw as
+// strips. Scrub them from the label (they're identified by exact text) and
+// tidy the leftover line-end whitespace.
+function cleanLabel(label: string, comments: SourceComment[]): string {
+  let t = label;
+  for (const c of comments)
+    if (t.includes(c.text)) t = t.split(c.text).join("");
+  const lines = t.split("\n").map((l) => l.trimEnd());
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "")
+    lines.pop();
+  return lines.join("\n");
+}
+
 export interface ProofToTreeOptions {
   /**
    * Label each tactic with its goal's FULL local context instead of the delta
@@ -110,6 +222,14 @@ export function proofToTree(
   for (const step of proof.steps) stepByGoal.set(step.goalBefore.id, step);
 
   const roots = rootIds(proof);
+
+  // Source comments, attributed to node ids (see attributeComments). Root
+  // narrative (before the first tactic / the docstring) keys on the root goal.
+  const commentByNode = attributeComments(
+    proof.comments ?? [],
+    proof.steps,
+    roots[0],
+  );
 
   const nodes: TreeNode[] = [];
   const emittedGoals = new Set<string>();
@@ -134,6 +254,7 @@ export function proofToTree(
       // The producing tactic's source span, for the widget's node↔source link
       // (see types.ts `TreeNode.position`).
       position: producedBy?.position,
+      comment: commentByNode.get(goalId),
     });
 
     const step = stepByGoal.get(goalId);
@@ -152,12 +273,13 @@ export function proofToTree(
     const tId = tacticId(goalId);
     nodes.push({
       id: tId,
-      label: step.tacticString,
+      label: cleanLabel(step.tacticString, proof.comments ?? []),
       type: "tactic",
       parents: [{ id: goalId, hyps }],
       // Carry the tactic's source span so the widget can link this node back to
       // the `.lean` source (see types.ts `TreeNode.position`).
       position: step.position,
+      comment: commentByNode.get(tId),
     });
 
     for (const child of stepGoalsAfter(step)) {

@@ -5,6 +5,7 @@ import {
   useRef,
   useLayoutEffect,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -21,6 +22,8 @@ import {
   ARROW_GAP,
   TRUNK_INSET,
   CONT_INDENT,
+  COMMENT_FONT_PX,
+  COMMENT_LINE_H,
   getCodeFontFamily,
   refreshCodeFontFamily,
 } from "./layout";
@@ -316,13 +319,19 @@ export default function ProofTreeView({
   // the new layout root); null shows the full proof. Folding still works
   // within the focused subtree.
   const [focusId, setFocusId] = useState<string | null>(null);
+  // The goal node currently showing its hover action bar (reveal-in-source /
+  // focus-subtree buttons). The bar renders inside the node's own <g>, so
+  // pointer travel from box to bar never leaves the hover region (no flicker).
+  const [hoverId, setHoverId] = useState<string | null>(null);
 
   // The proof + view we've already centered on; lets the init effect re-center
   // once per loaded proof (and once per sequence switch) without writing a ref
   // during render. Keyed on the PROOF, not the engine: the engine also rebuilds
   // on a hyp-label mode toggle, which re-anchors on the root instead of
   // re-centering. One ref: the pair is only ever written and compared together.
-  const centeredOn = useRef<{ proof: Proof; viewKey: string } | null>(null);
+  const centeredOn = useRef<{ shapeKey: string; viewKey: string } | null>(
+    null,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<Anchor | null>(null);
   // A zoom-change wants to keep some content point fixed on screen; this carries
@@ -372,13 +381,21 @@ export default function ProofTreeView({
   );
 
   // When a new proof loads, reset to "everything collapsed" and re-center.
-  // Keyed on the proof, NOT the engine: a hyp-label mode toggle rebuilds the
-  // engine too, but node ids are unchanged, so fold/zoom/sequence state stays
-  // valid and should survive. This is derived state, so we adjust it during
-  // render on change rather than in an effect (avoids a cascading re-render).
-  const [prevProof, setPrevProof] = useState(proof);
-  if (proof !== prevProof) {
-    setPrevProof(proof);
+  // Keyed on the proof's SHAPE (its node ids), NOT the proof object or the
+  // engine: a hyp-label mode toggle rebuilds the engine, and editing a
+  // comment or a tactic's text yields a new proof object — but node ids are
+  // unchanged in all three, so fold/zoom/sequence state stays valid and
+  // should survive (matters in the widget, where the proof re-arrives on
+  // every re-elaboration while the user types). This is derived state, so we
+  // adjust it during render on change rather than in an effect (avoids a
+  // cascading re-render).
+  const shapeKey = useMemo(
+    () => proof.steps.map((s) => s.goalBefore.id).join("\n"),
+    [proof],
+  );
+  const [prevShape, setPrevShape] = useState(shapeKey);
+  if (shapeKey !== prevShape) {
+    setPrevShape(shapeKey);
     setCollapsed(engine.foldableIds());
     setZoom(1);
     setSeq({ mode: "off" });
@@ -537,7 +554,7 @@ export default function ProofTreeView({
     const el = scrollRef.current;
     if (
       !el ||
-      (centeredOn.current?.proof === proof &&
+      (centeredOn.current?.shapeKey === shapeKey &&
         centeredOn.current?.viewKey === viewKey) ||
       viewport.w === 0 ||
       nodes.length === 0
@@ -560,13 +577,16 @@ export default function ProofTreeView({
       maxX,
     );
     el.scrollTop = clampScroll(
-      (MARGIN.top + PAD_Y + root.y - (root.data.h + root.data.hypBlockH) / 2) *
+      (MARGIN.top +
+        PAD_Y +
+        root.y -
+        (root.data.h + root.data.hypBlockH + root.data.commentBlockH) / 2) *
         zoom -
         MARGIN.top,
       maxY,
     );
-    centeredOn.current = { proof, viewKey };
-  }, [viewport, nodes, proof, viewKey, zoom, PAD_X, PAD_Y, compact]);
+    centeredOn.current = { shapeKey, viewKey };
+  }, [viewport, nodes, shapeKey, viewKey, zoom, PAD_X, PAD_Y, compact]);
 
   // After a zoom change re-renders the (resized) SVG, restore scroll so the
   // intended point stays put: an explicit target (fit) wins, else the anchor
@@ -618,17 +638,19 @@ export default function ProofTreeView({
   const fitWidth = () => {
     const el = scrollRef.current;
     if (!el || nodes.length === 0) return;
-    // A node's horizontal extent includes its context label. Wide mode centers
-    // label and box on n.x; compact left-aligns both at the box's left edge,
-    // so the wider of the two extends right from there.
+    // A node's horizontal extent includes its context label and comment
+    // strip. Wide mode centers them on n.x; compact left-aligns all three at
+    // the box's left edge, so the widest extends right from there.
     const effW = (n: (typeof nodes)[number]) =>
-      Math.max(n.data.w, hypSize(n.data.incHyp).w);
+      Math.max(n.data.w, hypSize(n.data.incHyp).w, n.data.commentW);
     const leftOf = (n: (typeof nodes)[number]) =>
       compact ? n.x - n.data.w / 2 : n.x - effW(n) / 2;
     const minLeft = Math.min(...nodes.map(leftOf));
     const maxRight = Math.max(...nodes.map((n) => leftOf(n) + effW(n)));
     const topY = Math.min(
-      ...nodes.map((n) => n.y - (n.data.h + n.data.hypBlockH) / 2),
+      ...nodes.map(
+        (n) => n.y - (n.data.h + n.data.hypBlockH + n.data.commentBlockH) / 2,
+      ),
     );
     const contentW = maxRight - minLeft + 2 * MARGIN.left;
     const z = clampZoom(el.clientWidth / contentW);
@@ -772,16 +794,25 @@ export default function ProofTreeView({
           {/* Coords originate at top-left */}
           <g transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}>
             {links.map((link, i) => {
-              // A node's band is hypBlockH (context label) + h (box), box at
-              // the bottom: edges leave a box's bottom edge and land above the
-              // target's whole band, so the arrow points at the context label
-              // when there is one — reading order goal → context → tactic.
+              // A node's band is commentBlockH (comment strip) + hypBlockH
+              // (context label) + h (box), box at the bottom: edges leave a
+              // box's bottom edge and land above the target's whole band —
+              // reading order goal → comment → context → tactic.
               const startY =
                 link.source.y +
-                (link.source.data.h + link.source.data.hypBlockH) / 2;
+                (link.source.data.h +
+                  link.source.data.hypBlockH +
+                  link.source.data.commentBlockH) /
+                  2;
               const bandTop =
                 link.target.y -
-                (link.target.data.h + link.target.data.hypBlockH) / 2;
+                (link.target.data.h +
+                  link.target.data.hypBlockH +
+                  link.target.data.commentBlockH) /
+                  2;
+              // The comment strip is narrative, not dataflow: labels and
+              // landing points sit below it.
+              const contentTop = bandTop + link.target.data.commentBlockH;
               const endY = bandTop - ARROW_GAP; // arrowhead just above the band
 
               const hyps = link.data; // the tactic's input context, if labeled
@@ -804,7 +835,7 @@ export default function ProofTreeView({
                   d = `M${col},${startY} L${col},${endY}`;
                 } else {
                   const landY =
-                    bandTop +
+                    contentTop +
                     (hyps ? hypSize(hyps).h / 2 : link.target.data.h / 2);
                   d = `M${col},${startY} L${col},${landY} L${tLeft - ARROW_GAP},${landY}`;
                 }
@@ -832,8 +863,9 @@ export default function ProofTreeView({
                   {hyps && (
                     <HypLabel
                       x={labelX}
-                      // At the top of the target's band; the box sits below it.
-                      y={bandTop + hypSize(hyps).h / 2}
+                      // At the top of the target's content (below any comment
+                      // strip); the box sits below it.
+                      y={contentTop + hypSize(hyps).h / 2}
                       hyps={hyps}
                       onClick={
                         onReveal && hypPos ? () => onReveal(hypPos) : undefined
@@ -852,11 +884,13 @@ export default function ProofTreeView({
             })}
             {nodes.map((node) => {
               const { w, h, lines, label, type, id, foldable, position } = node.data;
-              // The node's band is hypBlockH + h with the box pinned at the
-              // bottom (the context label, drawn by the links loop, occupies
-              // the top). All box geometry hangs off boxTop / boxCy.
-              const boxTop = (node.data.hypBlockH - h) / 2;
-              const boxCy = node.data.hypBlockH / 2;
+              // The node's band is commentBlockH + hypBlockH + h with the box
+              // pinned at the bottom (the comment strip tops the band, the
+              // context label — drawn by the links loop — sits between them).
+              // All box geometry hangs off boxTop / boxCy.
+              const topH = node.data.hypBlockH + node.data.commentBlockH;
+              const boxTop = (topH - h) / 2;
+              const boxCy = topH / 2;
               const style = NODE_STYLES[type] ?? NODE_STYLES.default;
               const isCollapsed = collapsed.has(id);
               const seqActive = seq.mode !== "off";
@@ -874,27 +908,33 @@ export default function ProofTreeView({
               const accent = isEndpoint || isCursor;
               // A positioned node can reveal its source (widget only, outside
               // sequence mode). For a tactic node the whole box reveals; goal
-              // nodes are the primary fold targets, so their reveal is a small
-              // corner icon instead (below) — the box stays a fold toggle.
+              // nodes are the primary fold targets, so their box stays a fold
+              // toggle and reveal rides the fast path (⌘/Ctrl-click — the
+              // editor's own go-to-source gesture) or the hover action bar.
               const canReveal = seq.mode === "off" && !!onReveal && !!position;
               const revealable = canReveal && type === "tactic";
-              const iconRevealable = canReveal && type === "goal";
+              const goalRevealable = canReveal && type === "goal";
               // A goal with descendants can become the root of a focused view
-              // (its ◎ corner icon); pointless for the current focus root.
+              // (⌥-click, or the hover bar's ◎); pointless for the current
+              // focus root.
               const focusable =
                 type === "goal" && foldable && !seqActive && id !== focusId;
-              const clickable = seqActive || foldable || revealable;
+              // Goal secondary actions live in a hover bar with button-sized
+              // targets (see NodeActionBar) instead of tiny corner glyphs.
+              const hasBar = goalRevealable || focusable;
+              const clickable =
+                seqActive || foldable || revealable || goalRevealable;
               // Native hover tooltip: the full (un-wrapped) label — useful even
               // though the box already shows it, since long types get pixel-
-              // wrapped across lines — plus hints on the corner-icon actions,
-              // which aren't otherwise discoverable.
+              // wrapped across lines — plus hints on the fast-path gestures the
+              // hover bar's button titles also teach.
               const hints = [
                 revealable
                   ? "· click to reveal in source"
-                  : iconRevealable
-                    ? "· click » to reveal in source"
+                  : goalRevealable
+                    ? `· ${CMD}-click to reveal in source`
                     : null,
-                focusable ? "· click ◎ to focus this subtree" : null,
+                focusable ? "· ⌥-click to focus this subtree" : null,
               ].filter(Boolean);
               const nodeTooltip =
                 hints.length > 0 ? `${label}\n\n${hints.join("\n")}` : label;
@@ -908,11 +948,22 @@ export default function ProofTreeView({
                     )
                   : null;
 
-              const handleClick = () => {
+              const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
                 // In the widget, clicking a positioned tactic reveals its source
                 // rather than folding; fold via goal nodes / the sequence tools.
                 if (revealable) {
                   onReveal!(position!);
+                  return;
+                }
+                // Goal fast paths — the whole box is the target, no fiddly
+                // icons: ⌘/Ctrl-click reveals in source (the editor's own
+                // go-to-definition gesture), ⌥-click focuses the subtree.
+                if (goalRevealable && (e.metaKey || e.ctrlKey)) {
+                  onReveal!(position!);
+                  return;
+                }
+                if (focusable && e.altKey) {
+                  focusOn(id);
                   return;
                 }
                 onNodeClick(id, foldable);
@@ -923,12 +974,57 @@ export default function ProofTreeView({
                   key={id}
                   transform={`translate(${node.x},${node.y})`}
                   onClick={clickable ? handleClick : undefined}
+                  onMouseEnter={hasBar ? () => setHoverId(id) : undefined}
+                  onMouseLeave={
+                    hasBar
+                      ? () => setHoverId((cur) => (cur === id ? null : cur))
+                      : undefined
+                  }
                   style={{ cursor: clickable ? "pointer" : "default" }}
                 >
                   {/* With a tagged label, the native tooltip retreats to the box
                       rect (padding/border) so it doesn't stack on the hover
                       type-tooltips the interactive text pops itself. */}
                   {!taggedLines && <title>{nodeTooltip}</title>}
+                  {/* Source-comment strip: the node's attributed comment(s),
+                      drawn as italic narrative at the very top of the band —
+                      above the context label, mirroring source order. Muted
+                      and box-less on purpose: authorial voice, not machine
+                      output. Left-aligned with the box in compact mode,
+                      centered block in wide mode (same convention as the
+                      context label). */}
+                  {node.data.commentLines.length > 0 && (
+                    <text
+                      textAnchor="start"
+                      fontSize={COMMENT_FONT_PX}
+                      fontFamily={getCodeFontFamily()}
+                      fontStyle="italic"
+                      fill="#8b949e"
+                      // Match the width measurer (no inherited letter-spacing).
+                      style={{ letterSpacing: 0 }}
+                    >
+                      {node.data.commentLines.map((line, j) => (
+                        <tspan
+                          key={j}
+                          x={
+                            (compact
+                              ? -w / 2
+                              : -node.data.commentW / 2) +
+                            (line.cont ? CONT_INDENT : 0)
+                          }
+                          y={
+                            boxTop -
+                            topH +
+                            (j + 0.5) * COMMENT_LINE_H
+                          }
+                          dy="0.32em"
+                        >
+                          {line.text}
+                        </tspan>
+                      ))}
+                    </text>
+                  )}
+
                   {/* Context label → box connector: the label (drawn by the
                       links loop) ends HYP_GAP above the box; a short arrow
                       bridges that gap so the "context feeds into the tactic"
@@ -974,47 +1070,6 @@ export default function ProofTreeView({
                       fill={style.stroke}
                     >
                       {isCollapsed ? "+" : "−"}
-                    </text>
-                  )}
-
-                  {iconRevealable && (
-                    <text
-                      x={-w / 2 + 10}
-                      y={boxTop + 12}
-                      textAnchor="middle"
-                      fontSize={NODE_FONT_PX}
-                      fontFamily={getCodeFontFamily()}
-                      fill={style.stroke}
-                      onClick={(e) => {
-                        // Reveal, not fold: stop the click from reaching the
-                        // box's own onClick (toggle).
-                        e.stopPropagation();
-                        onReveal!(position!);
-                      }}
-                      style={{ cursor: "pointer" }}
-                    >
-                      <title>Reveal in source</title>»
-                    </text>
-                  )}
-
-                  {focusable && (
-                    <text
-                      // Next to the » when both are shown, else in its corner.
-                      x={-w / 2 + (iconRevealable ? 24 : 10)}
-                      y={boxTop + 12}
-                      textAnchor="middle"
-                      fontSize={NODE_FONT_PX}
-                      fontFamily={getCodeFontFamily()}
-                      fill={style.stroke}
-                      onClick={(e) => {
-                        // Focus, not fold: stop the click from reaching the
-                        // box's own onClick (toggle).
-                        e.stopPropagation();
-                        focusOn(id);
-                      }}
-                      style={{ cursor: "pointer" }}
-                    >
-                      <title>Focus this subtree</title>◎
                     </text>
                   )}
 
@@ -1078,6 +1133,35 @@ export default function ProofTreeView({
                         </tspan>
                       ))}
                     </text>
+                  )}
+
+                  {/* Hover action bar (last, so it paints over the label): the
+                      goal's secondary actions with real button targets. */}
+                  {hasBar && hoverId === id && (
+                    <NodeActionBar
+                      right={w / 2 - 4}
+                      top={boxTop}
+                      actions={[
+                        ...(goalRevealable
+                          ? [
+                              {
+                                glyph: "»",
+                                title: `Reveal in source (${CMD}-click)`,
+                                onClick: () => onReveal!(position!),
+                              },
+                            ]
+                          : []),
+                        ...(focusable
+                          ? [
+                              {
+                                glyph: "◎",
+                                title: "Focus this subtree (⌥-click)",
+                                onClick: () => focusOn(id),
+                              },
+                            ]
+                          : []),
+                      ]}
+                    />
                   )}
                 </g>
               );
@@ -1217,6 +1301,94 @@ function Toolbar({
         </span>
       )}
     </div>
+  );
+}
+
+// Platform label for the reveal fast-path modifier (⌘ on mac, Ctrl elsewhere),
+// used in tooltips and button titles.
+const CMD =
+  typeof navigator !== "undefined" && /Mac/.test(navigator.platform)
+    ? "⌘"
+    : "Ctrl";
+
+// Hover action bar on a goal box: real button-sized targets for the node's
+// secondary actions (reveal in source, focus subtree), shown only while the
+// pointer is over the node so a dense tree stays clean. It straddles the box's
+// top-right corner — mostly outside so it doesn't cover the label, overlapping
+// the border a few px so the hover region is contiguous with the box (leaving
+// the box for the bar can't un-hover the node). UI chrome, so monospace like
+// the toolbar, not the code font.
+const BAR_BTN = 20; // button square
+const BAR_PAD = 3; // bar padding around the buttons
+const BAR_GAP = 2; // between buttons
+const BAR_OVERLAP = 5; // how far the bar dips onto the box's top edge
+interface NodeAction {
+  glyph: string;
+  title: string;
+  onClick: () => void;
+}
+function NodeActionBar({
+  right,
+  top,
+  actions,
+}: {
+  right: number; // bar's right edge (box right, slightly inset)
+  top: number; // box top edge
+  actions: NodeAction[];
+}) {
+  const w = actions.length * BAR_BTN + (actions.length - 1) * BAR_GAP + 2 * BAR_PAD;
+  const h = BAR_BTN + 2 * BAR_PAD;
+  const x0 = right - w;
+  const y0 = top - h + BAR_OVERLAP;
+  return (
+    <g>
+      <rect
+        x={x0}
+        y={y0}
+        width={w}
+        height={h}
+        rx={6}
+        fill="#fff"
+        stroke="#cbd5e0"
+      />
+      {actions.map((a, i) => {
+        const bx = x0 + BAR_PAD + i * (BAR_BTN + BAR_GAP);
+        return (
+          <g
+            key={a.glyph}
+            onClick={(e) => {
+              // Action, not fold: stop the click from reaching the box's own
+              // onClick (toggle).
+              e.stopPropagation();
+              a.onClick();
+            }}
+            style={{ cursor: "pointer" }}
+          >
+            <title>{a.title}</title>
+            <rect
+              x={bx}
+              y={y0 + BAR_PAD}
+              width={BAR_BTN}
+              height={BAR_BTN}
+              rx={4}
+              fill="#f7fafc"
+              stroke="#e2e8f0"
+            />
+            <text
+              x={bx + BAR_BTN / 2}
+              y={y0 + BAR_PAD + BAR_BTN / 2}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={13}
+              fontFamily="monospace"
+              fill="#2d3748"
+            >
+              {a.glyph}
+            </text>
+          </g>
+        );
+      })}
+    </g>
   );
 }
 

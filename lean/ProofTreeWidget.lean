@@ -1,5 +1,6 @@
 import Lean
 import Services.BetterParser
+import ProofTreeComments
 import ProofWidgets.Component.Basic
 import ProofWidgets.Component.Panel.Basic
 
@@ -54,6 +55,9 @@ structure ProofTreeData where
   steps       : List Paperproof.Services.ProofStep
   allGoals    : List Paperproof.Services.GoalInfo
   taggedGoals : Array TaggedGoalEntry := #[]
+  -- The command's source comments (parser trivia, so re-lexed from the raw
+  -- source — see ProofTreeComments.lean); the client attributes them to nodes.
+  comments    : Array SourceComment := #[]
   deriving Server.RpcEncodable
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
@@ -107,10 +111,17 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree)
       | return { steps := [], allGoals := [] }
     let taggedGoals ← collectTaggedGoals snap.infoTree
+    -- Comments live in the raw source, not the InfoTree; `snap.stx` is the
+    -- whole command, so its range bounds the lex (same result as the CLI's
+    -- `commandRange` walk).
+    let comments := match snap.stx.getRange? with
+      | some range => commentsInRange fileMap.source fileMap range
+      | none => #[]
     return {
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
-      taggedGoals
+      taggedGoals,
+      comments
     }
 
 end ProofTree

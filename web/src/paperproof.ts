@@ -39,10 +39,22 @@ export interface ProofStep {
   theorems: unknown[]; // theorem signatures used; unused by the renderer for now
 }
 
+/** One raw source comment within the theorem's command range, as lexed by
+ProofTreeComments.lean (both data paths emit these — comments are parser
+trivia, absent from the InfoTree, so the Lean side re-lexes the source).
+`text` includes the delimiters (`--`, `/- -/`); positions are LSP, the same
+space as `ProofStepPosition`. Attribution to nodes happens in proofToTree. */
+export interface SourceComment {
+  text: string;
+  start: { line: number; character: number };
+  stop: { line: number; character: number };
+}
+
 /** A complete parsed proof: the node set plus the tactic edges. */
 export interface Proof {
   steps: ProofStep[];
   allGoals: GoalInfo[];
+  comments?: SourceComment[];
 }
 
 /** One NDJSON line as emitted by the CLI: `{file, data:{index, proof}}`. */

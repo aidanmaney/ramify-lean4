@@ -46,6 +46,11 @@ export interface TreeNode {
   // Used by the infoview widget for the node↔source link (reveal on click,
   // and highlighting the node under the editor cursor).
   position?: ProofStepPosition;
+  // Source comment(s) attributed to this node (see proofToTree's
+  // attributeComments): leading/trailing comments for a tactic; the
+  // before-first-tactic narrative (incl. the docstring) for a root goal.
+  // Drawn as a strip at the top of the node's layout band.
+  comment?: string;
 }
 
 // A node placed at concrete coordinates by either layout mode (the wide
@@ -87,8 +92,15 @@ export interface LayoutNode extends TreeNode {
   // node so the layout can reserve room for the label drawn above it.
   incHyp?: EdgeHyps;
   // Height of the hyp label block (label + HYP_GAP) folded into this node's
-  // layout band, 0 without a label. The node's band is hypBlockH + h tall with
-  // the box pinned at the bottom and the label at the top, so a label can
-  // never eclipse the layer above. The render offsets the box by hypBlockH/2.
+  // layout band, 0 without a label. The node's band is commentBlockH +
+  // hypBlockH + h tall with the box pinned at the bottom, the hyp label above
+  // it and the comment strip on top, so neither can eclipse the layer above.
   hypBlockH: number;
+  // Source-comment strip (TreeNode.comment wrapped for display), drawn at the
+  // very top of the band: its wrapped lines, the height it adds to the band
+  // (lines + gap; 0 without a comment), and its measured width (so layout can
+  // reserve horizontal room like it does for wide hyp labels).
+  commentLines: WrappedLine[];
+  commentBlockH: number;
+  commentW: number;
 }

@@ -26,6 +26,12 @@ name = "mathlib"
 scope = "leanprover-community"
 rev = "v4.27.0"
 
+# --- Source-comment extraction shared by the CLI and the widget -------------
+# (file: ProofTreeComments.lean) Comments are parser trivia, absent from the
+# InfoTree, so both data paths re-lex the command's raw source through this.
+[[lean_lib]]
+name = "ProofTreeComments"
+
 # --- Our reusable parsing library (file: Ppharness.lean) ---
 [[lean_lib]]
 name = "Ppharness"

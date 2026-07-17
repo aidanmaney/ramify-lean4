@@ -55,7 +55,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     taggedGoals: TaggedGoalEntry[];
   } | null>(null);
   if (st.state === "resolved" && st.value.steps.length > 0) {
-    const proof: Proof = { steps: st.value.steps, allGoals: st.value.allGoals };
+    const proof: Proof = {
+      steps: st.value.steps,
+      allGoals: st.value.allGoals,
+      comments: st.value.comments,
+    };
     const sig = JSON.stringify(proof);
     if (!stable || stable.sig !== sig) {
       setStable({ sig, proof, taggedGoals: st.value.taggedGoals ?? [] });

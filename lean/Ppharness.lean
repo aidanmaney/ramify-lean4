@@ -1,5 +1,6 @@
 import Lean
 import Services.BetterParser
+import ProofTreeComments
 
 /-!
 # Ppharness
@@ -29,11 +30,14 @@ namespace Ppharness
 
 /-- `Result` itself has no `ToJson` instance (only `ProofStep`, `GoalInfo`, and
     `Hypothesis` derive one), so we encode its two fields by hand.
-    `allGoals` is a `Std.HashSet`, which has no canonical JSON form → dump as a list. -/
-def resultToJson (r : Result) : Json :=
+    `allGoals` is a `Std.HashSet`, which has no canonical JSON form → dump as a list.
+    `comments` is ours (not the parser's): the command's source comments, for the
+    renderer's comment strips (see ProofTreeComments.lean). -/
+def resultToJson (r : Result) (comments : Array ProofTree.SourceComment) : Json :=
   Json.mkObj [
     ("steps",    toJson r.steps),          -- List ProofStep  (ToJson derived upstream)
-    ("allGoals", toJson r.allGoals.toList) -- flatten the goal set into an array
+    ("allGoals", toJson r.allGoals.toList), -- flatten the goal set into an array
+    ("comments", toJson comments)
   ]
 
 /-- Run the (MetaM) parser from plain `IO`.
@@ -73,7 +77,13 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
     | some r =>
         -- Drop trees that produced no proof (keeps output to real theorems only).
         if !(r.steps.isEmpty && r.allGoals.isEmpty) then
-          out := out.push (Json.mkObj [("index", toJson idx), ("proof", resultToJson r)])
+          -- The command's comments ride along; the InfoTree never holds them
+          -- (they're parser trivia), so re-lex the command's source range.
+          let comments := match ProofTree.commandRange tree with
+            | some range => ProofTree.commentsInRange src fileMap range
+            | none => #[]
+          out := out.push (Json.mkObj
+            [("index", toJson idx), ("proof", resultToJson r comments)])
     | none => pure ()
     idx := idx + 1
   return out
