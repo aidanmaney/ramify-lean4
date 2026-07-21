@@ -119,6 +119,39 @@ def collectTaggedGoals (infoTree : InfoTree) : IO (Array TaggedGoalEntry) := do
           out := out.push { goalId := key, goal }
   return out
 
+/-- Semantic tokens for CONSTANT identifiers — `Nat.Prime`,
+`Nat.strong_induction_on`, `Nat.add_zero`.
+
+The server's own `collectInfoBasedSemanticTokens` deliberately emits tokens
+only for identifiers bound to local `fvar`s and for field projections; a
+constant gets nothing, because in the editor those are coloured by the
+TextMate grammar rather than by semantic tokens. We have no TextMate grammar,
+and — worse — the token list is also what carries the hover popups, so every
+constant in a tactic silently had neither colour nor tooltip. This fills that
+gap from the info tree, mirroring upstream's shape (`deepestNodes`, an
+`.original` head so macro-generated syntax is skipped) and leaving overlap
+resolution to `handleOverlappingSemanticTokens` as usual. -/
+def collectConstIdentTokens (tree : InfoTree) : Array FileWorker.LeanSemanticToken :=
+  List.toArray <| tree.deepestNodes fun _ info _ => do
+    let .ofTermInfo ti := info | none
+    let .original .. := ti.stx.getHeadInfo | none
+    guard ti.stx.isIdent
+    -- `.getAppFn` because an ident often elaborates to the constant already
+    -- applied to its implicit arguments.
+    guard ti.expr.getAppFn.isConst
+    return { stx := ti.stx, type := Lsp.SemanticTokenType.function }
+
+/-- The tokens the widget colours (and hangs hover popups on): exactly the pair
+the editor's `textDocument/semanticTokens` request uses, plus our constant
+identifiers. Shared with the offline probe so both exercise one code path. -/
+def semanticTokensFor (fileMap : FileMap) (stx : Syntax) (tree : InfoTree)
+    : Array FileWorker.AbsoluteLspSemanticToken :=
+  FileWorker.handleOverlappingSemanticTokens <|
+    FileWorker.computeAbsoluteLspSemanticTokens fileMap ⟨0⟩ none <|
+      FileWorker.collectSyntaxBasedSemanticTokens fileMap stx
+        ++ FileWorker.collectInfoBasedSemanticTokens tree
+        ++ collectConstIdentTokens tree
+
 /-- Would the editor's own hover consider this info node? Mirrors the
 eligibility test inside `InfoTree.hoverableInfoAt?`: anything carrying
 elaborator info, plus field/option/error-name nodes, minus the `nullKind` and
@@ -129,7 +162,7 @@ Deliberately NOT restricted to `TermInfo`. `makePopup` — the server side of
 populated for ANY info kind, so a `TacticInfo` yields the tactic's own
 documentation. That is what puts a real popup on `induction`, `simp` and
 friends rather than only on identifiers. -/
-private def hoverEligible (info : Elab.Info) : Bool :=
+def hoverEligible (info : Elab.Info) : Bool :=
   !info.stx.isOfKind nullKind
   && !info.toElabInfo?.any (·.elaborator == `Lean.Elab.Tactic.evalWithAnnotateState)
   && ((info matches .ofFieldInfo _ | .ofOptionInfo _ | .ofErrorNameInfo _)
@@ -137,7 +170,7 @@ private def hoverEligible (info : Elab.Info) : Bool :=
 
 /-- A synthetic `sorry` has no meaningful popup; `hoverableInfoAt?` drops these
 too. -/
-private def isSyntheticSorryInfo (info : Elab.Info) : Bool :=
+def isSyntheticSorryInfo (info : Elab.Info) : Bool :=
   match info with
   | .ofTermInfo ti => ti.expr.isSyntheticSorry
   | _              => false
@@ -151,11 +184,11 @@ time, and this runs on every cursor move. The prefix-max array keeps the lookup
 itself off O(targets): scanning backwards from the last candidate, the moment
 the running maximum stop falls at or before the query offset, no earlier item
 can contain it either, so the scan stops. -/
-private structure HoverIndex where
+structure HoverIndex where
   items         : Array (Nat × Nat × Elab.InfoWithCtx)
   prefixMaxStop : Array Nat
 
-private def mkHoverIndex (infoTree : InfoTree) : HoverIndex := Id.run do
+def mkHoverIndex (infoTree : InfoTree) : HoverIndex := Id.run do
   let raw : Array (Nat × Nat × Elab.InfoWithCtx) :=
     infoTree.foldInfo (init := #[]) fun ctx info acc =>
       if !hoverEligible info || isSyntheticSorryInfo info then acc
@@ -175,7 +208,7 @@ private def mkHoverIndex (infoTree : InfoTree) : HoverIndex := Id.run do
 /-- The smallest eligible range containing byte offset `p`, as
 `(start, stop, info)`. The range comes back with the info so callers can use it
 as an identity key for the node (see the ref cache in `getProofTree`). -/
-private def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
+def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
     : Option (Nat × Nat × Elab.InfoWithCtx) := Id.run do
   -- Binary search for the first index whose start exceeds `p`.
   let mut lo := 0
@@ -229,11 +262,7 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     -- `textDocument/semanticTokens` request. Overlaps are resolved the same way
     -- too, so a token span here means what it means in the editor. Computed
     -- once for the whole command and sliced per tactic below.
-    let allTokens :=
-      FileWorker.handleOverlappingSemanticTokens <|
-        FileWorker.computeAbsoluteLspSemanticTokens fileMap ⟨0⟩ none <|
-          FileWorker.collectSyntaxBasedSemanticTokens fileMap snap.stx
-            ++ FileWorker.collectInfoBasedSemanticTokens snap.infoTree
+    let allTokens := semanticTokensFor fileMap snap.stx snap.infoTree
     let lePos (a b : Lsp.Position) : Bool :=
       a.line < b.line || (a.line == b.line && a.character <= b.character)
     -- The editing seam: per distinct step range, the tactic's tight span and
