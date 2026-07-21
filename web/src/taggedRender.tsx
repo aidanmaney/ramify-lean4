@@ -45,8 +45,33 @@ export function ensureTaggedStyle() {
   if (document.getElementById(TAGGED_STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = TAGGED_STYLE_ID;
-  style.textContent =
-    ".ptw-tagged .font-code { font: inherit; line-height: inherit; color: inherit; }";
+  style.textContent = [
+    ".ptw-tagged .font-code { font: inherit; line-height: inherit; color: inherit; }",
+    // Hold a type popup back while its content is still in flight, so it never
+    // flashes "Loading.." and then resizes under the pointer. The infoview
+    // renders the loading (and error) state as a BARE TEXT NODE inside
+    // .tooltip-code-content and the resolved state as real elements, so
+    // `:not(:has(.tooltip-code-content > *))` is exactly "content hasn't
+    // arrived yet".
+    //
+    // The rule applies ONLY in that state, so the resolved popup — the
+    // overwhelmingly common one — is never animated and never delayed: the
+    // moment content lands the selector stops matching and it is simply
+    // visible. That also means a failure to animate cannot strand a populated
+    // popup invisible, which an earlier "hide everything, reveal by animation"
+    // shape could. The keyframe holds it hidden for 150ms then reveals it
+    // regardless, so a genuinely slow call still shows "Loading.." and an
+    // error still shows itself; only the sub-150ms flicker goes.
+    //
+    // This is the one rule here that is NOT scoped to [data-ptw-root]: the
+    // popups are portalled to document.body, outside our subtree, so there is
+    // no ancestor to scope on. It is deliberately confined to appearance
+    // timing — no restyling — and applies only to tooltips carrying code
+    // content, leaving the infoview's menu tooltips alone.
+    "@keyframes ptw-tooltip-hold { from, 99% { opacity: 0; pointer-events: none } to { opacity: 1 } }",
+    ".tooltip:has(.tooltip-code-content):not(:has(.tooltip-code-content > *))" +
+      " { animation: ptw-tooltip-hold 150ms both; }",
+  ].join("\n");
   document.head.appendChild(style);
 }
 
