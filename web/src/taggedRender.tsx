@@ -71,6 +71,19 @@ export function ensureTaggedStyle() {
     "@keyframes ptw-tooltip-hold { from, 99% { opacity: 0; pointer-events: none } to { opacity: 1 } }",
     ".tooltip:has(.tooltip-code-content):not(:has(.tooltip-code-content > *))" +
       " { animation: ptw-tooltip-hold 150ms both; }",
+    // Drop the popup's type line when there is no type to show. The infoview
+    // renders `{exprExplicit} : {type}` with the separator UNCONDITIONAL, and
+    // `makePopup` fills neither field for a `TacticInfo` (it produces
+    // `exprExplicit` only for term/field info, and `Info.type?` is none for a
+    // tactic) — so hovering a tactic keyword, whose whole value is its
+    // docstring, led with a line reading just " : ". Both halves missing is
+    // exactly "this div has no element children", so the empty case is the
+    // only one hidden: a popup with a real expr or a real type keeps its line,
+    // colon and all. The following <hr> goes too, or the popup would open on a
+    // rule with nothing above it.
+    ".tooltip-code-content > .font-code.pre-wrap:not(:has(> *))," +
+      " .tooltip-code-content > .font-code.pre-wrap:not(:has(> *)) + hr" +
+      " { display: none; }",
   ].join("\n");
   document.head.appendChild(style);
 }
