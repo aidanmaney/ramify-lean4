@@ -14,15 +14,16 @@ import { flattenTaggedText, lineOffsets } from "./taggedText";
 //
 // - **Colour only, never geometry.** Tokens change `fill`/`color`, never the
 //   text, so the boxes the canvas measurer sized stay correct by construction.
-// - **The line-offset match is the guard.** A tactic node's label is
-//   Paperproof's `tacticString`, which is *prettified* (first line only, `rw`
-//   re-synthesised) and comment-scrubbed, so it often is NOT the verbatim
-//   source the tokens index into. `lineOffsets` returns null unless the wrapped
-//   label lines are a PREFIX of `text` — which is precisely the case where the
-//   token offsets are meaningful. Any mismatch falls back to plain text.
-//   (Prefix rather than exact because Paperproof prettifies a structured tactic
-//   to its first line, so `induction n with` is a prefix of a source range that
-//   runs on for the whole `with` block.)
+// - **The LABEL is the coordinate space.** The wrapped lines were measured from
+//   the node's label, so offsets are resolved against the label
+//   (`lineOffsets` exact — the same contract goal labels use) and the token
+//   space is aligned INTO it by `alignInLabel`. Any failure to align falls back
+//   to plain text for the whole node.
+//
+// The alignment exists because Paperproof's `tacticString` is a *display*
+// string, not the source: it is prettified, comment-scrubbed, and for some
+// tactics re-synthesised outright, so the label and the verbatim source of the
+// step's range can disagree in either direction (see alignInLabel).
 
 /** An LSP position, as the wire carries it. */
 interface LspPos {
@@ -112,8 +113,60 @@ function tokenSpans(
 }
 
 /**
+ * Where the step's verbatim source `text` sits inside the node's `label`, or
+ * null when the two can't be reconciled (then the node renders plain).
+ *
+ * Paperproof's `tacticString` is a DISPLAY string, so it disagrees with the
+ * source of the step's range in three measured ways (all of them present in
+ * `proofs/`):
+ *
+ * - **Label is a prefix of the source** — a structured tactic is prettified to
+ *   its first line, so `induction n with` fronts a range running to the end of
+ *   the `with` block. Offset 0; tokens past the label fall off the end and are
+ *   clipped per line.
+ * - **Source is a prefix of the label** — consecutive binders are merged for
+ *   display (`intro p hpm`) while the step's range covers just `intro p`.
+ *   Offset 0 again; the un-covered tail simply stays uncoloured.
+ * - **Source is embedded in the label** — `rw` is re-synthesised per rewrite
+ *   rule, so a step labelled `rw [Nat.add_zero]` has a range covering only
+ *   `Nat.add_zero`. This is the case the prefix-only test used to reject, and
+ *   with it every `rw` in the tree.
+ *
+ * A multi-rule `rw` adds a wrinkle: the range includes the rule's trailing
+ * separator (`List.prod_append,`), which the label cannot contain — hence the
+ * retry on a separator-trimmed needle.
+ *
+ * Returns the label offset the source starts at, plus `len`: how much of the
+ * source actually matched there. Only `[0, len)` of the source is known to
+ * agree with the label character-for-character, so the caller clips tokens to
+ * that window — past it (the trimmed separator) the two texts diverge, and a
+ * token there would colour a character it doesn't own.
+ */
+export function alignInLabel(
+  text: string,
+  label: string,
+): { at: number; len: number } | null {
+  if (label.startsWith(text)) return { at: 0, len: text.length };
+  // Structured tactic: the label is the source's first line, so only the label
+  // is covered and the rest of the range is clipped away.
+  if (text.startsWith(label)) return { at: 0, len: label.length };
+  const at = label.indexOf(text);
+  if (at >= 0) return { at, len: text.length };
+  // `indexOf` takes the FIRST occurrence. With a repeated rule (`rw [h, h]`)
+  // that can pick the wrong one, but both slices are the same text and the
+  // same token type, so the only visible difference is which one carries the
+  // tooltip — and geometry is untouched either way.
+  const trimmed = text.replace(/[\s,;]+$/, "");
+  if (trimmed && trimmed !== text) {
+    const trimmedAt = label.indexOf(trimmed);
+    if (trimmedAt >= 0) return { at: trimmedAt, len: trimmed.length };
+  }
+  return null;
+}
+
+/**
  * One ReactNode per wrapped label line, coloured by token — or null to keep the
- * plain SVG text (the label isn't the verbatim source, or the tokens are
+ * plain SVG text (the source can't be aligned into the label, or the tokens are
  * stale). Lines are non-wrapping by construction: they are the very strings the
  * layout measured, cut at the layout's own break offsets.
  */
@@ -121,6 +174,7 @@ export function renderTacticTokens(
   text: string,
   origin: LspPos,
   tokens: TacticToken[],
+  label: string,
   lines: string[],
   // Indexed by `line:character` of the token START, over the WHOLE proof.
   // Built once by the caller: tactic ranges nest, so there is no correct way to
@@ -130,13 +184,25 @@ export function renderTacticTokens(
 ): ReactNode[] | null {
   if (tokens.length === 0) return null;
   ensureTaggedStyle(); // the .ptw-tagged font normalisation, shared with goals
-  // Prefix match, not exact: `tacticString` is the first line of a structured
-  // tactic, so the label is a prefix of the verbatim source. Tokens past the
-  // matched prefix intersect no line and are ignored.
-  const offsets = lineOffsets(text, lines, true);
+  // Exact: `lines` is `wrapText(label)`, so the label reconstructs them by
+  // construction (the same contract goal labels rely on).
+  const offsets = lineOffsets(label, lines);
   if (!offsets) return null;
-  const spans = tokenSpans(text, origin, tokens, infoAt);
-  if (!spans) return null;
+  // Tokens carry absolute document positions, so they resolve against `text`
+  // (the source they index into); shifting by the alignment moves them into
+  // label space, where the lines live. Spans landing outside the label are
+  // clipped away per line below.
+  const align = alignInLabel(text, label);
+  if (!align) return null;
+  const raw = tokenSpans(text, origin, tokens, infoAt);
+  if (!raw) return null;
+  const spans = raw
+    .filter((s) => s.start < align.len)
+    .map((s) => ({
+      ...s,
+      start: s.start + align.at,
+      end: Math.min(s.end, align.len) + align.at,
+    }));
 
   return offsets.map(([lo, hi], i) => {
     const parts: ReactNode[] = [];
@@ -145,8 +211,8 @@ export function renderTacticTokens(
       const a = Math.max(s.start, lo);
       const b = Math.min(s.end, hi);
       if (a >= b || a < cur) continue; // outside this line, or already covered
-      if (a > cur) parts.push(text.slice(cur, a));
-      const slice = text.slice(a, b);
+      if (a > cur) parts.push(label.slice(cur, a));
+      const slice = label.slice(a, b);
       // The interactive form is used only when its own text is EXACTLY the
       // slice being drawn — the same equality guard the goal labels use. It
       // fails for a token straddling a wrap (this line holds only part of it),
@@ -174,7 +240,7 @@ export function renderTacticTokens(
       );
       cur = b;
     }
-    if (cur < hi) parts.push(text.slice(cur, hi));
+    if (cur < hi) parts.push(label.slice(cur, hi));
     return <span key={i}>{parts}</span>;
   });
 }

@@ -242,9 +242,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     return e ? { pos: { start: e.start, stop: e.stop }, text: e.text } : null;
   };
   // Syntax colouring for tactic labels, from the same per-step entry: the
-  // tokens index into `text` (the verbatim source), so `renderTacticTokens`
-  // only colours when the label reconstructs that text exactly — Paperproof's
-  // prettified `tacticString` often doesn't, and then it falls back to plain.
+  // tokens index into `text` (the verbatim source), which `renderTacticTokens`
+  // aligns into the node's label — Paperproof's prettified `tacticString` and
+  // the step's source disagree in both directions, so the label is passed too.
   // Hover popups ride the same call. `tokenInfos` is a flat list over the whole
   // proof, keyed by ABSOLUTE token position — so it is indexed once, globally,
   // and every tactic looks its own tokens up by position.
@@ -265,10 +265,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [interactive],
   );
 
-  const renderTaggedTactic = (p: ProofStepPosition, lines: string[]) => {
+  const renderTaggedTactic = (
+    p: ProofStepPosition,
+    label: string,
+    lines: string[],
+  ) => {
     const e = editByStart.get(`${p.start.line}:${p.start.character}`);
     if (!e?.tokens) return null;
-    return renderTacticTokens(e.text, e.start, e.tokens, lines, infoAt);
+    return renderTacticTokens(e.text, e.start, e.tokens, label, lines, infoAt);
   };
 
   // …and commit by replacing the tight range in the document. Goes through

@@ -291,14 +291,17 @@ export interface ProofTreeViewProps {
   ) => (ReactNode | null)[] | null;
   /**
    * Widget-only: syntax-colour a tactic node's label. Called with the tactic's
-   * source span and its wrapped label lines; returns one ReactNode per line
-   * (rendered in the identical line geometry), or null to keep the plain SVG
-   * text. Colour only — the text must be unchanged, or the measured box lies.
-   * widget.tsx implements this from the server's semantic tokens (see
-   * tacticTokens.tsx).
+   * source span, its flat label and that label's wrapped lines; returns one
+   * ReactNode per line (rendered in the identical line geometry), or null to
+   * keep the plain SVG text. Colour only — the text must be unchanged, or the
+   * measured box lies. The flat label is passed because the label, not the
+   * step's source, is the space the lines were wrapped in — the two differ for
+   * `rw`/`intro` (see tacticTokens.tsx `alignInLabel`). widget.tsx implements
+   * this from the server's semantic tokens.
    */
   renderTaggedTactic?: (
     pos: ProofStepPosition,
+    label: string,
     lines: string[],
   ) => ReactNode[] | null;
   /**
@@ -1208,6 +1211,7 @@ export default function ProofTreeView({
                   : position
                     ? (renderTaggedTactic?.(
                         position,
+                        node.data.label,
                         lines.map((l) => l.text),
                       ) ?? null)
                     : null;

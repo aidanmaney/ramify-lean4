@@ -65,17 +65,16 @@ export function sliceTaggedText<T>(
  * the newline of an explicit line break) or nothing (a hard break inside an
  * over-wide token), so between lines we skip one separator iff one is there.
  *
- * `prefix` relaxes the "lines account for ALL of flat" requirement to "lines
- * are a prefix of flat". Goal labels want the strict form (the tagged print and
- * the measured text are the same string, and a partial match means something is
- * wrong). Tactic labels want the prefix form: Paperproof prettifies a tactic to
- * its FIRST LINE, so a structured `induction … with | … | …` has a label that is
- * a genuine prefix of the verbatim source the tokens index into.
+ * Always exact: both callers pass the very string the layout wrapped (a goal's
+ * tagged print, a tactic node's label), so a partial match means something is
+ * wrong and the caller should fall back to plain text. Tactic colouring used to
+ * pass the step's SOURCE here and needed a prefix-match relaxation to cope;
+ * it now aligns the source into the label instead (tacticTokens.ts
+ * `alignInLabel`), which handles the misalignments a prefix test could not.
  */
 export function lineOffsets(
   flat: string,
   lines: string[],
-  prefix = false,
 ): [number, number][] | null {
   const out: [number, number][] = [];
   let pos = 0;
@@ -85,5 +84,5 @@ export function lineOffsets(
     out.push([pos, pos + lines[i].length]);
     pos += lines[i].length;
   }
-  return prefix || pos === flat.length ? out : null;
+  return pos === flat.length ? out : null;
 }
