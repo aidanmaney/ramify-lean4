@@ -115,6 +115,17 @@ def extractComments (src : String) (fileMap : FileMap)
   commentSpans src startPos stopPos |>.map fun (b, e) =>
     mkComment src fileMap b e
 
+/-- One semantic token inside a tactic's tight range: the span the Lean server's
+own syntax highlighter assigns a `SemanticTokenType` to, plus that type's name
+(`"keyword"`, `"variable"`, `"property"`, `"function"`, …). Positions are
+ABSOLUTE document positions, like the enclosing `TacticEdit`'s — the client
+turns them into offsets into `text`, which starts exactly at `TacticEdit.start`. -/
+structure TacticToken where
+  start : Lsp.Position
+  stop  : Lsp.Position
+  type  : String
+  deriving ToJson, FromJson
+
 /-- The in-place editing seam for one tactic: the TIGHT source range of the
 tactic text proper and that text, verbatim. Paperproof's `ProofStep.position`
 includes trailing trivia (comments, the newline + indentation up to the next
@@ -128,6 +139,8 @@ structure TacticEdit where
   start : Lsp.Position
   stop  : Lsp.Position
   text  : String
+  /-- Syntax highlighting for `text`, from the server's own semantic tokens. -/
+  tokens : Array TacticToken := #[]
   deriving ToJson, FromJson
 
 /-- The end of `s` with all trailing TRIVIA removed: whitespace, and any

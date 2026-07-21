@@ -6,7 +6,7 @@ import type {
   SourceComment,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import type { EdgeHypLine, EdgeHyps, TreeNode } from "./types";
+import type { HypLine, TreeNode } from "./types";
 
 // Adapter: Paperproof `Proof` → the renderer's `TreeNode[]`.
 //
@@ -16,7 +16,8 @@ import type { EdgeHypLine, EdgeHyps, TreeNode } from "./types";
 //
 //     goalBefore ──(tactic node)──▶ goalsAfter ++ spawnedGoals
 //
-// - A *goal* node is labeled by its pretty-printed type.
+// - A *goal* node is labeled by its pretty-printed type, and carries its local
+//   context (`hyps`), which the renderer stacks above that type in the same box.
 // - A *tactic* node sits on the edge, labeled by its tactic string. Its single
 //   parent is the goal it consumed; its children are the goals it produced.
 // - The tree root is the original theorem goal: the one goal that some tactic
@@ -30,6 +31,10 @@ import type { EdgeHypLine, EdgeHyps, TreeNode } from "./types";
 // at most one tactic in a tree proof), so the id is stable across re-parses.
 const tacticId = (goalId: string): string => `tactic:${goalId}`;
 
+/** Prefix on every goal-node label (the infoview's own goal convention).
+The tagged renderer strips it before matching interactive prints. */
+export const TURNSTILE = "⊢ ";
+
 /** The edge-label line for one hypothesis, e.g. `h : p ∧ q` (`:= v` for lets).
 Exported so the widget's tagged renderer can match label lines back to a goal's
 hyps and swap in interactive types (see taggedRender.tsx). */
@@ -39,23 +44,24 @@ export function hypLine(h: Hypothesis): string {
     : `${h.username} : ${h.type}`;
 }
 
-// The context label shown above a tactic: the hypotheses of the goal it
-// consumes, each flagged with whether the tactic actually uses it
-// (`tacticDependsOn`, fvarIds — same ids as `Hypothesis.id`).
+// A goal's local context, drawn inside its own box above the `⊢ ` line: its
+// hypotheses, each flagged with whether the tactic that CONSUMES the goal
+// actually uses it (`tacticDependsOn`, fvarIds — same ids as `Hypothesis.id`;
+// a leaf goal has no consumer, so nothing is flagged).
 //
 // In full mode that's the whole context. In delta mode it's the hypotheses the
 // goal GAINED over the goal its own producing tactic consumed (Paperproof's
 // "introduced here" semantics; for a root goal, its binders — gained from the
-// theorem statement), PLUS any older hypotheses this tactic uses: usage is the
-// point of the label, so a used hyp is shown even when it isn't new. Context
-// order is preserved.
+// theorem statement), PLUS any older hypotheses the consuming tactic uses:
+// usage is half the point of showing the context, so a used hyp is shown even
+// when it isn't new. Context order is preserved.
 function contextFor(
-  step: ProofStep,
+  goal: GoalInfo,
+  consumedBy: ProofStep | undefined,
   producedBy: ProofStep | undefined,
   fullHyps: boolean,
-): EdgeHypLine[] {
-  const goal = step.goalBefore;
-  const used = new Set(step.tacticDependsOn);
+): HypLine[] {
+  const used = new Set(consumedBy?.tacticDependsOn ?? []);
   let shown = goal.hyps;
   if (!fullHyps) {
     const inherited = new Set(producedBy?.goalBefore.hyps.map((h) => h.id));
@@ -246,36 +252,34 @@ export function proofToTree(
     emittedGoals.add(goalId);
 
     const goal = goals.get(goalId);
+    const step = stepByGoal.get(goalId);
     nodes.push({
       id: goalId,
-      label: goal?.type ?? goalId,
+      // The turnstile prefix marks goal boxes as GOALS at a glance (same
+      // convention as the infoview's goal display). The widget's tagged
+      // renderer strips it before matching the interactive print
+      // (taggedRender), so keep the two in sync via TURNSTILE.
+      label: TURNSTILE + (goal?.type ?? goalId),
       type: "goal",
       parents,
       // The producing tactic's source span, for the widget's node↔source link
       // (see types.ts `TreeNode.position`).
       position: producedBy?.position,
+      // The local context rides the goal node itself and is drawn inside its
+      // box, above the `⊢ ` line — the goal and the assumptions it holds under
+      // are one thing to read, exactly as the infoview shows them.
+      hyps: goal && contextFor(goal, step, producedBy, fullHyps),
       comment: commentByNode.get(goalId),
     });
 
-    const step = stepByGoal.get(goalId);
     if (!step) return; // leaf: this goal was closed by its tactic
-
-    // The context the tactic runs in sits on the goal→tactic edge, drawn ABOVE
-    // the tactic node — reading order goal, context, tactic — with the hyps
-    // this tactic uses marked. Introduced by the step that produced this goal,
-    // hence that step's span for the label's source link.
-    const context = contextFor(step, producedBy, fullHyps);
-    const hyps: EdgeHyps | undefined =
-      context.length > 0
-        ? { lines: context, goalId, pos: producedBy?.position }
-        : undefined;
 
     const tId = tacticId(goalId);
     nodes.push({
       id: tId,
       label: cleanLabel(step.tacticString, proof.comments ?? []),
       type: "tactic",
-      parents: [{ id: goalId, hyps }],
+      parents: [{ id: goalId }],
       // Carry the tactic's source span so the widget can link this node back to
       // the `.lean` source (see types.ts `TreeNode.position`).
       position: step.position,

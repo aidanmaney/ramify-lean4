@@ -10,12 +10,9 @@ import {
 } from "react";
 import {
   createLayoutEngine,
-  hypSize,
   HYP_FONT_PX,
-  HYP_GAP,
   HYP_LINE_H,
   HYP_MARK_W,
-  HYP_PAD,
   LINE_H,
   NODE_FONT_PX,
   NODE_PAD,
@@ -28,9 +25,10 @@ import {
   COMMENT_INDENT,
   getCodeFontFamily,
   refreshCodeFontFamily,
+  measureText,
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
-import type { EdgeHyps } from "./types";
+import type { HypLine } from "./types";
 import { proofToTree } from "./proofToTree";
 
 // The interactive proof tree: layout, folding, zoom/scroll, and the SVG render.
@@ -59,6 +57,11 @@ type Seq =
   | { mode: "view"; from: string; to: string };
 
 const MARGIN = { top: 80, right: 90, bottom: 40, left: 90 };
+// The gap (content px) left of the trunk in compact mode — both the default
+// scroll position and where a tracked node is nudged to. Much tighter than
+// MARGIN.left so the left-aligned trunk sits near the edge, not floating in
+// from a full margin.
+const COMPACT_LEFT = 16;
 // Goals cool blue, tactics warm green — both several steps more saturated than
 // the old near-white pastels so the two node kinds read apart at a glance (the
 // yellow hyp labels and the orange accent stay distinct from both).
@@ -85,92 +88,60 @@ function beforeOrEq(
   return a.line < b.line || (a.line === b.line && a.character <= b.character);
 }
 
-// Does a tactic's source span contain the given cursor position (inclusive)?
+// Does a tactic's source span contain the given cursor position? HALF-OPEN,
+// `[start, stop)`. The exclusive end is load-bearing, not pedantry: Paperproof
+// step ranges include trailing trivia, so a tactic's `stop` runs all the way to
+// the NEXT tactic's first token — i.e. consecutive tactics share a boundary
+// position. With an inclusive end, a cursor on tactic B's first character is
+// contained by A as well, and since `cursorNodeId` breaks ties by smallest
+// span, whichever of the two happens to be shorter wins. That is how clicking a
+// tactic could accent its neighbour.
 function positionContains(
   range: ProofStepPosition,
   p: { line: number; character: number },
 ): boolean {
-  return beforeOrEq(range.start, p) && beforeOrEq(p, range.stop);
+  return beforeOrEq(range.start, p) && !beforeOrEq(range.stop, p);
 }
 
-// Colors of the context label's lines: hyps the tactic below actually uses
-// keep the full-strength ink (plus a marker in the gutter); the rest recede.
-const HYP_USED_FILL = "#7a6000";
-const HYP_UNUSED_FILL = "#a89557";
+// Colors of the context block's lines, drawn on the goal box's own fill: hyps
+// the consuming tactic uses keep the full-strength ink (plus a marker in the
+// gutter); the rest recede.
+const HYP_USED_FILL = "#1a365d";
+const HYP_UNUSED_FILL = "#7089a8";
 const HYP_MARK_FILL = "#c05621";
 const HYP_MARK = "▸";
 
-// A small context box centered at (x, y), listing the hypotheses in scope for
-// the tactic drawn below it — the ones the tactic uses are marked with a
-// gutter `▸` and full-strength ink. Box geometry comes from the shared hypSize
-// so it matches the room the layout folded into the tactic's band.
-// `onClick` wires the widget's tree→source link for the tactic that
-// introduced these hypotheses (see the links loop below); the label takes no
-// cursor accent — its span is the producing tactic's, so an accent here would
-// only duplicate that node's (see cursorNodeId).
+// The context block drawn INSIDE a goal box, above its `⊢ ` line: one line per
+// hypothesis in scope, the ones the consuming tactic uses marked with a gutter
+// `▸` and full-strength ink. `x` is the box's content-left edge and `y` the
+// block's top; the geometry matches exactly what layout.ts reserved (hypH), so
+// the block can never spill past the label below it.
+//
 // `taggedLines` (widget only) swaps individual lines for interactive content
 // with hover type tooltips; null entries keep the plain text for that line.
-function HypLabel({
+function HypBlock({
+  lines,
   x,
   y,
-  hyps,
-  onClick,
+  width,
   taggedLines,
 }: {
+  lines: HypLine[];
   x: number;
   y: number;
-  hyps: EdgeHyps;
-  onClick?: () => void;
+  width: number;
   taggedLines?: (ReactNode | null)[] | null;
 }) {
-  const lines = hyps.lines;
-  const { w, h } = hypSize(hyps);
   const anyUsed = lines.some((l) => l.used);
-  // Marker gutter (reserved by hypSize only when something is marked), and the
+  // Marker gutter (reserved by sizeOf only when something is marked), and the
   // left edge text starts at.
-  const gutterX = -w / 2 + HYP_PAD;
-  const textX = gutterX + (anyUsed ? HYP_MARK_W : 0);
+  const textX = x + (anyUsed ? HYP_MARK_W : 0);
   // Dim only as contrast: when nothing is marked, everything keeps full ink.
   const lineFill = (used: boolean) =>
     anyUsed && !used ? HYP_UNUSED_FILL : HYP_USED_FILL;
-  // Native hover tooltip: the full hyp text (markers inlined), plus a legend
-  // and a reveal hint when this label is clickable. With tagged content it
-  // moves onto the box rect only (padding/border), so it doesn't stack on the
-  // interactive type tooltips the HTML lines pop on hover.
-  const titleText =
-    lines.map((l) => (l.used ? `${HYP_MARK} ${l.text}` : l.text)).join("\n") +
-    (anyUsed ? `\n\n${HYP_MARK} = used by this tactic` : "");
-  const tooltip = onClick
-    ? `${titleText}\n· click to reveal in source`
-    : titleText;
 
   return (
-    <g
-      transform={`translate(${x},${y})`}
-      onClick={
-        onClick
-          ? (e) => {
-              // Interaction, not a background click (see the scroll div).
-              e.stopPropagation();
-              onClick();
-            }
-          : undefined
-      }
-      style={{ cursor: onClick ? "pointer" : "default" }}
-    >
-      {!taggedLines && <title>{tooltip}</title>}
-      <rect
-        x={-w / 2}
-        y={-h / 2}
-        width={w}
-        height={h}
-        rx={4}
-        fill="#fffbe6"
-        stroke="#d6b656"
-        strokeWidth={1}
-      >
-        {taggedLines && <title>{tooltip}</title>}
-      </rect>
+    <>
       {/* Gutter markers for used hyps are plain SVG in both render paths, so
           the tagged overlay only replaces the line text. */}
       {anyUsed && (
@@ -183,12 +154,7 @@ function HypLabel({
         >
           {lines.map((line, j) =>
             line.used ? (
-              <tspan
-                key={j}
-                x={gutterX}
-                y={(j - (lines.length - 1) / 2) * HYP_LINE_H}
-                dy="0.32em"
-              >
+              <tspan key={j} x={x} y={y + (j + 0.5) * HYP_LINE_H} dy="0.32em">
                 {HYP_MARK}
               </tspan>
             ) : null,
@@ -196,14 +162,14 @@ function HypLabel({
         </text>
       )}
       {taggedLines ? (
-        // HTML overlay in the exact geometry the tspans below would use: the
-        // padded content area, one fixed-height line box per label line. The
-        // text is identical to the measured plain lines (taggedRender.tsx
-        // guarantees it), so nothing wraps — hence white-space: pre.
+        // HTML overlay in the exact geometry the tspans below would use: one
+        // fixed-height line box per context line. The text is identical to the
+        // measured plain lines (taggedRender.tsx guarantees it), so nothing
+        // wraps — hence white-space: pre.
         <foreignObject
           x={textX}
-          y={-h / 2 + HYP_PAD}
-          width={w - HYP_PAD - (textX + w / 2)}
+          y={y}
+          width={Math.max(0, x + width - textX)}
           height={lines.length * HYP_LINE_H}
           style={{ overflow: "visible" }}
         >
@@ -239,7 +205,7 @@ function HypLabel({
             <tspan
               key={j}
               x={textX}
-              y={(j - (lines.length - 1) / 2) * HYP_LINE_H}
+              y={y + (j + 0.5) * HYP_LINE_H}
               dy="0.32em"
               fill={lineFill(line.used)}
             >
@@ -248,7 +214,7 @@ function HypLabel({
           ))}
         </text>
       )}
-    </g>
+    </>
   );
 }
 
@@ -277,6 +243,18 @@ export interface ProofTreeViewProps {
    */
   onEditTactic?: (pos: ProofStepPosition, newText: string) => void;
   /**
+   * Widget-only, the rich-editing escape hatch behind a tactic's hover-bar
+   * `⧉` button: opens the proof in the LENS — a slim editor group under the
+   * infoview — with the tactic's range selected (real buffer, so vim/LSP/
+   * keybindings all apply; the in-tree textarea stays the quick path). A
+   * button, NOT a modifier gesture: it lived on ⇧-double-click, where the
+   * webview's ⇧-click text-selection ate the second click. Independent of
+   * getTacticEdit, which only sharpens the selection to the tight range when
+   * available. widget.tsx relays this through the companion extension
+   * (ext/proof-tree-companion).
+   */
+  onPopoutEdit?: (pos: ProofStepPosition) => void;
+  /**
    * The editor's current cursor position. The tactic node whose source range
    * contains it gets an accent outline — the source→tree half of the link.
    */
@@ -302,15 +280,35 @@ export interface ProofTreeViewProps {
    */
   renderTaggedGoal?: (goalId: string, lines: string[]) => ReactNode[] | null;
   /**
-   * Widget-only, same idea for a tactic's context label: `goalId` is the goal
-   * whose local context the lines come from (the tactic's goalBefore — see
-   * types.ts EdgeHyps). Null entries in the returned array keep that line
-   * plain; null overall keeps the whole label plain.
+   * Widget-only, same idea for the context lines stacked above a goal's type
+   * in its own box: `goalId` is that goal (the lines are its local context —
+   * see types.ts HypLine). Null entries in the returned array keep that line
+   * plain; null overall keeps the whole block plain.
    */
   renderTaggedHyps?: (
     goalId: string,
     lines: string[],
   ) => (ReactNode | null)[] | null;
+  /**
+   * Widget-only: syntax-colour a tactic node's label. Called with the tactic's
+   * source span and its wrapped label lines; returns one ReactNode per line
+   * (rendered in the identical line geometry), or null to keep the plain SVG
+   * text. Colour only — the text must be unchanged, or the measured box lies.
+   * widget.tsx implements this from the server's semantic tokens (see
+   * tacticTokens.tsx).
+   */
+  renderTaggedTactic?: (
+    pos: ProofStepPosition,
+    lines: string[],
+  ) => ReactNode[] | null;
+  /**
+   * Widget-only: the pointer entered (`pos`) or left (`null`) a tactic node.
+   * The widget paints a decoration over that range in the editor, so hovering
+   * the tree lights up the corresponding source — the hover-weight sibling of
+   * the click-weight reveal. Debouncing belongs to the implementation, not
+   * here: the view reports raw enter/leave.
+   */
+  onHoverTactic?: (pos: ProofStepPosition | null) => void;
 }
 
 export default function ProofTreeView({
@@ -318,11 +316,14 @@ export default function ProofTreeView({
   onReveal,
   getTacticEdit,
   onEditTactic,
+  onPopoutEdit,
   highlightPos,
   headerExtra,
   height = "100vh",
   renderTaggedGoal,
   renderTaggedHyps,
+  renderTaggedTactic,
+  onHoverTactic,
 }: ProofTreeViewProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Accordion: expanding a node collapses its sibling branches, so only one
@@ -382,6 +383,27 @@ export default function ProofTreeView({
     if (cur.value !== cur.original) onEditTactic?.(cur.pos, cur.value);
     setEditing(null);
   };
+  // A tactic single-click reveals in source — but a double-click's FIRST
+  // click is a plain click, and revealing immediately steals focus to the
+  // editor mid-gesture (the second click never reaches the widget, so
+  // double-click editing/popout can't fire). On EDITABLE tactics the reveal
+  // is therefore deferred past the double-click window and canceled by the
+  // dblclick handler; non-editable tactics keep the instant reveal.
+  const revealTimer = useRef<number | null>(null);
+  const cancelPendingReveal = () => {
+    if (revealTimer.current !== null) {
+      window.clearTimeout(revealTimer.current);
+      revealTimer.current = null;
+    }
+  };
+  const deferReveal = (pos: ProofStepPosition) => {
+    cancelPendingReveal(); // a double-click's second click re-schedules
+    revealTimer.current = window.setTimeout(() => {
+      revealTimer.current = null;
+      onReveal?.(pos);
+    }, 300);
+  };
+  useEffect(() => cancelPendingReveal, []);
 
   // The proof + view we've already centered on; lets the init effect re-center
   // once per loaded proof (and once per sequence switch) without writing a ref
@@ -439,7 +461,7 @@ export default function ProofTreeView({
     [proof, fullHyps, codeFont],
   );
 
-  // When a new proof loads, reset to "everything collapsed" and re-center.
+  // When a new proof loads, reset to "everything expanded" and re-center.
   // Keyed on the proof's SHAPE (its node ids), NOT the proof object or the
   // engine: a hyp-label mode toggle rebuilds the engine, and editing a
   // comment or a tactic's text yields a new proof object — but node ids are
@@ -455,7 +477,7 @@ export default function ProofTreeView({
   const [prevShape, setPrevShape] = useState(shapeKey);
   if (shapeKey !== prevShape) {
     setPrevShape(shapeKey);
-    setCollapsed(engine.foldableIds());
+    setCollapsed(new Set());
     setZoom(1);
     setSeq({ mode: "off" });
     setFocusId(null);
@@ -670,7 +692,7 @@ export default function ProofTreeView({
     const maxY = el.scrollHeight - el.clientHeight;
     el.scrollLeft = clampScroll(
       compact
-        ? PAD_X * zoom
+        ? (MARGIN.left + PAD_X - COMPACT_LEFT) * zoom
         : (MARGIN.left + PAD_X + root.x) * zoom - viewport.w / 2,
       maxX,
     );
@@ -678,13 +700,60 @@ export default function ProofTreeView({
       (MARGIN.top +
         PAD_Y +
         root.y -
-        (root.data.h + root.data.hypBlockH + root.data.commentBlockH) / 2) *
+        (root.data.h + root.data.commentBlockH) / 2) *
         zoom -
         MARGIN.top,
       maxY,
     );
     centeredOn.current = { shapeKey, viewKey };
   }, [viewport, nodes, shapeKey, viewKey, zoom, PAD_X, PAD_Y, compact]);
+
+  // source→tree tracking: the accented node follows the editor cursor
+  // (highlightPos → cursorNodeId); keep it IN VIEW so moving through the
+  // proof in an editor (the lens especially) walks the tree along with you.
+  // Only fires when the cursor lands on a DIFFERENT node (scroll/zoom/fold
+  // alone never yank the view), and only scrolls when the node is outside a
+  // comfortable band of the viewport — then centers it smoothly.
+  const trackedCursorNode = useRef<string | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !cursorNodeId || hlDismissed) return;
+    if (trackedCursorNode.current === cursorNodeId) return;
+    const node = nodes.find((n) => n.data.id === cursorNodeId);
+    if (!node) return; // hidden by folding/focus — don't fight the user
+    // Marked tracked only once actually FOUND: a node hidden at cursor-move
+    // time still gets tracked when unfolding later reveals it.
+    trackedCursorNode.current = cursorNodeId;
+    const cx = (MARGIN.left + PAD_X + node.x) * zoom;
+    const cy = (MARGIN.top + PAD_Y + node.y) * zoom;
+    const halfW = (node.data.w / 2) * zoom;
+    const bandH = node.data.h + node.data.commentBlockH;
+    const halfH = (bandH / 2) * zoom;
+    const pad = 32;
+    const maxX = el.scrollWidth - el.clientWidth;
+    const maxY = el.scrollHeight - el.clientHeight;
+    let left = el.scrollLeft;
+    let top = el.scrollTop;
+    // Vertical is the reading axis (both modes): center the node when it
+    // strays outside the comfortable band.
+    if (cy - halfH < el.scrollTop + pad || cy + halfH > el.scrollTop + el.clientHeight - pad)
+      top = clampScroll(cy - el.clientHeight / 2, maxY);
+    if (compact) {
+      // Left-aligned trunk: never center horizontally (that pulls the trunk
+      // off screen). Only when a node spills past the RIGHT edge, nudge just
+      // enough to bring its left edge to the trunk inset — eyeballed, no
+      // exact centering.
+      if (cx + halfW > el.scrollLeft + el.clientWidth - pad)
+        left = clampScroll(cx - halfW - COMPACT_LEFT * zoom, maxX);
+    } else if (
+      cx - halfW < el.scrollLeft + pad ||
+      cx + halfW > el.scrollLeft + el.clientWidth - pad
+    ) {
+      left = clampScroll(cx - el.clientWidth / 2, maxX);
+    }
+    if (left === el.scrollLeft && top === el.scrollTop) return;
+    el.scrollTo({ left, top, behavior: "smooth" });
+  }, [cursorNodeId, hlDismissed, nodes, zoom, PAD_X, PAD_Y, compact]);
 
   // After a zoom change re-renders the (resized) SVG, restore scroll so the
   // intended point stays put: an explicit target (fit) wins, else the anchor
@@ -731,22 +800,20 @@ export default function ProofTreeView({
 
   // Fit the tree's actual content (ignoring the viewport-sized padding) to the
   // scroll box width, then centre it horizontally and scroll to its top. A
-  // node's extent includes its context label: the band (hypBlockH + h)
-  // vertically, and the label box when it's wider than the node box.
+  // node's extent includes its comment strip: the band (commentBlockH + h)
+  // vertically, and the strip when it's wider than the node box.
   const fitWidth = () => {
     const el = scrollRef.current;
     // clientWidth is 0 while the view is hidden/unmeasured — fitting then
     // would just clamp zoom to the minimum.
     if (!el || el.clientWidth === 0 || nodes.length === 0) return;
-    // A node's horizontal extent includes its context label and comment
-    // strip. Wide mode centers them on n.x; compact left-aligns them at the
-    // box's left edge — except parented nodes' comment strips, which hang
-    // indented off the incoming lane (COMMENT_INDENT) — so the widest
-    // extends right from there.
+    // A node's horizontal extent includes its comment strip. Wide mode
+    // centers it on n.x; compact left-aligns it at the box's left edge —
+    // except parented nodes' strips, which hang indented off the incoming lane
+    // (COMMENT_INDENT) — so the widest extends right from there.
     const effW = (n: (typeof nodes)[number]) =>
       Math.max(
         n.data.w,
-        hypSize(n.data.incHyp).w,
         (compact && n.data.parents.length > 0 && n.data.commentW > 0
           ? COMMENT_INDENT
           : 0) + n.data.commentW,
@@ -757,7 +824,7 @@ export default function ProofTreeView({
     const maxRight = Math.max(...nodes.map((n) => leftOf(n) + effW(n)));
     const topY = Math.min(
       ...nodes.map(
-        (n) => n.y - (n.data.h + n.data.hypBlockH + n.data.commentBlockH) / 2,
+        (n) => n.y - (n.data.h + n.data.commentBlockH) / 2,
       ),
     );
     const contentW = maxRight - minLeft + 2 * MARGIN.left;
@@ -945,11 +1012,11 @@ export default function ProofTreeView({
           top: 0,
           left: 0,
           right: 0,
-          height: 44,
+          height: 26,
           zIndex: 9,
           pointerEvents: "none",
           background:
-            "linear-gradient(to bottom, var(--vscode-editor-background, var(--bg, #fff)) 40%, transparent)",
+            "linear-gradient(to bottom, var(--vscode-editor-background, var(--bg, #fff)) 25%, transparent)",
         }}
       />
       <div
@@ -959,6 +1026,13 @@ export default function ProofTreeView({
           width: "100%",
           height: "100%",
           overflow: "auto",
+          // The tree is a DIAGRAM driven by click / double-click / drag, and a
+          // stray text selection fights all three: a ⇧-click gets eaten as a
+          // selection extension (which is exactly how the lens gesture broke
+          // when it lived on ⇧-double-click), and drag-scrolling smears a
+          // highlight across nodes. The in-place editor's textarea opts back
+          // in below — everything else here is display, not text to copy.
+          userSelect: "none",
         }}
         // A background click dismisses the editor-cursor accent (node and
         // label clicks stopPropagation, so they never land here): clicking
@@ -977,53 +1051,38 @@ export default function ProofTreeView({
           {/* Coords originate at top-left */}
           <g transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}>
             {links.map((link, i) => {
-              // A node's band is commentBlockH (comment strip) + hypBlockH
-              // (context label) + h (box), box at the bottom: edges leave a
-              // box's bottom edge and land above the target's whole band —
-              // reading order goal → comment → context → tactic.
+              // A node's band is commentBlockH (comment strip) + h (box), box
+              // at the bottom: edges leave a box's bottom edge and land above
+              // the target's whole band — reading order goal → comment → box.
               const startY =
                 link.source.y +
-                (link.source.data.h +
-                  link.source.data.hypBlockH +
-                  link.source.data.commentBlockH) /
-                  2;
+                (link.source.data.h + link.source.data.commentBlockH) / 2;
               const bandTop =
                 link.target.y -
-                (link.target.data.h +
-                  link.target.data.hypBlockH +
-                  link.target.data.commentBlockH) /
-                  2;
-              // The comment strip is narrative, not dataflow: labels and
-              // landing points sit below it.
+                (link.target.data.h + link.target.data.commentBlockH) / 2;
+              // The comment strip is narrative, not dataflow: landing points
+              // sit below it.
               const contentTop = bandTop + link.target.data.commentBlockH;
               const endY = bandTop - ARROW_GAP; // line ends just above the band
-
-              const hyps = link.data; // the tactic's input context, if labeled
-              const hypPos = hyps?.pos;
 
               const sLeft = link.source.x - link.source.data.w / 2;
               const tLeft = link.target.x - link.target.data.w / 2;
               let d: string;
-              let labelX: number;
               if (compact) {
                 // Orthogonal connector dropped from a column just inside the
                 // parent box's left edge: straight down into a same-indent
-                // (trunk) child, or │└▶ into an indented branch — landing at
-                // the vertical middle of the first thing in the child's band
-                // (its context label if any, else its box).
+                // (trunk) child, or │└ into an indented branch — landing at
+                // the vertical middle of the child's box.
                 const col = sLeft + TRUNK_INSET;
                 if (Math.abs(tLeft - sLeft) < 0.5) {
                   // Straight trunk lane: run CONTINUOUSLY past the comment
                   // strip (which hangs indented to the lane's right — see the
-                  // strip render) down to the node's content proper.
+                  // strip render) down to the node's box.
                   d = `M${col},${startY} L${col},${contentTop - ARROW_GAP}`;
                 } else {
-                  const landY =
-                    contentTop +
-                    (hyps ? hypSize(hyps).h / 2 : link.target.data.h / 2);
+                  const landY = contentTop + link.target.data.h / 2;
                   d = `M${col},${startY} L${col},${landY} L${tLeft - ARROW_GAP},${landY}`;
                 }
-                labelX = hyps ? tLeft + hypSize(hyps).w / 2 : link.target.x;
               } else {
                 const startX = link.source.x;
                 const endX = link.target.x;
@@ -1032,42 +1091,29 @@ export default function ProofTreeView({
                     C${startX},${(startY + endY) / 2}
                      ${endX},${endY - k}
                      ${endX},${endY}`;
-                labelX = endX;
               }
 
               return (
-                <g key={i}>
-                  <path fill="none" stroke="#555" strokeWidth={1.5} d={d} />
-                  {hyps && (
-                    <HypLabel
-                      x={labelX}
-                      // At the top of the target's content (below any comment
-                      // strip); the box sits below it.
-                      y={contentTop + hypSize(hyps).h / 2}
-                      hyps={hyps}
-                      onClick={
-                        onReveal && hypPos ? () => onReveal(hypPos) : undefined
-                      }
-                      taggedLines={
-                        renderTaggedHyps?.(
-                          hyps.goalId,
-                          hyps.lines.map((l) => l.text),
-                        ) ?? null
-                      }
-                    />
-                  )}
-                </g>
+                <path
+                  key={i}
+                  fill="none"
+                  stroke="#555"
+                  strokeWidth={1.5}
+                  d={d}
+                />
               );
             })}
             {nodes.map((node) => {
-              const { w, h, lines, label, type, id, foldable, position } = node.data;
-              // The node's band is commentBlockH + hypBlockH + h with the box
-              // pinned at the bottom (the comment strip tops the band, the
-              // context label — drawn by the links loop — sits between them).
-              // All box geometry hangs off boxTop / boxCy.
-              const topH = node.data.hypBlockH + node.data.commentBlockH;
+              const { w, h, hypH, hyps, lines, type, id, foldable, position } =
+                node.data;
+              // The node's band is commentBlockH + h with the box pinned at
+              // the bottom (the comment strip tops the band). All box geometry
+              // hangs off boxTop; inside it the text stack is the context
+              // block (hypH tall, empty for tactics) then the label lines.
+              const topH = node.data.commentBlockH;
               const boxTop = (topH - h) / 2;
-              const boxCy = topH / 2;
+              const contentTop = boxTop + NODE_PAD_Y;
+              const labelTop = contentTop + hypH;
               const style = NODE_STYLES[type] ?? NODE_STYLES.default;
               const isCollapsed = collapsed.has(id);
               const seqActive = seq.mode !== "off";
@@ -1096,41 +1142,75 @@ export default function ProofTreeView({
                 !!position &&
                 !!getTacticEdit &&
                 !!onEditTactic;
+              // The tactic can be opened in the lens (its hover-bar ⧉).
+              // Gated on its OWN hook only: the lens just needs a range to
+              // select, so it must not ride `editable` — a tactic missing from
+              // `tacticEdits` (which keys on the step's exact start) would
+              // otherwise lose the action silently.
+              const popoutable =
+                seq.mode === "off" &&
+                type === "tactic" &&
+                !!position &&
+                !!onPopoutEdit;
               const isEditing = editing?.id === id;
               // A goal with descendants can become the root of a focused view
               // (⌥-click, or the hover bar's ◎); pointless for the current
               // focus root.
               const focusable =
                 type === "goal" && foldable && !seqActive && id !== focusId;
-              // Goal secondary actions live in a hover bar with button-sized
-              // targets (see NodeActionBar) instead of tiny corner glyphs.
-              const hasBar = goalRevealable || focusable;
+              // Secondary actions live in a hover bar with button-sized
+              // targets (see NodeActionBar) instead of tiny corner glyphs or
+              // modifier gestures: goals get reveal/focus, tactics the lens.
+              const hasBar =
+                !isEditing && (goalRevealable || focusable || popoutable);
+              // Hovering a positioned tactic lights its range up in the editor.
+              const hoverHighlights =
+                type === "tactic" && !!position && !!onHoverTactic;
               const clickable =
                 seqActive || foldable || revealable || goalRevealable;
-              // Native hover tooltip: the full (un-wrapped) label — useful even
-              // though the box already shows it, since long types get pixel-
-              // wrapped across lines — plus hints on the fast-path gestures the
-              // hover bar's button titles also teach.
+              // Native hover tooltip: ONLY what you can do here. It used to
+              // repeat the node's own text, which the box is already showing —
+              // noise that buried the one thing a tooltip is good for. The
+              // marker legend stays: `▸` is the sole bit of the box that isn't
+              // self-explanatory.
               const hints = [
                 revealable
-                  ? "· click to reveal in source"
+                  ? "click to reveal in source"
                   : goalRevealable
-                    ? `· ${CMD}-click to reveal in source`
+                    ? `${CMD}-click to reveal in source`
                     : null,
-                editable ? "· double-click to edit" : null,
-                focusable ? "· ⌥-click to focus this subtree" : null,
+                editable ? "double-click to edit" : null,
+                focusable ? "⌥-click to focus this subtree" : null,
+                hyps?.some((l) => l.used)
+                  ? `${HYP_MARK} = used by the tactic below`
+                  : null,
               ].filter(Boolean);
-              const nodeTooltip =
-                hints.length > 0 ? `${label}\n\n${hints.join("\n")}` : label;
-              // Widget-only interactive label (hover type tooltips) for goal
-              // nodes; null keeps the plain SVG text (always, for tactics).
-              const taggedLines =
-                type === "goal" && renderTaggedGoal
-                  ? renderTaggedGoal(
+              const nodeTooltip = hints.map((h) => `· ${h}`).join("\n");
+              // Widget-only interactive context lines, same idea (null keeps
+              // the plain text for that line).
+              const taggedHyps =
+                hyps && hyps.length > 0 && renderTaggedHyps
+                  ? renderTaggedHyps(
                       id,
-                      lines.map((l) => l.text),
+                      hyps.map((l) => l.text),
                     )
                   : null;
+              // Widget-only rich label: hover type tooltips on a goal, syntax
+              // colouring on a tactic. Both return one node per wrapped line in
+              // the same geometry, so the render branch below is shared; null
+              // keeps the plain SVG text.
+              const taggedLines =
+                type === "goal"
+                  ? (renderTaggedGoal?.(
+                      id,
+                      lines.map((l) => l.text),
+                    ) ?? null)
+                  : position
+                    ? (renderTaggedTactic?.(
+                        position,
+                        lines.map((l) => l.text),
+                      ) ?? null)
+                    : null;
 
               const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
                 // A node click is an interaction, not a background click — it
@@ -1138,8 +1218,12 @@ export default function ProofTreeView({
                 e.stopPropagation();
                 // In the widget, clicking a positioned tactic reveals its source
                 // rather than folding; fold via goal nodes / the sequence tools.
+                // On editable tactics the reveal defers past the double-click
+                // window (see deferReveal), so the in-place editor's opening
+                // gesture isn't cut short by a focus jump to the editor.
                 if (revealable) {
-                  onReveal!(position!);
+                  if (editable) deferReveal(position!);
+                  else onReveal!(position!);
                   return;
                 }
                 // Goal fast paths — the whole box is the target, no fiddly
@@ -1165,21 +1249,34 @@ export default function ProofTreeView({
                     editable && !isEditing
                       ? (e) => {
                           e.stopPropagation();
+                          cancelPendingReveal();
                           const q = getTacticEdit!(position!);
-                          if (q)
-                            setEditing({
-                              id,
-                              pos: q.pos,
-                              original: q.text,
-                              value: q.text,
-                            });
+                          if (!q) return;
+                          setEditing({
+                            id,
+                            pos: q.pos,
+                            original: q.text,
+                            value: q.text,
+                          });
                         }
                       : undefined
                   }
-                  onMouseEnter={hasBar ? () => setHoverId(id) : undefined}
+                  // Hover drives two things: the action bar, and (tactics
+                  // only) the editor-side range highlight.
+                  onMouseEnter={
+                    hasBar || hoverHighlights
+                      ? () => {
+                          if (hasBar) setHoverId(id);
+                          if (hoverHighlights) onHoverTactic!(position!);
+                        }
+                      : undefined
+                  }
                   onMouseLeave={
-                    hasBar
-                      ? () => setHoverId((cur) => (cur === id ? null : cur))
+                    hasBar || hoverHighlights
+                      ? () => {
+                          if (hasBar) setHoverId((cur) => (cur === id ? null : cur));
+                          if (hoverHighlights) onHoverTactic!(null);
+                        }
                       : undefined
                   }
                   style={{
@@ -1189,7 +1286,9 @@ export default function ProofTreeView({
                   {/* With a tagged label, the native tooltip retreats to the box
                       rect (padding/border) so it doesn't stack on the hover
                       type-tooltips the interactive text pops itself. */}
-                  {!taggedLines && <title>{nodeTooltip}</title>}
+                  {!taggedLines && hints.length > 0 && (
+                    <title>{nodeTooltip}</title>
+                  )}
                   {/* Source-comment strip: the node's attributed comment(s),
                       drawn as italic narrative at the very top of the band —
                       above the context label, mirroring source order. Muted
@@ -1236,41 +1335,41 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {/* Context label → box connector: the label (drawn by the
-                      links loop) ends HYP_GAP above the box; a short arrow
-                      bridges that gap so the "context feeds into the tactic"
-                      flow stays visible. Wide mode centers label over box;
-                      compact left-aligns them, so the arrow sits in the
-                      connector column both overlap. */}
-                  {node.data.hypBlockH > 0 &&
-                    (() => {
-                      const cx = compact ? -w / 2 + TRUNK_INSET : 0;
-                      return (
-                        <path
-                          fill="none"
-                          stroke="#555"
-                          strokeWidth={1.5}
-                          d={`M${cx},${boxTop - HYP_GAP + 1} L${cx},${boxTop - ARROW_GAP}`}
-                        />
-                      );
-                    })()}
                   <rect
                     x={-w / 2}
                     y={boxTop}
                     width={w}
                     height={h}
-                    // Shape doubles the color cue: tactics get pill-ish corners,
-                    // goals stay squared. Capped so multi-line tactic boxes
-                    // don't curve into their first/last text lines.
-                    rx={type === "tactic" ? Math.min(h / 2, 14) : 6}
+                    // Tight corners on tactics — they're EDITABLE, and a pill
+                    // reads as a label; goals keep slightly softer corners.
+                    rx={type === "tactic" ? 4 : 6}
                     stroke={accent ? SEQ_STROKE : style.stroke}
                     strokeWidth={accent ? 2 : 1.5}
                     fill={style.fill}
+                    // While the in-place editor overlays this node, its box
+                    // (and label, below) hide — the overlay is bigger than
+                    // the box, and an accented node would clash through it.
+                    visibility={isEditing ? "hidden" : undefined}
                   >
-                    {taggedLines && <title>{nodeTooltip}</title>}
+                    {taggedLines && hints.length > 0 && (
+                      <title>{nodeTooltip}</title>
+                    )}
                   </rect>
 
-                  {foldable && !seqActive && !revealable && (
+                  {/* The goal's local context, stacked inside the box above
+                      its `⊢ ` line (see HypBlock). Hidden with the rest of the
+                      box's content while the in-place editor overlays it. */}
+                  {hyps && hyps.length > 0 && !isEditing && (
+                    <HypBlock
+                      lines={hyps}
+                      x={-w / 2 + NODE_PAD}
+                      y={contentTop}
+                      width={w - 2 * NODE_PAD}
+                      taggedLines={taggedHyps}
+                    />
+                  )}
+
+                  {foldable && !seqActive && !revealable && !isEditing && (
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -1291,10 +1390,11 @@ export default function ProofTreeView({
                     // so nothing wraps — hence white-space: pre.
                     <foreignObject
                       x={-w / 2 + NODE_PAD}
-                      y={boxCy - (lines.length * LINE_H) / 2}
+                      y={labelTop}
                       width={w - 2 * NODE_PAD}
                       height={lines.length * LINE_H}
                       style={{ overflow: "visible" }}
+                      visibility={isEditing ? "hidden" : undefined}
                     >
                       <div
                         style={{
@@ -1329,6 +1429,7 @@ export default function ProofTreeView({
                       // Match the width measurer in layout.ts, which doesn't include
                       // the page's inherited letter-spacing.
                       style={{ letterSpacing: 0 }}
+                      visibility={isEditing ? "hidden" : undefined}
                     >
                       {lines.map((line, j) => (
                         <tspan
@@ -1336,7 +1437,7 @@ export default function ProofTreeView({
                           // Continuation lines hang-indent by the same offset
                           // the layout budgeted for them.
                           x={-w / 2 + NODE_PAD + (line.cont ? CONT_INDENT : 0)}
-                          y={boxCy + (j - (lines.length - 1) / 2) * LINE_H}
+                          y={labelTop + (j + 0.5) * LINE_H}
                           dy="0.32em"
                         >
                           {line.text}
@@ -1345,23 +1446,103 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {/* In-place tactic editor: a textarea in the box's exact
-                      spot (grown to a comfortable minimum), pre-filled with
-                      the tactic's verbatim source (getTacticEdit). Esc
-                      cancels; Enter commits single-line tactics (Shift+Enter
-                      for a newline); ⌘/Ctrl-Enter always commits; so does
-                      clicking away. */}
-                  {isEditing && editing && (
+                  {/* Hover action bar (last, so it paints over the label):
+                      secondary actions with real button targets. Goals get
+                      theirs straddling the top-right corner; a tactic's rides
+                      the box's right edge instead — a tactic box is one line
+                      tall and the compact gap above it (TRUNK_GAP_STEP) is
+                      shorter than the bar, so the corner placement would
+                      collide with the goal box above. */}
+                  {hasBar && hoverId === id && (
+                    <NodeActionBar
+                      placement={type === "tactic" ? "right" : "top-right"}
+                      // Both placements OVERLAP the box by BAR_OVERLAP. That
+                      // is not cosmetic: the bar lives in the node's own <g>
+                      // and hover is tracked on that <g>, so any gap between
+                      // box and bar is dead space that fires mouseleave and
+                      // unmounts the bar mid-travel — the pointer can never
+                      // land on it. Overlapping keeps the hit area continuous.
+                      // A tactic's overlap falls inside NODE_PAD, so it covers
+                      // padding rather than glyphs.
+                      x={w / 2 - BAR_OVERLAP}
+                      y={type === "tactic" ? boxTop + h / 2 : boxTop}
+                      actions={[
+                        ...(goalRevealable
+                          ? [
+                              {
+                                glyph: "»",
+                                title: `Reveal in source (${CMD}-click)`,
+                                onClick: () => onReveal!(position!),
+                              },
+                            ]
+                          : []),
+                        ...(focusable
+                          ? [
+                              {
+                                glyph: "◎",
+                                title: "Focus this subtree (⌥-click)",
+                                onClick: () => focusOn(id),
+                              },
+                            ]
+                          : []),
+                        ...(popoutable
+                          ? [
+                              {
+                                glyph: "⧉",
+                                // The tight range when we have one; the node's
+                                // own trivia-inflated span otherwise, which
+                                // selects a little extra but always opens.
+                                title: "Open in lens",
+                                onClick: () =>
+                                  onPopoutEdit!(
+                                    getTacticEdit?.(position!)?.pos ?? position!,
+                                  ),
+                              },
+                            ]
+                          : []),
+                      ]}
+                    />
+                  )}
+                </g>
+              );
+            })}
+
+            {/* In-place tactic editor: a textarea over the edited node's box,
+                pre-filled with the tactic's verbatim source (getTacticEdit).
+                Esc cancels; Enter commits single-line tactics (Shift+Enter
+                for a newline); ⌘/Ctrl-Enter always commits; so does clicking
+                away. Rendered AFTER the nodes loop on purpose: SVG paints in
+                document order, so inside the node's own <g> every later
+                sibling would paint over the overlay wherever it outgrows the
+                box. It sizes to its content live (width from the measured
+                longest line, height from the line count) instead of pushing
+                the layout around — it's a transient overlay, not a node. */}
+            {editing &&
+              (() => {
+                const en = nodes.find((n) => n.data.id === editing.id);
+                if (!en) return null;
+                const { w, h } = en.data;
+                const topH = en.data.commentBlockH;
+                const boxTop = (topH - h) / 2;
+                const valueLines = editing.value.split("\n");
+                const fw = Math.max(
+                  w,
+                  320,
+                  ...valueLines.map(
+                    (l) => measureText(l, NODE_FONT_PX) + 2 * NODE_PAD + 12,
+                  ),
+                );
+                const fh = Math.max(
+                  h,
+                  valueLines.length * LINE_H + 2 * NODE_PAD_Y + 6,
+                );
+                return (
+                  <g transform={`translate(${en.x},${en.y})`}>
                     <foreignObject
                       x={-w / 2}
                       y={boxTop}
-                      width={Math.max(w, 320)}
-                      height={Math.max(
-                        h,
-                        editing.value.split("\n").length * LINE_H +
-                          2 * NODE_PAD_Y +
-                          6,
-                      )}
+                      width={fw}
+                      height={fh}
                       style={{ overflow: "visible" }}
                     >
                       <textarea
@@ -1404,47 +1585,21 @@ export default function ProofTreeView({
                           background: "#fff",
                           color: "#111",
                           border: `2px solid ${NODE_STYLES.tactic.stroke}`,
-                          borderRadius: 10,
+                          borderRadius: 4, // match the tactic box corners
                           outline: "none",
                           resize: "none",
                           whiteSpace: "pre",
-                          overflow: "auto",
+                          overflow: "hidden",
+                          // Opt back in: the scroll container sets
+                          // userSelect: none for the diagram, which would
+                          // otherwise make the textarea unselectable.
+                          userSelect: "text",
                         }}
                       />
                     </foreignObject>
-                  )}
-
-                  {/* Hover action bar (last, so it paints over the label): the
-                      goal's secondary actions with real button targets. */}
-                  {hasBar && hoverId === id && (
-                    <NodeActionBar
-                      right={w / 2 - 4}
-                      top={boxTop}
-                      actions={[
-                        ...(goalRevealable
-                          ? [
-                              {
-                                glyph: "»",
-                                title: `Reveal in source (${CMD}-click)`,
-                                onClick: () => onReveal!(position!),
-                              },
-                            ]
-                          : []),
-                        ...(focusable
-                          ? [
-                              {
-                                glyph: "◎",
-                                title: "Focus this subtree (⌥-click)",
-                                onClick: () => focusOn(id),
-                              },
-                            ]
-                          : []),
-                      ]}
-                    />
-                  )}
-                </g>
-              );
-            })}
+                  </g>
+                );
+              })()}
           </g>
         </svg>
       </div>
@@ -1457,6 +1612,9 @@ export default function ProofTreeView({
 // expected-type block straight onto the tree (see the render). Icons over
 // text — the tooltips carry the words — and toggles render "pressed" while
 // on. Zoom lives here too (no % readout; ⌘/Ctrl-scroll is the precise path).
+// Styled on the EDITOR's own widget palette (the vars every VS Code theme
+// defines for hover/find widgets) so the rail reads native in either theme;
+// the fallbacks keep the standalone app on the old light look.
 const RAIL_BTN: CSSProperties = {
   width: 26,
   height: 26,
@@ -1468,10 +1626,10 @@ const RAIL_BTN: CSSProperties = {
   fontSize: 14,
   lineHeight: 1,
   cursor: "pointer",
-  background: "rgba(255,255,255,0.92)",
-  border: "1px solid #cbd5e0",
-  borderRadius: 5,
-  color: "#2d3748",
+  background: "var(--vscode-editorWidget-background, rgba(255,255,255,0.92))",
+  border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+  borderRadius: 3,
+  color: "var(--vscode-icon-foreground, #2d3748)",
 };
 
 function RailButton({
@@ -1624,18 +1782,26 @@ interface NodeAction {
   onClick: () => void;
 }
 function NodeActionBar({
-  right,
-  top,
+  placement = "top-right",
+  x,
+  y,
   actions,
 }: {
-  right: number; // bar's right edge (box right, slightly inset)
-  top: number; // box top edge
+  // "top-right": the bar straddles the box's top-right corner — (x, y) is the
+  // bar's right edge and the box top; it dips BAR_OVERLAP down onto the box.
+  // "right": the bar hangs off the box's right edge, centred on it — (x, y) is
+  // the bar's LEFT edge (already inset by BAR_OVERLAP, so it starts ON the
+  // box) and the box's vertical centre. Used for tactic boxes, which are one
+  // line tall with too little room above for the corner placement.
+  placement?: "top-right" | "right";
+  x: number;
+  y: number;
   actions: NodeAction[];
 }) {
   const w = actions.length * BAR_BTN + (actions.length - 1) * BAR_GAP + 2 * BAR_PAD;
   const h = BAR_BTN + 2 * BAR_PAD;
-  const x0 = right - w;
-  const y0 = top - h + BAR_OVERLAP;
+  const x0 = placement === "right" ? x : x - w;
+  const y0 = placement === "right" ? y - h / 2 : y - h + BAR_OVERLAP;
   return (
     <g>
       <rect
@@ -1643,9 +1809,9 @@ function NodeActionBar({
         y={y0}
         width={w}
         height={h}
-        rx={6}
-        fill="#fff"
-        stroke="#cbd5e0"
+        rx={3}
+        fill="var(--vscode-editorWidget-background, #fff)"
+        stroke="var(--vscode-editorWidget-border, #cbd5e0)"
       />
       {actions.map((a, i) => {
         const bx = x0 + BAR_PAD + i * (BAR_BTN + BAR_GAP);
@@ -1666,9 +1832,9 @@ function NodeActionBar({
               y={y0 + BAR_PAD}
               width={BAR_BTN}
               height={BAR_BTN}
-              rx={4}
-              fill="#f7fafc"
-              stroke="#e2e8f0"
+              rx={2}
+              fill="var(--vscode-toolbar-hoverBackground, #f7fafc)"
+              stroke="var(--vscode-editorWidget-border, #e2e8f0)"
             />
             <text
               x={bx + BAR_BTN / 2}
@@ -1677,7 +1843,7 @@ function NodeActionBar({
               dominantBaseline="central"
               fontSize={13}
               fontFamily="monospace"
-              fill="#2d3748"
+              fill="var(--vscode-icon-foreground, #2d3748)"
             >
               {a.glyph}
             </text>

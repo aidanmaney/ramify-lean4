@@ -1,4 +1,4 @@
-import type { EdgeHyps, ParentEdge, TreeNode } from "./types";
+import type { HypLine, ParentEdge, TreeNode } from "./types";
 
 // Deterministic PRNG (mulberry32) so a given seed always builds the SAME tree.
 // Reproducibility matters here: you want to compare layout options on an
@@ -52,16 +52,13 @@ function hash(s: string): number {
   return h >>> 0;
 }
 
-// Structured like a real edge label (see types.ts EdgeHyps): line texts plus a
+// Structured like a real goal context (see types.ts HypLine): line texts plus a
 // deterministic "used by this tactic" flag so the marker gutter is exercised.
-const pickHyp = (childId: string): EdgeHyps => {
-  const n = hash(childId);
-  return {
-    lines: HYPS[n % HYPS.length]
-      .split("\n")
-      .map((text, i) => ({ text, used: (n >> i) % 3 === 0 })),
-    goalId: childId,
-  };
+const pickHyp = (goalId: string): HypLine[] => {
+  const n = hash(goalId);
+  return HYPS[n % HYPS.length]
+    .split("\n")
+    .map((text, i) => ({ text, used: (n >> i) % 3 === 0 }));
 };
 
 /**
@@ -86,7 +83,9 @@ export function makeTree(
   // rather than returning a subtree to be attached by the caller.
   function goal(level: number, path: string, parents: ParentEdge[]): string {
     const id = `⊢ goal ${path}`; // unique address-based id
-    nodes.push({ id, label: id, type: "goal", parents });
+    // A goal carries its own local context, drawn inside its box (root goals
+    // included — they'd hold the theorem's binders).
+    nodes.push({ id, label: id, type: "goal", parents, hyps: pickHyp(id) });
     if (level < depth) {
       tactic(level, path, [{ id }]); // this goal is the tactic's parent
     }
@@ -102,10 +101,7 @@ export function makeTree(
     if (level < depth - 1) {
       const n = jitter ? 1 + Math.floor(rand() * branching) : branching;
       for (let i = 0; i < n; i++) {
-        const childPath = `${path}.${i}`;
-        const childId = `⊢ goal ${childPath}`;
-        // The tactic→subgoal edge carries the subgoal's local hypotheses.
-        goal(level + 1, childPath, [{ id, hyps: pickHyp(childId) }]);
+        goal(level + 1, `${path}.${i}`, [{ id }]);
       }
     }
     return id;

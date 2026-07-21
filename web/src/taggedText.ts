@@ -64,10 +64,18 @@ export function sliceTaggedText<T>(
  * A break consumed either one separator character (the space at a word wrap,
  * the newline of an explicit line break) or nothing (a hard break inside an
  * over-wide token), so between lines we skip one separator iff one is there.
+ *
+ * `prefix` relaxes the "lines account for ALL of flat" requirement to "lines
+ * are a prefix of flat". Goal labels want the strict form (the tagged print and
+ * the measured text are the same string, and a partial match means something is
+ * wrong). Tactic labels want the prefix form: Paperproof prettifies a tactic to
+ * its FIRST LINE, so a structured `induction … with | … | …` has a label that is
+ * a genuine prefix of the verbatim source the tokens index into.
  */
 export function lineOffsets(
   flat: string,
   lines: string[],
+  prefix = false,
 ): [number, number][] | null {
   const out: [number, number][] = [];
   let pos = 0;
@@ -77,5 +85,5 @@ export function lineOffsets(
     out.push([pos, pos + lines[i].length]);
     pos += lines[i].length;
   }
-  return pos === flat.length ? out : null;
+  return prefix || pos === flat.length ? out : null;
 }

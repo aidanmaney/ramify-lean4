@@ -44,6 +44,24 @@ structure TaggedGoalEntry where
   goal   : Widget.InteractiveGoal
   deriving Server.RpcEncodable
 
+/-- The hover popup seam for ONE token of a tactic's source: the token's span
+plus a `CodeWithInfos` whose single tag carries the very `InfoWithCtx` the
+editor's own hover would use for that position, wrapping the token's *source*
+text.
+
+The point of the shape is total reuse. `InteractiveCode` on the JS side renders
+the tagged text and, on hover, resolves the tag through
+`Lean.Widget.InteractiveDiagnostics.infoToInteractive` — the same RPC that
+powers the goal-label tooltips and the editor's hover. So a token here gets the
+native popup (type, docs, links) without a bespoke popup component, and because
+the tagged text is the SOURCE text rather than a pretty-printed expression, what
+is drawn is byte-identical to what the layout measured. -/
+structure TacticTokenInfo where
+  start : Lsp.Position
+  stop  : Lsp.Position
+  code  : Widget.CodeWithInfos
+  deriving Server.RpcEncodable
+
 /-- The wire payload sent to the renderer: the CLI's `{ steps, allGoals }` shape
 plus `taggedGoals`, the interactive (tagged) rendering of each goal. The tagged
 half contains live RPC references, so the whole payload derives
@@ -61,6 +79,9 @@ structure ProofTreeData where
   -- Per-tactic tight ranges + verbatim text for in-place editing (see
   -- TacticEdit). Widget-only, like taggedGoals: the CLI has no editor.
   tacticEdits : Array TacticEdit := #[]
+  -- Hover popups for identifier tokens inside tactics (see TacticTokenInfo).
+  -- Like taggedGoals, these hold live RPC references, so they are widget-only.
+  tokenInfos  : Array TacticTokenInfo := #[]
   deriving Server.RpcEncodable
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
@@ -98,6 +119,86 @@ def collectTaggedGoals (infoTree : InfoTree) : IO (Array TaggedGoalEntry) := do
           out := out.push { goalId := key, goal }
   return out
 
+/-- Would the editor's own hover consider this info node? Mirrors the
+eligibility test inside `InfoTree.hoverableInfoAt?`: anything carrying
+elaborator info, plus field/option/error-name nodes, minus the `nullKind` and
+`withAnnotateState` nodes tactics use to steer which goal the infoview shows.
+
+Deliberately NOT restricted to `TermInfo`. `makePopup` — the server side of
+`infoToInteractive` — ends with `doc := ← i.info.docString?`, which is
+populated for ANY info kind, so a `TacticInfo` yields the tactic's own
+documentation. That is what puts a real popup on `induction`, `simp` and
+friends rather than only on identifiers. -/
+private def hoverEligible (info : Elab.Info) : Bool :=
+  !info.stx.isOfKind nullKind
+  && !info.toElabInfo?.any (·.elaborator == `Lean.Elab.Tactic.evalWithAnnotateState)
+  && ((info matches .ofFieldInfo _ | .ofOptionInfo _ | .ofErrorNameInfo _)
+      || info.toElabInfo?.isSome)
+
+/-- A synthetic `sorry` has no meaningful popup; `hoverableInfoAt?` drops these
+too. -/
+private def isSyntheticSorryInfo (info : Elab.Info) : Bool :=
+  match info with
+  | .ofTermInfo ti => ti.expr.isSyntheticSorry
+  | _              => false
+
+/-- Hoverable info nodes indexed for innermost-range lookup: `items` sorted by
+start offset, and `prefixMaxStop[i]` = the largest stop among `items[0..i]`.
+
+The tree is walked ONCE per request and the index shared by every token —
+calling `InfoTree.hoverableInfoAt?` per token would re-walk the whole tree each
+time, and this runs on every cursor move. The prefix-max array keeps the lookup
+itself off O(targets): scanning backwards from the last candidate, the moment
+the running maximum stop falls at or before the query offset, no earlier item
+can contain it either, so the scan stops. -/
+private structure HoverIndex where
+  items         : Array (Nat × Nat × Elab.InfoWithCtx)
+  prefixMaxStop : Array Nat
+
+private def mkHoverIndex (infoTree : InfoTree) : HoverIndex := Id.run do
+  let raw : Array (Nat × Nat × Elab.InfoWithCtx) :=
+    infoTree.foldInfo (init := #[]) fun ctx info acc =>
+      if !hoverEligible info || isSyntheticSorryInfo info then acc
+      else match info.stx.getRange? (canonicalOnly := true) with
+        | some r =>
+          acc.push (r.start.byteIdx, r.stop.byteIdx,
+                    { ctx, info, children := .empty })
+        | none => acc
+  let items := raw.qsort fun a b => a.1 < b.1
+  let mut pm : Array Nat := Array.mkEmpty items.size
+  let mut best := 0
+  for (_, stop, _) in items do
+    best := max best stop
+    pm := pm.push best
+  return { items, prefixMaxStop := pm }
+
+/-- The smallest eligible range containing byte offset `p`, as
+`(start, stop, info)`. The range comes back with the info so callers can use it
+as an identity key for the node (see the ref cache in `getProofTree`). -/
+private def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
+    : Option (Nat × Nat × Elab.InfoWithCtx) := Id.run do
+  -- Binary search for the first index whose start exceeds `p`.
+  let mut lo := 0
+  let mut hi := idx.items.size
+  while lo < hi do
+    let mid := (lo + hi) / 2
+    match idx.items[mid]? with
+    | some (start, _, _) => if start ≤ p then lo := mid + 1 else hi := mid
+    | none               => hi := mid
+  let mut i := lo
+  let mut best : Option (Nat × Nat × Nat × Elab.InfoWithCtx) := none
+  while i > 0 do
+    i := i - 1
+    match idx.prefixMaxStop[i]? with
+    | some m => if m ≤ p then break
+    | none   => break
+    if let some (start, stop, ictx) := idx.items[i]? then
+      if start ≤ p && p < stop then
+        let width := stop - start
+        if best.all fun (bw, _, _, _) => width < bw then
+          best := some (width, start, stop, ictx)
+  return best.map fun (_, start, stop, ictx) => (start, stop, ictx)
+
 /-- Parse the proof tree for the theorem under the cursor.
 
 Mirrors the `.tree` branch of `Paperproof.getSnapshotData`: wait for the snapshot
@@ -120,11 +221,40 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let comments := match snap.stx.getRange? with
       | some range => commentsInRange fileMap.source fileMap range
       | none => #[]
+    -- Syntax highlighting, from the server's OWN highlighter rather than a
+    -- hand-rolled Lean lexer: `collectSyntaxBasedSemanticTokens` (keywords and
+    -- syntactic categories from `snap.stx`) plus `collectInfoBasedSemanticTokens`
+    -- (identifiers classified by what they elaborated to, from the info tree) —
+    -- exactly the pair `computeSemanticTokens` feeds the real
+    -- `textDocument/semanticTokens` request. Overlaps are resolved the same way
+    -- too, so a token span here means what it means in the editor. Computed
+    -- once for the whole command and sliced per tactic below.
+    let allTokens :=
+      FileWorker.handleOverlappingSemanticTokens <|
+        FileWorker.computeAbsoluteLspSemanticTokens fileMap ⟨0⟩ none <|
+          FileWorker.collectSyntaxBasedSemanticTokens fileMap snap.stx
+            ++ FileWorker.collectInfoBasedSemanticTokens snap.infoTree
+    let lePos (a b : Lsp.Position) : Bool :=
+      a.line < b.line || (a.line == b.line && a.character <= b.character)
     -- The editing seam: per distinct step range, the tactic's tight span and
-    -- verbatim text (see TacticEdit).
+    -- verbatim text (see TacticEdit), plus the tokens falling inside it.
     let src := fileMap.source
+    -- Hover targets, walked once and shared by every token below.
+    let hoverIdx := mkHoverIndex snap.infoTree
     let mut seen : Std.HashSet (Nat × Nat) := {}
     let mut tacticEdits : Array TacticEdit := #[]
+    let mut tokenInfos : Array TacticTokenInfo := #[]
+    -- One RPC reference per distinct info NODE, not per token. Many tokens in
+    -- a tactic resolve to the same node — its keyword and punctuation all land
+    -- on the enclosing `TacticInfo` — and `rpcStoreRef` keys its store on the
+    -- `WithRpcRef` id, so handing out the same value keeps them a single store
+    -- entry (and lets the client reuse UI state for it) instead of one per
+    -- token. Keyed by the node's range, which identifies it here.
+    let mut refCache : Std.HashMap (Nat × Nat) (Server.WithRpcRef Elab.InfoWithCtx) := {}
+    -- Tactic ranges NEST, so a token inside a branch of a structured tactic
+    -- appears in that tactic's token list AND in every ancestor's. The client
+    -- indexes `tokenInfos` by absolute position, so emit each position once.
+    let mut seenTok : Std.HashSet (Nat × Nat) := {}
     for s in parsedTree.steps do
       let key := (s.position.start.line, s.position.start.character)
       unless seen.contains key do
@@ -133,18 +263,97 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         let e := fileMap.lspPosToUtf8Pos s.position.stop
         let raw := String.Pos.Raw.extract src b e
         let tight := trimmedEnd raw
+        let stop := fileMap.utf8PosToLspPos ⟨b.byteIdx + tight.byteIdx⟩
+        let tokens := allTokens.filterMap fun t =>
+          if lePos s.position.start t.pos && lePos t.tailPos stop then
+            some { start := t.pos, stop := t.tailPos,
+                   type := (toJson t.type).getStr?.toOption.getD "variable" : TacticToken }
+          else none
         tacticEdits := tacticEdits.push {
           start := s.position.start
-          stop  := fileMap.utf8PosToLspPos ⟨b.byteIdx + tight.byteIdx⟩
+          stop
           text  := String.Pos.Raw.extract raw ⟨0⟩ tight
+          tokens
         }
+        -- Per token, the innermost info node covering it — the same node the
+        -- editor's hover would land on — tagged onto the token's own source
+        -- text (see TacticTokenInfo). EVERY token is offered, not just the
+        -- identifier-ish ones: a tactic keyword resolves to its `TacticInfo`,
+        -- whose docstring is exactly the reference text you'd otherwise leave
+        -- the widget to read. Tokens with no info node (punctuation, most
+        -- syntactic keywords) simply find nothing and cost nothing.
+        for t in tokens do
+          let tb := fileMap.lspPosToUtf8Pos t.start
+          let te := fileMap.lspPosToUtf8Pos t.stop
+          if seenTok.contains (tb.byteIdx, te.byteIdx) then
+            continue
+          seenTok := seenTok.insert (tb.byteIdx, te.byteIdx)
+          if let some (rs, re, ictx) := hoverIdx.innermost tb.byteIdx then
+            -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates
+            -- the session-scoped id the client hands back to
+            -- `infoToInteractive` when the popup opens.
+            let ref ← match refCache[(rs, re)]? with
+              | some r => pure r
+              | none   => do
+                let r ← Server.WithRpcRef.mk ictx
+                refCache := refCache.insert (rs, re) r
+                pure r
+            tokenInfos := tokenInfos.push {
+              start := t.start
+              stop  := t.stop
+              code  := .tag
+                { info := ref, subexprPos := SubExpr.Pos.root }
+                (.text (String.Pos.Raw.extract src tb te))
+            }
     return {
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
       taggedGoals,
       comments,
-      tacticEdits
+      tacticEdits,
+      tokenInfos
     }
+
+/-- Parameters for `popoutEdit`: the document and the tactic's TIGHT range
+(from `TacticEdit`) to select in the lens editor. `action` selects the
+companion behavior: `"popout"` opens (or reuses) the lens; `"reveal"` shows
+the range in the lens when one is open, else in the main editor — the tree's
+click-to-reveal rides this, so it can target the lens (vscode-lean4's own
+reveal always picks the first visible editor). -/
+structure PopoutEditParams where
+  uri    : String
+  start  : Lsp.Position
+  stop   : Lsp.Position
+  action : String := "popout"
+  deriving FromJson, ToJson
+
+/-- The widget→companion bridge for the "edit in the lens" action (a tactic's
+hover-bar `⧉` button) and for click-to-reveal. The infoview's `EditorApi` has no `executeCommand`, and both
+webview-side escape hatches fail (vscode-lean4's `showDocument` silently drops
+non-file URIs; a synthetic anchor click navigates the webview blank) — so the
+request is relayed through the filesystem: this writes a one-shot request file
+under `~/.proof-tree-companion/`, which the companion extension
+(`ext/proof-tree-companion`) watches and turns into a slim LENS editor group
+directly below the infoview with the range selected. The nonce lets the
+watcher dedupe double fire (fs.watch often reports one write as several
+events). -/
+@[server_rpc_method]
+def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
+  RequestM.asTask do
+    let some home ← IO.getEnv "HOME"
+      | throw <| RequestError.internalError "popoutEdit: no HOME"
+    let dir := System.FilePath.mk home / ".proof-tree-companion"
+    IO.FS.createDirAll dir
+    let nonce ← IO.monoNanosNow
+    let payload := Json.mkObj [
+      ("nonce", toJson nonce),
+      ("uri", toJson params.uri),
+      ("start", toJson params.start),
+      ("stop", toJson params.stop),
+      ("action", toJson params.action)
+    ]
+    IO.FS.writeFile (dir / "popout-request.json") payload.compress
+    return "ok"
 
 end ProofTree
 

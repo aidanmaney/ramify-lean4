@@ -1,0 +1,23 @@
+{
+  "name": "proof-tree-companion",
+  "displayName": "Proof Tree Companion",
+  "description": "Editor-side commands for the proof-tree infoview widget: opens a tactic in the lens (a slim editor group split below the infoview) and reveals tree nodes in it, relayed through a request file the widget's Lean RPC writes (the infoview's EditorApi has no executeCommand). Will also grow global settings / persistent state for the widget.",
+  "publisher": "aidan",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "proofTree.openLens",
+        "title": "Proof Tree: Open Tactic in Lens"
+      }
+    ]
+  }
+}

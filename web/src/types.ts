@@ -1,32 +1,15 @@
 import type { ProofStepPosition } from "./paperproof";
 
-// One line of a hypothesis-context label, e.g. `h : p ∧ q`, with whether the
-// tactic the label sits above actually uses it (Paperproof's tacticDependsOn).
-export interface EdgeHypLine {
+// One line of a goal's local context, e.g. `h : p ∧ q`, with whether the tactic
+// that consumes the goal actually uses it (Paperproof's tacticDependsOn).
+export interface HypLine {
   text: string;
   used: boolean;
 }
 
-// A hypothesis-context label carried on a goal→tactic edge: the context the
-// tactic runs in, drawn ABOVE the tactic node (reading order: goal, context,
-// tactic). The label's height is folded into the tactic node's layout band
-// (LayoutNode.hypBlockH), so it can never overlap the layer above.
-export interface EdgeHyps {
-  lines: EdgeHypLine[];
-  // The goal whose local context these lines come from (the tactic's
-  // goalBefore) — the key for the widget's tagged hover tooltips.
-  goalId: string;
-  // Source span of the step that INTRODUCED these hypotheses (the one that
-  // produced `goalId`); root-goal binders come from the theorem statement and
-  // have none.
-  pos?: ProofStepPosition;
-}
-
-// An edge to a parent node, optionally carrying the hypothesis context shown
-// along that connection (only goal→tactic edges do).
+// An edge to a parent node.
 export interface ParentEdge {
   id: string;
-  hyps?: EdgeHyps;
 }
 
 // Raw node in the proof tree. `id` is a stable key (an mvarId for goals, a
@@ -46,6 +29,11 @@ export interface TreeNode {
   // Used by the infoview widget for the node↔source link (reveal on click,
   // and highlighting the node under the editor cursor).
   position?: ProofStepPosition;
+  // Goal nodes only: the goal's local context, drawn INSIDE the box above the
+  // `⊢ `-prefixed type — the same stacking the infoview uses. Which hyps appear
+  // (the delta the goal gained, or its full context) and their `used` flags are
+  // decided in proofToTree.
+  hyps?: HypLine[];
   // Source comment(s) attributed to this node (see proofToTree's
   // attributeComments): leading/trailing comments for a tactic; the
   // before-first-tactic narrative (incl. the docstring) for a root goal.
@@ -55,8 +43,8 @@ export interface TreeNode {
 
 // A node placed at concrete coordinates by either layout mode (the wide
 // Sugiyama bands or the compact trunk) — `x` is the BOX's horizontal center,
-// `y` the vertical center of the node's whole band (label block + box, see
-// LayoutNode.hypBlockH). Both layouts return this same shape so the renderer
+// `y` the vertical center of the node's whole band (comment strip + box, see
+// LayoutNode.commentBlockH). Both layouts return this same shape so the renderer
 // is layout-agnostic.
 export interface PlacedNode {
   x: number;
@@ -64,12 +52,10 @@ export interface PlacedNode {
   data: LayoutNode;
 }
 
-// An edge between two placed nodes, carrying the context label riding it, if
-// any (only goal→tactic edges are labeled).
+// An edge between two placed nodes.
 export interface PlacedLink {
   source: PlacedNode;
   target: PlacedNode;
-  data?: EdgeHyps;
 }
 
 // One wrapped line of a node label. `cont` marks a line produced by width-
@@ -88,18 +74,14 @@ export interface LayoutNode extends TreeNode {
   lines: WrappedLine[];
   w: number;
   h: number;
-  // Hypotheses on this node's (single) incoming edge, if any. Carried on the
-  // node so the layout can reserve room for the label drawn above it.
-  incHyp?: EdgeHyps;
-  // Height of the hyp label block (label + HYP_GAP) folded into this node's
-  // layout band, 0 without a label. The node's band is commentBlockH +
-  // hypBlockH + h tall with the box pinned at the bottom, the hyp label above
-  // it and the comment strip on top, so neither can eclipse the layer above.
-  hypBlockH: number;
+  // Height the context block occupies INSIDE the box (its lines + HYP_GAP),
+  // 0 without hyps. The box's text stack is that block then the label lines,
+  // so the render places both off this one number.
+  hypH: number;
   // Source-comment strip (TreeNode.comment wrapped for display), drawn at the
   // very top of the band: its wrapped lines, the height it adds to the band
   // (lines + gap; 0 without a comment), and its measured width (so layout can
-  // reserve horizontal room like it does for wide hyp labels).
+  // reserve horizontal room for a strip wider than the box).
   commentLines: WrappedLine[];
   commentBlockH: number;
   commentW: number;

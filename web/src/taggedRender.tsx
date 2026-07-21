@@ -7,7 +7,7 @@ import {
 } from "@leanprover/infoview";
 import type { GoalInfo, Proof } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import { hypLine } from "./proofToTree";
+import { hypLine, TURNSTILE } from "./proofToTree";
 import { flattenTaggedText, lineOffsets, sliceTaggedText } from "./taggedText";
 
 // Widget-land composition of the tagged (hover-interactive) rendering: builds
@@ -41,7 +41,7 @@ export interface TaggedGoalEntry {
 // infoview portals them to document.body, outside any .ptw-tagged ancestor,
 // so they keep their native editor styling.
 const TAGGED_STYLE_ID = "proof-tree-tagged-style";
-function ensureTaggedStyle() {
+export function ensureTaggedStyle() {
   if (document.getElementById(TAGGED_STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = TAGGED_STYLE_ID;
@@ -83,9 +83,9 @@ export function makeTaggedRenderers(
   ensureTaggedStyle();
   const tagged = new Map(entries.map((e) => [e.goalId, e.goal]));
 
-  // Edge hyp labels show a tactic's input context — the hyps of its
-  // goalBefore (root goals included), whichever subset the label mode picked —
-  // so index every goal we know of.
+  // Context blocks show a goal's own hypotheses (whichever subset the label
+  // mode picked), drawn inside that goal's box — so index every goal we know
+  // of.
   const goalById = new Map<string, GoalInfo>();
   for (const g of proof.allGoals) goalById.set(g.id, g);
   for (const step of proof.steps) {
@@ -95,14 +95,31 @@ export function makeTaggedRenderers(
 
   const renderTaggedGoal = (goalId: string, lines: string[]) => {
     const ig = tagged.get(goalId);
-    return ig ? taggedLines(ig.type, lines) : null;
+    if (!ig) return null;
+    // Goal labels carry a plain "⊢ " prefix (proofToTree) that the
+    // interactive print doesn't — strip it for the text-equality match,
+    // then re-attach it as plain text in the identical spot. The measured
+    // line includes the prefix, so geometry is unchanged.
+    const hasTurnstile = lines[0]?.startsWith(TURNSTILE);
+    const bare = hasTurnstile
+      ? [lines[0].slice(TURNSTILE.length), ...lines.slice(1)]
+      : lines;
+    const nodes = taggedLines(ig.type, bare);
+    if (!nodes || !hasTurnstile) return nodes;
+    return [
+      <span key="turnstile-line">
+        {TURNSTILE}
+        {nodes[0]}
+      </span>,
+      ...nodes.slice(1),
+    ];
   };
 
-  // Edge labels aren't pixel-wrapped (the box grows to the widest line), so
-  // each line is rebuilt as plain `name : ` + interactive type — no slicing.
-  // Lines are matched back to the child goal's hyps BY TEXT, one at a time:
-  // this covers both label modes (the delta and the full context are each a
-  // subset of the child's hyps) and degrades per-line, not wholesale.
+  // Context lines aren't pixel-wrapped (the box grows to the widest line), so
+  // each is rebuilt as plain `name : ` + interactive type — no slicing. Lines
+  // are matched back to the goal's hyps BY TEXT, one at a time: this covers
+  // both label modes (the delta and the full context are each a subset of the
+  // goal's hyps) and degrades per-line, not wholesale.
   const renderTaggedHyps = (goalId: string, lines: string[]) => {
     const ig = tagged.get(goalId);
     const child = goalById.get(goalId);

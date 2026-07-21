@@ -23,7 +23,7 @@ show_panel_widgets [ProofTreeWidget]
 theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   -- Step 1: every n ≥ 2 is divisible by some prime (strong induction on n).
   have exists_prime_dvd : ∀ n : ℕ, 2 ≤ n → ∃ p, Nat.Prime p ∧ p ∣ n := by
-    intro n
+    intro (n : ℕ)
     induction n using Nat.strong_induction_on with
     | _ n ih =>
       intro hn
@@ -50,7 +50,7 @@ theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   -- But a prime is ≥ 2 and cannot divide 1.
   have hle1 : p ≤ 1 := Nat.le_of_dvd one_pos hp1
   have h2 : 2 ≤ p := hp.two_le
-  omega
+  grind
 
 
 theorem my_zero_add (n : ℕ) : 0 + n = n := by
@@ -145,14 +145,14 @@ example
 
 open Classical
 
-theorem two_div_square : ∀ (n : ℤ), 2 ∣ n * n -> 2 ∣ n := by
-  intro n h
+-- theorem two_div_square : ∀ (n : ℤ), 2 ∣ n * n -> 2 ∣ n := by
+--   intro n h
 
 
 
 
-theorem no_coprime_square_eq_double_square :
-    ¬ ∃ m n : ℤ, Int.gcd m n = 1 ∧ m * m = 2 * n * n := by
-  by_contra!
-  have hdiv : (2 : ℤ) ∣ m := by
-    sorry
+-- theorem no_coprime_square_eq_double_square :
+--     ¬ ∃ m n : ℤ, Int.gcd m n = 1 ∧ m * m = 2 * n * n := by
+--   by_contra!
+--   have hdiv : (2 : ℤ) ∣ m := by
+--     sorry

@@ -1,7 +1,7 @@
 import { coordSimplex, graphStratify, sugiyama } from "d3-dag";
 import type { GraphNode, SugiNode } from "d3-dag";
 import type {
-  EdgeHyps,
+  HypLine,
   LayoutNode,
   PlacedLink,
   PlacedNode,
@@ -9,9 +9,9 @@ import type {
   WrappedLine,
 } from "./types";
 
-// Data carried on each link: the hypothesis-context label on that edge, if any
-// (only goal→tactic edges carry one — the context the tactic runs in).
-type LinkDatum = EdgeHyps | undefined;
+// Links carry no data of their own: a goal's context now lives inside the goal
+// node's own box, not on the edge below it.
+type LinkDatum = undefined;
 
 const CHAR_W = 7.2;
 // Font family for code text (goal types, tactics, hypothesis labels). The Lean
@@ -74,7 +74,7 @@ const MIN_W = 60;
 // we reserve can't be undersized by a char-count estimate (Lean labels are full
 // of wide unicode — ℕ, ∀, ∃ — that a fixed CHAR_W underestimates). Cached by
 // font+text; falls back to the estimate when there's no DOM (headless layout).
-const measureText = (() => {
+export const measureText = (() => {
   const ctx =
     typeof document !== "undefined"
       ? document.createElement("canvas").getContext("2d")
@@ -100,40 +100,23 @@ const measureText = (() => {
 // spacing in the render, so the two must agree.
 export const LINE_H = 16;
 
-// Vertical breathing room between a hypothesis label's bottom edge and the top
-// of the tactic box it annotates (both live in the same node band — see
-// LayoutNode.hypBlockH), and between an arrowhead and the band it points at.
-// Shared with the render so the geometry reserved matches what's drawn.
-export const HYP_GAP = 16;
+// Vertical breathing room INSIDE a goal box between the last context line and
+// the `⊢ ` line below it — enough that the two blocks read apart without a
+// rule. Shared with the render so the geometry reserved matches what's drawn.
+export const HYP_GAP = 6;
 // Air between a connector's end and the thing it runs into. Connectors are
 // bare lines (no arrowheads), so this stays small — just enough that a line
 // doesn't touch a border.
 export const ARROW_GAP = 3;
 
-// Hypothesis (local-context) label geometry. Shared with the render so the box
-// the layout reserves room for matches the box actually drawn.
+// Hypothesis (local-context) line geometry, for the block drawn inside a goal
+// box. Shared with the render so the room the layout reserves matches what's
+// drawn.
 const HYP_CHAR_W = 6.6; // headless measureText fallback only
 export const HYP_LINE_H = 13;
-export const HYP_PAD = 5;
-// Width of the left gutter holding the "used by this tactic" markers; reserved
-// only when some line is marked, so unmarked labels stay as tight as before.
+// Width of the left gutter holding the "used by the consuming tactic" markers;
+// reserved only when some line is marked, so unmarked contexts stay tight.
 export const HYP_MARK_W = 11;
-
-// Box size of a hypothesis label (empty when there's no hyp). Width comes from
-// measuring the widest line in the render font, so the box always contains it
-// (hyp labels aren't wrapped — the box just grows to fit), plus the marker
-// gutter when any line is flagged used.
-export function hypSize(hyps: EdgeHyps | undefined): { w: number; h: number } {
-  if (!hyps || hyps.lines.length === 0) return { w: 0, h: 0 };
-  const widest = Math.max(
-    ...hyps.lines.map((l) => measureText(l.text, HYP_FONT_PX)),
-  );
-  const gutter = hyps.lines.some((l) => l.used) ? HYP_MARK_W : 0;
-  return {
-    w: widest + gutter + 2 * HYP_PAD,
-    h: hyps.lines.length * HYP_LINE_H + 2 * HYP_PAD,
-  };
-}
 
 // ---- Compact ("trunk") layout geometry -------------------------------------
 // The compact mode lays the proof out as a scrolling outline (Nuprl-style):
@@ -173,13 +156,12 @@ function trunkLayout(visible: LayoutNode[]): {
   function place(n: LayoutNode, x0: number): PlacedNode {
     const already = placed.get(n.id);
     if (already) return already; // DAG guard: extra parents just link to it
-    const band = n.commentBlockH + n.hypBlockH + n.h;
-    // Label and box are left-aligned at x0; the comment strip too, except
-    // parented nodes' strips hang indented off the incoming lane
-    // (COMMENT_INDENT). Any of the three may be the widest.
+    const band = n.commentBlockH + n.h;
+    // The box is left-aligned at x0; the comment strip too, except parented
+    // nodes' strips hang indented off the incoming lane (COMMENT_INDENT).
+    // Either may be the widest.
     const eff = Math.max(
       n.w,
-      hypSize(n.incHyp).w,
       (n.parents.length > 0 && n.commentW > 0 ? COMMENT_INDENT : 0) +
         n.commentW,
     );
@@ -197,11 +179,7 @@ function trunkLayout(visible: LayoutNode[]): {
           ? TRUNK_GAP_STEP
           : TRUNK_GAP_BRANCH;
       const pc = place(c, c === trunk ? x0 : x0 + TRUNK_INDENT);
-      links.push({
-        source: pn,
-        target: pc,
-        data: c.parents.find((p) => p.id === n.id)?.hyps,
-      });
+      links.push({ source: pn, target: pc });
     }
     return pn;
   }
@@ -366,20 +344,40 @@ function commentSize(
   };
 }
 
-// Compute the wrapped label lines and box geometry for a node label. Every line
-// is wrapped to fit WRAP_W, so the widest measured line + padding stays within
-// MAX_W and the text is always bounded by its box.
-function sizeOf(text: string): Pick<LayoutNode, "lines" | "w" | "h"> {
+// Compute the wrapped label lines and box geometry for a node. The box holds
+// the context block (a goal's hyps, if any) stacked above the label, so its
+// height is both blocks and its width the wider of the two.
+//
+// Label lines are wrapped to fit WRAP_W, so the widest measured line + padding
+// stays within MAX_W. Context lines are deliberately NOT wrapped — the box just
+// grows to fit them, as the standalone context label used to. That keeps a
+// context line's text exactly the `name : type` string the widget's tagged
+// renderer matches on (taggedRender.tsx), which a mid-line break would destroy.
+function sizeOf(
+  text: string,
+  hyps: HypLine[] | undefined,
+): Pick<LayoutNode, "lines" | "w" | "h" | "hypH"> {
   const lines = wrapText(text, WRAP_W);
   const widest = Math.max(
     ...lines.map(
       (l) => (l.cont ? CONT_INDENT : 0) + measureText(l.text, NODE_FONT_PX),
     ),
   );
+  const labelW = Math.max(MIN_W, Math.min(MAX_W, widest + 2 * NODE_PAD));
+  const hypLines = hyps ?? [];
+  const gutter = hypLines.some((l) => l.used) ? HYP_MARK_W : 0;
+  const hypW =
+    hypLines.length > 0
+      ? Math.max(...hypLines.map((l) => measureText(l.text, HYP_FONT_PX))) +
+        gutter +
+        2 * NODE_PAD
+      : 0;
+  const hypH = hypLines.length > 0 ? hypLines.length * HYP_LINE_H + HYP_GAP : 0;
   return {
     lines,
-    w: Math.max(MIN_W, Math.min(MAX_W, widest + 2 * NODE_PAD)),
-    h: lines.length * LINE_H + 2 * NODE_PAD_Y,
+    w: Math.max(labelW, hypW),
+    h: hypH + lines.length * LINE_H + 2 * NODE_PAD_Y,
+    hypH,
   };
 }
 
@@ -419,7 +417,7 @@ export function createLayoutEngine(data: TreeNode[]) {
         n,
       ): [string, ReturnType<typeof sizeOf> & ReturnType<typeof commentSize>] => [
         n.id,
-        { ...sizeOf(n.label), ...commentSize(n.comment) },
+        { ...sizeOf(n.label, n.hyps), ...commentSize(n.comment) },
       ],
     ),
   );
@@ -543,40 +541,29 @@ export function createLayoutEngine(data: TreeNode[]) {
 
     const visible: LayoutNode[] = data
       .filter((n) => shown(n.id))
-      .map((n) => {
-        // A node has at most one parent edge carrying hyps (its tactic's input
-        // context), drawn above the node WITHIN the node's own layout band:
-        // the band is hypBlockH + h tall, box pinned at the bottom, label at
-        // the top — so a tall label grows the band instead of eclipsing the
-        // layer above.
-        const incHyp = n.parents.map((p) => p.hyps).find(Boolean);
-        const hb = hypSize(incHyp);
-        return {
-          ...n,
-          parents: n.parents.filter((p) => shown(p.id)),
-          foldable: HAS_CHILDREN.has(n.id),
-          incHyp,
-          hypBlockH: hb.h > 0 ? hb.h + HYP_GAP : 0,
-          ...SIZE.get(n.id)!,
-        };
-      });
+      .map((n) => ({
+        ...n,
+        parents: n.parents.filter((p) => shown(p.id)),
+        foldable: HAS_CHILDREN.has(n.id),
+        // Box geometry (label + context block) and the comment strip's, both
+        // measured once when the engine was built.
+        ...SIZE.get(n.id)!,
+      }));
 
     if (compact) return trunkLayout(visible);
 
     const graph = graphStratify().parentData((d: LayoutNode) =>
-      d.parents.map((p): [string, LinkDatum] => [p.id, p.hyps]),
+      d.parents.map((p): [string, LinkDatum] => [p.id, undefined]),
     )(visible);
     const layout = sugiyama()
       .nodeSize((node: GraphNode<LayoutNode, LinkDatum>) => {
-        // The hyp label and comment strip live INSIDE this node's band, so the
-        // vertical reservation is exact by construction: band = comment strip
-        // + label block + box + a constant 42 layer gap (room for the arrow +
-        // a breath). Horizontally, widen to the widest of the three so
-        // siblings clear them.
-        const hb = hypSize(node.data.incHyp);
+        // The comment strip lives INSIDE this node's band, so the vertical
+        // reservation is exact by construction: band = comment strip + box +
+        // a constant 42 layer gap. Horizontally, widen to the wider of the two
+        // so siblings clear a strip that outgrows the box.
         return [
-          Math.max(node.data.w, hb.w, node.data.commentW) + 40,
-          node.data.commentBlockH + node.data.hypBlockH + node.data.h + 42,
+          Math.max(node.data.w, node.data.commentW) + 40,
+          node.data.commentBlockH + node.data.h + 42,
         ] as const;
       })
       .decross(stableDecross) // fixed sibling order, immune to folding
@@ -593,7 +580,6 @@ export function createLayoutEngine(data: TreeNode[]) {
       links: [...graph.links()].map((l) => ({
         source: byNode.get(l.source)!,
         target: byNode.get(l.target)!,
-        data: l.data,
       })),
       extent,
     };
