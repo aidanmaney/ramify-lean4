@@ -133,7 +133,11 @@ export const TRUNK_INDENT = 56; // horizontal shift of a branched-off subtree
 export const TRUNK_INSET = 16; // connector column, from a box's left edge
 const TRUNK_GAP_STEP = 14; // goal → the tactic consuming it (one step, tight)
 const TRUNK_GAP_BRANCH = 24; // tactic → what it generates; between siblings
-const BRANCH_COL_GAP = 28; // horizontal air between side-by-side columns
+const BRANCH_COL_GAP = 18; // horizontal air between side-by-side columns
+// at their NEAREST approach — columns are contour-packed (each slides left
+// until its ragged left profile is this close to the previous columns' right
+// profile), not bounding-box packed, so the widest point of a tall column
+// doesn't hold every neighbour at arm's length over its whole height.
 
 // Position visible nodes as a trunk-and-branches outline. A branching tactic's
 // children are laid out TOP-TO-BOTTOM IN SOURCE ORDER (`srcRank`); the last one
@@ -176,6 +180,70 @@ function trunkLayout(
   const links: PlacedLink[] = [];
   let width = 0;
 
+  // A node's effective width: the box, or a strip hanging past it.
+  const effOf = (n: LayoutNode): number => {
+    const indent = n.parents.length > 0 ? COMMENT_INDENT : 0;
+    return Math.max(
+      n.w,
+      (n.commentW > 0 ? indent : 0) + n.commentW,
+      (n.caseW > 0 ? indent : 0) + n.caseW,
+    );
+  };
+
+  // ---- contour packing (side-by-side columns) -----------------------------
+  // Occupied ink as horizontal intervals over y-spans, so adjacent columns can
+  // interleave their ragged profiles instead of standing bounding-box apart.
+  // BOTH boxes and connectors count: a branch elbow's horizontal run and the
+  // lane down to a distant child live OUTSIDE every node rect, and a column
+  // packed against rects alone would sit right on top of them.
+  interface Span {
+    y0: number;
+    y1: number;
+    lo: number;
+    hi: number;
+  }
+
+  const nodeSpan = (pn: PlacedNode): Span => {
+    const d = pn.data;
+    const band = d.caseH + d.commentBlockH + d.h;
+    const left = pn.x - d.w / 2;
+    return { y0: pn.y - band / 2, y1: pn.y + band / 2, lo: left, hi: left + effOf(d) };
+  };
+
+  // The ink of one compact link, as spans. MIRRORS the renderer's routing in
+  // ProofTreeView (startY/bandTop/contentTop and the three elbow shapes) — if
+  // the routing there changes, this must change with it, or packing will stop
+  // clearing the connectors it can no longer see.
+  function linkSpans(l: PlacedLink): Span[] {
+    const sd = l.source.data;
+    const td = l.target.data;
+    const startY = l.source.y + (sd.h + sd.commentBlockH + sd.caseH) / 2;
+    const bandTop = l.target.y - (td.h + td.commentBlockH + td.caseH) / 2;
+    const contentTop = bandTop + td.caseH + td.commentBlockH;
+    const sLeft = l.source.x - sd.w / 2;
+    const tLeft = l.target.x - td.w / 2;
+    const col = sLeft + TRUNK_INSET;
+    if (l.col) {
+      const childLane = tLeft + TRUNK_INSET;
+      const hy = bandTop - ARROW_GAP * 2;
+      return [
+        { y0: startY, y1: hy, lo: col, hi: col },
+        { y0: hy, y1: hy, lo: Math.min(col, childLane), hi: Math.max(col, childLane) },
+        { y0: hy, y1: contentTop - ARROW_GAP, lo: childLane, hi: childLane },
+      ];
+    }
+    if (Math.abs(tLeft - sLeft) < 0.5)
+      return [{ y0: startY, y1: contentTop - ARROW_GAP, lo: col, hi: col }];
+    const landY = contentTop + td.h / 2;
+    return [
+      { y0: startY, y1: landY, lo: col, hi: col },
+      { y0: landY, y1: landY, lo: col, hi: tLeft - ARROW_GAP },
+    ];
+  }
+
+  const overlapsY = (a: Span, b: Span) =>
+    a.y0 < b.y1 + 1 && b.y0 < a.y1 + 1; // ±1px slack so touching edges count
+
   // Place `n`'s subtree with its band starting at (x0, y0); returns the
   // subtree's bottom edge and right edge so a parent can stack (thread the
   // bottom) or columnise (thread the right). y is THREADED rather than a
@@ -191,19 +259,12 @@ function trunkLayout(
       return { pn: already, bottom: y0, right: x0 };
     const band = n.caseH + n.commentBlockH + n.h;
     // The box is left-aligned at x0; the comment strip too, except parented
-    // nodes' strips hang indented off the incoming lane (COMMENT_INDENT).
-    // Either may be the widest.
-    const indent =
-      n.parents.length > 0 ? COMMENT_INDENT : 0; // strips hang off the lane
-    const eff = Math.max(
-      n.w,
-      (n.commentW > 0 ? indent : 0) + n.commentW,
-      (n.caseW > 0 ? indent : 0) + n.caseW,
-    );
+    // nodes' strips hang indented off the incoming lane (COMMENT_INDENT) —
+    // either may be the widest (effOf).
+    const eff = effOf(n);
     const pn: PlacedNode = { x: x0 + n.w / 2, y: y0 + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
-    width = Math.max(width, x0 + eff);
     let bottom = y0 + band;
     let right = x0 + eff;
     // Source order, then the trunk resumption last. Sort is stable, so
@@ -220,13 +281,53 @@ function trunkLayout(
       // All columns start at the SAME y — that identical band top is what the
       // renderer's over-the-top connector routing relies on.
       const top = bottom + TRUNK_GAP_BRANCH;
+      // The right contour of every column placed so far in THIS split.
+      const contour: Span[] = [];
       let colX = x0;
       for (const c of cs) {
+        const isFirst = colX === x0;
+        // Place PROVISIONALLY past everything (no collisions possible), then
+        // slide the whole column left until its left profile sits
+        // BRANCH_COL_GAP from the contour at the nearest approach. Shifting
+        // after placement is safe because links reference PlacedNodes by
+        // object — moving node.x moves their geometry with it.
+        const nodeMark = nodes.length;
+        const linkMark = links.length;
         const r = place(c, colX, top);
-        links.push({ source: pn, target: r.pn, col: colX !== x0 });
-        colX = Math.max(colX, r.right) + BRANCH_COL_GAP;
+        const colNodes = nodes.slice(nodeMark);
+        const colLinks = links.slice(linkMark);
+        const spans = [
+          ...colNodes.map(nodeSpan),
+          ...colLinks.flatMap(linkSpans),
+        ];
+        let shift = 0;
+        if (!isFirst && spans.length > 0) {
+          shift = Infinity;
+          for (const L of spans)
+            for (const R of contour)
+              if (overlapsY(L, R))
+                shift = Math.min(shift, L.lo - R.hi - BRANCH_COL_GAP);
+          // Never past the split's own base: below a short first column
+          // there is nothing to collide with, but a box left of x0 would
+          // escape the extent (and the trunk's own left margin).
+          const minLo = Math.min(...spans.map((s) => s.lo));
+          shift = Math.min(shift, minLo - x0);
+          shift = Math.max(0, shift === Infinity ? 0 : shift);
+          if (shift > 0)
+            for (const cn of colNodes) cn.x -= shift;
+        }
+        // The parent link is pushed AFTER packing on purpose: its over-the-top
+        // horizontal spans the gap between columns, and feeding it into the
+        // contour would hold every later column out past it.
+        links.push({ source: pn, target: r.pn, col: !isFirst });
+        for (const sSpan of spans)
+          contour.push(
+            shift > 0 ? { ...sSpan, lo: sSpan.lo - shift, hi: sSpan.hi - shift } : sSpan,
+          );
+        const colRight = Math.max(...spans.map((s) => s.hi)) - shift;
+        colX = Math.max(colX, colRight) + BRANCH_COL_GAP;
         bottom = Math.max(bottom, r.bottom);
-        right = Math.max(right, r.right);
+        right = Math.max(right, colRight);
       }
       return { pn, bottom, right };
     }
@@ -249,6 +350,10 @@ function trunkLayout(
     if (nodes.length > 0) cursor += TRUNK_GAP_BRANCH;
     cursor = place(r, 0, cursor).bottom;
   }
+  // Width is computed AFTER placement, not tracked during it: contour packing
+  // shifts whole columns left after their nodes were pushed, so a running
+  // maximum would remember the provisional (pre-shift) positions.
+  for (const pn of nodes) width = Math.max(width, pn.x - pn.data.w / 2 + effOf(pn.data));
   return { nodes, links, extent: { width, height: cursor } };
 }
 
