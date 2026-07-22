@@ -129,15 +129,26 @@ export const TRUNK_INSET = 16; // connector column, from a box's left edge
 const TRUNK_GAP_STEP = 14; // goal → the tactic consuming it (one step, tight)
 const TRUNK_GAP_BRANCH = 24; // tactic → what it generates; between siblings
 
-// Position visible nodes as a trunk-and-branches outline. A branching
-// tactic's FIRST child (Paperproof lists the main continuation first —
-// goalsAfter before spawnedGoals) resumes the trunk at the parent's indent;
-// the remaining side goals branch right and are drawn ABOVE the resumption,
-// so a branch stays local to the tactic that spawned it and the main proof
-// line never drifts (the Nuprl text rendering: side goals branch off, the
-// continuation resumes below them). The y-cursor is global, so no two bands
-// ever overlap and the total height is exactly the content's.
-function trunkLayout(visible: LayoutNode[]): {
+// Position visible nodes as a trunk-and-branches outline. A branching tactic's
+// children are laid out TOP-TO-BOTTOM IN SOURCE ORDER (`srcRank`); the last one
+// resumes the trunk at the parent's indent while the earlier ones branch right
+// and sit above it, so a branch stays local to the tactic that spawned it and
+// the main proof line never drifts (the Nuprl text rendering: side goals branch
+// off, the continuation resumes below them). The y-cursor is global, so no two
+// bands ever overlap and the total height is exactly the content's.
+//
+// Source order is what makes scrolling the source and scanning the tree agree —
+// move the cursor up a line and the accent moves up. It must be computed, not
+// taken from Paperproof's child order, which is main-continuation-first: for a
+// `have … := by` that happens to coincide (the body precedes the continuation
+// in the source, and "first child on the trunk" put it above), but for a real
+// case split it is exactly backwards. `by_cases` in euclid.lean listed `pos`
+// then `neg`, so the old rule drew the `neg` branch ABOVE the `pos` one and
+// walking the cursor up jumped from the composite branch to the prime branch.
+function trunkLayout(
+  visible: LayoutNode[],
+  srcRank: (id: string) => number,
+): {
   nodes: PlacedNode[];
   links: PlacedLink[];
   extent: { width: number; height: number };
@@ -156,24 +167,34 @@ function trunkLayout(visible: LayoutNode[]): {
   function place(n: LayoutNode, x0: number): PlacedNode {
     const already = placed.get(n.id);
     if (already) return already; // DAG guard: extra parents just link to it
-    const band = n.commentBlockH + n.h;
+    const band = n.caseH + n.commentBlockH + n.h;
     // The box is left-aligned at x0; the comment strip too, except parented
     // nodes' strips hang indented off the incoming lane (COMMENT_INDENT).
     // Either may be the widest.
+    const indent =
+      n.parents.length > 0 ? COMMENT_INDENT : 0; // strips hang off the lane
     const eff = Math.max(
       n.w,
-      (n.parents.length > 0 && n.commentW > 0 ? COMMENT_INDENT : 0) +
-        n.commentW,
+      (n.commentW > 0 ? indent : 0) + n.commentW,
+      (n.caseW > 0 ? indent : 0) + n.caseW,
     );
     const pn: PlacedNode = { x: x0 + n.w / 2, y: cursor + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
     width = Math.max(width, x0 + eff);
     cursor += band;
-    const cs = kids.get(n.id) ?? [];
-    // Side branches (children 2..n) first, then the trunk resumes (child 1).
-    const trunk = cs[0];
-    for (const c of cs.length > 1 ? [...cs.slice(1), trunk] : cs) {
+    // Source order, then the trunk resumption last. Sort is stable, so
+    // children whose subtrees hold no tactic at all (rank Infinity) keep their
+    // creation order rather than shuffling.
+    const cs = (kids.get(n.id) ?? []).slice().sort((a, b) => {
+      const ra = srcRank(a.id);
+      const rb = srcRank(b.id);
+      // Equality first: both-unpositioned would be Infinity - Infinity = NaN,
+      // which silently corrupts a sort.
+      return ra === rb ? 0 : ra - rb;
+    });
+    const trunk = cs[cs.length - 1];
+    for (const c of cs) {
       cursor +=
         n.type === "goal" && cs.length === 1
           ? TRUNK_GAP_STEP
@@ -325,6 +346,21 @@ export const COMMENT_GAP = 10;
 // is indented past the connector column plus some air. Root comments (no
 // incoming lane) stay flush-left.
 export const COMMENT_INDENT = TRUNK_INSET + 8;
+// A goal's case badge: one short line above the comment strip. Never wrapped —
+// a case name is a single identifier, and the box grows to fit it if need be.
+export const CASE_FONT_PX = 10;
+export const CASE_LINE_H = 14;
+export const CASE_GAP = 4;
+function caseSize(
+  label: string | undefined,
+): Pick<LayoutNode, "caseH" | "caseW"> {
+  if (!label) return { caseH: 0, caseW: 0 };
+  return {
+    caseH: CASE_LINE_H + CASE_GAP,
+    caseW: measureText(label, CASE_FONT_PX),
+  };
+}
+
 function commentSize(
   text: string | undefined,
 ): Pick<LayoutNode, "commentLines" | "commentBlockH" | "commentW"> {
@@ -388,10 +424,11 @@ function sizeOf(
 export type LayoutEngine = ReturnType<typeof createLayoutEngine>;
 
 export function createLayoutEngine(data: TreeNode[]) {
-  // Stable left-to-right order key: each node's index in creation order, which
-  // is a DFS preorder of the FULL tree. Built from `data` (all nodes), so a
-  // node's key never changes when other nodes are hidden by folding.
-  const ORD = new Map(data.map((n, i): [string, number] => [n.id, i]));
+  // Stable left-to-right order key for the wide layout, assigned below once
+  // `SRC` exists so that siblings there read in SOURCE order too — the wide
+  // mode can't put source order on the vertical axis (that axis is depth), but
+  // left-to-right is free to agree with the compact mode and the buffer.
+  const ORD = new Map<string, number>();
 
   // Ids that are a parent of at least one node — i.e. the foldable nodes.
   // Derived from the full `data`, so it's constant; a node stays foldable even
@@ -407,6 +444,48 @@ export function createLayoutEngine(data: TreeNode[]) {
       (CHILDREN.get(p.id) ?? CHILDREN.set(p.id, []).get(p.id)!).push(n.id);
   const NODE = new Map(data.map((n): [string, TreeNode] => [n.id, n]));
 
+  // Earliest source position anywhere in a node's SUBTREE, as one sortable
+  // number — what the compact layout orders branches by.
+  //
+  // It has to be the subtree's minimum, not the node's own position: a goal
+  // node carries the position of the step that PRODUCED it (proofToTree
+  // `producingPosition`), so every child of one tactic reports the same
+  // position and sorting on that would be a no-op. The first tactic reachable
+  // inside a branch is the thing that actually says where the branch lives.
+  // Computed over the full `data`, so folding never reorders anything.
+  const SRC = new Map<string, number>();
+  {
+    const own = (n: TreeNode) =>
+      n.type === "tactic" && n.position
+        ? n.position.start.line * 1e4 + n.position.start.character
+        : Infinity;
+    const visiting = new Set<string>();
+    const rank = (id: string): number => {
+      const memo = SRC.get(id);
+      if (memo !== undefined) return memo;
+      if (visiting.has(id)) return Infinity; // guard: shared children make a DAG
+      visiting.add(id);
+      const n = NODE.get(id);
+      let r = n ? own(n) : Infinity;
+      for (const c of CHILDREN.get(id) ?? []) r = Math.min(r, rank(c));
+      visiting.delete(id);
+      SRC.set(id, r);
+      return r;
+    };
+    for (const n of data) rank(n.id);
+  }
+  const srcRank = (id: string) => SRC.get(id) ?? Infinity;
+  // Creation order (a DFS preorder of the full tree) breaks ties, so nodes
+  // whose subtrees hold no tactic keep a deterministic place.
+  data
+    .map((n, i) => ({ n, i }))
+    .sort((a, b) => {
+      const ra = srcRank(a.n.id);
+      const rb = srcRank(b.n.id);
+      return ra === rb ? a.i - b.i : ra - rb;
+    })
+    .forEach(({ n }, rank) => ORD.set(n.id, rank));
+
   // Wrapped label lines + box geometry (and the comment strip's), per node. A
   // label never changes for the lifetime of an engine, so measure once here —
   // computeLayout runs on every fold toggle, and re-wrapping every visible
@@ -415,9 +494,18 @@ export function createLayoutEngine(data: TreeNode[]) {
     data.map(
       (
         n,
-      ): [string, ReturnType<typeof sizeOf> & ReturnType<typeof commentSize>] => [
+      ): [
+        string,
+        ReturnType<typeof sizeOf> &
+          ReturnType<typeof commentSize> &
+          ReturnType<typeof caseSize>,
+      ] => [
         n.id,
-        { ...sizeOf(n.label, n.hyps), ...commentSize(n.comment) },
+        {
+          ...sizeOf(n.label, n.hyps),
+          ...commentSize(n.comment),
+          ...caseSize(n.caseLabel),
+        },
       ],
     ),
   );
@@ -550,7 +638,7 @@ export function createLayoutEngine(data: TreeNode[]) {
         ...SIZE.get(n.id)!,
       }));
 
-    if (compact) return trunkLayout(visible);
+    if (compact) return trunkLayout(visible, srcRank);
 
     const graph = graphStratify().parentData((d: LayoutNode) =>
       d.parents.map((p): [string, LinkDatum] => [p.id, undefined]),
@@ -562,8 +650,8 @@ export function createLayoutEngine(data: TreeNode[]) {
         // a constant 42 layer gap. Horizontally, widen to the wider of the two
         // so siblings clear a strip that outgrows the box.
         return [
-          Math.max(node.data.w, node.data.commentW) + 40,
-          node.data.commentBlockH + node.data.h + 42,
+          Math.max(node.data.w, node.data.commentW, node.data.caseW) + 40,
+          node.data.caseH + node.data.commentBlockH + node.data.h + 42,
         ] as const;
       })
       .decross(stableDecross) // fixed sibling order, immune to folding

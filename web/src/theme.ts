@@ -147,6 +147,7 @@ const PALETTE_CSS = `
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
 
   --ptw-comment: #8b949e;
+  --ptw-case: #6b7f99;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
   --ptw-link: #9aa0a6;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
@@ -207,6 +208,7 @@ const PALETTE_CSS = `
   --ptw-hyp-mark: #d9a271;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
   --ptw-comment: #7d8590;
+  --ptw-case: #8fa3bf;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
   --ptw-link: #6e7681;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
@@ -258,6 +260,8 @@ export const HYP_USED_FILL = "var(--ptw-hyp-used)";
 export const HYP_UNUSED_FILL = "var(--ptw-hyp-unused)";
 export const HYP_MARK_FILL = "var(--ptw-hyp-mark)";
 export const COMMENT_FILL = "var(--ptw-comment)";
+/** Case-name badge on a branch goal — hue-free, like the context lines. */
+export const CASE_FILL = "var(--ptw-case)";
 export const LINK_STROKE = "var(--ptw-link)";
 export const MUTED_FILL = "var(--ptw-muted)";
 export const EDIT_BG = "var(--ptw-edit-bg)";

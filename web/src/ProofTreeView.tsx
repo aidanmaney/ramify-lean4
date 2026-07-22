@@ -23,6 +23,8 @@ import {
   COMMENT_FONT_PX,
   COMMENT_LINE_H,
   COMMENT_INDENT,
+  CASE_FONT_PX,
+  CASE_LINE_H,
   getCodeFontFamily,
   refreshCodeFontFamily,
   measureText,
@@ -32,6 +34,7 @@ import type { HypLine } from "./types";
 import { proofToTree } from "./proofToTree";
 import {
   ACCENT_TEXT,
+  CASE_FILL,
   COMMENT_FILL,
   EDIT_BG,
   EDIT_TEXT,
@@ -556,22 +559,72 @@ export default function ProofTreeView({
   // the innermost (smallest-span) TACTIC containing the cursor, and nothing
   // else — goals and hyp labels never take the cursor accent, theirs being
   // the producing tactic's span, i.e. always redundant with it.
-  const cursorNodeId = useMemo(() => {
-    if (hlKey === "" || hlDismissed || !highlightPos) return null;
-    const span = (p: ProofStepPosition) =>
-      (p.stop.line - p.start.line) * 1e4 +
-      (p.stop.character - p.start.character);
+  //
+  // A cursor inside a COMMENT needs its own answer. Comments are parser
+  // trivia, so they sit inside the enclosing structured tactic's range (and
+  // inside the previous tactic's, whose range includes trailing trivia) but
+  // own no range of their own — the innermost rule resolves a comment line to
+  // the `have`/`by_cases` at the top of the branch, so scrolling through a
+  // comment yanked the accent up the tree and back down again. Instead a
+  // comment resolves to the tactic it ANNOTATES, by the same rule proofToTree
+  // uses to attach comment strips to nodes, so the accent lands where the
+  // comment is already drawn.
+  const commentSpans = useMemo(
+    () =>
+      (proof.comments ?? []).map((c) => ({
+        start: c.start,
+        // A `--` comment owns the rest of its line: the lexed range stops at
+        // the last character, so without this the cursor resting past the text
+        // (or at end-of-line, where it naturally lands) would fall through.
+        stop: c.text.startsWith("--")
+          ? { line: c.stop.line, character: Number.MAX_SAFE_INTEGER }
+          : c.stop,
+      })),
+    [proof],
+  );
+  const span = (p: ProofStepPosition) =>
+    (p.stop.line - p.start.line) * 1e4 +
+    (p.stop.character - p.start.character);
+  // The innermost tactic containing `p`, which is the whole accent rule for a
+  // normal cursor and the first half of the comment rule.
+  const innermostTacticAt = (p: { line: number; character: number }) => {
     let best: { id: string; s: number } | null = null;
     for (const n of nodes) {
       const d = n.data;
       if (d.type !== "tactic" || !d.position) continue;
-      if (!positionContains(d.position, highlightPos)) continue;
+      if (!positionContains(d.position, p)) continue;
       const s = span(d.position);
       if (!best || s < best.s) best = { id: d.id, s };
     }
     return best?.id ?? null;
+  };
+  // Per comment range, the node whose strip is SHOWING it. Taken straight from
+  // the attribution proofToTree already computed (TreeNode.commentRanges)
+  // rather than re-derived here, so the accent can never drift from where the
+  // comment is drawn. Goal owners (the root's "here's the plan" narrative) are
+  // kept but resolve to null below, since goals never take the accent.
+  const commentOwner = useMemo(() => {
+    const byStart = new Map<string, { id: string; isTactic: boolean }>();
+    for (const n of nodes)
+      for (const r of n.data.commentRanges ?? [])
+        byStart.set(`${r.start.line}:${r.start.character}`, {
+          id: n.data.id,
+          isTactic: n.data.type === "tactic",
+        });
+    return commentSpans.map((c) => {
+      const o = byStart.get(`${c.start.line}:${c.start.character}`);
+      return o && o.isTactic ? o.id : null;
+    });
+  }, [nodes, commentSpans]);
+  const cursorNodeId = useMemo(() => {
+    if (hlKey === "" || hlDismissed || !highlightPos) return null;
+    const ci = commentSpans.findIndex((c) =>
+      positionContains(c, highlightPos),
+    );
+    if (ci >= 0) return commentOwner[ci];
+    return innermostTacticAt(highlightPos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, hlKey, hlDismissed]);
+  }, [nodes, hlKey, hlDismissed, commentSpans, commentOwner]);
 
   // Capture a re-anchor on node `id` (or the root) before a relayout, so the
   // post-render `[nodes]` effect can hold that node fixed on screen. `sx/sy` are
@@ -1145,11 +1198,12 @@ export default function ProofTreeView({
             {nodes.map((node) => {
               const { w, h, hypH, hyps, lines, type, id, foldable, position } =
                 node.data;
-              // The node's band is commentBlockH + h with the box pinned at
-              // the bottom (the comment strip tops the band). All box geometry
-              // hangs off boxTop; inside it the text stack is the context
-              // block (hypH tall, empty for tactics) then the label lines.
-              const topH = node.data.commentBlockH;
+              // The node's band is caseH + commentBlockH + h with the box
+              // pinned at the bottom — case badge, then comment strip, then
+              // the box, mirroring source order. All box geometry hangs off
+              // boxTop; inside it the text stack is the context block (hypH
+              // tall, empty for tactics) then the label lines.
+              const topH = node.data.caseH + node.data.commentBlockH;
               const boxTop = (topH - h) / 2;
               const contentTop = boxTop + NODE_PAD_Y;
               const labelTop = contentTop + hypH;
@@ -1329,6 +1383,31 @@ export default function ProofTreeView({
                   {!taggedLines && hints.length > 0 && (
                     <title>{nodeTooltip}</title>
                   )}
+                  {/* Case badge: the name of the branch this goal IS
+                      (`succ`, `pos`, …), sitting at the very top of the band
+                      above any comment strip — the source order of a case
+                      marker and the comment inside it. Aligned with the
+                      comment strip, so an annotated branch reads as one
+                      left-aligned column. */}
+                  {node.data.caseLabel && (
+                    <text
+                      textAnchor="start"
+                      fontSize={CASE_FONT_PX}
+                      fontFamily={getCodeFontFamily()}
+                      fill={CASE_FILL}
+                      style={{ letterSpacing: 0 }}
+                      x={
+                        compact
+                          ? -w / 2 +
+                            (node.data.parents.length > 0 ? COMMENT_INDENT : 0)
+                          : -node.data.caseW / 2
+                      }
+                      y={boxTop - topH + CASE_LINE_H / 2}
+                      dy="0.32em"
+                    >
+                      {node.data.caseLabel}
+                    </text>
+                  )}
                   {/* Source-comment strip: the node's attributed comment(s),
                       drawn as italic narrative at the very top of the band —
                       above the context label, mirroring source order. Muted
@@ -1365,6 +1444,7 @@ export default function ProofTreeView({
                           y={
                             boxTop -
                             topH +
+                            node.data.caseH +
                             (j + 0.5) * COMMENT_LINE_H
                           }
                           dy="0.32em"
@@ -1563,7 +1643,7 @@ export default function ProofTreeView({
                 const en = nodes.find((n) => n.data.id === editing.id);
                 if (!en) return null;
                 const { w, h } = en.data;
-                const topH = en.data.commentBlockH;
+                const topH = en.data.caseH + en.data.commentBlockH;
                 const boxTop = (topH - h) / 2;
                 const valueLines = editing.value.split("\n");
                 const fw = Math.max(

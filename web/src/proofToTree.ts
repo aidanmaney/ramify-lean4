@@ -3,6 +3,7 @@ import type {
   Hypothesis,
   Proof,
   ProofStep,
+  ProofStepPosition,
   SourceComment,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
@@ -103,6 +104,23 @@ export function proofTitle(proof: Proof): string {
   return (root && goals.get(root)?.type) || "(proof)";
 }
 
+// The case name a goal carries, when its producing tactic split into named
+// branches (`induction … with | zero | succ`, `by_cases` → `pos`/`neg`).
+//
+// Paperproof passes Lean's tag through verbatim, so the name arrives with the
+// MACRO-HYGIENE suffix attached — `by_cases` yields
+// `pos._@.282783777._hygCtx._hyg.77`, which is an implementation detail of
+// name generation and not something to put on screen. Everything from the
+// `._@.` marker on is dropped. Unnamed goals (`[anonymous]`, or a bare `_`
+// case) get no badge rather than a meaningless one.
+function caseName(goal: GoalInfo | undefined): string | undefined {
+  const raw = goal?.username;
+  if (!raw) return undefined;
+  const name = raw.split("._@.")[0].trim();
+  if (name === "" || name === "[anonymous]" || name === "_") return undefined;
+  return name;
+}
+
 // ---- Source comments → node attribution -------------------------------------
 
 type LspPos = { line: number; character: number };
@@ -149,17 +167,25 @@ function attributeComments(
   comments: SourceComment[],
   steps: ProofStep[],
   rootId: string | undefined,
-): Map<string, string> {
+): { text: Map<string, string>; ranges: Map<string, ProofStepPosition[]> } {
   const out = new Map<string, string>();
-  if (comments.length === 0 || steps.length === 0) return out;
+  const ranges = new Map<string, ProofStepPosition[]>();
+  if (comments.length === 0 || steps.length === 0) return { text: out, ranges };
   const byStart = [...steps].sort((a, b) =>
     cmpPos(a.position.start, b.position.start),
   );
   const first = byStart[0];
-  const add = (nodeId: string, text: string) =>
+  let cur: SourceComment;
+  const add = (nodeId: string, text: string) => {
     out.set(nodeId, out.has(nodeId) ? `${out.get(nodeId)}\n${text}` : text);
+    ranges.set(nodeId, [
+      ...(ranges.get(nodeId) ?? []),
+      { start: cur.start, stop: cur.stop },
+    ]);
+  };
   const sorted = [...comments].sort((a, b) => cmpPos(a.start, b.start));
   for (const c of sorted) {
+    cur = c;
     const text = stripComment(c.text);
     if (text === "") continue;
     const container = byStart
@@ -170,11 +196,26 @@ function attributeComments(
       )
       .pop(); // byStart order → last = innermost
     if (container) {
-      const inner = byStart.find(
-        (s) =>
-          cmpPos(s.position.start, c.stop) >= 0 &&
-          cmpPos(s.position.start, container.position.stop) < 0,
-      );
+      // A comment starting on the container's OWN first line is its trailing
+      // comment (`simp -- why`) and stays with it — step ranges include
+      // trailing trivia, so it is genuinely part of that step's text.
+      //
+      // Anything else sits on its own line inside the container's inflated
+      // range and INTRODUCES what follows, so it belongs to the next step.
+      // The container-end bound must be inclusive: trivia inflation makes the
+      // next step start exactly AT the container's stop, so the strict test
+      // this used to run never fired and every leading comment fell back onto
+      // the PRECEDING tactic — "-- Step 2: apply it to N! + 1" was drawn above
+      // the last `exact` of the previous branch instead of the `have` it
+      // introduces, and the cursor accent jumped there with it.
+      const inner =
+        c.start.line === container.position.start.line
+          ? undefined
+          : byStart.find(
+              (s) =>
+                cmpPos(s.position.start, c.stop) >= 0 &&
+                cmpPos(s.position.start, container.position.stop) <= 0,
+            );
       add(tacticId((inner ?? container).goalBefore.id), text);
       continue;
     }
@@ -192,7 +233,7 @@ function attributeComments(
       .find((s) => cmpPos(s.position.start, c.start) <= 0);
     if (prev) add(tacticId(prev.goalBefore.id), text);
   }
-  return out;
+  return { text: out, ranges };
 }
 
 // Tactic labels are raw source text of the step's range — which, because the
@@ -247,12 +288,17 @@ export function proofToTree(
     goalId: string,
     parents: TreeNode["parents"],
     producedBy?: ProofStep,
+    // The case name in force at the parent goal. A case tag propagates to
+    // every descendant, so showing it unconditionally would stamp `neg` on all
+    // nine goals of a branch; the badge marks where a case is ENTERED.
+    parentCase?: string,
   ): void {
     if (emittedGoals.has(goalId)) return; // a proof tree is acyclic, but be safe
     emittedGoals.add(goalId);
 
     const goal = goals.get(goalId);
     const step = stepByGoal.get(goalId);
+    const thisCase = caseName(goal);
     nodes.push({
       id: goalId,
       // The turnstile prefix marks goal boxes as GOALS at a glance (same
@@ -269,7 +315,9 @@ export function proofToTree(
       // box, above the `⊢ ` line — the goal and the assumptions it holds under
       // are one thing to read, exactly as the infoview shows them.
       hyps: goal && contextFor(goal, step, producedBy, fullHyps),
-      comment: commentByNode.get(goalId),
+      comment: commentByNode.text.get(goalId),
+      commentRanges: commentByNode.ranges.get(goalId),
+      caseLabel: thisCase === parentCase ? undefined : thisCase,
     });
 
     if (!step) return; // leaf: this goal was closed by its tactic
@@ -283,11 +331,12 @@ export function proofToTree(
       // Carry the tactic's source span so the widget can link this node back to
       // the `.lean` source (see types.ts `TreeNode.position`).
       position: step.position,
-      comment: commentByNode.get(tId),
+      comment: commentByNode.text.get(tId),
+      commentRanges: commentByNode.ranges.get(tId),
     });
 
     for (const child of stepGoalsAfter(step)) {
-      visitGoal(child.id, [{ id: tId }], step);
+      visitGoal(child.id, [{ id: tId }], step, thisCase);
     }
   }
 

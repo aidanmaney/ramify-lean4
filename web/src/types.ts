@@ -39,6 +39,15 @@ export interface TreeNode {
   // before-first-tactic narrative (incl. the docstring) for a root goal.
   // Drawn as a strip at the top of the node's layout band.
   comment?: string;
+  // Goal nodes only: the name of the case this goal IS, when its producing
+  // tactic split into named branches (`induction … with | zero | succ`,
+  // `by_cases` → `pos`/`neg`). Hygienic suffixes are stripped in proofToTree,
+  // and anonymous goals carry nothing.
+  caseLabel?: string;
+  // The SOURCE RANGES of those comments. Carried so the widget can resolve a
+  // cursor sitting in a comment to the very node whose strip is showing it,
+  // instead of re-deriving the attribution rule (and drifting from it).
+  commentRanges?: ProofStepPosition[];
 }
 
 // A node placed at concrete coordinates by either layout mode (the wide
@@ -85,4 +94,10 @@ export interface LayoutNode extends TreeNode {
   commentLines: WrappedLine[];
   commentBlockH: number;
   commentW: number;
+  // Case-name badge (TreeNode.caseLabel), drawn ABOVE the comment strip —
+  // the case marker (`| succ m ih =>`, `·`) precedes any comment inside it in
+  // the source, so the band reads in source order top-down. Height it adds to
+  // the band and its measured width; both 0 when the goal has no case name.
+  caseH: number;
+  caseW: number;
 }
