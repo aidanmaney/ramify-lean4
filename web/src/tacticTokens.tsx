@@ -95,54 +95,87 @@ function tokenSpans(
   return out;
 }
 
+/** A region where the source and the label are known to agree character for
+character: `len` chars from `srcAt` in the source are `len` chars from
+`labelAt` in the label. Tokens are shifted through whichever segment holds
+them and clipped to it — outside one the two texts diverge, and a token there
+would colour a character it doesn't own. */
+export interface AlignSegment {
+  labelAt: number;
+  srcAt: number;
+  len: number;
+}
+
+/** Longest common prefix length of two strings. */
+function commonPrefix(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i++;
+  return i;
+}
+
 /**
- * Where the step's verbatim source `text` sits inside the node's `label`, or
- * null when the two can't be reconciled (then the node renders plain).
+ * How the step's verbatim source `text` maps onto the node's `label`, as
+ * agreeing segments — or null when the two can't be reconciled at all (then
+ * the node renders plain).
  *
  * Paperproof's `tacticString` is a DISPLAY string, so it disagrees with the
- * source of the step's range in three measured ways (all of them present in
- * `proofs/`):
+ * source in ways that are all present in `proofs/`:
  *
  * - **Label is a prefix of the source** — a structured tactic is prettified to
  *   its first line, so `induction n with` fronts a range running to the end of
- *   the `with` block. Offset 0; tokens past the label fall off the end and are
- *   clipped per line.
+ *   the `with` block. Tokens past the label are clipped.
  * - **Source is a prefix of the label** — consecutive binders are merged for
- *   display (`intro p hpm`) while the step's range covers just `intro p`.
- *   Offset 0 again; the un-covered tail simply stays uncoloured.
- * - **Source is embedded in the label** — `rw` is re-synthesised per rewrite
- *   rule, so a step labelled `rw [Nat.add_zero]` has a range covering only
- *   `Nat.add_zero`. This is the case the prefix-only test used to reject, and
- *   with it every `rw` in the tree.
- *
- * A multi-rule `rw` adds a wrinkle: the range includes the rule's trailing
- * separator (`List.prod_append,`), which the label cannot contain — hence the
- * retry on a separator-trimmed needle.
- *
- * Returns the label offset the source starts at, plus `len`: how much of the
- * source actually matched there. Only `[0, len)` of the source is known to
- * agree with the label character-for-character, so the caller clips tokens to
- * that window — past it (the trimmed separator) the two texts diverge, and a
- * token there would colour a character it doesn't own.
+ *   display (`intro p hpm`) while the step's range covers just `intro p`. The
+ *   un-covered tail stays uncoloured.
+ * - **Label is the source with one rule kept** — `rw` is re-synthesised per
+ *   rewrite rule, so a step of `rw [List.prod_append, hl₁prod, ← hk]` is
+ *   labelled `rw [hl₁prod]`. Neither string contains the other, and this is
+ *   the case that needs TWO segments: the shared `rw [` head, then the rule
+ *   itself wherever it sits in the real bracket list. A single-window
+ *   alignment could only ever cover one of the two, and covering the rule
+ *   alone is what left `rw` with no colour and no docstring popup.
  */
 export function alignInLabel(
   text: string,
   label: string,
-): { at: number; len: number } | null {
-  if (label.startsWith(text)) return { at: 0, len: text.length };
+): AlignSegment[] | null {
+  if (label.startsWith(text)) return [{ labelAt: 0, srcAt: 0, len: text.length }];
   // Structured tactic: the label is the source's first line, so only the label
   // is covered and the rest of the range is clipped away.
-  if (text.startsWith(label)) return { at: 0, len: label.length };
-  const at = label.indexOf(text);
-  if (at >= 0) return { at, len: text.length };
+  if (text.startsWith(label))
+    return [{ labelAt: 0, srcAt: 0, len: label.length }];
   // `indexOf` takes the FIRST occurrence. With a repeated rule (`rw [h, h]`)
   // that can pick the wrong one, but both slices are the same text and the
   // same token type, so the only visible difference is which one carries the
   // tooltip — and geometry is untouched either way.
+  const at = label.indexOf(text);
+  if (at >= 0) return [{ labelAt: at, srcAt: 0, len: text.length }];
+  // Shared head, then the label's tail located in the source. The tail is
+  // stripped of the closers the display string adds back (`rw [hl₁prod]` vs
+  // `hl₁prod,` in the source) before matching, and only the matched part is
+  // claimed.
+  const head = commonPrefix(text, label);
+  if (head > 0) {
+    const tail = label.slice(head).replace(/[\s,;)\]}⟩]+$/, "");
+    // The FIRST rule of a list needs no second segment: the shared head
+    // already runs through it (`rw [List.prod_append` is common to both), and
+    // what's left of the label is the closer the display string added back.
+    const srcAt = tail ? text.indexOf(tail, head) : -1;
+    return srcAt >= 0
+      ? [
+          { labelAt: 0, srcAt: 0, len: head },
+          { labelAt: head, srcAt, len: tail.length },
+        ]
+      : [{ labelAt: 0, srcAt: 0, len: head }];
+  }
+  // Last resort, kept for a source that trails a separator the label can't
+  // contain and shares no head with it.
   const trimmed = text.replace(/[\s,;]+$/, "");
   if (trimmed && trimmed !== text) {
     const trimmedAt = label.indexOf(trimmed);
-    if (trimmedAt >= 0) return { at: trimmedAt, len: trimmed.length };
+    if (trimmedAt >= 0)
+      return [{ labelAt: trimmedAt, srcAt: 0, len: trimmed.length }];
   }
   return null;
 }
@@ -226,13 +259,27 @@ export function renderTacticTokens(
   if (!align) return null;
   const raw = tokenSpans(text, origin, tokens, infoAt);
   if (!raw) return null;
-  const spans = raw
-    .filter((s) => s.start < align.len)
-    .map((s) => ({
-      ...s,
-      start: s.start + align.at,
-      end: Math.min(s.end, align.len) + align.at,
-    }));
+  // Each token belongs to at most one agreeing segment: the one holding its
+  // start. Its end is clipped to that segment, since past it the two texts
+  // part company.
+  const spans = raw.flatMap((s) => {
+    const seg = align.find(
+      (g) => s.start >= g.srcAt && s.start < g.srcAt + g.len,
+    );
+    if (!seg) return [];
+    const shift = seg.labelAt - seg.srcAt;
+    return [
+      {
+        ...s,
+        start: s.start + shift,
+        end: Math.min(s.end, seg.srcAt + seg.len) + shift,
+      },
+    ];
+  });
+  // Segments are emitted head-first, but tokens within them are not
+  // necessarily in label order (a rule further down the bracket list maps to
+  // an earlier label offset than a token after it in the source).
+  spans.sort((a, b) => a.start - b.start);
 
   return offsets.map(([lo, hi], i) => {
     const parts: ReactNode[] = [];

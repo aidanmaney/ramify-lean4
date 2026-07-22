@@ -73,6 +73,10 @@ function useSectionOrderCss() {
 // that text verbatim. Keyed by `start`, which equals the step's
 // `position.start`.
 interface TacticEditEntry {
+  /** The STEP's own start — what this entry is keyed by. It differs from
+  `start` only for a step Paperproof split out of a tactic (`rw [a, b]` is one
+  step per rule), where the editable/colourable unit is the whole tactic. */
+  stepStart: { line: number; character: number };
   start: { line: number; character: number };
   stop: { line: number; character: number };
   text: string;
@@ -280,7 +284,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     () =>
       new Map(
         (stable?.tacticEdits ?? []).map((e): [string, TacticEditEntry] => [
-          `${e.start.line}:${e.start.character}`,
+          // Keyed by the STEP, which is what a node's `position.start` is;
+          // `start` may be the wider surface tactic (see TacticEditEntry).
+          `${(e.stepStart ?? e.start).line}:${(e.stepStart ?? e.start).character}`,
           e,
         ]),
       ),

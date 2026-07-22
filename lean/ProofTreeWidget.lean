@@ -154,6 +154,60 @@ def semanticTokensFor (fileMap : FileMap) (stx : Syntax) (tree : InfoTree)
         ++ FileWorker.collectInfoBasedSemanticTokens tree
         ++ collectConstIdentTokens tree
 
+/-- Every `TacticInfo`'s source range, as byte offsets. Used to find the
+SURFACE tactic a split step belongs to (see `surfaceTacticRange`). -/
+def collectTacticRanges (tree : InfoTree) : Array (Nat × Nat) :=
+  tree.foldInfo (init := #[]) fun _ info acc =>
+    match info, info.stx.getRange? (canonicalOnly := true) with
+    | .ofTacticInfo _, some r => acc.push (r.start.byteIdx, r.stop.byteIdx)
+    | _, _ => acc
+
+/-- The range of the tactic a step was SPLIT out of, or none when the step is a
+tactic in its own right.
+
+Paperproof emits one step per rewrite rule, so the steps of `rw [h, hk]` have
+ranges covering `h,` and `hk` — a range nobody wrote, useless to edit and
+missing the `rw` keyword whose docstring is the whole point of hovering it.
+
+The test for "this step was split" is positional and deliberately narrow: a
+step that starts anywhere OTHER than at its line's tactic column
+(`tacticIndentAt`, past the indent and any bullet) began inside a tactic rather
+than at one. That is exactly the split case, and it does not fire for the
+lookalike that must not widen — a structured tactic's range is truncated at its
+first case marker, but `induction n with` still STARTS at the `induction`, so
+it is left alone; without that guard the enclosing `have … := by` would swallow
+it, since containment alone cannot tell a macro expansion from a nested block.
+
+Given the guard, the widened range is the smallest `TacticInfo` that starts
+exactly at that column and still contains the step — and that must be a tactic
+the step's own LABEL claims to be, i.e. the two agree on their first token.
+Both conditions earn their keep on real syntax: `| zero => rfl` puts the
+line's tactic column on the `|`, and `constructor <;> simp [a, b]` puts it on
+the `constructor`, so a rule step inside the `simp` would otherwise widen to
+the whole combinator — and then nothing in its `simp [a]` label could be
+aligned against it at all, costing the colouring that already worked. -/
+def surfaceTacticRange (fileMap : FileMap) (src : String) (ranges : Array (Nat × Nat))
+    (indentCol : Nat) (pos : Lsp.Position) (label : String) (b e : String.Pos.Raw)
+    : Option (Nat × Nat) := Id.run do
+  if pos.character == indentCol then
+    return none
+  -- The head token: up to the first space or opening bracket. Enough to say
+  -- "this label is about that tactic" without parsing either.
+  let head (s : String) : String := Id.run do
+    let t := s.dropWhile Char.isWhitespace
+    return (t.takeWhile fun c => !c.isWhitespace && c != '[' && c != '(').toString
+  let want := head label
+  if want.isEmpty then
+    return none
+  let anchor := (fileMap.lspPosToUtf8Pos ⟨pos.line, indentCol⟩).byteIdx
+  let mut best : Option (Nat × Nat) := none
+  for (rb, re) in ranges do
+    if rb == anchor && re ≥ e.byteIdx && rb ≤ b.byteIdx then
+      if head (String.Pos.Raw.extract src ⟨rb⟩ ⟨re⟩) == want then
+        if best.all fun (bb, be) => re - rb < be - bb then
+          best := some (rb, re)
+  return best
+
 /-- Would the editor's own hover consider this info node? Mirrors the
 eligibility test inside `InfoTree.hoverableInfoAt?`: anything carrying
 elaborator info, plus field/option/error-name nodes, minus the `nullKind` and
@@ -323,17 +377,35 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     -- appears in that tactic's token list AND in every ancestor's. The client
     -- indexes `tokenInfos` by absolute position, so emit each position once.
     let mut seenTok : Std.HashSet (Nat × Nat) := {}
+    -- Every tactic's span, for re-widening the steps Paperproof split out of
+    -- one (see surfaceTacticRange).
+    let tacticRanges := collectTacticRanges snap.infoTree
     for s in parsedTree.steps do
       let key := (s.position.start.line, s.position.start.character)
       unless seen.contains key do
         seen := seen.insert key
-        let b := fileMap.lspPosToUtf8Pos s.position.start
-        let e := fileMap.lspPosToUtf8Pos s.position.stop
+        let indent := tacticIndentAt fileMap s.position.start.line
+        let b0 := fileMap.lspPosToUtf8Pos s.position.start
+        let e0 := fileMap.lspPosToUtf8Pos s.position.stop
+        -- The step's TIGHT end. Containment below must be tested against this,
+        -- not the raw stop: a Paperproof range runs into the following trivia,
+        -- so a step at the very end of its tactic (the synthetic `rfl` closing
+        -- an `rw`) stops PAST the tactic that owns it and would never widen.
+        let e0t : String.Pos.Raw :=
+          ⟨b0.byteIdx + (trimmedEnd (String.Pos.Raw.extract src b0 e0)).byteIdx⟩
+        -- A split step (`rw [a, b]` → one step per rule) edits and colours as
+        -- the tactic it came from; everything else is its own range.
+        let (b, e, start) : String.Pos.Raw × String.Pos.Raw × Lsp.Position :=
+          match surfaceTacticRange fileMap src tacticRanges indent s.position.start
+                  s.tacticString b0 e0t with
+          | some (rb, re) =>
+            (⟨rb⟩, ⟨re⟩, fileMap.utf8PosToLspPos ⟨rb⟩)
+          | none => (b0, e0, s.position.start)
         let raw := String.Pos.Raw.extract src b e
         let tight := trimmedEnd raw
         let stop := fileMap.utf8PosToLspPos ⟨b.byteIdx + tight.byteIdx⟩
         let tokens := allTokens.filterMap fun t =>
-          if lePos s.position.start t.pos && lePos t.tailPos stop then
+          if lePos start t.pos && lePos t.tailPos stop then
             -- `names` is upstream's canonical constructor-name array (it
             -- carries a sanity-check example against `toJson`); no JSON
             -- round-trip per token.
@@ -341,13 +413,14 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
                    type := Lsp.SemanticTokenType.names[t.type.toNat]! : TacticToken }
           else none
         tacticEdits := tacticEdits.push {
-          start := s.position.start
+          stepStart := s.position.start
+          start
           stop
           text  := String.Pos.Raw.extract raw ⟨0⟩ tight
           tokens
           -- Where this line's tactic text starts, which is neither the step's
           -- column nor the bare line indent (see tacticIndentAt).
-          tacticIndent := tacticIndentAt fileMap s.position.start.line
+          tacticIndent := indent
         }
         -- Per token, the innermost info node covering it — the same node the
         -- editor's hover would land on — tagged onto the token's own source

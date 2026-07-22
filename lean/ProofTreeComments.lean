@@ -133,9 +133,19 @@ token) and its `tacticString` is prettified for display (first line only,
 `rw` re-synthesized) — so neither is safe to edit with. The server, which has
 the real source, re-extracts the range's text and trims trailing trivia
 (`trimmedEnd`), so replacing `[start, stop)` with edited text can never eat a
-trailing comment. Keyed client-side by `start` (= the step's
-`position.start`). -/
+trailing comment.
+
+`start`/`stop` are the SURFACE tactic's range, which is not always the step's:
+Paperproof splits `rw [a, b]` into one step per rule, so those steps' ranges
+cover a rule (and its trailing separator) rather than a tactic anyone wrote.
+Editing that is nonsense — you get `a,` in the box — and its tokens miss the
+`rw` keyword entirely, so the label's own `rw` had neither colour nor
+docstring popup. Such a step is widened to the tactic that owns it (see
+`getProofTree`), and `stepStart` keeps the client's key on the step itself. -/
 structure TacticEdit where
+  /-- The STEP's own `position.start`: what the client keys this entry by, and
+  equal to `start` for every tactic that wasn't split. -/
+  stepStart : Lsp.Position
   start : Lsp.Position
   stop  : Lsp.Position
   text  : String
