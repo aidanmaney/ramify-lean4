@@ -1637,6 +1637,10 @@ export default function ProofTreeView({
               // hides; an ADD's overlay hangs below it and the goal must stay
               // readable while you answer it.
               const hideForEdit = isEditing && !editing?.add;
+              // A `.none`-flagged tactic is REPLACED by its elision marker: the
+              // note stands in for the whole tactic (and the subtree already
+              // hidden below it), rather than hanging off a still-drawn box.
+              const isElided = elided.has(id) && seq.mode === "off";
               // A goal with descendants can become the root of a focused view
               // (⌥-click, or the hover bar's ◎); pointless for the current
               // focus root.
@@ -1846,26 +1850,31 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  <rect
-                    x={-w / 2}
-                    y={boxTop}
-                    width={w}
-                    height={h}
-                    // Tight corners on tactics — they're EDITABLE, and a pill
-                    // reads as a label; goals keep slightly softer corners.
-                    rx={type === "tactic" ? 4 : 6}
-                    stroke={accent ? SEQ_STROKE : style.stroke}
-                    strokeWidth={accent ? 2 : 1.5}
-                    fill={style.fill}
-                    // While the in-place editor overlays this node, its box
-                    // (and label, below) hide — the overlay is bigger than
-                    // the box, and an accented node would clash through it.
-                    visibility={hideForEdit ? "hidden" : undefined}
-                  >
-                    {taggedLines && hints.length > 0 && (
-                      <title>{nodeTooltip}</title>
-                    )}
-                  </rect>
+                  {/* An elided tactic draws no box — the marker below IS the
+                      node. Everything else (label, hyps, fold glyph) is
+                      likewise suppressed when isElided. */}
+                  {!isElided && (
+                    <rect
+                      x={-w / 2}
+                      y={boxTop}
+                      width={w}
+                      height={h}
+                      // Tight corners on tactics — they're EDITABLE, and a pill
+                      // reads as a label; goals keep slightly softer corners.
+                      rx={type === "tactic" ? 4 : 6}
+                      stroke={accent ? SEQ_STROKE : style.stroke}
+                      strokeWidth={accent ? 2 : 1.5}
+                      fill={style.fill}
+                      // While the in-place editor overlays this node, its box
+                      // (and label, below) hide — the overlay is bigger than
+                      // the box, and an accented node would clash through it.
+                      visibility={hideForEdit ? "hidden" : undefined}
+                    >
+                      {taggedLines && hints.length > 0 && (
+                        <title>{nodeTooltip}</title>
+                      )}
+                    </rect>
+                  )}
 
                   {/* The goal's local context, stacked inside the box above
                       its `⊢ ` line (see HypBlock). Hidden with the rest of the
@@ -1880,7 +1889,7 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {foldable && !seqActive && !revealable && !hideForEdit && (
+                  {foldable && !seqActive && !revealable && !hideForEdit && !isElided && (
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -1893,7 +1902,7 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {taggedLines ? (
+                  {isElided ? null : taggedLines ? (
                     // HTML overlay in the exact line geometry of the tspans
                     // below: block top at the centered stack's top, one
                     // LINE_H-high box per wrapped line. Line texts equal the
@@ -1958,14 +1967,15 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {/* What a `.none` flag removed. Drawn on the node that
-                      OWNS the directive, since its children are the things
-                      that are gone — so the tree says "there was more here"
-                      instead of just stopping. */}
-                  {elided.has(id) && seq.mode === "off" && !isEditing && (
+                  {/* What a `.none` flag removed. Drawn IN PLACE of the tactic
+                      box (which is suppressed above): the note stands in for
+                      the whole tactic and the subtree already hidden below it,
+                      so the tree says "there was more here" in one dashed chip
+                      instead of a live box trailing a secondary strip. */}
+                  {isElided && !isEditing && (
                     <g
-                      transform={`translate(${-w / 2 + TRUNK_INSET}, ${
-                        boxTop + h + 4
+                      transform={`translate(${-w / 2}, ${
+                        boxTop + (h - CHIP_H) / 2
                       })`}
                     >
                       <ElidedMarker note={node.data.flags?.note} x={0} />
