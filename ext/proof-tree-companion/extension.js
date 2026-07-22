@@ -316,11 +316,48 @@ const highlightDecoration = vscode.window.createTextEditorDecorationType({
   isWholeLine: false,
 });
 
+/**
+ * Shrink a hover range to what should actually be painted.
+ *
+ * Two ways an incoming range overshoots. Paperproof's step ranges include
+ * TRAILING TRIVIA — they run to the next tactic's first token — so `obtain
+ * ⟨p, hpp, hpm⟩ := ih m hmlt hm2` arrives as `31:8 → 32:8` and paints to the
+ * end of its own line plus the whole indent of the next. And a structured
+ * tactic's range covers its entire block, so hovering `have … := by` would
+ * light up a dozen lines for a node whose box shows one.
+ *
+ * The highlight is a "it's over here" pointer, not a region selector, so it is
+ * clamped to the START line and then trimmed back over trailing whitespace.
+ * The widget already sends the server's tight range where it has one (which
+ * also strips trailing comments); this is the geometric backstop, and the only
+ * thing standing when a tactic is missing from `tacticEdits`.
+ */
+function tightenForHighlight(doc, range) {
+  const lineEnd = doc.lineAt(range.start.line).range.end;
+  let end = range.end.isAfter(lineEnd) ? lineEnd : range.end;
+  const text = doc.getText(new vscode.Range(range.start, end));
+  const trimmed = text.replace(/\s+$/, "");
+  if (trimmed.length < text.length) {
+    // Whitespace-only tail, so counting UTF-16 units back from the end is
+    // safe: no multi-byte character can be split by this.
+    end = end.translate(0, -(text.length - trimmed.length));
+  }
+  return end.isAfter(range.start) ? new vscode.Range(range.start, end) : null;
+}
+
 /** Paint `range` in every visible editor showing `uri`; `null` clears. */
 function highlight(uri, range) {
   for (const ed of vscode.window.visibleTextEditors) {
     if (uri && ed.document.uri.toString() !== uri.toString()) continue;
-    ed.setDecorations(highlightDecoration, range ? [range] : []);
+    let paint = null;
+    if (range) {
+      try {
+        paint = tightenForHighlight(ed.document, range);
+      } catch {
+        paint = range; // a stale range after an edit — better than nothing
+      }
+    }
+    ed.setDecorations(highlightDecoration, paint ? [paint] : []);
   }
 }
 

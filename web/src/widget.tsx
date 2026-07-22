@@ -305,7 +305,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     hoverTimer.current = window.setTimeout(() => {
       hoverTimer.current = null;
       highlighted.current = true;
-      callCompanion("highlight", p);
+      // The TIGHT range, not the node's own: a Paperproof step range includes
+      // trailing trivia (it runs to the next tactic's first token), so
+      // painting it bleeds past the tactic's text and onto the next line's
+      // indent. `tacticEdits` already carries the server's trimmed span —
+      // which also drops a trailing comment, something the companion's
+      // geometric clamp can't see. It falls back to the node span for a
+      // tactic that isn't in the edit map.
+      callCompanion("highlight", getTacticEdit(p)?.pos ?? p);
     }, HOVER_DWELL_MS);
   };
   // Leaving the widget entirely (unmount) must not strand a decoration.
