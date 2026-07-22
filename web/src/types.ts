@@ -75,6 +75,31 @@ export interface TreeNode {
   // cursor sitting in a comment to the very node whose strip is showing it,
   // instead of re-deriving the attribution rule (and drifting from it).
   commentRanges?: ProofStepPosition[];
+  // Display directives written in the source as Alectryon-style comment flags
+  // (`-- .fold`), attributed to this node like any other comment. See
+  // proofToTree's parseFlags.
+  flags?: NodeFlags;
+}
+
+/** What a node's Alectryon-style comment flags ask the renderer to do.
+ *
+ * A flag governs its node's OUTPUT — the goals below it — which is the direct
+ * translation of Alectryon's model, where a flag on a sentence governs what
+ * that sentence produced. On a tactic that is the goals it left behind; on a
+ * root goal (the pre-proof narrative slot) it is the whole proof.
+ *
+ * Hypothesis flags (`.no-hyps`, `.h#name`) are applied in proofToTree, where
+ * the context is built, so they leave no trace here. */
+export interface NodeFlags {
+  /** `.fold`: this node's subtree starts collapsed, still unfoldable by hand —
+  Alectryon's "shown but folded". */
+  fold?: boolean;
+  /** `.none`: the subtree is dropped from the layout outright, with no fold
+  glyph to bring it back. */
+  elide?: boolean;
+  /** Whatever prose followed the flags in the same comment. Shown in place of
+  what `.none` removed, so an elision can say what it swallowed. */
+  note?: string;
 }
 
 // A node placed at concrete coordinates by either layout mode (the wide

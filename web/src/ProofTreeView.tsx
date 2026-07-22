@@ -125,6 +125,10 @@ const CHIP_H = 15;
 const CHIP_GAP = 6;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
+// The `.none` elision marker (see ElidedMarker) is the one chip that DOES
+// measure: it carries the directive's own prose, so its width is its text's.
+const CHIP_FONT_PX = 10;
+const CHIP_PAD_X = 6;
 
 // Gallery pager geometry (see GalleryPager). It hangs in the gap a branching
 // tactic leaves above its children — TRUNK_GAP_BRANCH (24px) in compact mode,
@@ -693,6 +697,23 @@ export default function ProofTreeView({
     setEditing(null);
   }
 
+  // `.fold` flags written in the source (see NodeFlags) seed the collapsed set
+  // ONCE per proof — a starting view, not a lock: unfolding by hand from there
+  // works exactly as it does anywhere else, which is the whole difference
+  // between `.fold` and `.none`. Keyed on the proof's identity like the reset
+  // above, and adjusted during render for the same reason; a first mount seeds
+  // too (the reset only fires on a CHANGE), and it runs after the reset in the
+  // same render, so on a new proof the seed is what survives.
+  const [seededFor, setSeededFor] = useState<string | null>(null);
+  if (seededFor !== proofKey) {
+    setSeededFor(proofKey);
+    const seed = engine
+      .allNodes()
+      .filter((n) => n.flags?.fold)
+      .map((n) => n.id);
+    if (seed.length > 0) setCollapsed(new Set(seed));
+  }
+
   // In `view` mode, restrict the layout to the chosen path's nodes (or null if
   // the two endpoints aren't on one ancestor→descendant line — leaves the tree
   // intact). Drives `computeLayout(only)`.
@@ -734,8 +755,22 @@ export default function ProofTreeView({
   // the same fixpoint sweep the fold rule uses — so hiding a branch's root
   // takes its whole subtree with it, and no separate reachability pass is
   // needed here.
+  // …joined with the subtrees the SOURCE elided, via a `.none` comment flag
+  // (see NodeFlags). Same mechanism, different author: one is a view gesture,
+  // the other a directive written into the proof, and both mean "these nodes
+  // are not part of the picture".
+  const elided = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const n of engine.allNodes())
+      if (n.flags?.elide) {
+        const cs = engine.childrenOf(n.id);
+        if (cs.length > 0) m.set(n.id, cs);
+      }
+    return m;
+  }, [engine]);
+
   const hide = useMemo(() => {
-    if (splits.size === 0) return null;
+    if (splits.size === 0 && elided.size === 0) return null;
     const h = new Set<string>();
     for (const [id, cs] of splits) {
       const keep = shownChild.get(id)!;
@@ -743,8 +778,9 @@ export default function ProofTreeView({
         if (j !== keep) h.add(c);
       });
     }
+    for (const cs of elided.values()) for (const c of cs) h.add(c);
     return h;
-  }, [splits, shownChild]);
+  }, [splits, shownChild, elided]);
 
   const { nodes, links, extent } = useMemo(
     () =>
@@ -1925,6 +1961,20 @@ export default function ProofTreeView({
                     </text>
                   )}
 
+                  {/* What a `.none` flag removed. Drawn on the node that
+                      OWNS the directive, since its children are the things
+                      that are gone — so the tree says "there was more here"
+                      instead of just stopping. */}
+                  {elided.has(id) && seq.mode === "off" && !isEditing && (
+                    <g
+                      transform={`translate(${-w / 2 + TRUNK_INSET}, ${
+                        boxTop + h + 4
+                      })`}
+                    >
+                      <ElidedMarker note={node.data.flags?.note} x={0} />
+                    </g>
+                  )}
+
                   {/* Frontier chips: a pending goal (no consuming tactic —
                       the live frontier while writing a proof) offers to fill
                       it. `+` opens the editor to type a tactic; `sorry` stubs
@@ -2468,6 +2518,51 @@ function FrontierChip({
         style={{ userSelect: "none" }}
       >
         {glyph}
+      </text>
+    </g>
+  );
+}
+
+// What a `.none` flag left behind: a dashed, hue-free marker hanging where the
+// elided subtree would have been, carrying whatever prose the directive
+// comment wrote after its flags. Alectryon's flags can silently drop a
+// sentence's output; in a TREE that would read as a proof that simply stops,
+// so the elision says so — and says why, when the author bothered to.
+//
+// Deliberately not interactive: `.fold` is the toggleable one. This is inert
+// by design, so the two directives stay visibly different things.
+function ElidedMarker({ note, x }: { note?: string; x: number }) {
+  const text = note ? `… ${note}` : "…";
+  const w = measureText(text, CHIP_FONT_PX) + 2 * CHIP_PAD_X;
+  return (
+    <g transform={`translate(${x},0)`} style={{ cursor: "default" }}>
+      <title>
+        {note
+          ? `elided by a .none flag in the source — ${note}`
+          : "elided by a .none flag in the source"}
+      </title>
+      <rect
+        x={0}
+        y={0}
+        width={w}
+        height={CHIP_H}
+        rx={4}
+        fill="transparent"
+        stroke="var(--ptw-comment)"
+        strokeWidth={1}
+        strokeDasharray="2 3"
+      />
+      <text
+        x={CHIP_PAD_X}
+        y={CHIP_H / 2}
+        dy="0.32em"
+        fontSize={CHIP_FONT_PX}
+        fontFamily={getCodeFontFamily()}
+        fontStyle="italic"
+        fill="var(--ptw-comment)"
+        style={{ userSelect: "none", letterSpacing: 0 }}
+      >
+        {text}
       </text>
     </g>
   );

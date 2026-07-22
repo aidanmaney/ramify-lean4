@@ -7,7 +7,7 @@ import type {
   SourceComment,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import type { AddSpec, HypLine, TreeNode } from "./types";
+import type { AddSpec, HypLine, NodeFlags, TreeNode } from "./types";
 
 // Adapter: Paperproof `Proof` → the renderer's `TreeNode[]`.
 //
@@ -30,7 +30,8 @@ import type { AddSpec, HypLine, TreeNode } from "./types";
 
 // One tactic node per step; key it by the consumed goal (a goal is consumed by
 // at most one tactic in a tree proof), so the id is stable across re-parses.
-const tacticId = (goalId: string): string => `tactic:${goalId}`;
+const TACTIC_PREFIX = "tactic:";
+const tacticId = (goalId: string): string => `${TACTIC_PREFIX}${goalId}`;
 
 /** Prefix on every goal-node label (the infoview's own goal convention).
 The tagged renderer strips it before matching interactive prints. */
@@ -72,7 +73,11 @@ function contextFor(
   consumedBy: ProofStep | undefined,
   producedBy: ProofStep | undefined,
   mode: HypMode,
+  // Source flags governing this goal (see NodeFlags): `.no-hyps` drops the
+  // context outright, `.h#name` narrows it to a named few.
+  flags?: ParsedFlags,
 ): HypLine[] {
+  if (flags?.noHyps) return [];
   const used = new Set(consumedBy?.tacticDependsOn ?? []);
   let shown = goal.hyps;
   if (mode === "used") {
@@ -81,6 +86,12 @@ function contextFor(
     const inherited = new Set(producedBy?.goalBefore.hyps.map((h) => h.id));
     shown = goal.hyps.filter((h) => !inherited.has(h.id) || used.has(h.id));
   }
+  // `.h#name` INTERSECTS with the rail's breadth rather than overriding it, so
+  // the two controls compose: a named hyp the current mode wouldn't show stays
+  // hidden, and switching to ∀ reveals it. Filtering last is what makes that
+  // true — the mode branches above rebuild from `goal.hyps` each time.
+  if (flags?.onlyHyps?.length)
+    shown = shown.filter((h) => flags.onlyHyps!.includes(h.username));
   return shown.map((h) => ({ text: hypLine(h), used: used.has(h.id) }));
 }
 
@@ -208,6 +219,96 @@ function stripComment(raw: string): string {
   return lines.join("\n");
 }
 
+// ---- Alectryon-style display flags ------------------------------------------
+
+/** The flags parsed out of one comment, plus whatever prose followed them.
+ *
+ * Alectryon (and, through LeanInk, Lean) lets a proof author write display
+ * directives as comment flags — `(* .fold *)` in Coq, `-- .fold` here — that
+ * say how a sentence's OUTPUT should be shown. Translated to a tree, a
+ * "sentence" is a tactic (or the root goal, for the pre-proof narrative slot)
+ * and its "output" is the goals below it, so the same vocabulary controls
+ * subtrees, and `.no-hyps`/`.h#name` control the context blocks inside them.
+ *
+ * Flags are only recognised at the START of a comment, and scanning stops at
+ * the first word that is not one: `-- .fold why this is boring` is a directive
+ * with a note, `-- see .fold above` is ordinary prose. */
+interface ParsedFlags {
+  fold?: boolean;
+  elide?: boolean;
+  noHyps?: boolean;
+  /** `.h#name`, repeatable: show only these hypotheses. */
+  onlyHyps?: string[];
+  /** Text after the flags — kept as the node's comment strip, and shown in
+  place of whatever `.none` removed. */
+  prose: string;
+  /** Whether any flag at all was recognised (an all-prose comment is not a
+  directive, and must keep its leading word). */
+  any: boolean;
+}
+
+// `.name` or `.name#argument`. The name must start with a letter, so a decimal
+// (`-- .5 of the cases`) is prose rather than a malformed flag.
+const FLAG_RE = /^\.([a-zA-Z][\w-]*)(?:#(\S+))?$/;
+
+export function parseFlags(text: string): ParsedFlags {
+  const out: ParsedFlags = { prose: text, any: false };
+  // Flags live on the comment's FIRST line; a block comment's later lines are
+  // prose no matter what they start with.
+  const [head, ...rest] = text.split("\n");
+  const words = head.split(/\s+/);
+  let i = 0;
+  for (; i < words.length; i++) {
+    const m = FLAG_RE.exec(words[i]);
+    if (!m) break;
+    const [, name, arg] = m;
+    switch (name) {
+      case "fold":
+        out.fold = true;
+        break;
+      case "unfold":
+        // The default, but Alectryon has it, and writing it makes "this one
+        // stays open" explicit next to a sibling that doesn't.
+        out.fold = false;
+        break;
+      case "none":
+        out.elide = true;
+        break;
+      case "no-hyps":
+        out.noHyps = true;
+        break;
+      case "h":
+        if (arg) out.onlyHyps = [...(out.onlyHyps ?? []), arg];
+        break;
+      default:
+        // An unrecognised but well-formed flag is CONSUMED, not left in the
+        // prose: Alectryon's vocabulary is bigger than the part that means
+        // anything to a tree (`.in`, `.messages`, `.g#1`), and echoing those
+        // into a comment strip would be noise.
+        break;
+    }
+    out.any = true;
+  }
+  if (!out.any) return out;
+  out.prose = [words.slice(i).join(" "), ...rest].join("\n").trim();
+  return out;
+}
+
+// The subset of the parsed flags the RENDERER acts on. The hypothesis flags
+// are consumed in proofToTree (contextFor), so they never reach a TreeNode.
+// Returns undefined when nothing is left to say, keeping the field absent on
+// the overwhelming majority of nodes.
+function nodeFlags(f: ParsedFlags | undefined): NodeFlags | undefined {
+  if (!f) return undefined;
+  const out: NodeFlags = {};
+  if (f.fold) out.fold = true;
+  if (f.elide) out.elide = true;
+  // The note is only ever SHOWN in place of an elision; anywhere else the
+  // prose is already the node's comment strip.
+  if (f.elide && f.prose) out.note = f.prose;
+  return out.fold || out.elide ? out : undefined;
+}
+
 // Attribute each comment to a tree node id (tactic node, or a root goal),
 // joining multiple comments per node in source order.
 //
@@ -233,16 +334,42 @@ function attributeComments(
   comments: SourceComment[],
   steps: ProofStep[],
   rootId: string | undefined,
-): { text: Map<string, string>; ranges: Map<string, ProofStepPosition[]> } {
+): {
+  text: Map<string, string>;
+  ranges: Map<string, ProofStepPosition[]>;
+  flags: Map<string, ParsedFlags>;
+} {
   const out = new Map<string, string>();
   const ranges = new Map<string, ProofStepPosition[]>();
-  if (comments.length === 0 || steps.length === 0) return { text: out, ranges };
+  const flags = new Map<string, ParsedFlags>();
+  if (comments.length === 0 || steps.length === 0)
+    return { text: out, ranges, flags };
   const byStart = [...steps].sort((a, b) =>
     cmpPos(a.position.start, b.position.start),
   );
   const first = byStart[0];
   let cur: SourceComment;
-  const add = (nodeId: string, text: string) => {
+  const add = (nodeId: string, raw: string) => {
+    const f = parseFlags(raw);
+    if (f.any) {
+      const prev = flags.get(nodeId);
+      // Several directive comments on one node merge; the note is whichever
+      // one bothered to write prose.
+      flags.set(nodeId, {
+        ...prev,
+        ...f,
+        onlyHyps: [...(prev?.onlyHyps ?? []), ...(f.onlyHyps ?? [])],
+        prose: f.prose || prev?.prose || "",
+        any: true,
+      });
+    }
+    // A directive's own prose moves INTO the elision marker rather than being
+    // drawn twice (see NodeFlags.note), so `.none why` reads as one thing.
+    const text = f.elide ? "" : f.prose;
+    // A comment with nothing left to draw claims no range either:
+    // `commentRanges` means "the node whose strip is SHOWING this", and the
+    // widget's cursor accent trusts it (see ProofTreeView's commentOwner).
+    if (text === "") return;
     out.set(nodeId, out.has(nodeId) ? `${out.get(nodeId)}\n${text}` : text);
     ranges.set(nodeId, [
       ...(ranges.get(nodeId) ?? []),
@@ -299,7 +426,7 @@ function attributeComments(
       .find((s) => cmpPos(s.position.start, c.start) <= 0);
     if (prev) add(tacticId(prev.goalBefore.id), text);
   }
-  return { text: out, ranges };
+  return { text: out, ranges, flags };
 }
 
 // Tactic labels are raw source text of the step's range — which, because the
@@ -413,6 +540,22 @@ export function proofToTree(
     roots[0],
   );
 
+  // Which GOAL each comment's hypothesis flags speak about. A flag comment
+  // attributed to a tactic is written directly above it, and the goal box
+  // drawn there is the one that tactic CONSUMES — so that is what `.no-hyps` /
+  // `.h#name` narrow. (Alectryon frames a flag as governing its sentence's
+  // OUTPUT, which is the right reading for `.fold`/`.none` below, where the
+  // output is the subtree. It does not survive the translation for context:
+  // a tree draws a goal above its tactic, not after it, and a closing tactic
+  // like `omega` has no output at all — so under the output reading the flag
+  // on the branch you were annotating would silently do nothing.)
+  const hypFlags = new Map<string, ParsedFlags>();
+  for (const [nodeId, f] of commentByNode.flags)
+    hypFlags.set(
+      nodeId.startsWith(TACTIC_PREFIX) ? nodeId.slice(TACTIC_PREFIX.length) : nodeId,
+      f,
+    );
+
   const nodes: TreeNode[] = [];
   const emittedGoals = new Set<string>();
 
@@ -449,9 +592,10 @@ export function proofToTree(
       // The local context rides the goal node itself and is drawn inside its
       // box, above the `⊢ ` line — the goal and the assumptions it holds under
       // are one thing to read, exactly as the infoview shows them.
-      hyps: goal && contextFor(goal, step, producedBy, hypMode),
+      hyps: goal && contextFor(goal, step, producedBy, hypMode, hypFlags.get(goalId)),
       comment: commentByNode.text.get(goalId),
       commentRanges: commentByNode.ranges.get(goalId),
+      flags: nodeFlags(commentByNode.flags.get(goalId)),
       caseLabel: thisCase === parentCase ? undefined : thisCase,
       // (+) only on an unconsumed goal reached through `goalsAfter`. An
       // unconsumed SPAWNED goal is not the editing frontier: Paperproof emits
@@ -480,6 +624,7 @@ export function proofToTree(
       position: step.position,
       comment: commentByNode.text.get(tId),
       commentRanges: commentByNode.ranges.get(tId),
+      flags: nodeFlags(commentByNode.flags.get(tId)),
     });
 
     for (const child of stepGoalsAfter(step)) {
