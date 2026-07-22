@@ -69,3 +69,17 @@ ln -s "$(pwd)/ext/proof-tree-companion" ~/.vscode/extensions/aidan.proof-tree-co
 Uninstall by removing the symlink. After changing `package.json` (e.g.
 activation events), a full VS Code restart may be needed for the manifest
 rescan; `extension.js` changes need only a window reload.
+
+## Settings
+
+- `proofTree.lensFontScale` (default `0.85`) — scales `editor.fontSize` while
+  the lens is open. Unavoidably global: VS Code has no per-editor font API, so
+  the main editor shrinks too. Set to `1` to leave your font untouched (the
+  key is then never written at all); height and sticky-scroll removal still
+  apply.
+- `proofTree.lensShrinkNudges` (default `3`) — how far to shrink the lens below
+  the 50% split it opens at. The split is ~8-9 nudges tall, so **lower is
+  taller**; `0` keeps it at half the column.
+
+Changing `package.json` needs a full VS Code restart (manifest rescan);
+`extension.js` changes need only a window reload.

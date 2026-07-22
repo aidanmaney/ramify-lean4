@@ -18,6 +18,25 @@
         "command": "proofTree.openLens",
         "title": "Proof Tree: Open Tactic in Lens"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Proof Tree Companion",
+      "properties": {
+        "proofTree.lensFontScale": {
+          "type": "number",
+          "default": 0.85,
+          "minimum": 0.5,
+          "maximum": 1,
+          "markdownDescription": "Scale applied to `#editor.fontSize#` while the lens is open, so more of the proof fits its few lines. **This is unavoidably global** \u2014 VS Code has no per-editor font API (`TextEditorOptions` covers only tab size, indent, cursor style and line numbers), so the main editor shrinks with it. The original size is restored when the lens closes. Set to `1` to leave your font alone; height and sticky-scroll removal still apply."
+        },
+        "proofTree.lensShrinkNudges": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 8,
+          "markdownDescription": "How far to shrink the lens below the 50% split it opens at. The split is roughly 8-9 nudges tall, so **lower is taller** \u2014 `0` leaves the lens at half the infoview column."
+        }
+      }
+    }
   }
 }

@@ -61,9 +61,27 @@ const STATIC_STRIP = {
 // The lens font is shrunk so more of the proof fits the same height. This one
 // is DERIVED, not fixed: a literal size would be wrong for anyone whose editor
 // font isn't the default, so it scales the user's own.
-const LENS_FONT_SCALE = 0.85;
+//
+// It is also the one strip that is unavoidably felt OUTSIDE the lens, so it is
+// user-configurable and can be turned off (`proofTree.lensFontScale: 1`).
+// There is genuinely no per-editor alternative: `TextEditorOptions` exposes
+// only tabSize/indentSize/insertSpaces/cursorStyle/lineNumbers, and decoration
+// render options have no fontSize. Smuggling `font-size` through a
+// decoration's `textDecoration` CSS string does render smaller glyphs per
+// editor, but VS Code measures character advance width from the CONFIGURED
+// font, so the cursor, click hit-testing and selection rectangles all stay on
+// the old grid — unusable in a pane meant for typing — and it wouldn't even
+// gain lines, since line height derives from the fontSize setting rather than
+// the painted glyphs.
+const DEFAULT_LENS_FONT_SCALE = 0.85;
 const DEFAULT_FONT_SIZE = 14; // VS Code's own default, used when unset
 const MIN_FONT_SIZE = 8;
+
+/** A numeric setting from `proofTree.*`, falling back when unset/invalid. */
+function tuning(key, fallback) {
+  const v = vscode.workspace.getConfiguration("proofTree").get(key);
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
 // Keys to snapshot and restore. `editor.fontSize` has no static target, so it
 // is listed here but valued by `stripValues`.
 const STRIP_KEYS = [...Object.keys(STATIC_STRIP), "editor.fontSize"];
@@ -72,17 +90,18 @@ const STRIP_KEYS = [...Object.keys(STATIC_STRIP), "editor.fontSize"];
  * the original and never off the live setting: another window's lens may have
  * already shrunk it, and re-deriving from that would compound each time. */
 function stripValues(originals) {
+  const scale = tuning("lensFontScale", DEFAULT_LENS_FONT_SCALE);
   const base =
     typeof originals["editor.fontSize"] === "number"
       ? originals["editor.fontSize"]
       : DEFAULT_FONT_SIZE;
-  return {
-    ...STATIC_STRIP,
-    "editor.fontSize": Math.max(
-      MIN_FONT_SIZE,
-      Math.round(base * LENS_FONT_SCALE),
-    ),
-  };
+  // Scale 1 (or anything that rounds back to the original) means "leave my
+  // font alone": write nothing for it, so the setting is never touched and
+  // restore has nothing to undo.
+  const target = Math.max(MIN_FONT_SIZE, Math.round(base * scale));
+  const out = { ...STATIC_STRIP };
+  if (target !== base) out["editor.fontSize"] = target;
+  return out;
 }
 let strippedOriginals = null; // in-memory while a lens is open
 
@@ -167,9 +186,8 @@ async function restoreEditorChrome(fromDisk) {
 
 // How many `decreaseViewHeight` nudges to take off the fresh 50% split. The
 // split is empirically ≈ 9 nudges tall, so the lens ends up ≈ (9−n) slices:
-// LOWER IS TALLER. This is the one knob for lens height — 5 was too cramped to
-// edit in comfortably.
-const LENS_SHRINK_NUDGES = 3;
+// LOWER IS TALLER. 5 was too cramped to edit in comfortably.
+const DEFAULT_LENS_SHRINK_NUDGES = 3;
 
 // `workbench.action.newGroupBelow` acts on the ACTIVE group, and the only
 // way to activate an arbitrary group from an extension is the positional
@@ -365,7 +383,8 @@ async function popout(uri, selection) {
   // height ≈ (9−n) slices: 6→~3 lines, 3→double that, 5→two-thirds of 3's).
   // Height commands act on the active group (the lens); best-effort.
   try {
-    for (let i = 0; i < LENS_SHRINK_NUDGES; i++) {
+    const nudges = tuning("lensShrinkNudges", DEFAULT_LENS_SHRINK_NUDGES);
+    for (let i = 0; i < nudges; i++) {
       await vscode.commands.executeCommand(
         "workbench.action.decreaseViewHeight",
       );
