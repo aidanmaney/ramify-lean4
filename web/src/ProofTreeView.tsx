@@ -128,6 +128,16 @@ const CHIP_GAP = 6;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
 
+// Gallery pager geometry (see GalleryPager). It hangs in the gap a branching
+// tactic leaves above its children — TRUNK_GAP_BRANCH (24px) in compact mode,
+// which is what bounds the height here; a tactic with one VISIBLE child still
+// gets that gap (the tight TRUNK_GAP_STEP is a goal→tactic rule), so hiding
+// the siblings can't squeeze the pager out.
+const PAGER_H = 15;
+const PAGER_ARROW_W = 15;
+const PAGER_LABEL_W = 30;
+const PAGER_W = 2 * PAGER_ARROW_W + PAGER_LABEL_W;
+
 const ZOOM_MIN = 0.05;
 const ZOOM_MAX = 2;
 const clampZoom = (z: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
@@ -396,6 +406,15 @@ export default function ProofTreeView({
   // page. A computeLayout parameter, not an engine rebuild: geometry per
   // node is unchanged, only placement moves.
   const [sideBySide, setSideBySide] = useState(false);
+  // Gallery: show only ONE of a branching tactic's subtrees at a time, cycled
+  // by a ‹ n/m › pager under the tactic. The opposite trade to side-by-side —
+  // that one spends width to show every branch at once, this one spends none
+  // and shows a branch at a time — so a wide case split reads at the same
+  // width as a linear proof. `pick` maps a splitting node's id to which child
+  // is showing; it is indexed modulo the child count, so a stale entry left by
+  // an edit can't point at nothing.
+  const [gallery, setGallery] = useState(false);
+  const [pick, setPick] = useState<Record<string, number>>({});
   // Zoom factor applied to the whole SVG (1 = 100%). Lets you fit a wide/tall
   // tree into the slice and zoom back into a region.
   const [zoom, setZoom] = useState(1);
@@ -625,6 +644,10 @@ export default function ProofTreeView({
     setSeq({ mode: "off" });
     setFocusId(null);
     setEditing(null);
+    // A different proof's splits are different nodes entirely. (A same-proof
+    // EDIT needs no pruning: `pick` is read modulo the live child count, and
+    // keys naming a vanished split are simply never looked up.)
+    setPick({});
   } else if (shapeKey !== prevShape) {
     setPrevShape(shapeKey);
     // Same proof, edited. Keep everything that still refers to a live node and
@@ -668,10 +691,54 @@ export default function ProofTreeView({
     [engine, focusId],
   );
 
+  // Every node that branches, with its children in SOURCE order — the set the
+  // gallery pages through. Empty unless gallery mode is on, so nothing here
+  // costs anything in the normal view.
+  const splits = useMemo(() => {
+    const m = new Map<string, string[]>();
+    if (!gallery) return m;
+    for (const id of engine.foldableIds()) {
+      const cs = engine.childrenOf(id);
+      if (cs.length > 1) m.set(id, cs);
+    }
+    return m;
+  }, [engine, gallery]);
+
+  // Which child of each split is showing, resolved modulo the child count.
+  const shownChild = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const [id, cs] of splits)
+      m.set(id, (((pick[id] ?? 0) % cs.length) + cs.length) % cs.length);
+    return m;
+  }, [splits, pick]);
+
+  // The branches NOT showing. Handed to computeLayout as `hide`, which seeds
+  // the same fixpoint sweep the fold rule uses — so hiding a branch's root
+  // takes its whole subtree with it, and no separate reachability pass is
+  // needed here.
+  const hide = useMemo(() => {
+    if (splits.size === 0) return null;
+    const h = new Set<string>();
+    for (const [id, cs] of splits) {
+      const keep = shownChild.get(id)!;
+      cs.forEach((c, j) => {
+        if (j !== keep) h.add(c);
+      });
+    }
+    return h;
+  }, [splits, shownChild]);
+
   const { nodes, links, extent } = useMemo(
     () =>
-      engine.computeLayout(collapsed, only, focusSet, compact, sideBySide),
-    [engine, collapsed, only, focusSet, compact, sideBySide],
+      engine.computeLayout(
+        collapsed,
+        only,
+        focusSet,
+        compact,
+        sideBySide,
+        hide,
+      ),
+    [engine, collapsed, only, focusSet, compact, sideBySide, hide],
   );
 
   // A cursor move re-arms the dismissed accent (derived state, adjusted
@@ -864,6 +931,11 @@ export default function ProofTreeView({
     (compact ? "compact:" : "wide:") +
     (reflow ? "reflow:" : "") +
     (compact && sideBySide ? "cols:" : "") +
+    // Paging to another branch is a different VIEW, not a fold: the tree it
+    // replaces may be a different height entirely, so re-center on it.
+    (gallery
+      ? `gal:${[...shownChild].map(([k, v]) => `${k}=${v}`).join(",")}:`
+      : "") +
     (seq.mode === "view"
       ? `seq:${seq.from}>${seq.to}`
       : focusId
@@ -919,6 +991,52 @@ export default function ProofTreeView({
     );
     centeredOn.current = { proofKey, viewKey };
   }, [viewport, nodes, proofKey, viewKey, zoom, PAD_X, PAD_Y, compact]);
+
+  // Gallery follows the CURSOR: if the editor lands in a branch the gallery
+  // isn't showing, page to it. Without this the tree↔source loop breaks in
+  // exactly the mode that hides the most — you'd move the cursor into a case
+  // and the tree would sit on a different one, with the accent nowhere. The
+  // path from the root to the cursor's node names, at each split it crosses,
+  // which child is on the way there.
+  // Adjusted during render (the same pattern as prevShape/prevHlKey above)
+  // rather than in an effect, so it costs no cascading render; the guard makes
+  // it fire only when the cursor lands on a DIFFERENT node, which is what
+  // keeps it from fighting a branch you paged to by hand.
+  // Resolved against EVERY tactic in the proof, not `cursorNodeId`, which
+  // comes from `cursorTargets` — built from the VISIBLE nodes. That scoping is
+  // right for the accent (it lights a drawn box) but fatal here: the branch we
+  // need to page to is by definition the one not drawn, so cursorNodeId is
+  // null exactly when this has work to do. Once the follow pages to it the
+  // node becomes visible and the accent resolves normally.
+  const galleryTarget = useMemo(() => {
+    if (!gallery || hlKey === "" || hlDismissed || !highlightPos) return null;
+    return tacticNodeAt(
+      engine
+        .allNodes()
+        .filter((d) => d.type === "tactic" && d.position)
+        .map((d) => ({ id: d.id, position: d.position! })),
+      highlightPos,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, gallery, hlKey, hlDismissed]);
+  const [galleryFollowed, setGalleryFollowed] = useState<string | null>(null);
+  if (gallery && galleryTarget && galleryTarget !== galleryFollowed) {
+    setGalleryFollowed(galleryTarget);
+    for (const root of rootIds(proof)) {
+      const path = engine.pathBetween(root, galleryTarget);
+      if (!path) continue;
+      const want: Record<string, number> = {};
+      for (let i = 0; i + 1 < path.length; i++) {
+        const cs = splits.get(path[i]);
+        if (!cs) continue;
+        const j = cs.indexOf(path[i + 1]);
+        if (j >= 0 && shownChild.get(path[i]) !== j) want[path[i]] = j;
+      }
+      if (Object.keys(want).length > 0)
+        setPick((prev) => ({ ...prev, ...want }));
+      break;
+    }
+  }
 
   // source→tree tracking: the accented node follows the editor cursor
   // (highlightPos → cursorNodeId); keep it IN VIEW so moving through the
@@ -1188,6 +1306,8 @@ export default function ProofTreeView({
         outline={outline}
         onOutlineChange={setOutline}
         sideBySide={sideBySide}
+        gallery={gallery}
+        onGalleryChange={setGallery}
         onSideBySideChange={(v) => {
           anchorRoot();
           setSideBySide(v);
@@ -1787,6 +1907,33 @@ export default function ProofTreeView({
                       </g>
                     )}
 
+                  {/* Gallery pager: this node branches, but only one branch is
+                      showing. Sits in the gap above the children, just RIGHT
+                      of the descending lane so it annotates the connector
+                      rather than covering it. */}
+                  {splits.has(id) && !isEditing && seq.mode === "off" && (
+                    <g transform={`translate(0,${boxTop + h + 5})`}>
+                    <GalleryPager
+                      index={shownChild.get(id)!}
+                      count={splits.get(id)!.length}
+                      label={
+                        nodes.find(
+                          (n) =>
+                            n.data.id ===
+                            splits.get(id)![shownChild.get(id)!],
+                        )?.data.caseLabel ?? ""
+                      }
+                      x={-w / 2 + TRUNK_INSET + 8}
+                      onStep={(d) =>
+                        setPick((prev) => ({
+                          ...prev,
+                          [id]: (prev[id] ?? 0) + d,
+                        }))
+                      }
+                    />
+                    </g>
+                  )}
+
                   {/* Hover action bar (last, so it paints over the label):
                       secondary actions with real button targets. Goals get
                       theirs straddling the top-right corner; a tactic's rides
@@ -2063,6 +2210,8 @@ function ControlRail({
   onOutlineChange,
   sideBySide,
   onSideBySideChange,
+  gallery,
+  onGalleryChange,
   reflow,
   onReflowChange,
   hypMode,
@@ -2085,6 +2234,8 @@ function ControlRail({
   onOutlineChange: (v: boolean) => void;
   sideBySide: boolean;
   onSideBySideChange: (v: boolean) => void;
+  gallery: boolean;
+  onGalleryChange: (v: boolean) => void;
   reflow: boolean;
   onReflowChange: (v: boolean) => void;
   hypMode: HypMode;
@@ -2129,6 +2280,12 @@ function ControlRail({
         title="Side-by-side branches: goals spawned by one tactic lay out as columns (compact mode; pairs well with ¶ reflow)"
         pressed={sideBySide}
         onClick={() => onSideBySideChange(!sideBySide)}
+      />
+      <RailButton
+        glyph="❮❯"
+        title="Gallery: show one of a branching tactic's subtrees at a time, cycled by the ‹ n/m › pager under it"
+        pressed={gallery}
+        onClick={() => onGalleryChange(!gallery)}
       />
       <RailButton
         glyph="¶"
@@ -2237,6 +2394,89 @@ function FrontierChip({
       >
         {glyph}
       </text>
+    </g>
+  );
+}
+
+// The gallery's ‹ n/m › pager, drawn under a branching tactic in the gap
+// above its children. Always visible rather than hover-revealed: it is the
+// ONLY way to reach the hidden branches, and an affordance you have to
+// discover by hovering is no affordance at all. Chrome-styled (the editor's
+// widget palette) like the rail, not proof-styled like a FrontierChip —
+// it navigates the view, it isn't part of the proof.
+function GalleryPager({
+  index,
+  count,
+  label,
+  x,
+  onStep,
+}: {
+  index: number;
+  count: number;
+  label: string;
+  x: number;
+  onStep: (delta: number) => void;
+}) {
+  const arrow = (dx: number, glyph: string, at: number) => (
+    <g
+      transform={`translate(${at},0)`}
+      style={{ cursor: "pointer" }}
+      // Both stopped: a bare click would fall through to the tactic box (which
+      // reveals in source), a double-click to the in-place editor.
+      onClick={(e) => {
+        e.stopPropagation();
+        onStep(dx);
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <rect
+        x={0}
+        y={0}
+        width={PAGER_ARROW_W}
+        height={PAGER_H}
+        fill="transparent"
+      />
+      <text
+        x={PAGER_ARROW_W / 2}
+        y={PAGER_H / 2}
+        textAnchor="middle"
+        dy="0.32em"
+        fontSize={11}
+        fontFamily="monospace"
+        fill="var(--vscode-icon-foreground, #6b7280)"
+        style={{ userSelect: "none" }}
+      >
+        {glyph}
+      </text>
+    </g>
+  );
+  return (
+    <g transform={`translate(${x},0)`}>
+      <title>{`branch ${index + 1} of ${count}${label ? `: ${label}` : ""} — ‹ › to cycle`}</title>
+      <rect
+        x={0}
+        y={0}
+        width={PAGER_W}
+        height={PAGER_H}
+        rx={3}
+        fill="var(--vscode-editorWidget-background, #f3f4f6)"
+        stroke="var(--vscode-editorWidget-border, #d1d5db)"
+        strokeWidth={1}
+      />
+      {arrow(-1, "‹", 0)}
+      <text
+        x={PAGER_ARROW_W + PAGER_LABEL_W / 2}
+        y={PAGER_H / 2}
+        textAnchor="middle"
+        dy="0.32em"
+        fontSize={10}
+        fontFamily="monospace"
+        fill="var(--vscode-icon-foreground, #6b7280)"
+        style={{ userSelect: "none" }}
+      >
+        {`${index + 1}/${count}`}
+      </text>
+      {arrow(1, "›", PAGER_ARROW_W + PAGER_LABEL_W)}
     </g>
   );
 }

@@ -914,6 +914,17 @@ export function createLayoutEngine(
     return new Set(HAS_CHILDREN);
   }
 
+  // A node's children in SOURCE order — the order the gallery cycles through,
+  // and the same key the compact layout stacks branches by, so "next" in the
+  // gallery means "next in the buffer".
+  function childrenOf(id: string): string[] {
+    return [...(CHILDREN.get(id) ?? [])].sort((a, b) => {
+      const ra = srcRank(a);
+      const rb = srcRank(b);
+      return ra === rb ? 0 : ra - rb;
+    });
+  }
+
   // All ids in the subtree rooted at `id` (inclusive). Drives the "focus on a
   // subtree" mode: computeLayout treats this set as the whole world, making
   // `id` the layout root.
@@ -966,6 +977,10 @@ export function createLayoutEngine(
     // Compact-mode only: branches spawned by one tactic become side-by-side
     // columns instead of stacking (see trunkLayout).
     sideBySide = false,
+    // Ids to force hidden, along with everything only reachable through them.
+    // Seeds the same fixpoint sweep the fold rule uses, so a hidden node takes
+    // its subtree with it for free. Drives the gallery (one branch at a time).
+    hide?: Set<string> | null,
   ): {
     nodes: PlacedNode[];
     links: PlacedLink[];
@@ -974,7 +989,9 @@ export function createLayoutEngine(
     const inScope = (id: string) => !focus || focus.has(id);
     // Hide a node iff ALL in-scope parents are hidden-or-collapsed. Fixpoint
     // sweep. Skipped entirely when `only` drives visibility.
-    const hidden = new Set<string>();
+    const hidden = new Set<string>(
+      hide ? [...hide].filter((id) => inScope(id)) : [],
+    );
     let changed = true;
     while (!only && changed) {
       changed = false;
@@ -1041,5 +1058,22 @@ export function createLayoutEngine(
     };
   }
 
-  return { foldableIds, siblingIds, subtreeIds, pathBetween, computeLayout };
+  // Every node in the proof, visible or not. `computeLayout` returns only what
+  // is DRAWN, which is the right answer for the render but the wrong one for
+  // anything that has to reason about hidden nodes — the gallery's
+  // follow-the-cursor, which must resolve a cursor sitting in the branch it is
+  // NOT showing in order to page to it.
+  function allNodes(): TreeNode[] {
+    return data;
+  }
+
+  return {
+    foldableIds,
+    siblingIds,
+    subtreeIds,
+    childrenOf,
+    allNodes,
+    pathBetween,
+    computeLayout,
+  };
 }
