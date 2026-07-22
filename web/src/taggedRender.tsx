@@ -40,12 +40,19 @@ export interface TaggedGoalEntry {
 // the very one the canvas measurer used. The hover type-popups are safe: the
 // infoview portals them to document.body, outside any .ptw-tagged ancestor,
 // so they keep their native editor styling.
-const TAGGED_STYLE_ID = "proof-tree-tagged-style";
-export function ensureTaggedStyle() {
-  if (document.getElementById(TAGGED_STYLE_ID)) return;
+/** Inject a stylesheet into the document head once, keyed by element id.
+Deliberately never removed: each sheet is inert without its target markup, and
+widget remounts are frequent (every cursor move). Shared by the tagged-label
+sheet below and widget.tsx's section-order sheet. */
+export function injectStyleOnce(id: string, css: string) {
+  if (document.getElementById(id)) return;
   const style = document.createElement("style");
-  style.id = TAGGED_STYLE_ID;
-  style.textContent = [
+  style.id = id;
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+const TAGGED_CSS = [
     ".ptw-tagged .font-code { font: inherit; line-height: inherit; color: inherit; }",
     // Hold a type popup back while its content is still in flight, so it never
     // flashes "Loading.." and then resizes under the pointer. The infoview
@@ -84,8 +91,10 @@ export function ensureTaggedStyle() {
     ".tooltip-code-content > .font-code.pre-wrap:not(:has(> *))," +
       " .tooltip-code-content > .font-code.pre-wrap:not(:has(> *)) + hr" +
       " { display: none; }",
-  ].join("\n");
-  document.head.appendChild(style);
+].join("\n");
+
+export function ensureTaggedStyle() {
+  injectStyleOnce("proof-tree-tagged-style", TAGGED_CSS);
 }
 
 export interface TaggedRenderers {
@@ -121,6 +130,19 @@ export function makeTaggedRenderers(
   ensureTaggedStyle();
   const tagged = new Map(entries.map((e) => [e.goalId, e.goal]));
 
+  // Result caches. The view calls these hooks for EVERY visible node on EVERY
+  // render — each hover enter/leave, zoom tick and editing keystroke — and
+  // un-cached each call redid the tag-tree slicing and rebuilt the ReactNode
+  // arrays wholesale. The caches live in this closure, so they are dropped
+  // exactly when the inputs change (the renderers are rebuilt per
+  // (proof, taggedGoals) pair); the key carries the wrapped lines too, because
+  // a font change re-measures lines without rebuilding the renderers.
+  // Returning the identical array also lets React bail on reconciliation.
+  const goalCache = new Map<string, ReactNode[] | null>();
+  const hypsCache = new Map<string, (ReactNode | null)[] | null>();
+  const keyOf = (goalId: string, lines: string[]) =>
+    `${goalId}\u0000${lines.join("\u0000")}`;
+
   // Context blocks show a goal's own hypotheses (whichever subset the label
   // mode picked), drawn inside that goal's box — so index every goal we know
   // of.
@@ -132,6 +154,14 @@ export function makeTaggedRenderers(
   }
 
   const renderTaggedGoal = (goalId: string, lines: string[]) => {
+    const key = keyOf(goalId, lines);
+    const hit = goalCache.get(key);
+    if (hit !== undefined) return hit;
+    const out = computeTaggedGoal(goalId, lines);
+    goalCache.set(key, out);
+    return out;
+  };
+  const computeTaggedGoal = (goalId: string, lines: string[]) => {
     const ig = tagged.get(goalId);
     if (!ig) return null;
     // Goal labels carry a plain "⊢ " prefix (proofToTree) that the
@@ -159,6 +189,14 @@ export function makeTaggedRenderers(
   // both label modes (the delta and the full context are each a subset of the
   // goal's hyps) and degrades per-line, not wholesale.
   const renderTaggedHyps = (goalId: string, lines: string[]) => {
+    const key = keyOf(goalId, lines);
+    const hit = hypsCache.get(key);
+    if (hit !== undefined) return hit;
+    const out = computeTaggedHyps(goalId, lines);
+    hypsCache.set(key, out);
+    return out;
+  };
+  const computeTaggedHyps = (goalId: string, lines: string[]) => {
     const ig = tagged.get(goalId);
     const child = goalById.get(goalId);
     if (!ig || !child) return null;

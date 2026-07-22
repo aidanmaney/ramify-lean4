@@ -57,8 +57,10 @@ native popup (type, docs, links) without a bespoke popup component, and because
 the tagged text is the SOURCE text rather than a pretty-printed expression, what
 is drawn is byte-identical to what the layout measured. -/
 structure TacticTokenInfo where
+  -- The token's START alone identifies it: the client joins `tokenInfos` onto
+  -- `TacticEdit.tokens` by start position (a token's extent is already on the
+  -- edit entry), so a stop here would be dead weight on the wire.
   start : Lsp.Position
-  stop  : Lsp.Position
   code  : Widget.CodeWithInfos
   deriving Server.RpcEncodable
 
@@ -232,6 +234,29 @@ def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
           best := some (width, start, stop, ictx)
   return best.map fun (_, start, stop, ictx) => (start, stop, ictx)
 
+/-- One-entry cache for `getProofTree`'s payload, keyed on
+`(uri, document version, command start)`. Nothing in the payload depends on the
+cursor beyond which command snapshot it lands in, yet the handler runs on EVERY
+cursor move — so walking a proof line-by-line (the dominant interaction, and
+exactly what tree↔lens tracking generates) recomputed an identical payload per
+keypress: five info-tree walks plus a tagged pretty-print of every goal.
+
+Caching the `WithRpcRef`-carrying halves is safe, and deliberately so: a ref's
+id is minted once by `WithRpcRef.mk`, but its session registration happens at
+response-ENCODE time (`rpcStoreRef` is `StateM RpcObjectStore`, run while
+serialising the response into whichever session made the request). Re-serving
+the cached value therefore registers fresh refs in a reconnected session's
+store — the client-side self-heal in widget.tsx is untouched — and within one
+session the client receives byte-identical ref ids across cursor moves, which
+is what lets it skip re-installing an unchanged interactive payload. The
+DOCUMENT VERSION is what must gate reuse (a stale `InfoWithCtx` against an old
+environment), and it is in the key; `version` counts every edit
+(`DocumentMeta.version`), so an edited file can never be served a stale tree.
+One entry suffices: the panel follows a single cursor, and switching files or
+proofs just evicts. -/
+initialize proofTreeCache :
+    IO.Ref (Option (String × Nat × Nat × ProofTreeData)) ← IO.mkRef none
+
 /-- Parse the proof tree for the theorem under the cursor.
 
 Mirrors the `.tree` branch of `Paperproof.getSnapshotData`: wait for the snapshot
@@ -239,14 +264,28 @@ containing `pos`, then run `BetterParser_Tree` over its (fully elaborated) info
 tree. A cursor outside a tactic proof is a normal outcome, not an error: it
 returns an EMPTY proof (`steps := []`), which the widget renders as a quiet
 "no proof here" — keeping the empty state in the data model rather than encoding
-it in error-message strings the client would have to pattern-match. -/
+it in error-message strings the client would have to pattern-match. That empty
+answer short-circuits BEFORE the enrichment passes (tagged goals, tokens, hover
+index): the cursor sits outside a proof most of the time in a working file, and
+the client reads none of the rich payload in that state. -/
 @[server_rpc_method]
 def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTreeData) := do
   withWaitFindSnapAtPos params.pos fun snap => do
-    let fileMap : FileMap := (← readDoc).meta.text
+    let doc ← readDoc
+    let fileMap : FileMap := doc.meta.text
+    let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
+    let cacheKey := (doc.meta.uri, doc.meta.version, snapStart)
+    if let some (uri, ver, start, payload) ← proofTreeCache.get then
+      if (uri, ver, start) == cacheKey then
+        return payload
+    let finish (payload : ProofTreeData) : RequestM ProofTreeData := do
+      proofTreeCache.set <| some (cacheKey.1, cacheKey.2.1, cacheKey.2.2, payload)
+      return payload
     let some parsedTree ← RequestM.runTermElabM snap
       (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree)
-      | return { steps := [], allGoals := [] }
+      | finish { steps := [], allGoals := [] }
+    if parsedTree.steps.isEmpty then
+      return ← finish { steps := [], allGoals := [] }
     let taggedGoals ← collectTaggedGoals snap.infoTree
     -- Comments live in the raw source, not the InfoTree; `snap.stx` is the
     -- whole command, so its range bounds the lex (same result as the CLI's
@@ -263,8 +302,8 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     -- too, so a token span here means what it means in the editor. Computed
     -- once for the whole command and sliced per tactic below.
     let allTokens := semanticTokensFor fileMap snap.stx snap.infoTree
-    let lePos (a b : Lsp.Position) : Bool :=
-      a.line < b.line || (a.line == b.line && a.character <= b.character)
+    -- `Lsp.Position` derives `Ord`; no bespoke comparator to keep in sync.
+    let lePos (a b : Lsp.Position) : Bool := (compare a b).isLE
     -- The editing seam: per distinct step range, the tactic's tight span and
     -- verbatim text (see TacticEdit), plus the tokens falling inside it.
     let src := fileMap.source
@@ -295,8 +334,11 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         let stop := fileMap.utf8PosToLspPos ⟨b.byteIdx + tight.byteIdx⟩
         let tokens := allTokens.filterMap fun t =>
           if lePos s.position.start t.pos && lePos t.tailPos stop then
+            -- `names` is upstream's canonical constructor-name array (it
+            -- carries a sanity-check example against `toJson`); no JSON
+            -- round-trip per token.
             some { start := t.pos, stop := t.tailPos,
-                   type := (toJson t.type).getStr?.toOption.getD "variable" : TacticToken }
+                   type := Lsp.SemanticTokenType.names[t.type.toNat]! : TacticToken }
           else none
         tacticEdits := tacticEdits.push {
           start := s.position.start
@@ -329,12 +371,11 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
                 pure r
             tokenInfos := tokenInfos.push {
               start := t.start
-              stop  := t.stop
               code  := .tag
                 { info := ref, subexprPos := SubExpr.Pos.root }
                 (.text (String.Pos.Raw.extract src tb te))
             }
-    return {
+    finish {
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
       taggedGoals,

@@ -40,11 +40,11 @@ export interface TacticToken {
 }
 
 /** A token's hover popup (ProofTreeWidget.lean `TacticTokenInfo`): the token's
-span plus tagged text carrying the info node the editor's own hover would use.
-Rendering it with `InteractiveCode` gives the native type popup. */
+START (its extent already rides `TacticToken` on the edit entry — the join is
+by start alone) plus tagged text carrying the info node the editor's own hover
+would use. Rendering it with `InteractiveCode` gives the native type popup. */
 export interface TacticTokenInfo {
   start: LspPos;
-  stop: LspPos;
   code: CodeWithInfos;
 }
 
@@ -162,6 +162,53 @@ export function alignInLabel(
     if (trimmedAt >= 0) return { at: trimmedAt, len: trimmed.length };
   }
   return null;
+}
+
+/** The slice of a `TacticEdit` entry the renderer needs. */
+export interface TacticTokenSource {
+  start: LspPos;
+  text: string;
+  tokens?: TacticToken[];
+}
+
+/**
+ * A tactic-label renderer with a per-node result cache — the factory
+ * counterpart of `makeTaggedRenderers`. The view calls the renderer for EVERY
+ * visible tactic on EVERY render (each hover enter/leave, zoom tick and
+ * editing keystroke), and un-cached each call re-ran
+ * `alignInLabel`/`tokenSpans` and rebuilt the ReactNode tree. The cache lives
+ * in this closure, so it drops exactly when the caller rebuilds the renderer
+ * (its inputs — the edit entries and token popups — refreshed); the key
+ * carries the label and the wrapped lines too, because a font change
+ * re-measures lines without touching those inputs. Returning the identical
+ * array also lets React bail on reconciling unchanged labels.
+ */
+export function makeTacticRenderer(
+  editAt: (p: { start: LspPos }) => TacticTokenSource | undefined,
+  infoAt: Map<string, CodeWithInfos>,
+): (
+  p: { start: LspPos },
+  label: string,
+  lines: string[],
+) => ReactNode[] | null {
+  const cache = new Map<string, ReactNode[] | null>();
+  return (p, label, lines) => {
+    const e = editAt(p);
+    if (!e?.tokens) return null;
+    // NUL-joined: a space separator would collide `"a b"+["c"]` with
+    // `"a"+["b c"]`, and a rewrap that only moves a line break must miss.
+    const key = [
+      `${p.start.line}:${p.start.character}`,
+      label,
+      ...lines,
+    ].join("\u0000");
+    let out = cache.get(key);
+    if (out === undefined) {
+      out = renderTacticTokens(e.text, e.start, e.tokens, label, lines, infoAt);
+      cache.set(key, out);
+    }
+    return out;
+  };
 }
 
 /**

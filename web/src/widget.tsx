@@ -8,9 +8,13 @@ import {
 } from "@leanprover/infoview";
 import type { Proof, ProofStepPosition } from "./paperproof";
 import ProofTreeView from "./ProofTreeView";
-import { makeTaggedRenderers, type TaggedGoalEntry } from "./taggedRender";
 import {
-  renderTacticTokens,
+  injectStyleOnce,
+  makeTaggedRenderers,
+  type TaggedGoalEntry,
+} from "./taggedRender";
+import {
+  makeTacticRenderer,
   type TacticToken,
   type TacticTokenInfo,
 } from "./tacticTokens";
@@ -53,14 +57,7 @@ const SECTION_ORDER_CSS = `
 
 function useSectionOrderCss() {
   useEffect(() => {
-    const id = "ptw-section-order";
-    if (document.getElementById(id)) return;
-    const el = document.createElement("style");
-    el.id = id;
-    el.textContent = SECTION_ORDER_CSS;
-    document.head.appendChild(el);
-    // Deliberately never removed: it is inert without a [data-ptw-root] in
-    // the document, and widget remounts are frequent (cursor moves).
+    injectStyleOnce("ptw-section-order", SECTION_ORDER_CSS);
   }, []);
 }
 
@@ -113,35 +110,45 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [rs, pos.uri, pos.line, pos.character],
   );
 
+  // The latest non-empty response, if any. Both holders below key off it.
+  const resolved =
+    st.state === "resolved" && st.value.steps.length > 0 ? st.value : null;
+
   // Hold the last rendered NON-EMPTY proof, keyed by the payload's TEXT parts,
   // so re-highlighting on cursor moves within a proof doesn't churn the layout
   // or fold state, and moving the cursor out of the proof keeps the tree up.
   // Everything here is PLAIN DATA — no RPC references (see `interactive`).
   // We adjust this during render (React's sanctioned pattern, cf. `prevEngine`
   // in ProofTreeView) rather than via a ref, which mustn't be read during render.
+  //
+  // The signature serializes the whole proof, so it is memoized on the RESPONSE
+  // object: `useAsyncPersistent` returns the same value identity between
+  // renders, and un-memoized this ran O(payload) on every render — each hover,
+  // zoom tick and editing keystroke — not just per response.
+  const incoming = useMemo(() => {
+    if (!resolved) return null;
+    const proof: Proof = {
+      steps: resolved.steps,
+      allGoals: resolved.allGoals,
+      comments: resolved.comments,
+    };
+    return { proof, sig: JSON.stringify(proof) };
+  }, [resolved]);
   const [stable, setStable] = useState<{
     sig: string;
     proof: Proof;
     tacticEdits: TacticEditEntry[];
   } | null>(null);
-  if (st.state === "resolved" && st.value.steps.length > 0) {
-    const proof: Proof = {
-      steps: st.value.steps,
-      allGoals: st.value.allGoals,
-      comments: st.value.comments,
-    };
-    const sig = JSON.stringify(proof);
-    if (!stable || stable.sig !== sig) {
-      setStable({
-        sig,
-        proof,
-        // Edits derive from the same source text as the steps, so refreshing
-        // them exactly when the proof signature changes keeps their ranges
-        // in sync with the document (positions live in the steps → any shift
-        // changes the sig).
-        tacticEdits: st.value.tacticEdits ?? [],
-      });
-    }
+  if (resolved && incoming && (!stable || stable.sig !== incoming.sig)) {
+    setStable({
+      sig: incoming.sig,
+      proof: incoming.proof,
+      // Edits derive from the same source text as the steps, so refreshing
+      // them exactly when the proof signature changes keeps their ranges
+      // in sync with the document (positions live in the steps → any shift
+      // changes the sig).
+      tacticEdits: resolved.tacticEdits ?? [],
+    });
   }
 
   // The RPC-REFERENCE-carrying half of the payload, deliberately NOT kept in
@@ -163,25 +170,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // the next call after the reconnect installs live refs. Identity-compared
   // against the response object, so the persistent value returned while a
   // refetch is in flight doesn't loop.
-  const [interactive, setInteractive] = useState<{
-    src: ProofTreeData | null;
-    taggedGoals: TaggedGoalEntry[];
-    tokenInfos: TacticTokenInfo[];
-  }>({ src: null, taggedGoals: [], tokenInfos: [] });
-  if (
-    st.state === "resolved" &&
-    st.value.steps.length > 0 &&
-    interactive.src !== st.value
-  ) {
-    setInteractive({
-      src: st.value,
-      taggedGoals: st.value.taggedGoals ?? [],
-      tokenInfos: st.value.tokenInfos ?? [],
-    });
-  } else if (st.state === "rejected" && interactive.src !== null) {
+  const [interactive, setInteractive] = useState<ProofTreeData | null>(null);
+  if (resolved && interactive !== resolved) {
+    setInteractive(resolved);
+  } else if (st.state === "rejected" && interactive !== null) {
     // A failed call is the one signal we get that the session may be gone;
     // holding its refs afterwards can only produce dead popups.
-    setInteractive({ src: null, taggedGoals: [], tokenInfos: [] });
+    setInteractive(null);
   }
 
   // The tagged (hover-interactive) label renderers for this proof; see
@@ -189,7 +184,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const renderers = useMemo(
     () =>
       stable
-        ? makeTaggedRenderers(stable.proof, interactive.taggedGoals)
+        ? makeTaggedRenderers(stable.proof, interactive?.taggedGoals ?? [])
         : null,
     [stable, interactive],
   );
@@ -210,9 +205,10 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     }).then(
       () => setRelayError(null),
       (e: unknown) => {
-        const msg = e instanceof Error ? e.message : JSON.stringify(e);
         console.error(`[proof-tree] ${action} RPC failed:`, e);
-        setRelayError(`${action} failed: ${msg}`);
+        // mapRpcError: the infoview's own RPC-error formatter (used for the
+        // load-failure banner below) — no hand-rolled instanceof dance.
+        setRelayError(`${action} failed: ${mapRpcError(e).message}`);
       },
     );
   };
@@ -257,23 +253,27 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const infoAt = useMemo(
     () =>
       new Map(
-        interactive.tokenInfos.map((i): [string, TacticTokenInfo["code"]] => [
-          `${i.start.line}:${i.start.character}`,
-          i.code,
-        ]),
+        (interactive?.tokenInfos ?? []).map(
+          (i): [string, TacticTokenInfo["code"]] => [
+            `${i.start.line}:${i.start.character}`,
+            i.code,
+          ],
+        ),
       ),
     [interactive],
   );
 
-  const renderTaggedTactic = (
-    p: ProofStepPosition,
-    label: string,
-    lines: string[],
-  ) => {
-    const e = editByStart.get(`${p.start.line}:${p.start.character}`);
-    if (!e?.tokens) return null;
-    return renderTacticTokens(e.text, e.start, e.tokens, label, lines, infoAt);
-  };
+  // Built (with its internal result cache) exactly when its inputs refresh —
+  // the same factory pattern as makeTaggedRenderers; see makeTacticRenderer
+  // for why the cache exists.
+  const renderTaggedTactic = useMemo(
+    () =>
+      makeTacticRenderer(
+        (p) => editByStart.get(`${p.start.line}:${p.start.character}`),
+        infoAt,
+      ),
+    [editByStart, infoAt],
+  );
 
   // …and commit by replacing the tight range in the document. Goes through
   // the editor's own edit pipeline (applyEdit), so it lands on the undo
