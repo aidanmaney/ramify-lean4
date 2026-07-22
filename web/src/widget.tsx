@@ -3,6 +3,7 @@ import {
   EditorContext,
   useRpcSession,
   useAsyncPersistent,
+  useServerNotificationEffect,
   mapRpcError,
   type PanelWidgetProps,
 } from "@leanprover/infoview";
@@ -23,6 +24,10 @@ import {
 // Dwell before a hovered tactic lights up in the editor. Long enough that
 // sweeping the pointer across the tree sends nothing.
 const HOVER_DWELL_MS = 180;
+// Trailing debounce on document-change re-parses: elaboration publishes
+// diagnostics several times as it progresses, and only the last one is worth
+// re-parsing at. Short enough that a committed edit redraws immediately.
+const DOC_SETTLE_MS = 120;
 // "clear" carries no meaningful range; the companion ignores it.
 const ORIGIN = { line: 0, character: 0 };
 
@@ -103,6 +108,43 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const pos = props.pos; // DocumentPosition: { uri, line, character }
   useSectionOrderCss();
 
+  // The cursor is not the only thing that invalidates the tree: the DOCUMENT
+  // changes too, and a change that leaves the cursor where it is (every edit
+  // the widget itself makes via applyEdit — an in-place tactic commit, a (+)
+  // insertion, a `sorry` stub — as well as any typing in the buffer or the
+  // lens) would otherwise leave the old tree on screen until the cursor
+  // happened to move. `publishDiagnostics` is the signal that the file worker
+  // has re-elaborated and a fresh snapshot exists, which is exactly when a
+  // re-parse can return something new; it is also what the infoview's own
+  // panels refresh on. Bump a revision and let it ride the RPC's deps.
+  //
+  // Elaboration publishes diagnostics repeatedly as it progresses, so this
+  // fires in bursts. That is affordable rather than ignored: the server caches
+  // the whole payload on (uri, version, command start), and `stable` only
+  // re-lays-out when the proof's TEXT signature actually changes — an
+  // identical re-parse costs one cached round trip and no re-render of the
+  // tree. A trailing debounce keeps even that down to one call per burst.
+  const [docRev, setDocRev] = useState(0);
+  const revTimer = useRef<number | null>(null);
+  useServerNotificationEffect<{ uri: string }>(
+    "textDocument/publishDiagnostics",
+    (params) => {
+      if (params.uri !== pos.uri) return;
+      if (revTimer.current !== null) window.clearTimeout(revTimer.current);
+      revTimer.current = window.setTimeout(() => {
+        revTimer.current = null;
+        setDocRev((r) => r + 1);
+      }, DOC_SETTLE_MS);
+    },
+    [pos.uri],
+  );
+  useEffect(
+    () => () => {
+      if (revTimer.current !== null) window.clearTimeout(revTimer.current);
+    },
+    [],
+  );
+
   // Re-parse whenever the cursor moves; the server's snapshot is cached, so this
   // is cheap, and it is what makes the tree "follow the cursor". The server
   // returns an EMPTY proof (`steps: []`) when the cursor isn't inside a tactic
@@ -112,7 +154,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       rs.call<{ pos: typeof pos }, ProofTreeData>("ProofTree.getProofTree", {
         pos,
       }),
-    [rs, pos.uri, pos.line, pos.character],
+    [rs, pos.uri, pos.line, pos.character, docRev],
   );
 
   // The latest non-empty response, if any. Both holders below key off it.

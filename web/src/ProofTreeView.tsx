@@ -1812,9 +1812,9 @@ export default function ProofTreeView({
                 away. Rendered AFTER the nodes loop on purpose: SVG paints in
                 document order, so inside the node's own <g> every later
                 sibling would paint over the overlay wherever it outgrows the
-                box. It sizes to its content live (width from the measured
-                longest line, height from the line count) instead of pushing
-                the layout around — it's a transient overlay, not a node. */}
+                box. It widens to its content live (from the measured longest
+                line) but its HEIGHT is fixed, and neither pushes the layout
+                around — it's a transient overlay, not a node. */}
             {editing &&
               (() => {
                 const en = nodes.find((n) => n.data.id === editing.id);
@@ -1834,10 +1834,19 @@ export default function ProofTreeView({
                     (l) => measureText(l, NODE_FONT_PX) + 2 * NODE_PAD + 12,
                   ),
                 );
-                const fh = Math.max(
-                  h,
-                  valueLines.length * LINE_H + 2 * NODE_PAD_Y + 6,
-                );
+                // Height is fixed at OPEN time, from the text the editor
+                // started with — never from `value`. Growing a line at a time
+                // as you type reflows nothing around it (the overlay is
+                // transient; the layout stays put) but reads as the tree
+                // shifting under you. Measured the same way a tactic box is,
+                // so a single-line edit covers its box exactly; an add is one
+                // line, since the goal box it hangs under can be many and an
+                // empty textarea that tall is all void. Type past the bottom
+                // and the textarea scrolls (overflowY below).
+                const openLines = editing.add
+                  ? 1
+                  : editing.original.split("\n").length;
+                const fh = openLines * LINE_H + 2 * NODE_PAD_Y;
                 return (
                   <g transform={`translate(${en.x},${en.y})`}>
                     <foreignObject
@@ -1891,7 +1900,11 @@ export default function ProofTreeView({
                           outline: "none",
                           resize: "none",
                           whiteSpace: "pre",
-                          overflow: "hidden",
+                          overflowX: "hidden",
+                          // Fixed height, so text typed past the bottom must
+                          // stay reachable. `auto` keeps the (overlay)
+                          // scrollbar out of sight until there is overflow.
+                          overflowY: "auto",
                           // Opt back in: the scroll container sets
                           // userSelect: none for the diagram, which would
                           // otherwise make the textarea unselectable.
