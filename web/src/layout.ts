@@ -493,15 +493,20 @@ function wrapLine(
   maxW: number,
   fontPx = NODE_FONT_PX,
   italic = false,
-  // Reflow mode indents each continuation by the BRACKET DEPTH open at the
-  // break rather than a flat hang, which is what keeps a narrow box readable:
-  // the wrapped tail of `⟨p, hpp, hpm⟩` lines up inside the bracket instead of
-  // against everything else. Off, every continuation gets the flat CONT_INDENT.
-  nested = false,
+  // How a continuation line is indented. `flat` hangs every one by
+  // CONT_INDENT. `nested` (reflow) indents by the BRACKET DEPTH open at the
+  // break instead, which is what keeps a narrow box readable: the wrapped tail
+  // of `⟨p, hpp, hpm⟩` lines up inside the bracket rather than against
+  // everything else. `none` is for PROSE — a comment strip is not a structured
+  // expression, so neither hang means anything there, and mixing indented
+  // wrapped lines with flush explicit-newline ones just makes the block ragged
+  // and hard to read; comment strips get extra LEADING instead
+  // (COMMENT_LINE_H).
+  indentMode: "flat" | "nested" | "none" = "flat",
   // Break at the earliest worthwhile seam rather than filling the line to the
-  // budget (see `eager` below). Defaults to reflow mode, the only place a
-  // narrower box is worth extra lines.
-  eagerSeams = nested,
+  // budget (see `eager` below). Defaults to reflow's own indent mode, since a
+  // narrower box is only worth extra lines there.
+  eagerSeams = indentMode === "nested",
 ): WrappedLine[] {
   const out: WrappedLine[] = [];
   const words = text.split(" ");
@@ -511,11 +516,12 @@ function wrapLine(
     const cont = out.length > 0;
     // Indent is capped so a deeply nested tail can never squeeze the budget to
     // nothing — past the cap the text simply stops indenting further.
-    const indent = !cont
-      ? 0
-      : nested
-        ? Math.min(CONT_INDENT + depth * NEST_INDENT, maxW * 0.4)
-        : CONT_INDENT;
+    const indent =
+      !cont || indentMode === "none"
+        ? 0
+        : indentMode === "nested"
+          ? Math.min(CONT_INDENT + depth * NEST_INDENT, maxW * 0.4)
+          : CONT_INDENT;
     const budget = maxW - indent;
     // Over-wide token: peel off the widest prefix that fits and go around.
     if (measureText(words[i], fontPx, italic) > budget) {
@@ -597,13 +603,13 @@ function wrapText(
   maxW: number,
   fontPx = NODE_FONT_PX,
   italic = false,
-  nested = false,
-  eagerSeams = nested,
+  indentMode: "flat" | "nested" | "none" = "flat",
+  eagerSeams = indentMode === "nested",
 ): WrappedLine[] {
   return text
     .split("\n")
     .flatMap((segment) =>
-      wrapLine(segment, maxW, fontPx, italic, nested, eagerSeams),
+      wrapLine(segment, maxW, fontPx, italic, indentMode, eagerSeams),
     );
 }
 
@@ -613,7 +619,11 @@ function wrapText(
 // labels — measured italic, because italics are wider. COMMENT_GAP separates
 // the strip from whatever sits below it (the hyp label or the box).
 export const COMMENT_FONT_PX = 11;
-export const COMMENT_LINE_H = 15;
+// Looser leading than the code blocks (1.6× vs LINE_H's 1.2×). Comment lines
+// carry NO hanging indent — a strip is prose, and indenting it only made a
+// wrapped block ragged against its own explicit-newline lines — so the gap
+// between lines is the only thing separating them, and it has to be visible.
+export const COMMENT_LINE_H = 18;
 export const COMMENT_GAP = 10;
 // Compact mode draws a parented node's incoming connector as a continuous
 // lane straight down to the node's content (below the comment strip), and
@@ -650,6 +660,7 @@ function commentSize(
     reflow ? REFLOW_W : WRAP_W,
     COMMENT_FONT_PX,
     true,
+    "none",
     reflow,
   );
   const commentW = Math.max(
@@ -684,7 +695,7 @@ function sizeOf(
     reflow ? REFLOW_W : WRAP_W,
     NODE_FONT_PX,
     false,
-    reflow,
+    reflow ? "nested" : "flat",
   );
   const widest = Math.max(
     ...lines.map(
@@ -717,7 +728,7 @@ function sizeOf(
           REFLOW_W - gutter,
           HYP_FONT_PX,
           false,
-          true,
+          "nested",
           // NOT eager, unlike the label: an eagerly broken hyp line buys a
           // little width and costs a type tooltip (a wrapped line stops
           // matching by text). Measured over the corpus, eager hyps took the
