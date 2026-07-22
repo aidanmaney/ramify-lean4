@@ -224,9 +224,34 @@ function findInfoviewColumn() {
 // groups come and go, so reuse double-checks the group still holds the doc.
 let lensColumn = null;
 
-/** Show `uri` in the lens editor: selection set, tactic line at the top
- * (the lens is a few lines tall — AtTop makes the tactic the content),
- * line numbers off (a per-editor option; other editors keep their own). */
+/** How much of the lens to leave ABOVE the tactic. AtTop alone pins it to the
+ * very first row, which reads as though the proof began there; a third of the
+ * way down shows the step it follows from without pushing what comes next off
+ * the bottom of a pane this short. */
+const LENS_TOP_FRACTION = 1 / 3;
+
+/** Scroll the lens so `selection` sits LENS_TOP_FRACTION down it. There is no
+ * "reveal at fraction" API, so this reveals a line that far ABOVE the target
+ * AtTop instead, measuring the pane's height in lines from `visibleRanges` —
+ * which is why the first popout re-reveals after the shrink nudges (before
+ * them the pane is twice the height it will end up). Degenerate readings (an
+ * editor that hasn't laid out yet, a tactic near the top of the file) clamp to
+ * a zero pad, i.e. back to plain AtTop. */
+function revealAtFraction(ed, selection) {
+  const vis = ed.visibleRanges[0];
+  const lines = vis ? vis.end.line - vis.start.line + 1 : 0;
+  const pad = Math.max(0, Math.floor(lines * LENS_TOP_FRACTION));
+  const top = Math.max(0, selection.start.line - pad);
+  ed.revealRange(
+    new vscode.Range(top, 0, top, 0),
+    vscode.TextEditorRevealType.AtTop,
+  );
+}
+
+/** Show `uri` in the lens editor: selection set, tactic a third of the way
+ * down (see revealAtFraction), line numbers off (a per-editor option; other
+ * editors keep their own). Returns the editor so the caller can re-reveal
+ * once the pane has settled at its final height. */
 async function showInLens(doc, selection, column) {
   // Same narrowing as the hover highlight: a raw step range would select the
   // trailing trivia too, and a structured tactic's whole block — more than the
@@ -249,7 +274,8 @@ async function showInLens(doc, selection, column) {
   // a structured tactic's range ends deep inside its last nested tactic — so a
   // cursor at the end selects the wrong node. Its start is unambiguous.
   ed.selection = new vscode.Selection(selection.end, selection.start);
-  ed.revealRange(selection, vscode.TextEditorRevealType.AtTop);
+  revealAtFraction(ed, selection);
+  return { ed, selection };
 }
 
 /** Is this group showing `uri`? */
@@ -428,7 +454,7 @@ async function popout(uri, selection) {
   await vscode.commands.executeCommand("workbench.action.newGroupBelow");
   lensColumn = vscode.window.tabGroups.activeTabGroup.viewColumn;
   say(`  popout: lens opened in column ${lensColumn}`);
-  await showInLens(doc, selection, lensColumn);
+  const shown = await showInLens(doc, selection, lensColumn);
   await stripEditorChrome();
   // Shrink the lens: the split starts at 50% of the infoview column; each
   // nudge takes a fixed slice off (empirically the split ≈ 9 nudges, so
@@ -444,6 +470,11 @@ async function popout(uri, selection) {
   } catch {
     // sizing is cosmetic — an unshrunk lens still works
   }
+  // The pane is only now at its final height, and the reveal inside showInLens
+  // measured the pre-shrink one — so place the tactic again against what the
+  // lens actually is. Reused lenses (the early return above) are already
+  // settled and need no second pass.
+  if (shown) revealAtFraction(shown.ed, shown.selection);
 }
 
 function activate(context) {

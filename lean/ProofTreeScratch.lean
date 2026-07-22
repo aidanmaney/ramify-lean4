@@ -50,7 +50,7 @@ theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   -- But a prime is ≥ 2 and cannot divide 1.
   have hle1 : p ≤ 1 := Nat.le_of_dvd one_pos hp1
   have h2 : 2 ≤ p := hp.two_le
-  grind
+  sorry
 
 
 theorem my_zero_add (n : ℕ) : 0 + n = n := by
@@ -161,4 +161,4 @@ theorem three_column_demo (n : ℕ) :
       refine ⟨k + m + 1, ?_⟩
       show (m + 1) * (m + 2) = 2 * (k + m + 1)
       have h : (m + 1) * (m + 2) = m * (m + 1) + 2 * (m + 1) := by ring
-      rw [h, hk]
+      grind
