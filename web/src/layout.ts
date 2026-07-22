@@ -512,6 +512,14 @@ function wrapLine(
   // narrower box is only worth extra lines there.
   eagerSeams = indentMode === "nested",
 ): WrappedLine[] {
+  // `none` is the comment-strip mode, and a comment is PROSE: it wraps by
+  // whole words (greedy fill to the budget) with the operator/bracket seam
+  // machinery below turned OFF. That machinery is tuned for Lean expressions —
+  // "break before the connective" — and on prose it breaks a sentence at a `+`
+  // or `=` and mid-formula, which is exactly what looked wrong. Inline-code
+  // spans arrive pre-joined with non-breaking spaces (cleanMarkdown), so a
+  // formula stays whole here without any special case.
+  const prose = indentMode === "none";
   const out: WrappedLine[] = [];
   const words = text.split(" ");
   let i = 0;
@@ -557,14 +565,15 @@ function wrapLine(
     };
     let cur = words[i];
     let d = Math.max(0, depth + depthDelta(words[i]));
-    note(seamRank(words[i], words[i + 1], d), cur, i + 1 < words.length);
+    if (!prose) note(seamRank(words[i], words[i + 1], d), cur, i + 1 < words.length);
     let j = i + 1;
     for (; j < words.length; j++) {
       const cand = cur + " " + words[j];
       if (measureText(cand, fontPx, italic) > budget) break;
       cur = cand;
       d = Math.max(0, d + depthDelta(words[j]));
-      note(seamRank(words[j], words[j + 1], d), cand, j + 1 < words.length);
+      if (!prose)
+        note(seamRank(words[j], words[j + 1], d), cand, j + 1 < words.length);
     }
     // Clause beats group beats relation beats the plain word break — as long
     // as the seam doesn't waste most of the line (an early comma shouldn't

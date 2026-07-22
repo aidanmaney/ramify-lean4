@@ -204,8 +204,34 @@ type LspPos = { line: number; character: number };
 const cmpPos = (a: LspPos, b: LspPos): number =>
   a.line - b.line || a.character - b.character;
 
+// A non-breaking space: the wrapper splits on ordinary spaces, so joining a
+// span's words with these makes it one unbreakable token. Renders identically.
+const NBSP = " ";
+
+// Lightweight markdown cleanup for a comment strip (docstrings especially are
+// written in markdown). We DON'T render markdown — the strip is one muted
+// italic block — so the delimiters are pure noise on screen (`**Sums…**`, the
+// backticks around `` `m` ``). Strip the ones that show up in proof prose:
+//
+// - bold `**x**` / `__x__` → `x`;
+// - a leading `#` heading marker per line;
+// - inline code `` `x` `` → `x`, but with its inner spaces turned to
+//   NON-BREAKING ones, so the wrapper keeps the whole span on one line instead
+//   of breaking a formula like `1 + 3 + ⋯ + (2m−1) = m²` at a `+`.
+//
+// Single-`*` italics are deliberately left alone: `2 * k` is multiplication,
+// not emphasis, and telling them apart reliably isn't worth it here.
+function cleanMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/`([^`]+)`/g, (_, code: string) => code.replace(/ /g, NBSP));
+}
+
 // Display form of a raw comment: delimiters stripped, block-comment lines
-// trimmed (they carry the source indentation), blank edge lines dropped.
+// trimmed (they carry the source indentation), blank edge lines dropped, and
+// markdown noise cleaned (see cleanMarkdown).
 function stripComment(raw: string): string {
   let t = raw.trim();
   if (t.startsWith("--")) t = t.slice(2);
@@ -216,7 +242,25 @@ function stripComment(raw: string): string {
   const lines = t.split("\n").map((l) => l.trim());
   while (lines.length > 0 && lines[0] === "") lines.shift();
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return lines.join("\n");
+  // Collapse soft-wrapped lines within a paragraph. A block comment (a
+  // docstring especially) is wrapped to the .lean file's own width, but the
+  // tree has its own budget — so a single newline is a soft break (joined with
+  // a space) and only a BLANK line separates paragraphs. Without this the
+  // display inherits the source's physical breaks and re-wraps each fragment
+  // independently, leaving ragged short lines mid-paragraph. Single-line `--`
+  // comments have no internal newline, so they are untouched.
+  const paras: string[] = [];
+  let para: string[] = [];
+  for (const l of lines) {
+    if (l === "") {
+      if (para.length) paras.push(para.join(" "));
+      para = [];
+    } else para.push(l);
+  }
+  if (para.length) paras.push(para.join(" "));
+  // Paragraphs stay separated by a blank line (the author's own structure —
+  // e.g. a docstring's title above its body).
+  return cleanMarkdown(paras.join("\n\n"));
 }
 
 // ---- Alectryon-style display flags ------------------------------------------
