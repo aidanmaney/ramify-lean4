@@ -71,8 +71,6 @@ interface Anchor {
   id: string;
   x: number;
   y: number;
-  sx: number;
-  sy: number;
 }
 
 // Sequence ("linearize a path") mode. `pick` selects two endpoints; `view`
@@ -463,6 +461,12 @@ export default function ProofTreeView({
     const cur = editingRef.current;
     editingRef.current = null;
     if (!cur) return;
+    // Pin the node being edited across the relayout the commit will cause,
+    // rather than letting the viewport-centre rule guess. A tactic can only
+    // affect the proof BELOW it, and the compact layout walks a single y-cursor
+    // in DFS order — so with this node held fixed, everything above it is
+    // literally unmoved and only the part the edit could have changed shifts.
+    anchorOn(cur.id);
     if (cur.add) {
       if (cur.value.trim() !== "") onAddTactic?.(cur.add, cur.value);
     } else if (cur.value !== cur.original) {
@@ -547,6 +551,20 @@ export default function ProofTreeView({
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<Anchor | null>(null);
+  // The scroll that is currently SHOWING the last drawn layout. Every re-anchor
+  // measures from this rather than from `el.scrollLeft/Top` at apply time,
+  // because a relayout that SHRANK the SVG has already made those the browser's
+  // clamped values — the pre-relayout position is gone by then. It is sampled
+  // during RENDER (below), where the DOM still holds the previous layout.
+  // Deliberately not from a `scroll` listener: those are dispatched with the
+  // rendering steps, and a hidden webview doesn't run them at all.
+  const lastScrollRef = useRef({ x: 0, y: 0 });
+  // Where every node sat in the layout we last drew. A relayout we did not
+  // initiate (an edit landing, the buffer re-elaborating, a context-breadth
+  // toggle) has no explicit anchor, and this is what lets one be inferred.
+  const lastLayoutRef = useRef<Map<string, { x: number; y: number }> | null>(
+    null,
+  );
   // A zoom-change wants to keep some content point fixed on screen; this carries
   // that intent to the post-render layout effect (mirrors anchorRef for folds).
   const zoomAnchorRef = useRef<{
@@ -821,14 +839,10 @@ export default function ProofTreeView({
   }, [cursorTargets, hlKey, hlDismissed, commentSpans, commentOwner]);
 
   // Capture a re-anchor on node `id` (or the root) before a relayout, so the
-  // post-render `[nodes]` effect can hold that node fixed on screen. `sx/sy` are
-  // the TRUE pre-relayout scroll, captured before the browser can clamp them
-  // when the SVG resizes.
+  // post-render `[nodes]` effect can hold that node fixed on screen.
   const anchorOn = (id: string) => {
     const cur = nodes.find((n) => n.data.id === id);
-    const el = scrollRef.current;
-    if (cur && el)
-      anchorRef.current = { id, x: cur.x, y: cur.y, sx: el.scrollLeft, sy: el.scrollTop };
+    if (cur) anchorRef.current = { id, x: cur.x, y: cur.y };
   };
 
   // Anchor on the root: expand-all / collapse-all relayout the whole tree, and
@@ -901,23 +915,65 @@ export default function ProofTreeView({
     return () => ro.disconnect();
   }, []);
 
+  // Keep the "scroll showing the current layout" record up to date. Two
+  // sources, because neither alone covers it: a `scroll` listener catches the
+  // user (and the wheel handler), but scroll events are dispatched with the
+  // rendering steps, so a hidden webview never delivers them — hence also the
+  // post-commit sample below, which catches every programmatic scroll.
   useLayoutEffect(() => {
-    const anchor = anchorRef.current;
     const el = scrollRef.current;
-    if (!anchor || !el) return;
+    if (!el) return;
+    const onScroll = () => {
+      lastScrollRef.current = { x: el.scrollLeft, y: el.scrollTop };
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
 
-    const now = nodes.find((n) => n.data.id === anchor.id);
-    if (now) {
-      // Target = old scroll + how far the node moved in content space. We use the
-      // captured anchor.sx (not el.scrollLeft, which may already be clamped) so the
-      // base is correct. Then clamp to the NEW scrollable range ourselves.
-      const maxX = el.scrollWidth - el.clientWidth;
-      const maxY = el.scrollHeight - el.clientHeight;
-      el.scrollLeft = clampScroll(anchor.sx + (now.x - anchor.x) * zoom, maxX);
-      el.scrollTop = clampScroll(anchor.sy + (now.y - anchor.y) * zoom, maxY);
+  // Hold the view steady across a relayout. Every relayout gets an anchor now,
+  // not just the gestures that set one: a proof arriving over RPC (our own
+  // committed edit, or anyone typing in the buffer) rebuilds the engine and
+  // moves boxes, while scroll stays at the same NUMBER — so the tree slid
+  // under the viewport with nothing holding it. Where no gesture named an
+  // anchor, the node nearest the viewport's vertical centre stands in: it is
+  // what you were looking at, so pinning it is what "nothing moved" means.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const prev = lastLayoutRef.current;
+    const { x: sx, y: sy } = lastScrollRef.current;
+
+    let anchor = anchorRef.current;
+    anchorRef.current = null; // consume it; unrelated re-renders must not re-shift
+    if (!anchor && prev) {
+      // Nearest to the old viewport's vertical centre AMONG nodes that
+      // survived — an id that vanished has no new position to measure against.
+      let best = Infinity;
+      const mid = sy + el.clientHeight / 2;
+      for (const n of nodes) {
+        const was = prev.get(n.data.id);
+        if (!was) continue;
+        const d = Math.abs(was.y * zoom - mid);
+        if (d < best) {
+          best = d;
+          anchor = { id: n.data.id, x: was.x, y: was.y };
+        }
+      }
     }
 
-    anchorRef.current = null; // consume it so unrelated re-renders don't re-shift
+    const now = anchor && nodes.find((n) => n.data.id === anchor!.id);
+    if (anchor && now) {
+      // Target = old scroll + how far the node moved in content space, clamped
+      // to the NEW scrollable range ourselves.
+      const maxX = el.scrollWidth - el.clientWidth;
+      const maxY = el.scrollHeight - el.clientHeight;
+      el.scrollLeft = clampScroll(sx + (now.x - anchor.x) * zoom, maxX);
+      el.scrollTop = clampScroll(sy + (now.y - anchor.y) * zoom, maxY);
+    }
+
+    lastLayoutRef.current = new Map(
+      nodes.map((n) => [n.data.id, { x: n.x, y: n.y }]),
+    );
     // Intentionally re-runs only on relayout (`nodes`), reading the current `zoom`;
     // zoom changes are handled by their own effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1044,16 +1100,23 @@ export default function ProofTreeView({
   // Only fires when the cursor lands on a DIFFERENT node (scroll/zoom/fold
   // alone never yank the view), and only scrolls when the node is outside a
   // comfortable band of the viewport — then centers it smoothly.
+  //
+  // Keyed on the CURSOR (hlKey), not on the resolved node id, because node ids
+  // are mvarIds: a re-elaboration mints new ones for everything downstream of
+  // an edit, so an id-keyed guard read "the cursor moved to a new node" every
+  // time the file was re-parsed and smooth-scrolled the view away — while the
+  // cursor had not moved at all. That was the unpredictable scroll during
+  // editing; the tree only follows a real cursor move now.
   const trackedCursorNode = useRef<string | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !cursorNodeId || hlDismissed) return;
-    if (trackedCursorNode.current === cursorNodeId) return;
+    if (trackedCursorNode.current === hlKey) return;
     const node = nodes.find((n) => n.data.id === cursorNodeId);
     if (!node) return; // hidden by folding/focus — don't fight the user
     // Marked tracked only once actually FOUND: a node hidden at cursor-move
     // time still gets tracked when unfolding later reveals it.
-    trackedCursorNode.current = cursorNodeId;
+    trackedCursorNode.current = hlKey;
     const cx = (MARGIN.left + PAD_X + node.x) * zoom;
     const cy = (MARGIN.top + PAD_Y + node.y) * zoom;
     const halfW = (node.data.w / 2) * zoom;
@@ -1083,7 +1146,7 @@ export default function ProofTreeView({
     }
     if (left === el.scrollLeft && top === el.scrollTop) return;
     el.scrollTo({ left, top, behavior: "smooth" });
-  }, [cursorNodeId, hlDismissed, nodes, zoom, PAD_X, PAD_Y, compact]);
+  }, [cursorNodeId, hlKey, hlDismissed, nodes, zoom, PAD_X, PAD_Y, compact]);
 
   // After a zoom change re-renders the (resized) SVG, restore scroll so the
   // intended point stays put: an explicit target (fit) wins, else the anchor
@@ -1105,6 +1168,15 @@ export default function ProofTreeView({
     zoomAnchorRef.current = null;
     zoomRef.current = zoom; // the DOM now reflects this zoom
   }, [zoom]);
+
+  // Post-commit half of the scroll record (see lastScrollRef): declared after
+  // every effect that writes scroll, and with no dep list, so it samples where
+  // the view actually settled on each commit — the half that works when a
+  // hidden webview is delivering no scroll events.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) lastScrollRef.current = { x: el.scrollLeft, y: el.scrollTop };
+  });
 
   // Re-zoom keeping the screen point (px,py) within the scroll box fixed. SVG
   // coord X under that point is (scrollLeft + px) / zoom; after the change we
@@ -1902,7 +1974,10 @@ export default function ProofTreeView({
                           // Straight to the document: a stub has nothing to
                           // type, and the tree redraws off the re-elaboration
                           // with a real `sorry` node in place of this chip.
-                          onPick={() => onAddTactic(node.data.addSpec!, "sorry")}
+                          onPick={() => {
+                            anchorOn(id); // hold this goal put across the redraw
+                            onAddTactic(node.data.addSpec!, "sorry");
+                          }}
                         />
                       </g>
                     )}
