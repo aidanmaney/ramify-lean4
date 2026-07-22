@@ -343,6 +343,10 @@ export default function ProofTreeView({
   // vertical slot, branches indent off a left trunk, read by scrolling), or
   // the wide Sugiyama tree (same-depth nodes share a band).
   const [compact, setCompact] = useState(true);
+  // Outline mode: drop the node fills and let the borders carry the type.
+  // Purely a paint change — the palette swaps three CSS variables off the root
+  // attribute below (theme.ts), so no geometry is touched and nothing relayouts.
+  const [outline, setOutline] = useState(false);
   // Zoom factor applied to the whole SVG (1 = 100%). Lets you fit a wide/tall
   // tree into the slice and zoom back into a region.
   const [zoom, setZoom] = useState(1);
@@ -939,6 +943,7 @@ export default function ProofTreeView({
       // inherits from here, so the whole tree re-colours by changing this one
       // attribute.
       data-ptw-theme={themeKind}
+      data-ptw-fill={outline ? "none" : undefined}
       style={{ position: "relative", width: "100%", height, overflow: "hidden" }}
     >
       {/* No top bar: the top edge stays empty so the eye falls straight from
@@ -998,6 +1003,8 @@ export default function ProofTreeView({
         onAccordionChange={setAccordion}
         compact={compact}
         onCompactChange={setCompact}
+        outline={outline}
+        onOutlineChange={setOutline}
         fullHyps={fullHyps}
         onFullHypsChange={(v) => {
           // Every layer's hyp label resizes, so hold the root fixed on screen
@@ -1661,7 +1668,12 @@ const RAIL_BTN: CSSProperties = {
   lineHeight: 1,
   cursor: "pointer",
   background: "var(--vscode-editorWidget-background, rgba(255,255,255,0.92))",
-  border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+  // Longhands, not the `border` shorthand: the pressed variant overrides
+  // borderColor alone, and React warns (correctly) that mixing shorthand with
+  // longhand for the same value across re-renders can leave stale styling.
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderColor: "var(--vscode-editorWidget-border, #cbd5e0)",
   borderRadius: 3,
   color: "var(--vscode-icon-foreground, #2d3748)",
 };
@@ -1708,6 +1720,8 @@ function ControlRail({
   onAccordionChange,
   compact,
   onCompactChange,
+  outline,
+  onOutlineChange,
   fullHyps,
   onFullHypsChange,
   focused,
@@ -1724,6 +1738,8 @@ function ControlRail({
   onAccordionChange: (v: boolean) => void;
   compact: boolean;
   onCompactChange: (v: boolean) => void;
+  outline: boolean;
+  onOutlineChange: (v: boolean) => void;
   fullHyps: boolean;
   onFullHypsChange: (v: boolean) => void;
   focused: boolean;
@@ -1760,6 +1776,12 @@ function ControlRail({
         title="Compact outline layout — every node on its own line, branches indent off a left trunk (off: the wide layered tree)"
         pressed={compact}
         onClick={() => onCompactChange(!compact)}
+      />
+      <RailButton
+        glyph="□"
+        title="Outline only — drop the node fills, keep the borders"
+        pressed={outline}
+        onClick={() => onOutlineChange(!outline)}
       />
       <RailButton
         glyph="∀"

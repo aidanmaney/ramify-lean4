@@ -215,6 +215,18 @@ const PALETTE_CSS = `
   --ptw-rail-pressed: #9ca3af;
   --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
 }
+
+/* Outline mode (the rail's □): drop the fills, keep the borders. Last in the
+   sheet on purpose — it has the same specificity as the theme blocks above,
+   so source order is what lets it win. Transparent rather than the page
+   colour, so the box is genuinely unfilled; the layout's bands are
+   overlap-free by construction, so nothing hides behind a node to bleed
+   through. */
+[data-ptw-fill="none"] {
+  --ptw-node-goal-fill: transparent;
+  --ptw-node-tactic-fill: transparent;
+  --ptw-node-default-fill: transparent;
+}
 `;
 
 export function ensurePaletteStyle() {
