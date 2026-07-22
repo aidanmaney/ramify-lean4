@@ -141,3 +141,25 @@ example
               constructor
               · exact hu
               · exact hw
+
+/-- Shaped for the rail's ◫ side-by-side layout (best with ¶ reflow on too):
+one `refine` spawns three columns of very different heights — a one-liner, a
+`ring`, and a branch that SPLITS AGAIN into nested `zero`/`succ` columns — so
+the columns read left-to-right in source order with their case badges on top. -/
+theorem three_column_demo (n : ℕ) :
+    0 < n + 1 ∧ (n + 1) * (n + 1) = n * n + 2 * n + 1 ∧ ∃ k, n * (n + 1) = 2 * k := by
+  refine ⟨?_, ?_, ?_⟩
+  · -- A one-step column.
+    exact Nat.succ_pos n
+  · -- A little algebra.
+    ring
+  · -- This column splits again: nested columns of unequal height.
+    induction n with
+    | zero => exact ⟨0, rfl⟩
+    | succ m ih =>
+      obtain ⟨k, hk⟩ := ih
+      refine ⟨k + m + 1, ?_⟩
+      show (m + 1) * (m + 2) = 2 * (k + m + 1)
+      have h : (m + 1) * (m + 2) = m * (m + 1) + 2 * (m + 1) := by ring
+      rw [h, hk]
+      ring

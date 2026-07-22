@@ -373,6 +373,11 @@ export default function ProofTreeView({
   // Unlike `outline` this is GEOMETRY — it rebuilds the engine (below) rather
   // than just repainting.
   const [reflow, setReflow] = useState(false);
+  // Side-by-side branches (compact mode): a branching tactic's subtrees lay
+  // out as columns sharing one vertical span instead of stacking down the
+  // page. A computeLayout parameter, not an engine rebuild: geometry per
+  // node is unchanged, only placement moves.
+  const [sideBySide, setSideBySide] = useState(false);
   // Zoom factor applied to the whole SVG (1 = 100%). Lets you fit a wide/tall
   // tree into the slice and zoom back into a region.
   const [zoom, setZoom] = useState(1);
@@ -559,8 +564,9 @@ export default function ProofTreeView({
   );
 
   const { nodes, links, extent } = useMemo(
-    () => engine.computeLayout(collapsed, only, focusSet, compact),
-    [engine, collapsed, only, focusSet, compact],
+    () =>
+      engine.computeLayout(collapsed, only, focusSet, compact, sideBySide),
+    [engine, collapsed, only, focusSet, compact, sideBySide],
   );
 
   // A cursor move re-arms the dismissed accent (derived state, adjusted
@@ -752,6 +758,7 @@ export default function ProofTreeView({
   const viewKey =
     (compact ? "compact:" : "wide:") +
     (reflow ? "reflow:" : "") +
+    (compact && sideBySide ? "cols:" : "") +
     (seq.mode === "view"
       ? `seq:${seq.from}>${seq.to}`
       : focusId
@@ -1075,6 +1082,11 @@ export default function ProofTreeView({
         onCompactChange={setCompact}
         outline={outline}
         onOutlineChange={setOutline}
+        sideBySide={sideBySide}
+        onSideBySideChange={(v) => {
+          anchorRoot();
+          setSideBySide(v);
+        }}
         reflow={reflow}
         onReflowChange={(v) => {
           // Every box is re-measured, so hold the root steady like the other
@@ -1167,24 +1179,45 @@ export default function ProofTreeView({
           {/* Coords originate at top-left */}
           <g transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}>
             {links.map((link, i) => {
-              // A node's band is commentBlockH (comment strip) + h (box), box
-              // at the bottom: edges leave a box's bottom edge and land above
-              // the target's whole band — reading order goal → comment → box.
+              // A node's band is caseH (badge) + commentBlockH (strip) + h
+              // (box), box at the bottom: edges leave a box's bottom edge and
+              // land above the target's whole band — reading order goal →
+              // badge → comment → box. The band heights must include caseH or
+              // lanes stop short on badged nodes.
               const startY =
                 link.source.y +
-                (link.source.data.h + link.source.data.commentBlockH) / 2;
+                (link.source.data.h +
+                  link.source.data.commentBlockH +
+                  link.source.data.caseH) /
+                  2;
               const bandTop =
                 link.target.y -
-                (link.target.data.h + link.target.data.commentBlockH) / 2;
-              // The comment strip is narrative, not dataflow: landing points
-              // sit below it.
-              const contentTop = bandTop + link.target.data.commentBlockH;
+                (link.target.data.h +
+                  link.target.data.commentBlockH +
+                  link.target.data.caseH) /
+                  2;
+              // The badge and comment strip are narrative, not dataflow:
+              // landing points sit below them.
+              const contentTop =
+                bandTop +
+                link.target.data.caseH +
+                link.target.data.commentBlockH;
               const endY = bandTop - ARROW_GAP; // line ends just above the band
 
               const sLeft = link.source.x - link.source.data.w / 2;
               const tLeft = link.target.x - link.target.data.w / 2;
               let d: string;
-              if (compact) {
+              if (compact && link.col) {
+                // Side-by-side column: the target sits in its own column to
+                // the right, sharing its band top with every sibling column —
+                // so route OVER the tops (down the parent's lane, across in
+                // the gap band, down the child's own lane into its box). The
+                // stacked │└ elbow would cut through earlier columns' boxes.
+                const col = sLeft + TRUNK_INSET;
+                const childLane = tLeft + TRUNK_INSET;
+                const hy = bandTop - ARROW_GAP * 2;
+                d = `M${col},${startY} L${col},${hy} L${childLane},${hy} L${childLane},${contentTop - ARROW_GAP}`;
+              } else if (compact) {
                 // Orthogonal connector dropped from a column just inside the
                 // parent box's left edge: straight down into a same-indent
                 // (trunk) child, or │└ into an indented branch — landing at
@@ -1826,6 +1859,8 @@ function ControlRail({
   onCompactChange,
   outline,
   onOutlineChange,
+  sideBySide,
+  onSideBySideChange,
   reflow,
   onReflowChange,
   hypMode,
@@ -1846,6 +1881,8 @@ function ControlRail({
   onCompactChange: (v: boolean) => void;
   outline: boolean;
   onOutlineChange: (v: boolean) => void;
+  sideBySide: boolean;
+  onSideBySideChange: (v: boolean) => void;
   reflow: boolean;
   onReflowChange: (v: boolean) => void;
   hypMode: HypMode;
@@ -1884,6 +1921,12 @@ function ControlRail({
         title="Compact outline layout — every node on its own line, branches indent off a left trunk (off: the wide layered tree)"
         pressed={compact}
         onClick={() => onCompactChange(!compact)}
+      />
+      <RailButton
+        glyph="◫"
+        title="Side-by-side branches: goals spawned by one tactic lay out as columns (compact mode; pairs well with ¶ reflow)"
+        pressed={sideBySide}
+        onClick={() => onSideBySideChange(!sideBySide)}
       />
       <RailButton
         glyph="¶"

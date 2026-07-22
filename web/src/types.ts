@@ -65,10 +65,14 @@ export interface PlacedNode {
   data: LayoutNode;
 }
 
-// An edge between two placed nodes.
+// An edge between two placed nodes. `col` marks a compact-mode SIDE-BY-SIDE
+// column link (see trunkLayout): the target sits in its own column to the
+// right, so the connector must route over the columns' tops — the normal
+// stacked `│└` elbow would cut through earlier siblings' boxes.
 export interface PlacedLink {
   source: PlacedNode;
   target: PlacedNode;
+  col?: boolean;
 }
 
 // One wrapped line of a node label. `cont` marks a line produced by width-

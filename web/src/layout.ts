@@ -133,6 +133,7 @@ export const TRUNK_INDENT = 56; // horizontal shift of a branched-off subtree
 export const TRUNK_INSET = 16; // connector column, from a box's left edge
 const TRUNK_GAP_STEP = 14; // goal → the tactic consuming it (one step, tight)
 const TRUNK_GAP_BRANCH = 24; // tactic → what it generates; between siblings
+const BRANCH_COL_GAP = 28; // horizontal air between side-by-side columns
 
 // Position visible nodes as a trunk-and-branches outline. A branching tactic's
 // children are laid out TOP-TO-BOTTOM IN SOURCE ORDER (`srcRank`); the last one
@@ -153,6 +154,13 @@ const TRUNK_GAP_BRANCH = 24; // tactic → what it generates; between siblings
 function trunkLayout(
   visible: LayoutNode[],
   srcRank: (id: string) => number,
+  // Side-by-side mode: a branching tactic's subtrees become COLUMNS sharing
+  // one vertical span (leftmost continues the trunk lane, later ones fork
+  // right in source order), instead of stacking down the page. The y-cursor
+  // stops being global — each column threads its own — so the "no two bands
+  // overlap" argument changes shape: columns overlap in y but are exclusive
+  // in x by construction (each starts past the previous column's right edge).
+  sideBySide = false,
 ): {
   nodes: PlacedNode[];
   links: PlacedLink[];
@@ -166,12 +174,21 @@ function trunkLayout(
   const placed = new Map<string, PlacedNode>();
   const nodes: PlacedNode[] = [];
   const links: PlacedLink[] = [];
-  let cursor = 0;
   let width = 0;
 
-  function place(n: LayoutNode, x0: number): PlacedNode {
+  // Place `n`'s subtree with its band starting at (x0, y0); returns the
+  // subtree's bottom edge and right edge so a parent can stack (thread the
+  // bottom) or columnise (thread the right). y is THREADED rather than a
+  // global cursor precisely so a column can restart at its sibling's top.
+  function place(
+    n: LayoutNode,
+    x0: number,
+    y0: number,
+  ): { pn: PlacedNode; bottom: number; right: number } {
     const already = placed.get(n.id);
-    if (already) return already; // DAG guard: extra parents just link to it
+    if (already)
+      // DAG guard: extra parents just link to it, contributing no extent.
+      return { pn: already, bottom: y0, right: x0 };
     const band = n.caseH + n.commentBlockH + n.h;
     // The box is left-aligned at x0; the comment strip too, except parented
     // nodes' strips hang indented off the incoming lane (COMMENT_INDENT).
@@ -183,11 +200,12 @@ function trunkLayout(
       (n.commentW > 0 ? indent : 0) + n.commentW,
       (n.caseW > 0 ? indent : 0) + n.caseW,
     );
-    const pn: PlacedNode = { x: x0 + n.w / 2, y: cursor + band / 2, data: n };
+    const pn: PlacedNode = { x: x0 + n.w / 2, y: y0 + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
     width = Math.max(width, x0 + eff);
-    cursor += band;
+    let bottom = y0 + band;
+    let right = x0 + eff;
     // Source order, then the trunk resumption last. Sort is stable, so
     // children whose subtrees hold no tactic at all (rank Infinity) keep their
     // creation order rather than shuffling.
@@ -198,21 +216,38 @@ function trunkLayout(
       // which silently corrupts a sort.
       return ra === rb ? 0 : ra - rb;
     });
+    if (sideBySide && cs.length > 1) {
+      // All columns start at the SAME y — that identical band top is what the
+      // renderer's over-the-top connector routing relies on.
+      const top = bottom + TRUNK_GAP_BRANCH;
+      let colX = x0;
+      for (const c of cs) {
+        const r = place(c, colX, top);
+        links.push({ source: pn, target: r.pn, col: colX !== x0 });
+        colX = Math.max(colX, r.right) + BRANCH_COL_GAP;
+        bottom = Math.max(bottom, r.bottom);
+        right = Math.max(right, r.right);
+      }
+      return { pn, bottom, right };
+    }
     const trunk = cs[cs.length - 1];
     for (const c of cs) {
-      cursor +=
+      const gap =
         n.type === "goal" && cs.length === 1
           ? TRUNK_GAP_STEP
           : TRUNK_GAP_BRANCH;
-      const pc = place(c, c === trunk ? x0 : x0 + TRUNK_INDENT);
-      links.push({ source: pn, target: pc });
+      const r = place(c, c === trunk ? x0 : x0 + TRUNK_INDENT, bottom + gap);
+      links.push({ source: pn, target: r.pn });
+      bottom = r.bottom;
+      right = Math.max(right, r.right);
     }
-    return pn;
+    return { pn, bottom, right };
   }
 
+  let cursor = 0;
   for (const r of visible.filter((n) => n.parents.length === 0)) {
     if (nodes.length > 0) cursor += TRUNK_GAP_BRANCH;
-    place(r, 0);
+    cursor = place(r, 0, cursor).bottom;
   }
   return { nodes, links, extent: { width, height: cursor } };
 }
@@ -731,6 +766,9 @@ export function createLayoutEngine(
     only?: Set<string> | null,
     focus?: Set<string> | null,
     compact = false,
+    // Compact-mode only: branches spawned by one tactic become side-by-side
+    // columns instead of stacking (see trunkLayout).
+    sideBySide = false,
   ): {
     nodes: PlacedNode[];
     links: PlacedLink[];
@@ -771,7 +809,7 @@ export function createLayoutEngine(
         ...SIZE.get(n.id)!,
       }));
 
-    if (compact) return trunkLayout(visible, srcRank);
+    if (compact) return trunkLayout(visible, srcRank, sideBySide);
 
     const graph = graphStratify().parentData((d: LayoutNode) =>
       d.parents.map((p): [string, LinkDatum] => [p.id, undefined]),
