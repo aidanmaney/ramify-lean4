@@ -50,14 +50,13 @@ theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   -- But a prime is ≥ 2 and cannot divide 1.
   have hle1 : p ≤ 1 := Nat.le_of_dvd one_pos hp1
   have h2 : 2 ≤ p := hp.two_le
-  sorry
+  grind
 
 
 theorem my_zero_add (n : ℕ) : 0 + n = n := by
   induction n with
   | zero => rw [Nat.zero_add]
   | succ d hd => rw [Nat.add_succ, hd]
-
 
 example
     (P Q R S T U V W X Y : Prop)

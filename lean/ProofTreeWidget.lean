@@ -169,28 +169,34 @@ Paperproof emits one step per rewrite rule, so the steps of `rw [h, hk]` have
 ranges covering `h,` and `hk` — a range nobody wrote, useless to edit and
 missing the `rw` keyword whose docstring is the whole point of hovering it.
 
-The test for "this step was split" is positional and deliberately narrow: a
-step that starts anywhere OTHER than at its line's tactic column
-(`tacticIndentAt`, past the indent and any bullet) began inside a tactic rather
-than at one. That is exactly the split case, and it does not fire for the
-lookalike that must not widen — a structured tactic's range is truncated at its
-first case marker, but `induction n with` still STARTS at the `induction`, so
-it is left alone; without that guard the enclosing `have … := by` would swallow
-it, since containment alone cannot tell a macro expansion from a nested block.
+The answer is the SMALLEST `TacticInfo` that contains the step's tight range
+and starts strictly before it, subject to two further conditions. Each rules
+out a real construct that would otherwise be swallowed, and neither is
+sufficient alone:
 
-Given the guard, the widened range is the smallest `TacticInfo` that starts
-exactly at that column and still contains the step — and that must be a tactic
-the step's own LABEL claims to be, i.e. the two agree on their first token.
-Both conditions earn their keep on real syntax: `| zero => rfl` puts the
-line's tactic column on the `|`, and `constructor <;> simp [a, b]` puts it on
-the `constructor`, so a rule step inside the `simp` would otherwise widen to
-the whole combinator — and then nothing in its `simp [a]` label could be
-aligned against it at all, costing the colouring that already worked. -/
+* **its first token must be the step LABEL's first token.** The smallest strict
+  container of an `induction n with` step (whose range is truncated at the
+  first case marker) is the enclosing `by` block, and of an `omega` inside
+  `| succ k ih => omega` it is the whole `induction`. A split step, by
+  contrast, is always labelled after the tactic it came out of — that is what
+  makes the label alignable against the widened source at all.
+* **it must start on the step's own LINE.** Nested `have … := by have … ` puts
+  a `have` step inside an outer `have` whose head token matches, and only the
+  line rules it out. The cost is that a `rw` broken across lines widens only
+  for the rules on its first line; the rest keep the old per-rule behaviour.
+
+Containment must be tested against the step's TIGHT end (`trimmedEnd`): a
+Paperproof range runs into the following trivia, so a step sitting at the very
+end of its tactic — the synthetic `rfl` closing an `rw`, whose range is the
+bare `]` — stops PAST the tactic that owns it and would never widen.
+
+An earlier version anchored on `tacticIndentAt` instead of on containment.
+That is the wrong tool: it deliberately does not skip a `| case =>` marker (it
+exists to place INSERTIONS), so on `| succ d hd => rw [Nat.add_succ, hd]` — a
+perfectly ordinary line — it pointed at the `|` and nothing widened at all. -/
 def surfaceTacticRange (fileMap : FileMap) (src : String) (ranges : Array (Nat × Nat))
-    (indentCol : Nat) (pos : Lsp.Position) (label : String) (b e : String.Pos.Raw)
+    (pos : Lsp.Position) (label : String) (b e : String.Pos.Raw)
     : Option (Nat × Nat) := Id.run do
-  if pos.character == indentCol then
-    return none
   -- The head token: up to the first space or opening bracket. Enough to say
   -- "this label is about that tactic" without parsing either.
   let head (s : String) : String := Id.run do
@@ -199,10 +205,10 @@ def surfaceTacticRange (fileMap : FileMap) (src : String) (ranges : Array (Nat �
   let want := head label
   if want.isEmpty then
     return none
-  let anchor := (fileMap.lspPosToUtf8Pos ⟨pos.line, indentCol⟩).byteIdx
+  let lineStart := (fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩).byteIdx
   let mut best : Option (Nat × Nat) := none
   for (rb, re) in ranges do
-    if rb == anchor && re ≥ e.byteIdx && rb ≤ b.byteIdx then
+    if lineStart ≤ rb && rb < b.byteIdx && re ≥ e.byteIdx then
       if head (String.Pos.Raw.extract src ⟨rb⟩ ⟨re⟩) == want then
         if best.all fun (bb, be) => re - rb < be - bb then
           best := some (rb, re)
@@ -396,7 +402,7 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         -- A split step (`rw [a, b]` → one step per rule) edits and colours as
         -- the tactic it came from; everything else is its own range.
         let (b, e, start) : String.Pos.Raw × String.Pos.Raw × Lsp.Position :=
-          match surfaceTacticRange fileMap src tacticRanges indent s.position.start
+          match surfaceTacticRange fileMap src tacticRanges s.position.start
                   s.tacticString b0 e0t with
           | some (rb, re) =>
             (⟨rb⟩, ⟨re⟩, fileMap.utf8PosToLspPos ⟨rb⟩)
