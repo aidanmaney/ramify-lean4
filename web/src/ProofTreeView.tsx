@@ -31,7 +31,11 @@ import {
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
 import type { HypLine } from "./types";
-import { proofToTree } from "./proofToTree";
+import {
+  positionContains,
+  proofToTree,
+  tacticNodeAt,
+} from "./proofToTree";
 import {
   ACCENT_TEXT,
   CASE_FILL,
@@ -92,29 +96,6 @@ const ZOOM_MAX = 2;
 const clampZoom = (z: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
 // Clamp a scroll offset into [0, max]; used everywhere an effect restores scroll.
 const clampScroll = (v: number, max: number) => Math.max(0, Math.min(max, v));
-
-// (line, character) ordering: is `a` at or before `b` in the source?
-function beforeOrEq(
-  a: { line: number; character: number },
-  b: { line: number; character: number },
-): boolean {
-  return a.line < b.line || (a.line === b.line && a.character <= b.character);
-}
-
-// Does a tactic's source span contain the given cursor position? HALF-OPEN,
-// `[start, stop)`. The exclusive end is load-bearing, not pedantry: Paperproof
-// step ranges include trailing trivia, so a tactic's `stop` runs all the way to
-// the NEXT tactic's first token — i.e. consecutive tactics share a boundary
-// position. With an inclusive end, a cursor on tactic B's first character is
-// contained by A as well, and since `cursorNodeId` breaks ties by smallest
-// span, whichever of the two happens to be shorter wins. That is how clicking a
-// tactic could accent its neighbour.
-function positionContains(
-  range: ProofStepPosition,
-  p: { line: number; character: number },
-): boolean {
-  return beforeOrEq(range.start, p) && !beforeOrEq(range.stop, p);
-}
 
 const HYP_MARK = "▸";
 
@@ -582,22 +563,15 @@ export default function ProofTreeView({
       })),
     [proof],
   );
-  const span = (p: ProofStepPosition) =>
-    (p.stop.line - p.start.line) * 1e4 +
-    (p.stop.character - p.start.character);
-  // The innermost tactic containing `p`, which is the whole accent rule for a
-  // normal cursor and the first half of the comment rule.
-  const innermostTacticAt = (p: { line: number; character: number }) => {
-    let best: { id: string; s: number } | null = null;
-    for (const n of nodes) {
-      const d = n.data;
-      if (d.type !== "tactic" || !d.position) continue;
-      if (!positionContains(d.position, p)) continue;
-      const s = span(d.position);
-      if (!best || s < best.s) best = { id: d.id, s };
-    }
-    return best?.id ?? null;
-  };
+  // Every VISIBLE tactic with a span, in the shape `tacticNodeAt` wants.
+  const cursorTargets = useMemo(
+    () =>
+      nodes
+        .map((n) => n.data)
+        .filter((d) => d.type === "tactic" && d.position)
+        .map((d) => ({ id: d.id, position: d.position! })),
+    [nodes],
+  );
   // Per comment range, the node whose strip is SHOWING it. Taken straight from
   // the attribution proofToTree already computed (TreeNode.commentRanges)
   // rather than re-derived here, so the accent can never drift from where the
@@ -622,9 +596,9 @@ export default function ProofTreeView({
       positionContains(c, highlightPos),
     );
     if (ci >= 0) return commentOwner[ci];
-    return innermostTacticAt(highlightPos);
+    return tacticNodeAt(cursorTargets, highlightPos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, hlKey, hlDismissed, commentSpans, commentOwner]);
+  }, [cursorTargets, hlKey, hlDismissed, commentSpans, commentOwner]);
 
   // Capture a re-anchor on node `id` (or the root) before a relayout, so the
   // post-render `[nodes]` effect can hold that node fixed on screen. `sx/sy` are

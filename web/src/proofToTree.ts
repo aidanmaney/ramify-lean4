@@ -121,6 +121,59 @@ function caseName(goal: GoalInfo | undefined): string | undefined {
   return name;
 }
 
+// ---- Cursor → tactic node ---------------------------------------------------
+
+const posLE = (a: LspPos, b: LspPos) => cmpPos(a, b) <= 0;
+/** HALF-OPEN containment, `[start, stop)`. See the widget's accent notes: step
+ranges include trailing trivia, so consecutive tactics share a boundary
+position and an inclusive end lets a neighbour match. */
+export function positionContains(r: ProofStepPosition, p: LspPos): boolean {
+  return posLE(r.start, p) && !posLE(r.stop, p);
+}
+
+/**
+ * The single tactic node the editor cursor should accent, or null.
+ *
+ * Two steps, and the second one exists because parts of a proof belong to NO
+ * tactic's range. A structured tactic's recorded range stops at its first case
+ * marker — `induction n … with` is `23:4 → 24:4`, ending exactly ON the `|` —
+ * and a bullet `·` sits just past the range of the tactic before it. Those
+ * regions are covered only by the ENCLOSING construct, so containment alone
+ * resolved `| _ n ih =>` to the whole `have … := by` at the top of the proof.
+ *
+ * So: take the innermost containing tactic, then prefer the nearest tactic
+ * that has already CLOSED at or before the cursor from within it. On a case
+ * marker that is the `induction` the marker belongs to; on a bullet it is the
+ * tactic that split the goal. When the cursor sits inside a leaf tactic no
+ * such candidate exists and the innermost answer stands, so the property this
+ * had to preserve — cursor at a tactic's own start resolves to that tactic —
+ * is untouched.
+ */
+export function tacticNodeAt(
+  tactics: { id: string; position: ProofStepPosition }[],
+  p: LspPos,
+): string | null {
+  const span = (r: ProofStepPosition) =>
+    (r.stop.line - r.start.line) * 1e4 + (r.stop.character - r.start.character);
+  let inner: (typeof tactics)[number] | null = null;
+  for (const t of tactics)
+    if (
+      positionContains(t.position, p) &&
+      (!inner || span(t.position) < span(inner.position))
+    )
+      inner = t;
+  if (!inner) return null;
+  // Nearest tactic that closed at/before the cursor, strictly inside `inner`.
+  let prior: (typeof tactics)[number] | null = null;
+  for (const t of tactics) {
+    if (t === inner) continue;
+    if (cmpPos(t.position.start, inner.position.start) <= 0) continue;
+    if (!posLE(t.position.stop, p)) continue;
+    if (!prior || cmpPos(prior.position.stop, t.position.stop) < 0) prior = t;
+  }
+  return (prior ?? inner).id;
+}
+
 // ---- Source comments → node attribution -------------------------------------
 
 type LspPos = { line: number; character: number };
