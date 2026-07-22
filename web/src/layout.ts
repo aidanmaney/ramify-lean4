@@ -384,6 +384,18 @@ function fitPrefix(
 export const CONT_INDENT = 18;
 // Extra indent per open bracket in reflow mode (on top of CONT_INDENT).
 const NEST_INDENT = 10;
+// A seam is only worth breaking at once the line it closes is this full. Keeps
+// an early comma from forcing a 10%-full line in normal wrapping, and stops
+// reflow's eager break from shredding a label into two-token slivers.
+const SEAM_MIN_FILL = 0.4;
+// …and the floor for reflow's EAGER break is lower, because it is protecting
+// against something else. Filling the line is not the goal there — narrowing
+// the box is — so the only thing to avoid is a sliver first line. Keeping both
+// floors at 0.4 was measurably worse than one number suggests: in
+// `⊢ ∃ k, n = 2 * k ∨ n = 2 * k + 1` the `∨` seam sits at 36% and the `=` at
+// 45%, so the shared floor rejected the CLAUSE seam and took the relation one
+// — a worse break for a wider box (max line 20 cols vs 16).
+const EAGER_MIN_FILL = 0.3;
 
 // Semantic seams to prefer when breaking a long line: break BEFORE one of
 // these tokens, so the continuation line STARTS with the connective that ties
@@ -411,6 +423,11 @@ const BREAK_BEFORE_WEAK = new Set([
 // constructors are everywhere in these proofs.
 const OPENERS = "([{⟨";
 const CLOSERS = ")]}⟩";
+// A token made entirely of operator glyphs — `*`, `=`, `∧`, `:=`, `⊢`. Such a
+// token must never END a wrapped line (see seamRank).
+const OP_CHARS = "+-*/^=<>≤≥≠∣∧∨→↔↦%·∘:⊢";
+const isOperator = (t: string) =>
+  t.length > 0 && [...t].every((c) => OP_CHARS.includes(c));
 function depthDelta(s: string): number {
   let d = 0;
   for (const ch of s) {
@@ -439,6 +456,12 @@ function seamRank(
   right: string | undefined,
   depth = 0,
 ): number {
+  // Never leave a line ending on a bare infix operator. The whole model here
+  // is "break BEFORE the connective, so the continuation STARTS with it"; a
+  // dangling `*` or `=` is that rule inverted. It bites via the GROUP tier,
+  // which fires on the token after it: `⊢ m + 1 = 2 * (k + 1)` scored a seam
+  // between `*` and `(k`, giving `⊢ m + 1 = 2 *` / `(k + 1)`.
+  if (isOperator(left)) return 0;
   let base = 0;
   if (
     left.endsWith(",") ||
@@ -475,6 +498,10 @@ function wrapLine(
   // the wrapped tail of `⟨p, hpp, hpm⟩` lines up inside the bracket instead of
   // against everything else. Off, every continuation gets the flat CONT_INDENT.
   nested = false,
+  // Break at the earliest worthwhile seam rather than filling the line to the
+  // budget (see `eager` below). Defaults to reflow mode, the only place a
+  // narrower box is worth extra lines.
+  eagerSeams = nested,
 ): WrappedLine[] {
   const out: WrappedLine[] = [];
   const words = text.split(" ");
@@ -499,37 +526,62 @@ function wrapLine(
       words[i] = words[i].slice(cut);
       continue;
     }
-    // Greedy fill, remembering the latest seam of each tier that still fits.
-    // `d` is the bracket depth AT each candidate break, which decides whether
-    // that seam is demoted for sitting inside a group (see seamRank).
-    const seamEnd: (string | null)[] = [null, null, null, null]; // by rank
+    // Greedy fill, remembering per tier the LATEST seam that still fits (the
+    // width-bound break) and the EARLIEST one that clears the fill floor (the
+    // eager break). `d` is the bracket depth AT each candidate break, which
+    // decides whether that seam is demoted for sitting inside a group (see
+    // seamRank).
+    const seamLast: (string | null)[] = [null, null, null, null]; // by rank
+    const seamFirst: (string | null)[] = [null, null, null, null];
+    const note = (rank: number, line: string, hasMore: boolean) => {
+      // A "seam" at the very end of the text is not a break — there'd be
+      // nothing after it. (seamRank sees `right === undefined` there and can
+      // still score a trailing comma.)
+      if (rank === 0 || !hasMore) return;
+      seamLast[rank] = line;
+      if (
+        seamFirst[rank] === null &&
+        measureText(line, fontPx, italic) >= EAGER_MIN_FILL * budget
+      )
+        seamFirst[rank] = line;
+    };
     let cur = words[i];
     let d = Math.max(0, depth + depthDelta(words[i]));
-    seamEnd[seamRank(words[i], words[i + 1], d)] = cur;
+    note(seamRank(words[i], words[i + 1], d), cur, i + 1 < words.length);
     let j = i + 1;
     for (; j < words.length; j++) {
       const cand = cur + " " + words[j];
       if (measureText(cand, fontPx, italic) > budget) break;
       cur = cand;
       d = Math.max(0, d + depthDelta(words[j]));
-      seamEnd[seamRank(words[j], words[j + 1], d)] = cur;
-    }
-    if (j >= words.length) {
-      out.push({ text: cur, cont, indent }); // the rest fits on this line
-      break;
+      note(seamRank(words[j], words[j + 1], d), cand, j + 1 < words.length);
     }
     // Clause beats group beats relation beats the plain word break — as long
     // as the seam doesn't waste most of the line (an early comma shouldn't
     // force a 10%-full line).
     const usable = (s: string | null): s is string =>
-      s !== null && measureText(s, fontPx, italic) >= 0.4 * budget;
-    const chosen = usable(seamEnd[3])
-      ? seamEnd[3]
-      : usable(seamEnd[2])
-        ? seamEnd[2]
-        : usable(seamEnd[1])
-          ? seamEnd[1]
-          : cur;
+      s !== null && measureText(s, fontPx, italic) >= SEAM_MIN_FILL * budget;
+    // Reflow mode breaks EAGERLY: at the earliest seam past the fill floor,
+    // even when the remainder would have fit. Filling the line to the budget
+    // is the wrong objective there — the box is sized by its widest line, so a
+    // 38-column label that fits the 44-column budget still makes a 38-column
+    // box, and side-by-side columns pay for every one of those columns. The
+    // tier order is unchanged (it is what keeps the break readable); only
+    // "latest that fits" becomes "earliest that's worth it".
+    const eager = eagerSeams
+      ? (seamFirst[3] ?? seamFirst[2] ?? seamFirst[1])
+      : null;
+    const chosen =
+      eager ??
+      (j >= words.length
+        ? cur // the rest fits on this line
+        : usable(seamLast[3])
+          ? seamLast[3]
+          : usable(seamLast[2])
+            ? seamLast[2]
+            : usable(seamLast[1])
+              ? seamLast[1]
+              : cur);
     out.push({ text: chosen, cont, indent });
     depth = Math.max(0, depth + depthDelta(chosen));
     i += chosen.split(" ").length;
@@ -546,10 +598,13 @@ function wrapText(
   fontPx = NODE_FONT_PX,
   italic = false,
   nested = false,
+  eagerSeams = nested,
 ): WrappedLine[] {
   return text
     .split("\n")
-    .flatMap((segment) => wrapLine(segment, maxW, fontPx, italic, nested));
+    .flatMap((segment) =>
+      wrapLine(segment, maxW, fontPx, italic, nested, eagerSeams),
+    );
 }
 
 // Source-comment strip geometry: an italic block drawn at the very TOP of the
@@ -657,7 +712,19 @@ function sizeOf(
   const hypLines: HypLine[] = !reflow
     ? raw
     : raw.flatMap((l) =>
-        wrapText(l.text, REFLOW_W - gutter, HYP_FONT_PX, false, true).map(
+        wrapText(
+          l.text,
+          REFLOW_W - gutter,
+          HYP_FONT_PX,
+          false,
+          true,
+          // NOT eager, unlike the label: an eagerly broken hyp line buys a
+          // little width and costs a type tooltip (a wrapped line stops
+          // matching by text). Measured over the corpus, eager hyps took the
+          // total layout width a further 2% only, and wrapped 18 more context
+          // lines to do it — the wrong side of that trade.
+          false,
+        ).map(
           (w) => ({ text: w.text, used: l.used, cont: w.cont, indent: w.indent }),
         ),
       );
