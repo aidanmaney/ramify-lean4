@@ -709,8 +709,7 @@ export default function ProofTreeView({
     setSeededFor(proofKey);
     const seed = engine
       .allNodes()
-      .filter((n) => n.flags?.fold)
-      .map((n) => n.id);
+      .flatMap((n) => (n.flags?.fold ? (n.flags.targets ?? []) : []));
     if (seed.length > 0) setCollapsed(new Set(seed));
   }
 
@@ -762,10 +761,8 @@ export default function ProofTreeView({
   const elided = useMemo(() => {
     const m = new Map<string, string[]>();
     for (const n of engine.allNodes())
-      if (n.flags?.elide) {
-        const cs = engine.childrenOf(n.id);
-        if (cs.length > 0) m.set(n.id, cs);
-      }
+      if (n.flags?.elide && n.flags.targets?.length)
+        m.set(n.id, n.flags.targets);
     return m;
   }, [engine]);
 

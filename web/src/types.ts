@@ -83,20 +83,30 @@ export interface TreeNode {
 
 /** What a node's Alectryon-style comment flags ask the renderer to do.
  *
- * A flag governs its node's OUTPUT — the goals below it — which is the direct
- * translation of Alectryon's model, where a flag on a sentence governs what
- * that sentence produced. On a tactic that is the goals it left behind; on a
- * root goal (the pre-proof narrative slot) it is the whole proof.
+ * A flag governs its node's OUTPUT — the direct translation of Alectryon's
+ * model, where a flag on a sentence governs what that sentence produced.
  *
  * Hypothesis flags (`.no-hyps`, `.h#name`) are applied in proofToTree, where
  * the context is built, so they leave no trace here. */
 export interface NodeFlags {
-  /** `.fold`: this node's subtree starts collapsed, still unfoldable by hand —
-  Alectryon's "shown but folded". */
+  /** `.fold`: the targets start collapsed — their boxes are drawn, their
+  proofs are not, and a fold glyph opens them. Alectryon's "output shown but
+  folded", and the reason the flag targets the goals rather than the tactic:
+  collapsing the tactic would take the goals with it, leaving nothing to say
+  what was folded away. */
   fold?: boolean;
-  /** `.none`: the subtree is dropped from the layout outright, with no fold
-  glyph to bring it back. */
+  /** `.none`: the targets are dropped from the layout outright, with no fold
+  glyph to bring them back. */
   elide?: boolean;
+  /** The child goals the flag acts on: a tactic's SPAWNED goals when it has
+  any, else the goals it produced.
+   *
+   * The spawned-first rule is what keeps a flag on a `have … := by` from
+   * swallowing the rest of the proof. Such a step has two children — the side
+   * proof it opened and the continuation of the main line — and "hide this
+   * have's proof" plainly means the former. A real case split has no spawned
+   * goals, so there the targets are simply all the branches. */
+  targets?: string[];
   /** Whatever prose followed the flags in the same comment. Shown in place of
   what `.none` removed, so an elision can say what it swallowed. */
   note?: string;

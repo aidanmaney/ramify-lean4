@@ -76,14 +76,19 @@ theorem sum_range_odd (n : ℕ) :
     intro m
     induction m with
     | zero =>
-      -- The empty sum is 0, and 0 ^ 2 = 0.
+      -- .no-hyps
+      -- The empty sum is 0, and 0 ^ 2 = 0.  Nothing in the context bears on
+      -- this, so the flag above drops it.
       simp
     | succ k ih =>
+      -- .h#ih
       -- Peel the last summand off the range, fold in the hypothesis, and let
-      -- `ring` finish the binomial.
+      -- `ring` finish the binomial. Only `ih` is worth reading here.
       rw [Finset.sum_range_succ, ih, add_comm]
       ring
+  -- .fold
   -- Step 2: the gap between consecutive partial sums is the next odd number.
+  -- Its proof is one lemma application, so it starts folded.
   have gap : ∀ m : ℕ,
       (∑ i ∈ Finset.range (m + 1), (2 * i + 1))
         = (∑ i ∈ Finset.range m, (2 * i + 1)) + (2 * m + 1) := by
@@ -109,6 +114,7 @@ theorem sum_range_odd (n : ℕ) :
         -- and no natural number is both even and odd.
         exfalso
         obtain ⟨j, hj⟩ := ho
+        -- .none the algebra: m = 2j + 1 squares to 2 * (2j² + 2j) + 1
         have hodd : Odd (m ^ 2) := by
           refine ⟨2 * j * j + 2 * j, ?_⟩
           rw [hj]

@@ -298,15 +298,18 @@ export function parseFlags(text: string): ParsedFlags {
 // are consumed in proofToTree (contextFor), so they never reach a TreeNode.
 // Returns undefined when nothing is left to say, keeping the field absent on
 // the overwhelming majority of nodes.
-function nodeFlags(f: ParsedFlags | undefined): NodeFlags | undefined {
-  if (!f) return undefined;
-  const out: NodeFlags = {};
+function nodeFlags(
+  f: ParsedFlags | undefined,
+  targets: string[],
+): NodeFlags | undefined {
+  if (!f || (!f.fold && !f.elide) || targets.length === 0) return undefined;
+  const out: NodeFlags = { targets };
   if (f.fold) out.fold = true;
   if (f.elide) out.elide = true;
   // The note is only ever SHOWN in place of an elision; anywhere else the
   // prose is already the node's comment strip.
   if (f.elide && f.prose) out.note = f.prose;
-  return out.fold || out.elide ? out : undefined;
+  return out;
 }
 
 // Attribute each comment to a tree node id (tactic node, or a root goal),
@@ -595,7 +598,12 @@ export function proofToTree(
       hyps: goal && contextFor(goal, step, producedBy, hypMode, hypFlags.get(goalId)),
       comment: commentByNode.text.get(goalId),
       commentRanges: commentByNode.ranges.get(goalId),
-      flags: nodeFlags(commentByNode.flags.get(goalId)),
+      // A root goal's own flags (the pre-proof narrative slot) act on the
+      // tactic that opens the proof, i.e. on everything below.
+      flags: nodeFlags(
+        commentByNode.flags.get(goalId),
+        step ? [tacticId(goalId)] : [],
+      ),
       caseLabel: thisCase === parentCase ? undefined : thisCase,
       // (+) only on an unconsumed goal reached through `goalsAfter`. An
       // unconsumed SPAWNED goal is not the editing frontier: Paperproof emits
@@ -624,7 +632,15 @@ export function proofToTree(
       position: step.position,
       comment: commentByNode.text.get(tId),
       commentRanges: commentByNode.ranges.get(tId),
-      flags: nodeFlags(commentByNode.flags.get(tId)),
+      // Spawned goals first (see NodeFlags.targets): a `have … := by` opens a
+      // side proof AND continues the main line, and a flag on it means the
+      // side proof.
+      flags: nodeFlags(
+        commentByNode.flags.get(tId),
+        (step.spawnedGoals.length > 0 ? step.spawnedGoals : step.goalsAfter).map(
+          (g) => g.id,
+        ),
+      ),
     });
 
     for (const child of stepGoalsAfter(step)) {
