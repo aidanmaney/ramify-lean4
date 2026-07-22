@@ -157,3 +157,31 @@ theorem three_column_demo (n : ℕ) :
       show (m + 1) * (m + 2) = 2 * (k + m + 1)
       have h : (m + 1) * (m + 2) = m * (m + 1) + 2 * (m + 1) := by ring
       grind
+
+/-- **√2 is irrational, over ℤ.** No coprime integers `m, n` satisfy
+`m * m = 2 * n * n`. This is the Nuprl `root_2_irrat_over_int` translated step
+for step: assert `2 ∣ m`, then `2 ∣ n`, then read off `2 ∼ 1` from coprimality,
+which is absurd. -/
+theorem root_2_irrat_over_int :
+    ¬ ∃ m n : ℤ, IsCoprime m n ∧ m * m = 2 * n * n := by
+  -- D 0 THENM ExRepD: destruct the existential and split its conjunction, so
+  -- m, n, the coprimality witness and the equation are all in context.
+  rintro ⟨m, n, hcop, hmn⟩
+  -- Assert ⌜2 ∣ m⌝: m * m = 2 * n * n is even, and 2 is prime, so m is even.
+  have hm : (2 : ℤ) ∣ m := by
+    have hmm : m * m = 2 * (n * n) := by linear_combination hmn
+    rcases Int.prime_two.dvd_or_dvd (⟨n * n, hmm⟩ : (2 : ℤ) ∣ m * m) with h | h <;>
+      exact h
+  -- Assert ⌜2 ∣ n⌝: write m = 2 * c, so 2 * n * n = 4 * c * c, hence n * n is
+  -- even too, and again primality of 2 gives 2 ∣ n.
+  have hn : (2 : ℤ) ∣ n := by
+    obtain ⟨c, rfl⟩ := hm
+    have hnn : n * n = 2 * (c * c) :=
+      mul_left_cancel₀ two_ne_zero (by linear_combination -hmn)
+    rcases Int.prime_two.dvd_or_dvd (⟨c * c, hnn⟩ : (2 : ℤ) ∣ n * n) with h | h <;>
+      exact h
+  -- coprime_elim: a common divisor of coprime m, n is a unit — so 2 ∼ 1.
+  have h2 : IsUnit (2 : ℤ) := hcop.isUnit_of_dvd' hm hn
+  -- assoced_elim: but the only units of ℤ are ±1, so 2 ∼ 1 is a contradiction.
+  rw [Int.isUnit_iff] at h2
+  omega
