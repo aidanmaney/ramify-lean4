@@ -7,7 +7,7 @@ import type {
   SourceComment,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import type { HypLine, TreeNode } from "./types";
+import type { AddSpec, HypLine, TreeNode } from "./types";
 
 // Adapter: Paperproof `Proof` → the renderer's `TreeNode[]`.
 //
@@ -334,6 +334,66 @@ export function proofToTree(
   const stepByGoal = new Map<string, ProofStep>();
   for (const step of proof.steps) stepByGoal.set(step.goalBefore.id, step);
 
+  // The step ending LAST in source within the subtree under a goal — where a
+  // new sibling branch's text must be inserted after. Trivia-inflated stops
+  // are fine for the COMPARISON (they preserve source order); the widget
+  // resolves the winner's TIGHT end via tacticEdits before inserting.
+  function subtreeLastStep(goalId: string): ProofStep | undefined {
+    const s = stepByGoal.get(goalId);
+    if (!s) return undefined;
+    let best = s;
+    for (const g of stepGoalsAfter(s)) {
+      const b = subtreeLastStep(g.id);
+      if (b && cmpPos(b.position.stop, best.position.stop) > 0) best = b;
+    }
+    return best;
+  }
+
+  // Where a NEW tactic for a pending goal (no consuming step) would go — the
+  // seam behind the tree's (+) chips. The producing step's SHAPE picks the
+  // insertion form:
+  //
+  // - `have … := by` body (the goal is SPAWNED and the label ends in `by`):
+  //   next line, one level deeper — inside the by-block.
+  // - only child: plain next line at the producer's own indent.
+  // - one of several, producer ends in `with`: a `| case => ` line (the
+  //   with-block form; anonymous cases fall back to `_`).
+  // - one of several otherwise: a `· ` bullet at the producer's indent.
+  //
+  // `after` is the last-in-source step among the producer's subtrees, so the
+  // new branch lands BELOW its already-written siblings — except for a
+  // by-body, which must stay inside the `by` and so anchors on the producer
+  // itself. Known v1 limit: with SEVERAL pending siblings, each (+) inserts at
+  // the same anchor, so adding them out of source order attaches text to the
+  // wrong goal — Lean's bullets bind by position, and only `case`-named
+  // insertion could do better.
+  function addSpecFor(goalId: string, prod: ProofStep): AddSpec {
+    const label = prod.tacticString.trimEnd();
+    const spawned = prod.spawnedGoals.some((g) => g.id === goalId);
+    const base = prod.position.start.character;
+    if (spawned && label.endsWith("by"))
+      return { kind: "seq", indent: base + 2, after: prod.position };
+    let anchor = prod;
+    for (const g of stepGoalsAfter(prod)) {
+      const b = subtreeLastStep(g.id);
+      if (b && cmpPos(b.position.stop, anchor.position.stop) > 0) anchor = b;
+    }
+    // The `with` test MUST outrank the only-child rule: an induction with a
+    // single case still needs its `| case =>` marker — a bare next line after
+    // `with` is a syntax error, and a one-case with-block is common
+    // (`Nat.strong_induction_on`).
+    if (label.endsWith("with"))
+      return {
+        kind: "case",
+        indent: base,
+        after: anchor.position,
+        caseName: caseName(goals.get(goalId)),
+      };
+    if (stepGoalsAfter(prod).length <= 1)
+      return { kind: "seq", indent: base, after: anchor.position };
+    return { kind: "bullet", indent: base, after: anchor.position };
+  }
+
   const roots = rootIds(proof);
 
   // Source comments, attributed to node ids (see attributeComments). Root
@@ -384,6 +444,7 @@ export function proofToTree(
       comment: commentByNode.text.get(goalId),
       commentRanges: commentByNode.ranges.get(goalId),
       caseLabel: thisCase === parentCase ? undefined : thisCase,
+      addSpec: !step && producedBy ? addSpecFor(goalId, producedBy) : undefined,
     });
 
     if (!step) return; // leaf: this goal was closed by its tactic

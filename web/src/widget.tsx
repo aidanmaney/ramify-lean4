@@ -7,6 +7,7 @@ import {
   type PanelWidgetProps,
 } from "@leanprover/infoview";
 import type { Proof, ProofStepPosition } from "./paperproof";
+import type { AddSpec } from "./types";
 import ProofTreeView from "./ProofTreeView";
 import {
   injectStyleOnce,
@@ -290,6 +291,39 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     });
   };
 
+  // A (+) chip commit: INSERT a new tactic for a pending goal. The insertion
+  // point is the end of the LINE holding the anchor step's TIGHT stop —
+  // resolved through `tacticEdits` so trailing trivia can't push the anchor
+  // onto the next tactic's line, and taken to end-of-line so a trailing
+  // comment stays glued to its own tactic instead of jumping to the new line.
+  // The huge character value is deliberate: positions beyond a line's end are
+  // clamped by the editor when the edit applies, and the true line length
+  // isn't known here (the widget never holds the document text).
+  const addTactic = (spec: AddSpec, text: string) => {
+    const e = editByStart.get(
+      `${spec.after.start.line}:${spec.after.start.character}`,
+    );
+    const stop = e?.stop ?? spec.after.stop;
+    const at = { line: stop.line, character: 1e5 };
+    const indent = " ".repeat(spec.indent);
+    const prefix =
+      spec.kind === "bullet"
+        ? "· "
+        : spec.kind === "case"
+          ? `| ${spec.caseName ?? "_"} => `
+          : "";
+    // Multi-line input: continuation lines sit one level inside the first.
+    const body = text
+      .split("\n")
+      .map((l, i) => (i === 0 ? indent + prefix + l : indent + "  " + l))
+      .join("\n");
+    void ec.api.applyEdit({
+      changes: {
+        [pos.uri]: [{ range: { start: at, end: at }, newText: "\n" + body }],
+      },
+    });
+  };
+
   // Hovering a tactic node paints a decoration over its range in the editor.
   // DEBOUNCED here rather than in the view: every request is a file write by
   // the Lean server plus an fs.watch wake-up in the companion, so firing on
@@ -403,6 +437,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         renderTaggedGoal={renderers?.renderTaggedGoal}
         renderTaggedHyps={renderers?.renderTaggedHyps}
         renderTaggedTactic={renderTaggedTactic}
+        onAddTactic={addTactic}
         onHoverTactic={hoverTactic}
       />
     </div>

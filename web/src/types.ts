@@ -11,6 +11,20 @@ export interface HypLine {
   used: boolean;
 }
 
+/** How to insert a new tactic for a pending goal (see TreeNode.addSpec).
+`after` is the step whose (tight) end the insertion follows — the LAST step in
+source among the producing tactic's already-written branches, so a new bullet
+lands below its finished siblings rather than between the split and them. */
+export interface AddSpec {
+  // seq: plain next line (linear chain, or the body of a `… := by`, whose
+  // deeper indent is already baked into `indent`); bullet: `· `; case:
+  // `| name => ` (with-block).
+  kind: "seq" | "bullet" | "case";
+  indent: number;
+  after: ProofStepPosition;
+  caseName?: string;
+}
+
 // An edge to a parent node.
 export interface ParentEdge {
   id: string;
@@ -43,6 +57,11 @@ export interface TreeNode {
   // before-first-tactic narrative (incl. the docstring) for a root goal.
   // Drawn as a strip at the top of the node's layout band.
   comment?: string;
+  // Pending leaf goals only (no consuming tactic — the live-editing
+  // frontier): where and how a NEW tactic for this goal would be inserted
+  // into the source. Computed by proofToTree from the producing step's shape;
+  // the widget's (+) chip turns it into a document edit.
+  addSpec?: AddSpec;
   // Goal nodes only: the name of the case this goal IS, when its producing
   // tactic split into named branches (`induction … with | zero | succ`,
   // `by_cases` → `pos`/`neg`). Hygienic suffixes are stripped in proofToTree,

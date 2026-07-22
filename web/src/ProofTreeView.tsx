@@ -29,7 +29,7 @@ import {
   measureText,
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
-import type { HypLine } from "./types";
+import type { AddSpec, HypLine } from "./types";
 import {
   positionContains,
   proofToTree,
@@ -327,6 +327,13 @@ export interface ProofTreeViewProps {
     lines: string[],
   ) => ReactNode[] | null;
   /**
+   * Widget-only: insert a NEW tactic for a pending goal (the (+) chip).
+   * `spec` says where and in what form (bullet/case/plain line); `text` is
+   * what the user typed. widget.tsx turns it into a document insertion via
+   * the editor's own edit pipeline.
+   */
+  onAddTactic?: (spec: AddSpec, text: string) => void;
+  /**
    * Widget-only: the pointer entered (`pos`) or left (`null`) a tactic node.
    * The widget paints a decoration over that range in the editor, so hovering
    * the tree lights up the corresponding source — the hover-weight sibling of
@@ -348,6 +355,7 @@ export default function ProofTreeView({
   renderTaggedGoal,
   renderTaggedHyps,
   renderTaggedTactic,
+  onAddTactic,
   onHoverTactic,
 }: ProofTreeViewProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -408,6 +416,10 @@ export default function ProofTreeView({
     pos: ProofStepPosition;
     original: string;
     value: string;
+    // Present when this is an ADD (the (+) chip on a pending goal): commit
+    // INSERTS via onAddTactic instead of replacing, empty commits just close,
+    // and the goal's own box stays visible under the overlay.
+    add?: AddSpec;
   } | null>(null);
   // Commit goes through the editor's own edit pipeline (undoable there); a
   // no-op edit just closes the box. The ref mirrors `editing` and is nulled
@@ -422,7 +434,11 @@ export default function ProofTreeView({
     const cur = editingRef.current;
     editingRef.current = null;
     if (!cur) return;
-    if (cur.value !== cur.original) onEditTactic?.(cur.pos, cur.value);
+    if (cur.add) {
+      if (cur.value.trim() !== "") onAddTactic?.(cur.add, cur.value);
+    } else if (cur.value !== cur.original) {
+      onEditTactic?.(cur.pos, cur.value);
+    }
     setEditing(null);
   };
   // A tactic single-click reveals in source — but a double-click's FIRST
@@ -1303,6 +1319,10 @@ export default function ProofTreeView({
                 !!position &&
                 !!onPopoutEdit;
               const isEditing = editing?.id === id;
+              // A replace-edit's overlay stands in for the box, so the box
+              // hides; an ADD's overlay hangs below it and the goal must stay
+              // readable while you answer it.
+              const hideForEdit = isEditing && !editing?.add;
               // A goal with descendants can become the root of a focused view
               // (⌥-click, or the hover bar's ◎); pointless for the current
               // focus root.
@@ -1526,7 +1546,7 @@ export default function ProofTreeView({
                     // While the in-place editor overlays this node, its box
                     // (and label, below) hide — the overlay is bigger than
                     // the box, and an accented node would clash through it.
-                    visibility={isEditing ? "hidden" : undefined}
+                    visibility={hideForEdit ? "hidden" : undefined}
                   >
                     {taggedLines && hints.length > 0 && (
                       <title>{nodeTooltip}</title>
@@ -1536,7 +1556,7 @@ export default function ProofTreeView({
                   {/* The goal's local context, stacked inside the box above
                       its `⊢ ` line (see HypBlock). Hidden with the rest of the
                       box's content while the in-place editor overlays it. */}
-                  {hyps && hyps.length > 0 && !isEditing && (
+                  {hyps && hyps.length > 0 && !hideForEdit && (
                     <HypBlock
                       lines={hyps}
                       x={-w / 2 + NODE_PAD}
@@ -1546,7 +1566,7 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {foldable && !seqActive && !revealable && !isEditing && (
+                  {foldable && !seqActive && !revealable && !hideForEdit && (
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -1571,7 +1591,7 @@ export default function ProofTreeView({
                       width={w - 2 * NODE_PAD}
                       height={lines.length * LINE_H}
                       style={{ overflow: "visible" }}
-                      visibility={isEditing ? "hidden" : undefined}
+                      visibility={hideForEdit ? "hidden" : undefined}
                     >
                       <div
                         style={{
@@ -1607,7 +1627,7 @@ export default function ProofTreeView({
                       // Match the width measurer in layout.ts, which doesn't include
                       // the page's inherited letter-spacing.
                       style={{ letterSpacing: 0 }}
-                      visibility={isEditing ? "hidden" : undefined}
+                      visibility={hideForEdit ? "hidden" : undefined}
                     >
                       {lines.map((line, j) => (
                         <tspan
@@ -1623,6 +1643,62 @@ export default function ProofTreeView({
                       ))}
                     </text>
                   )}
+
+                  {/* (+) chip: a pending goal (no consuming tactic — the
+                      live frontier while writing a proof) offers to ADD one.
+                      Ghost-styled in the tactic look (dashed border, no
+                      fill): the tactic that isn't there yet. Sits just below
+                      the box, aligned on the compact lane; the band gaps
+                      leave it room in every layout mode. */}
+                  {type === "goal" &&
+                    node.data.addSpec &&
+                    onAddTactic &&
+                    seq.mode === "off" &&
+                    !isEditing && (
+                      <g
+                        transform={`translate(${-w / 2 + TRUNK_INSET}, ${
+                          boxTop + h + 4
+                        })`}
+                        style={{ cursor: "pointer" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const spec = node.data.addSpec!;
+                          setEditing({
+                            id,
+                            pos: spec.after,
+                            original: "",
+                            value: "",
+                            add: spec,
+                          });
+                        }}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                      >
+                        <title>add a tactic for this goal</title>
+                        <rect
+                          x={-10}
+                          y={0}
+                          width={20}
+                          height={15}
+                          rx={4}
+                          fill="transparent"
+                          stroke={NODE_STYLES.tactic.stroke}
+                          strokeWidth={1.2}
+                          strokeDasharray="3 2"
+                        />
+                        <text
+                          x={0}
+                          y={8}
+                          textAnchor="middle"
+                          dy="0.32em"
+                          fontSize={12}
+                          fontFamily="monospace"
+                          fill={NODE_STYLES.tactic.stroke}
+                          style={{ userSelect: "none" }}
+                        >
+                          +
+                        </text>
+                      </g>
+                    )}
 
                   {/* Hover action bar (last, so it paints over the label):
                       secondary actions with real button targets. Goals get
@@ -1702,6 +1778,10 @@ export default function ProofTreeView({
                 const { w, h } = en.data;
                 const topH = en.data.caseH + en.data.commentBlockH;
                 const boxTop = (topH - h) / 2;
+                // An ADD's textarea hangs below the goal box (where its chip
+                // sat), leaving the goal readable while you answer it; a
+                // replace-edit covers the hidden box as before.
+                const overlayY = editing.add ? boxTop + h + 4 : boxTop;
                 const valueLines = editing.value.split("\n");
                 const fw = Math.max(
                   w,
@@ -1718,7 +1798,7 @@ export default function ProofTreeView({
                   <g transform={`translate(${en.x},${en.y})`}>
                     <foreignObject
                       x={-w / 2}
-                      y={boxTop}
+                      y={overlayY}
                       width={fw}
                       height={fh}
                       style={{ overflow: "visible" }}
