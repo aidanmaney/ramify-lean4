@@ -251,7 +251,11 @@ const NEST_INDENT = 10;
 // binding strength: a clause boundary (comma/semicolon, or a low-precedence
 // logical connective) beats a relation/definition symbol — breaking at `≤`
 // inside `(2 ≤ n → …)` splits an atom that a nearby `∧` seam keeps whole.
-const BREAK_BEFORE_STRONG = new Set(["→", "↔", "∧", "∨", "⊢"]);
+const BREAK_BEFORE_STRONG = new Set([
+  "→", "↔", "∧", "∨", "⊢",
+  // Binders open a clause exactly as an arrow does.
+  "∀", "∃", "Σ", "λ", "fun",
+]);
 // Tactic-syntax keywords open a new clause of the invocation, so breaking
 // before one reads like the source would if you wrapped it by hand
 // (`induction n` / `using Nat.strong_induction_on` / `with`).
@@ -261,19 +265,6 @@ const BREAK_BEFORE_KEYWORD = new Set([
 const BREAK_BEFORE_WEAK = new Set([
   "=", "≠", "≤", "≥", "<", ">", "∣", ":=", ":", "↦",
 ]);
-// Seam quality of a break between adjacent tokens: 2 = clause boundary,
-// 1 = relation, 0 = not a seam.
-function seamRank(left: string, right: string | undefined): number {
-  if (
-    left.endsWith(",") ||
-    left.endsWith(";") ||
-    (right !== undefined &&
-      (BREAK_BEFORE_STRONG.has(right) || BREAK_BEFORE_KEYWORD.has(right)))
-  )
-    return 2;
-  return right !== undefined && BREAK_BEFORE_WEAK.has(right) ? 1 : 0;
-}
-
 // Bracket depth accumulated over a string — what reflow mode indents by, so a
 // continuation inside `⟨…⟩` or `(…)` hangs under its opener instead of all
 // wrapped lines sharing one flat indent. Angle brackets count: Lean anonymous
@@ -288,6 +279,43 @@ function depthDelta(s: string): number {
   }
   return d;
 }
+
+// Seam quality of a break between adjacent tokens:
+//   3 = clause boundary (comma/semicolon, connective, binder, tactic keyword)
+//   2 = group boundary  (a bracketed group ends here, or the next one opens)
+//   1 = relation        (=, ≤, ∣, …)
+//   0 = not a seam
+//
+// Groups sit BELOW clauses on purpose: `(2 ≤ n → …)` should split at a nearby
+// `∧` rather than at the paren that wraps it, the same reasoning that already
+// put relations below clauses.
+//
+// `depth` is the bracket nesting AT the break. A seam inside brackets is
+// demoted one tier, because breaking there splits a group that reads as one
+// unit — a comma between the fields of `⟨m, hmdvd, hm2, hmlt⟩` is a genuine
+// seam, but a worse one than any boundary at top level.
+function seamRank(
+  left: string,
+  right: string | undefined,
+  depth = 0,
+): number {
+  let base = 0;
+  if (
+    left.endsWith(",") ||
+    left.endsWith(";") ||
+    (right !== undefined &&
+      (BREAK_BEFORE_STRONG.has(right) || BREAK_BEFORE_KEYWORD.has(right)))
+  )
+    base = 3;
+  else if (
+    CLOSERS.includes(left[left.length - 1]) ||
+    (right !== undefined && right.length > 0 && OPENERS.includes(right[0]))
+  )
+    base = 2;
+  else if (right !== undefined && BREAK_BEFORE_WEAK.has(right)) base = 1;
+  return base > 0 && depth > 0 ? base - 1 : base;
+}
+
 
 // Width-wrap a single label segment (no newlines) by MEASURED pixel width
 // rather than char count. Breaks happen at word boundaries, preferring the
@@ -332,30 +360,36 @@ function wrapLine(
       continue;
     }
     // Greedy fill, remembering the latest seam of each tier that still fits.
-    const seamEnd: (string | null)[] = [null, null, null]; // indexed by rank
+    // `d` is the bracket depth AT each candidate break, which decides whether
+    // that seam is demoted for sitting inside a group (see seamRank).
+    const seamEnd: (string | null)[] = [null, null, null, null]; // by rank
     let cur = words[i];
-    seamEnd[seamRank(words[i], words[i + 1])] = cur;
+    let d = Math.max(0, depth + depthDelta(words[i]));
+    seamEnd[seamRank(words[i], words[i + 1], d)] = cur;
     let j = i + 1;
     for (; j < words.length; j++) {
       const cand = cur + " " + words[j];
       if (measureText(cand, fontPx, italic) > budget) break;
       cur = cand;
-      seamEnd[seamRank(words[j], words[j + 1])] = cur;
+      d = Math.max(0, d + depthDelta(words[j]));
+      seamEnd[seamRank(words[j], words[j + 1], d)] = cur;
     }
     if (j >= words.length) {
       out.push({ text: cur, cont, indent }); // the rest fits on this line
       break;
     }
-    // A clause boundary beats a relation beats the plain word break — as long
+    // Clause beats group beats relation beats the plain word break — as long
     // as the seam doesn't waste most of the line (an early comma shouldn't
     // force a 10%-full line).
     const usable = (s: string | null): s is string =>
       s !== null && measureText(s, fontPx, italic) >= 0.4 * budget;
-    const chosen = usable(seamEnd[2])
-      ? seamEnd[2]
-      : usable(seamEnd[1])
-        ? seamEnd[1]
-        : cur;
+    const chosen = usable(seamEnd[3])
+      ? seamEnd[3]
+      : usable(seamEnd[2])
+        ? seamEnd[2]
+        : usable(seamEnd[1])
+          ? seamEnd[1]
+          : cur;
     out.push({ text: chosen, cont, indent });
     depth = Math.max(0, depth + depthDelta(chosen));
     i += chosen.split(" ").length;
