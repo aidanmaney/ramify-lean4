@@ -46,13 +46,44 @@ const CHROME_BACKUP = path.join(REQUEST_DIR, "chrome-backup.json");
 // originals are snapshotted to disk (PID-stamped) so a crash mid-lens can't
 // permanently eat the user's settings — restored on next activation if the
 // owning extension host is dead.
-const STRIP_SETTINGS = {
+const STATIC_STRIP = {
   "workbench.editor.showTabs": "none",
   "breadcrumbs.enabled": false,
   "editor.glyphMargin": false,
   "editor.folding": false,
   "editor.minimap.enabled": false,
+  // Sticky scroll pins the enclosing declaration to the top of the editor —
+  // in a lens a few lines tall that is `theorem foo … := by` eating a large
+  // fraction of the visible height, and it re-renders as the cursor moves
+  // between tactics, which is exactly the jitter you feel while typing.
+  "editor.stickyScroll.enabled": false,
 };
+// The lens font is shrunk so more of the proof fits the same height. This one
+// is DERIVED, not fixed: a literal size would be wrong for anyone whose editor
+// font isn't the default, so it scales the user's own.
+const LENS_FONT_SCALE = 0.85;
+const DEFAULT_FONT_SIZE = 14; // VS Code's own default, used when unset
+const MIN_FONT_SIZE = 8;
+// Keys to snapshot and restore. `editor.fontSize` has no static target, so it
+// is listed here but valued by `stripValues`.
+const STRIP_KEYS = [...Object.keys(STATIC_STRIP), "editor.fontSize"];
+
+/** What to write, given the user's ORIGINAL values. The font must scale off
+ * the original and never off the live setting: another window's lens may have
+ * already shrunk it, and re-deriving from that would compound each time. */
+function stripValues(originals) {
+  const base =
+    typeof originals["editor.fontSize"] === "number"
+      ? originals["editor.fontSize"]
+      : DEFAULT_FONT_SIZE;
+  return {
+    ...STATIC_STRIP,
+    "editor.fontSize": Math.max(
+      MIN_FONT_SIZE,
+      Math.round(base * LENS_FONT_SCALE),
+    ),
+  };
+}
 let strippedOriginals = null; // in-memory while a lens is open
 
 function readChromeBackup() {
@@ -85,7 +116,7 @@ async function stripEditorChrome() {
     originals = prior.originals;
   } else {
     originals = {};
-    for (const key of Object.keys(STRIP_SETTINGS)) {
+    for (const key of STRIP_KEYS) {
       // `globalValue` (not the effective value): update() writes the USER
       // scope, so that's the scope that must be restored — possibly to unset.
       originals[key] = cfg.inspect(key)?.globalValue ?? null;
@@ -100,7 +131,7 @@ async function stripEditorChrome() {
   } catch {
     // non-fatal: worst case a crash loses the snapshot
   }
-  for (const [key, val] of Object.entries(STRIP_SETTINGS)) {
+  for (const [key, val] of Object.entries(stripValues(originals))) {
     await cfg.update(key, val, vscode.ConfigurationTarget.Global);
   }
 }
@@ -133,6 +164,12 @@ async function restoreEditorChrome(fromDisk) {
 }
 
 // ---- the lens group ------------------------------------------------------
+
+// How many `decreaseViewHeight` nudges to take off the fresh 50% split. The
+// split is empirically ≈ 9 nudges tall, so the lens ends up ≈ (9−n) slices:
+// LOWER IS TALLER. This is the one knob for lens height — 5 was too cramped to
+// edit in comfortably.
+const LENS_SHRINK_NUDGES = 3;
 
 // `workbench.action.newGroupBelow` acts on the ACTIVE group, and the only
 // way to activate an arbitrary group from an extension is the positional
@@ -328,7 +365,7 @@ async function popout(uri, selection) {
   // height ≈ (9−n) slices: 6→~3 lines, 3→double that, 5→two-thirds of 3's).
   // Height commands act on the active group (the lens); best-effort.
   try {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < LENS_SHRINK_NUDGES; i++) {
       await vscode.commands.executeCommand(
         "workbench.action.decreaseViewHeight",
       );

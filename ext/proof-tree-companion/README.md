@@ -27,7 +27,9 @@ Current actions (the request file carries an `action` field):
   lens is reused by subsequent popouts while it stays open. While a lens is
   open, chrome is stripped globally (no per-window settings API exists) to
   maximize the infoview column: tab rows, breadcrumbs, glyph margin, folding
-  controls, minimap — all restored when the lens closes, with a PID-stamped
+  controls, minimap, sticky scroll, and a reduced `editor.fontSize` (scaled
+  from the user's own, so it suits any starting size) — all restored when the
+  lens closes, with a PID-stamped
   on-disk snapshot for crash recovery. An existing lens is re-found down a
   ladder (remembered column → our `lineNumbers: Off` tag → a second group
   already showing the doc), so a window reload or a viewColumn renumber
