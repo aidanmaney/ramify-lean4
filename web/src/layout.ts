@@ -396,6 +396,10 @@ const SEAM_MIN_FILL = 0.4;
 // 45%, so the shared floor rejected the CLAUSE seam and took the relation one
 // — a worse break for a wider box (max line 20 cols vs 16).
 const EAGER_MIN_FILL = 0.3;
+// …and a line is only a candidate for an eager break once it is this much of
+// the budget. Below it the text is already narrow relative to its neighbours,
+// so splitting saves no width anywhere.
+const EAGER_MIN_SEG = 0.65;
 
 // Semantic seams to prefer when breaking a long line: break BEFORE one of
 // these tokens, so the continuation line STARTS with the connective that ties
@@ -574,9 +578,19 @@ function wrapLine(
     // box, and side-by-side columns pay for every one of those columns. The
     // tier order is unchanged (it is what keeps the break readable); only
     // "latest that fits" becomes "earliest that's worth it".
-    const eager = eagerSeams
-      ? (seamFirst[3] ?? seamFirst[2] ?? seamFirst[1])
-      : null;
+    // …but only on a line that is actually LONG. Breaking a short one buys
+    // nothing: `refine ⟨?_, ?_, ?_⟩` sitting under a full-width goal box is
+    // already narrower than everything around it, so splitting it saves no
+    // width anywhere and just reads as noise. Measured against the text
+    // REMAINING for this line, which also stops a wrapped tail from being
+    // split again once it has become short.
+    const worthBreaking =
+      measureText(words.slice(i).join(" "), fontPx, italic) >=
+      EAGER_MIN_SEG * budget;
+    const eager =
+      eagerSeams && worthBreaking
+        ? (seamFirst[3] ?? seamFirst[2] ?? seamFirst[1])
+        : null;
     const chosen =
       eager ??
       (j >= words.length
