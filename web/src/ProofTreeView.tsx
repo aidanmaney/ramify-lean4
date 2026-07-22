@@ -29,10 +29,12 @@ import {
   measureText,
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
+import { stepGoalsAfter } from "./paperproof";
 import type { AddSpec, HypLine } from "./types";
 import {
   positionContains,
   proofToTree,
+  rootIds,
   tacticNodeAt,
 } from "./proofToTree";
 import type { HypMode } from "./proofToTree";
@@ -476,7 +478,9 @@ export default function ProofTreeView({
   // during render. Keyed on the PROOF, not the engine: the engine also rebuilds
   // on a hyp-label mode toggle, which re-anchors on the root instead of
   // re-centering. One ref: the pair is only ever written and compared together.
-  const centeredOn = useRef<{ shapeKey: string; viewKey: string } | null>(
+  // Keyed on the proof's IDENTITY, not its shape: re-centering on every
+  // structural edit is what yanked the view back to the root mid-edit.
+  const centeredOn = useRef<{ proofKey: string; viewKey: string } | null>(
     null,
   );
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -546,28 +550,62 @@ export default function ProofTreeView({
     [proof, hypMode, codeFont, reflow],
   );
 
-  // When a new proof loads, reset to "everything expanded" and re-center.
-  // Keyed on the proof's SHAPE (its node ids), NOT the proof object or the
-  // engine: a hyp-label mode toggle rebuilds the engine, and editing a
-  // comment or a tactic's text yields a new proof object — but node ids are
-  // unchanged in all three, so fold/zoom/sequence state stays valid and
-  // should survive (matters in the widget, where the proof re-arrives on
-  // every re-elaboration while the user types). This is derived state, so we
-  // adjust it during render on change rather than in an effect (avoids a
-  // cascading re-render).
+  // Two different events, and conflating them is what made editing painful.
+  //
+  // `proofKey` is the proof's IDENTITY: its root goal's mvarId. Measured
+  // across re-elaborations, that survives edits to the proof BODY (adding a
+  // tactic keeps every existing id and appends one; deleting keeps the root
+  // and 8 of 12 downstream; both keep the root) and differs for a different
+  // theorem. A change here is a genuinely new proof, so reset everything and
+  // re-center.
+  //
+  // `shapeKey` is the node set. It changes on any structural edit, and used to
+  // drive the reset — so adding a tactic or deleting one threw away fold,
+  // zoom and focus and scrolled back to the root, which is exactly where you
+  // are NOT working. Now a same-proof shape change only PRUNES state that no
+  // longer refers to anything; scroll and zoom stay put.
+  //
+  // Both are derived state, adjusted during render rather than in an effect
+  // (avoids a cascading re-render).
+  const proofKey = useMemo(() => rootIds(proof).join("\n"), [proof]);
   const shapeKey = useMemo(
     () => proof.steps.map((s) => s.goalBefore.id).join("\n"),
     [proof],
   );
+  const [prevProof, setPrevProof] = useState(proofKey);
   const [prevShape, setPrevShape] = useState(shapeKey);
-  if (shapeKey !== prevShape) {
+  if (proofKey !== prevProof) {
+    setPrevProof(proofKey);
     setPrevShape(shapeKey);
     setCollapsed(new Set());
     setZoom(1);
     setSeq({ mode: "off" });
     setFocusId(null);
-    // A shape change means the source changed under the edit box (usually
-    // OUR own committed edit coming back); stale ranges must not be applied.
+    setEditing(null);
+  } else if (shapeKey !== prevShape) {
+    setPrevShape(shapeKey);
+    // Same proof, edited. Keep everything that still refers to a live node and
+    // drop only what doesn't: a collapsed id that vanished would linger
+    // forever, and a focus root or sequence endpoint that vanished would scope
+    // the view to nothing.
+    const live = new Set<string>();
+    for (const st of proof.steps) {
+      live.add(st.goalBefore.id);
+      live.add(`tactic:${st.goalBefore.id}`);
+      for (const g of stepGoalsAfter(st)) live.add(g.id);
+    }
+    setCollapsed((prev) => {
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    if (focusId && !live.has(focusId)) setFocusId(null);
+    if (
+      (seq.mode === "pick" && seq.from && !live.has(seq.from)) ||
+      (seq.mode === "view" && (!live.has(seq.from) || !live.has(seq.to)))
+    )
+      setSeq({ mode: "off" });
+    // The source moved under the edit box (usually OUR own committed edit
+    // coming back), so its ranges are stale either way.
     setEditing(null);
   }
 
@@ -805,7 +843,7 @@ export default function ProofTreeView({
     const el = scrollRef.current;
     if (
       !el ||
-      (centeredOn.current?.shapeKey === shapeKey &&
+      (centeredOn.current?.proofKey === proofKey &&
         centeredOn.current?.viewKey === viewKey) ||
       viewport.w === 0 ||
       nodes.length === 0
@@ -836,8 +874,8 @@ export default function ProofTreeView({
         MARGIN.top,
       maxY,
     );
-    centeredOn.current = { shapeKey, viewKey };
-  }, [viewport, nodes, shapeKey, viewKey, zoom, PAD_X, PAD_Y, compact]);
+    centeredOn.current = { proofKey, viewKey };
+  }, [viewport, nodes, proofKey, viewKey, zoom, PAD_X, PAD_Y, compact]);
 
   // source→tree tracking: the accented node follows the editor cursor
   // (highlightPos → cursorNodeId); keep it IN VIEW so moving through the

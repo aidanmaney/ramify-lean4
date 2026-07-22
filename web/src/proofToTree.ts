@@ -100,7 +100,7 @@ function goalIndex(proof: Proof): Map<string, GoalInfo> {
 
 // Root goal ids: consumed by some tactic but never produced by one — the
 // original theorem goal(s). Order follows first appearance in `steps`.
-function rootIds(proof: Proof): string[] {
+export function rootIds(proof: Proof): string[] {
   const produced = new Set<string>();
   for (const step of proof.steps) {
     for (const g of stepGoalsAfter(step)) produced.add(g.id);
