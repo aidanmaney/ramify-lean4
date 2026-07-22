@@ -119,6 +119,13 @@ const HYP_MODES: Record<
   },
 };
 
+// Frontier-chip row geometry (see FrontierChip). Widths are fixed rather than
+// measured: both labels are constant, and the row must not resize per node.
+const CHIP_H = 15;
+const CHIP_GAP = 6;
+const CHIP_W_ADD = 20;
+const CHIP_W_SORRY = 36;
+
 const ZOOM_MIN = 0.05;
 const ZOOM_MAX = 2;
 const clampZoom = (z: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
@@ -1667,8 +1674,11 @@ export default function ProofTreeView({
                         <FrontierChip
                           glyph="+"
                           title="add a tactic for this goal"
-                          x={0}
-                          width={20}
+                          // Centred on the incoming lane; the row runs right
+                          // from there, each chip starting past the previous
+                          // one's width plus CHIP_GAP.
+                          x={-CHIP_W_ADD / 2}
+                          width={CHIP_W_ADD}
                           color={NODE_STYLES.tactic.stroke}
                           onPick={() => {
                             const spec = node.data.addSpec!;
@@ -1684,8 +1694,8 @@ export default function ProofTreeView({
                         <FrontierChip
                           glyph="sorry"
                           title="stub this goal with `sorry`"
-                          x={26}
-                          width={36}
+                          x={-CHIP_W_ADD / 2 + CHIP_W_ADD + CHIP_GAP}
+                          width={CHIP_W_SORRY}
                           fontSize={9}
                           color={SORRY_FILL}
                           // Straight to the document: a stub has nothing to
@@ -2056,7 +2066,8 @@ function ControlRail({
 
 /** One frontier chip under a pending goal (see the call site). Ghost-styled —
 dashed outline, no fill — so it reads as a slot rather than an existing node.
-`x` is its CENTRE in the chip row. */
+`x` is its LEFT EDGE, so the call site can lay the row out by running a cursor
+across widths; a centre-based x is what let the two chips overlap by 2px. */
 function FrontierChip({
   glyph,
   title,
@@ -2088,10 +2099,10 @@ function FrontierChip({
     >
       <title>{title}</title>
       <rect
-        x={-width / 2}
+        x={0}
         y={0}
         width={width}
-        height={15}
+        height={CHIP_H}
         rx={4}
         fill="transparent"
         stroke={color}
@@ -2099,8 +2110,8 @@ function FrontierChip({
         strokeDasharray="3 2"
       />
       <text
-        x={0}
-        y={8}
+        x={width / 2}
+        y={CHIP_H / 2}
         textAnchor="middle"
         dy="0.32em"
         fontSize={fontSize}
