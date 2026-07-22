@@ -451,6 +451,49 @@ export default function ProofTreeView({
     }
     setEditing(null);
   };
+  // Select-all and clipboard in the in-place editor. The VS Code webview is an
+  // awkward host for these: the workbench owns most keybindings, and whether
+  // ⌘/Ctrl-C/X/V reach a focused textarea as native clipboard ACTIONS (rather
+  // than being swallowed on the way) isn't something the widget can observe up
+  // front. So the clipboard three are deliberately NOT intercepted — replacing
+  // the browser's own handling would break paste outright wherever the async
+  // Clipboard API is unavailable or unpermitted, i.e. it could only make a
+  // working case worse. Instead we WATCH for the native event (`onCopy`/`onCut`
+  // /`onPaste` set this flag) and fill in from `navigator.clipboard` on the
+  // next tick only when none arrived, so the native path always wins when it
+  // works. Select-all needs none of that care — it touches no clipboard and no
+  // permission, so it's done outright.
+  const nativeClip = useRef(false);
+  const clipboardFallback = async (
+    key: "c" | "x" | "v",
+    ta: HTMLTextAreaElement,
+  ) => {
+    const from = ta.selectionStart;
+    const to = ta.selectionEnd;
+    const v = ta.value;
+    // The textarea is controlled, so a cut/paste has to go through state —
+    // writing `ta.value` directly would be overwritten on the next render.
+    // The caret is then restored after that render (setTimeout, not rAF: a
+    // hidden webview never fires animation frames).
+    const put = (value: string, caret: number) => {
+      setEditing((cur) => cur && { ...cur, value });
+      window.setTimeout(() => ta.setSelectionRange(caret, caret), 0);
+    };
+    try {
+      if (key === "v") {
+        const text = await navigator.clipboard.readText();
+        if (!text) return;
+        put(v.slice(0, from) + text + v.slice(to), from + text.length);
+        return;
+      }
+      if (from === to) return; // nothing selected: copy/cut are no-ops
+      await navigator.clipboard.writeText(v.slice(from, to));
+      if (key === "x") put(v.slice(0, from) + v.slice(to), from);
+    } catch (e) {
+      console.warn("[proof-tree] clipboard fallback failed:", e);
+    }
+  };
+
   // A tactic single-click reveals in source — but a double-click's FIRST
   // click is a plain click, and revealing immediately steals focus to the
   // editor mid-gesture (the second click never reaches the widget, so
@@ -1867,8 +1910,30 @@ export default function ProofTreeView({
                         }
                         onClick={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => e.stopPropagation()}
+                        onCopy={() => (nativeClip.current = true)}
+                        onCut={() => (nativeClip.current = true)}
+                        onPaste={() => (nativeClip.current = true)}
                         onKeyDown={(e) => {
                           e.stopPropagation();
+                          const mod = e.metaKey || e.ctrlKey;
+                          const k = e.key.toLowerCase();
+                          const ta = e.currentTarget;
+                          if (mod && k === "a") {
+                            e.preventDefault();
+                            ta.setSelectionRange(0, ta.value.length);
+                            return;
+                          }
+                          if (mod && (k === "c" || k === "x" || k === "v")) {
+                            // No preventDefault: let the native clipboard run,
+                            // and only stand in for it if it didn't (see
+                            // clipboardFallback).
+                            nativeClip.current = false;
+                            window.setTimeout(() => {
+                              if (!nativeClip.current)
+                                void clipboardFallback(k, ta);
+                            }, 0);
+                            return;
+                          }
                           if (e.key === "Escape") {
                             e.preventDefault();
                             setEditing(null);
