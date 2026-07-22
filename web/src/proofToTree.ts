@@ -50,21 +50,34 @@ export function hypLine(h: Hypothesis): string {
 // actually uses it (`tacticDependsOn`, fvarIds — same ids as `Hypothesis.id`;
 // a leaf goal has no consumer, so nothing is flagged).
 //
-// In full mode that's the whole context. In delta mode it's the hypotheses the
-// goal GAINED over the goal its own producing tactic consumed (Paperproof's
-// "introduced here" semantics; for a root goal, its binders — gained from the
-// theorem statement), PLUS any older hypotheses the consuming tactic uses:
-// usage is half the point of showing the context, so a used hyp is shown even
-// when it isn't new. Context order is preserved.
+// Three levels of verbosity, selected by the rail's hyp-mode button:
+//
+// - `full` — the goal's whole context.
+// - `delta` (default) — the hypotheses the goal GAINED over the goal its own
+//   producing tactic consumed (Paperproof's "introduced here" semantics; for a
+//   root goal, its binders — gained from the theorem statement), PLUS any older
+//   hypotheses the consuming tactic uses: usage is half the point of showing
+//   the context, so a used hyp is shown even when it isn't new.
+// - `used` — ONLY what the consuming tactic actually mentions. This is the
+//   narrowest honest answer to "what does this step depend on", and it is the
+//   one mode that can legitimately come back EMPTY: a leaf goal has no
+//   consuming tactic, so nothing is used, and its box shows the `⊢ ` line
+//   alone. That is the truth rather than a rendering gap.
+//
+// Context order is preserved in every mode.
+export type HypMode = "used" | "delta" | "full";
+
 function contextFor(
   goal: GoalInfo,
   consumedBy: ProofStep | undefined,
   producedBy: ProofStep | undefined,
-  fullHyps: boolean,
+  mode: HypMode,
 ): HypLine[] {
   const used = new Set(consumedBy?.tacticDependsOn ?? []);
   let shown = goal.hyps;
-  if (!fullHyps) {
+  if (mode === "used") {
+    shown = goal.hyps.filter((h) => used.has(h.id));
+  } else if (mode === "delta") {
     const inherited = new Set(producedBy?.goalBefore.hyps.map((h) => h.id));
     shown = goal.hyps.filter((h) => !inherited.has(h.id) || used.has(h.id));
   }
@@ -308,12 +321,12 @@ export interface ProofToTreeOptions {
    * Label each tactic with its goal's FULL local context instead of the delta
    * the goal gained (plus used) — contexts read additively down the tree.
    */
-  fullHyps?: boolean;
+  hypMode?: HypMode;
 }
 
 export function proofToTree(
   proof: Proof,
-  { fullHyps = false }: ProofToTreeOptions = {},
+  { hypMode = "delta" }: ProofToTreeOptions = {},
 ): TreeNode[] {
   const goals = goalIndex(proof);
 
@@ -367,7 +380,7 @@ export function proofToTree(
       // The local context rides the goal node itself and is drawn inside its
       // box, above the `⊢ ` line — the goal and the assumptions it holds under
       // are one thing to read, exactly as the infoview shows them.
-      hyps: goal && contextFor(goal, step, producedBy, fullHyps),
+      hyps: goal && contextFor(goal, step, producedBy, hypMode),
       comment: commentByNode.text.get(goalId),
       commentRanges: commentByNode.ranges.get(goalId),
       caseLabel: thisCase === parentCase ? undefined : thisCase,

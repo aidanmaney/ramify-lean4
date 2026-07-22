@@ -35,6 +35,7 @@ import {
   proofToTree,
   tacticNodeAt,
 } from "./proofToTree";
+import type { HypMode } from "./proofToTree";
 import {
   ACCENT_TEXT,
   CASE_FILL,
@@ -90,6 +91,33 @@ const COMPACT_LEFT = 16;
 // yellow hyp labels and the orange accent stay distinct from both).
 // Every drawable colour resolves from the editor's theme; see theme.ts.
 
+// The hyp-mode cycle, ordered by increasing breadth so repeated clicks widen
+// the context and then wrap back. The glyph shows the CURRENT mode rather than
+// a fixed icon: with three states there is no on/off to read from a pressed
+// style alone.
+const HYP_MODES: Record<
+  HypMode,
+  { glyph: string; title: string; next: HypMode }
+> = {
+  used: {
+    glyph: "▸",
+    title:
+      "Context: only hypotheses the tactic below actually mentions (click for the ones it introduced too)",
+    next: "delta",
+  },
+  delta: {
+    glyph: "Δ",
+    title:
+      "Context: hypotheses this goal introduced, plus any its tactic uses (click for the full context)",
+    next: "full",
+  },
+  full: {
+    glyph: "∀",
+    title: "Context: every hypothesis in scope (click for only the used ones)",
+    next: "used",
+  },
+};
+
 const ZOOM_MIN = 0.05;
 const ZOOM_MAX = 2;
 const clampZoom = (z: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
@@ -119,7 +147,10 @@ function HypBlock({
   width: number;
   taggedLines?: (ReactNode | null)[] | null;
 }) {
-  const anyUsed = lines.some((l) => l.used);
+  // Markers only when they SEPARATE something: all-used (the `used` context
+  // mode) or none-used means the gutter says nothing. Mirrors sizeOf's
+  // reservation, which must agree or the text and its box disagree.
+  const anyUsed = lines.some((l) => l.used) && !lines.every((l) => l.used);
   // Marker gutter (reserved by sizeOf only when something is marked), and the
   // left edge text starts at.
   const textX = x + (anyUsed ? HYP_MARK_W : 0);
@@ -325,7 +356,10 @@ export default function ProofTreeView({
   const [accordion, setAccordion] = useState(true);
   // Edge hyp labels: the delta a goal gained (default), or its full context
   // ("all hyps"), so contexts read additively down the tree.
-  const [fullHyps, setFullHyps] = useState(false);
+  // Context verbosity, cycled by the rail (see HYP_MODES): `used` shows only
+  // what the consuming tactic mentions, `delta` what the goal gained (plus
+  // anything used), `full` the whole context.
+  const [hypMode, setHypMode] = useState<HypMode>("delta");
   // Layout mode: the compact trunk outline (default — every node gets its own
   // vertical slot, branches indent off a left trunk, read by scrolling), or
   // the wide Sugiyama tree (same-depth nodes share a band).
@@ -478,9 +512,9 @@ export default function ProofTreeView({
     // via layout.ts module state — the dep is what forces a re-measure when
     // the editor font changes (hence the lint suppression: the dependency is
     // real, just invisible to the linter).
-    () => createLayoutEngine(proofToTree(proof, { fullHyps }), { reflow }),
+    () => createLayoutEngine(proofToTree(proof, { hypMode }), { reflow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, fullHyps, codeFont, reflow],
+    [proof, hypMode, codeFont, reflow],
   );
 
   // When a new proof loads, reset to "everything expanded" and re-center.
@@ -1048,12 +1082,12 @@ export default function ProofTreeView({
           anchorRoot();
           setReflow(v);
         }}
-        fullHyps={fullHyps}
-        onFullHypsChange={(v) => {
+        hypMode={hypMode}
+        onHypModeChange={(v) => {
           // Every layer's hyp label resizes, so hold the root fixed on screen
           // (same treatment as expand/collapse-all).
           anchorRoot();
-          setFullHyps(v);
+          setHypMode(v);
         }}
         focused={focusId !== null}
         onExitFocus={() => setFocusId(null)}
@@ -1794,8 +1828,8 @@ function ControlRail({
   onOutlineChange,
   reflow,
   onReflowChange,
-  fullHyps,
-  onFullHypsChange,
+  hypMode,
+  onHypModeChange,
   focused,
   onExitFocus,
   seqActive,
@@ -1814,8 +1848,8 @@ function ControlRail({
   onOutlineChange: (v: boolean) => void;
   reflow: boolean;
   onReflowChange: (v: boolean) => void;
-  fullHyps: boolean;
-  onFullHypsChange: (v: boolean) => void;
+  hypMode: HypMode;
+  onHypModeChange: (v: HypMode) => void;
   focused: boolean;
   onExitFocus: () => void;
   seqActive: boolean;
@@ -1864,10 +1898,12 @@ function ControlRail({
         onClick={() => onOutlineChange(!outline)}
       />
       <RailButton
-        glyph="∀"
-        title="Show each goal's full context (off: only the hypotheses its tactic introduced or uses)"
-        pressed={fullHyps}
-        onClick={() => onFullHypsChange(!fullHyps)}
+        glyph={HYP_MODES[hypMode].glyph}
+        title={HYP_MODES[hypMode].title}
+        // Pressed whenever the context is NOT the default breadth, so the rail
+        // shows at a glance that something is being filtered or expanded.
+        pressed={hypMode !== "delta"}
+        onClick={() => onHypModeChange(HYP_MODES[hypMode].next)}
       />
       <div style={{ height: 6 }} />
       <RailButton

@@ -499,7 +499,12 @@ function sizeOf(
   const cap = reflow ? REFLOW_W + 2 * NODE_PAD : MAX_W;
   const labelW = Math.max(MIN_W, Math.min(cap, widest + 2 * NODE_PAD));
   const raw = hyps ?? [];
-  const gutter = raw.some((l) => l.used) ? HYP_MARK_W : 0;
+  // The `▸` gutter exists to tell used hyps from unused ones, so it is
+  // reserved only when there is actually a distinction to draw. In `used` mode
+  // every line is used by construction, and a marker on all of them would be
+  // pure noise in an already-tight box. Must agree with HypBlock's own test.
+  const gutter =
+    raw.some((l) => l.used) && !raw.every((l) => l.used) ? HYP_MARK_W : 0;
   // Context lines are normally NOT wrapped — the box grows to fit them,
   // because a mid-line break destroys the exact `name : type` string the
   // widget's tagged renderer matches on (taggedRender.tsx). But they are what
