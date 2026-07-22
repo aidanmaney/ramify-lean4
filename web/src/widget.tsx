@@ -219,7 +219,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // buffer), while the companion targets the lens when one is open, which is
   // what closes the tree↔lens loop (the lens cursor move it causes flows
   // back as highlightPos). Without the companion installed, reveal is inert.
-  const reveal = (p: ProofStepPosition) => callCompanion("reveal", p);
+  // The TIGHT span again (see hoverTactic): a raw step range runs into the
+  // next tactic, so revealing it would select past the tactic in the lens and,
+  // for a structured tactic, select its whole block. The start is what matters
+  // most — it becomes the cursor, and the accent lookup depends on it landing
+  // at the range's start — and tightening never moves it.
+  const reveal = (p: ProofStepPosition) =>
+    callCompanion("reveal", getTacticEdit(p)?.pos ?? p);
 
   // In-place editing: resolve a step's tight edit seam (double-click opens
   // the editor overlay pre-filled with `text`)…

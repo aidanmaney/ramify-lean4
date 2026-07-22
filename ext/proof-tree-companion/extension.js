@@ -228,6 +228,14 @@ let lensColumn = null;
  * (the lens is a few lines tall — AtTop makes the tactic the content),
  * line numbers off (a per-editor option; other editors keep their own). */
 async function showInLens(doc, selection, column) {
+  // Same narrowing as the hover highlight: a raw step range would select the
+  // trailing trivia too, and a structured tactic's whole block — more than the
+  // lens is tall. The start is untouched, so the cursor still lands there.
+  try {
+    selection = tightenRange(doc, selection) ?? selection;
+  } catch {
+    // stale range after an edit: fall through with what we were given
+  }
   const ed = await vscode.window.showTextDocument(doc, {
     viewColumn: column,
     selection,
@@ -317,22 +325,29 @@ const highlightDecoration = vscode.window.createTextEditorDecorationType({
 });
 
 /**
- * Shrink a hover range to what should actually be painted.
+ * Shrink an incoming range to the span actually worth painting — used for
+ * BOTH the hover highlight and the selection a reveal/popout leaves in the
+ * lens, which overshoot for the same two reasons.
  *
- * Two ways an incoming range overshoots. Paperproof's step ranges include
- * TRAILING TRIVIA — they run to the next tactic's first token — so `obtain
- * ⟨p, hpp, hpm⟩ := ih m hmlt hm2` arrives as `31:8 → 32:8` and paints to the
- * end of its own line plus the whole indent of the next. And a structured
- * tactic's range covers its entire block, so hovering `have … := by` would
- * light up a dozen lines for a node whose box shows one.
+ * Paperproof's step ranges include TRAILING TRIVIA — they run to the next
+ * tactic's first token — so `obtain ⟨p, hpp, hpm⟩ := ih m hmlt hm2` arrives as
+ * `31:8 → 32:8` and covers the end of its own line plus the whole indent of
+ * the next. And a structured tactic's range covers its entire block, so
+ * `have … := by` spans 13 lines in euclid for a node whose box shows one —
+ * as a highlight that lights up half the screen, as a lens selection that
+ * paints more than the lens is tall.
  *
- * The highlight is a "it's over here" pointer, not a region selector, so it is
- * clamped to the START line and then trimmed back over trailing whitespace.
+ * Both are POINTERS ("the node is here"), not region selectors, so the range
+ * is clamped to the START line and then trimmed back over trailing
+ * whitespace. The start is never moved: the cursor left there is what flows
+ * back as `highlightPos` and picks the accented node (see showInLens).
+ *
  * The widget already sends the server's tight range where it has one (which
- * also strips trailing comments); this is the geometric backstop, and the only
- * thing standing when a tactic is missing from `tacticEdits`.
+ * also strips a trailing comment, invisible from here); this is the geometric
+ * backstop, and the only thing standing for a tactic missing from
+ * `tacticEdits`.
  */
-function tightenForHighlight(doc, range) {
+function tightenRange(doc, range) {
   const lineEnd = doc.lineAt(range.start.line).range.end;
   let end = range.end.isAfter(lineEnd) ? lineEnd : range.end;
   const text = doc.getText(new vscode.Range(range.start, end));
@@ -352,7 +367,7 @@ function highlight(uri, range) {
     let paint = null;
     if (range) {
       try {
-        paint = tightenForHighlight(ed.document, range);
+        paint = tightenRange(ed.document, range);
       } catch {
         paint = range; // a stale range after an edit — better than nothing
       }
