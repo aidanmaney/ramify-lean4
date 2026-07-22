@@ -68,6 +68,11 @@ const MAX_CHARS = 100;
 // fits its box. Deriving from MAX_CHARS keeps the old ~100-col feel.
 const WRAP_W = MAX_CHARS * CHAR_W;
 const MAX_W = WRAP_W + 2 * NODE_PAD;
+// Reflow mode's budget: a much narrower column, so several branches fit across
+// the viewport at once (the point of the mode). Narrow enough to be worth the
+// extra height, wide enough that a typical goal still lands in 2-3 lines.
+const REFLOW_CHARS = 44;
+const REFLOW_W = REFLOW_CHARS * CHAR_W;
 const MIN_W = 60;
 
 // Measure rendered text width using the very font the SVG draws with, so the box
@@ -237,6 +242,8 @@ function fitPrefix(
 // the line it continues. Shared with the render (tspan x / line paddingLeft);
 // the wrap budget below subtracts it, so an indented line still fits WRAP_W.
 export const CONT_INDENT = 18;
+// Extra indent per open bracket in reflow mode (on top of CONT_INDENT).
+const NEST_INDENT = 10;
 
 // Semantic seams to prefer when breaking a long line: break BEFORE one of
 // these tokens, so the continuation line STARTS with the connective that ties
@@ -245,6 +252,12 @@ export const CONT_INDENT = 18;
 // logical connective) beats a relation/definition symbol — breaking at `≤`
 // inside `(2 ≤ n → …)` splits an atom that a nearby `∧` seam keeps whole.
 const BREAK_BEFORE_STRONG = new Set(["→", "↔", "∧", "∨", "⊢"]);
+// Tactic-syntax keywords open a new clause of the invocation, so breaking
+// before one reads like the source would if you wrapped it by hand
+// (`induction n` / `using Nat.strong_induction_on` / `with`).
+const BREAK_BEFORE_KEYWORD = new Set([
+  "using", "with", "at", "by", "from", "generalizing", ":=",
+]);
 const BREAK_BEFORE_WEAK = new Set([
   "=", "≠", "≤", "≥", "<", ">", "∣", ":=", ":", "↦",
 ]);
@@ -254,10 +267,26 @@ function seamRank(left: string, right: string | undefined): number {
   if (
     left.endsWith(",") ||
     left.endsWith(";") ||
-    (right !== undefined && BREAK_BEFORE_STRONG.has(right))
+    (right !== undefined &&
+      (BREAK_BEFORE_STRONG.has(right) || BREAK_BEFORE_KEYWORD.has(right)))
   )
     return 2;
   return right !== undefined && BREAK_BEFORE_WEAK.has(right) ? 1 : 0;
+}
+
+// Bracket depth accumulated over a string — what reflow mode indents by, so a
+// continuation inside `⟨…⟩` or `(…)` hangs under its opener instead of all
+// wrapped lines sharing one flat indent. Angle brackets count: Lean anonymous
+// constructors are everywhere in these proofs.
+const OPENERS = "([{⟨";
+const CLOSERS = ")]}⟩";
+function depthDelta(s: string): number {
+  let d = 0;
+  for (const ch of s) {
+    if (OPENERS.includes(ch)) d++;
+    else if (CLOSERS.includes(ch)) d--;
+  }
+  return d;
 }
 
 // Width-wrap a single label segment (no newlines) by MEASURED pixel width
@@ -273,17 +302,32 @@ function wrapLine(
   maxW: number,
   fontPx = NODE_FONT_PX,
   italic = false,
+  // Reflow mode indents each continuation by the BRACKET DEPTH open at the
+  // break rather than a flat hang, which is what keeps a narrow box readable:
+  // the wrapped tail of `⟨p, hpp, hpm⟩` lines up inside the bracket instead of
+  // against everything else. Off, every continuation gets the flat CONT_INDENT.
+  nested = false,
 ): WrappedLine[] {
   const out: WrappedLine[] = [];
   const words = text.split(" ");
   let i = 0;
+  let depth = 0; // bracket depth at the START of the current line
   while (i < words.length) {
     const cont = out.length > 0;
-    const budget = maxW - (cont ? CONT_INDENT : 0);
+    // Indent is capped so a deeply nested tail can never squeeze the budget to
+    // nothing — past the cap the text simply stops indenting further.
+    const indent = !cont
+      ? 0
+      : nested
+        ? Math.min(CONT_INDENT + depth * NEST_INDENT, maxW * 0.4)
+        : CONT_INDENT;
+    const budget = maxW - indent;
     // Over-wide token: peel off the widest prefix that fits and go around.
     if (measureText(words[i], fontPx, italic) > budget) {
       const cut = fitPrefix(words[i], budget, fontPx, italic);
-      out.push({ text: words[i].slice(0, cut), cont });
+      const head = words[i].slice(0, cut);
+      out.push({ text: head, cont, indent });
+      depth += depthDelta(head);
       words[i] = words[i].slice(cut);
       continue;
     }
@@ -299,7 +343,7 @@ function wrapLine(
       seamEnd[seamRank(words[j], words[j + 1])] = cur;
     }
     if (j >= words.length) {
-      out.push({ text: cur, cont }); // the rest fits on this line
+      out.push({ text: cur, cont, indent }); // the rest fits on this line
       break;
     }
     // A clause boundary beats a relation beats the plain word break — as long
@@ -312,7 +356,8 @@ function wrapLine(
       : usable(seamEnd[1])
         ? seamEnd[1]
         : cur;
-    out.push({ text: chosen, cont });
+    out.push({ text: chosen, cont, indent });
+    depth = Math.max(0, depth + depthDelta(chosen));
     i += chosen.split(" ").length;
   }
   return out;
@@ -326,10 +371,11 @@ function wrapText(
   maxW: number,
   fontPx = NODE_FONT_PX,
   italic = false,
+  nested = false,
 ): WrappedLine[] {
   return text
     .split("\n")
-    .flatMap((segment) => wrapLine(segment, maxW, fontPx, italic));
+    .flatMap((segment) => wrapLine(segment, maxW, fontPx, italic, nested));
 }
 
 // Source-comment strip geometry: an italic block drawn at the very TOP of the
@@ -363,14 +409,24 @@ function caseSize(
 
 function commentSize(
   text: string | undefined,
+  reflow = false,
 ): Pick<LayoutNode, "commentLines" | "commentBlockH" | "commentW"> {
   if (!text)
     return { commentLines: [], commentBlockH: 0, commentW: 0 };
-  const commentLines = wrapText(text, WRAP_W, COMMENT_FONT_PX, true);
+  // Same budget as the labels: a narrow box under a full-width comment strip
+  // would defeat the whole point of the mode, since the strip's width joins
+  // the node's effective width in both layouts.
+  const commentLines = wrapText(
+    text,
+    reflow ? REFLOW_W : WRAP_W,
+    COMMENT_FONT_PX,
+    true,
+    reflow,
+  );
   const commentW = Math.max(
     ...commentLines.map(
       (l) =>
-        (l.cont ? CONT_INDENT : 0) + measureText(l.text, COMMENT_FONT_PX, true),
+        l.indent + measureText(l.text, COMMENT_FONT_PX, true),
     ),
   );
   return {
@@ -392,25 +448,54 @@ function commentSize(
 function sizeOf(
   text: string,
   hyps: HypLine[] | undefined,
-): Pick<LayoutNode, "lines" | "w" | "h" | "hypH"> {
-  const lines = wrapText(text, WRAP_W);
+  reflow = false,
+): Pick<LayoutNode, "lines" | "w" | "h" | "hypH" | "hyps"> {
+  const lines = wrapText(
+    text,
+    reflow ? REFLOW_W : WRAP_W,
+    NODE_FONT_PX,
+    false,
+    reflow,
+  );
   const widest = Math.max(
     ...lines.map(
-      (l) => (l.cont ? CONT_INDENT : 0) + measureText(l.text, NODE_FONT_PX),
+      (l) => l.indent + measureText(l.text, NODE_FONT_PX),
     ),
   );
-  const labelW = Math.max(MIN_W, Math.min(MAX_W, widest + 2 * NODE_PAD));
-  const hypLines = hyps ?? [];
-  const gutter = hypLines.some((l) => l.used) ? HYP_MARK_W : 0;
+  const cap = reflow ? REFLOW_W + 2 * NODE_PAD : MAX_W;
+  const labelW = Math.max(MIN_W, Math.min(cap, widest + 2 * NODE_PAD));
+  const raw = hyps ?? [];
+  const gutter = raw.some((l) => l.used) ? HYP_MARK_W : 0;
+  // Context lines are normally NOT wrapped — the box grows to fit them,
+  // because a mid-line break destroys the exact `name : type` string the
+  // widget's tagged renderer matches on (taggedRender.tsx). But they are what
+  // actually sets most box widths (measured: 44 of 84 boxes with a context are
+  // bound by their widest hyp, not their label), so leaving them alone made
+  // reflow nearly pointless. In reflow mode they wrap too, and the cost is
+  // paid exactly where it lands: a WRAPPED hyp line no longer matches by text,
+  // so it renders as plain text and loses its type tooltip. Unwrapped ones —
+  // the majority, and every hyp outside this mode — keep theirs.
+  const hypLines: HypLine[] = !reflow
+    ? raw
+    : raw.flatMap((l) =>
+        wrapText(l.text, REFLOW_W - gutter, HYP_FONT_PX, false, true).map(
+          (w) => ({ text: w.text, used: l.used, cont: w.cont, indent: w.indent }),
+        ),
+      );
   const hypW =
     hypLines.length > 0
-      ? Math.max(...hypLines.map((l) => measureText(l.text, HYP_FONT_PX))) +
+      ? Math.max(
+          ...hypLines.map(
+            (l) => (l.indent ?? 0) + measureText(l.text, HYP_FONT_PX),
+          ),
+        ) +
         gutter +
         2 * NODE_PAD
       : 0;
   const hypH = hypLines.length > 0 ? hypLines.length * HYP_LINE_H + HYP_GAP : 0;
   return {
     lines,
+    hyps: hypLines,
     w: Math.max(labelW, hypW),
     h: hypH + lines.length * LINE_H + 2 * NODE_PAD_Y,
     hypH,
@@ -423,7 +508,16 @@ function sizeOf(
 // inferred and surfaced as `LayoutEngine` for the renderer's prop typing.
 export type LayoutEngine = ReturnType<typeof createLayoutEngine>;
 
-export function createLayoutEngine(data: TreeNode[]) {
+export interface LayoutEngineOptions {
+  /** Wrap labels and comment strips at a much narrower column, with
+   * bracket-depth indentation, so branches fit side by side. */
+  reflow?: boolean;
+}
+
+export function createLayoutEngine(
+  data: TreeNode[],
+  { reflow = false }: LayoutEngineOptions = {},
+) {
   // Stable left-to-right order key for the wide layout, assigned below once
   // `SRC` exists so that siblings there read in SOURCE order too — the wide
   // mode can't put source order on the vertical axis (that axis is depth), but
@@ -502,8 +596,8 @@ export function createLayoutEngine(data: TreeNode[]) {
       ] => [
         n.id,
         {
-          ...sizeOf(n.label, n.hyps),
-          ...commentSize(n.comment),
+          ...sizeOf(n.label, n.hyps, reflow),
+          ...commentSize(n.comment, reflow),
           ...caseSize(n.caseLabel),
         },
       ],

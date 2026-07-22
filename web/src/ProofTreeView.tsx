@@ -19,7 +19,6 @@ import {
   NODE_PAD_Y,
   ARROW_GAP,
   TRUNK_INSET,
-  CONT_INDENT,
   COMMENT_FONT_PX,
   COMMENT_LINE_H,
   COMMENT_INDENT,
@@ -141,7 +140,7 @@ function HypBlock({
           style={{ letterSpacing: 0 }}
         >
           {lines.map((line, j) =>
-            line.used ? (
+            line.used && !line.cont ? (
               <tspan key={j} x={x} y={y + (j + 0.5) * HYP_LINE_H} dy="0.32em">
                 {HYP_MARK}
               </tspan>
@@ -173,7 +172,11 @@ function HypBlock({
             {lines.map((line, j) => (
               <div
                 key={j}
-                style={{ height: HYP_LINE_H, color: lineFill(line.used) }}
+                style={{
+                  height: HYP_LINE_H,
+                  color: lineFill(line.used),
+                  paddingLeft: line.indent ?? 0,
+                }}
               >
                 {taggedLines[j] ?? line.text}
               </div>
@@ -192,7 +195,7 @@ function HypBlock({
           {lines.map((line, j) => (
             <tspan
               key={j}
-              x={textX}
+              x={textX + (line.indent ?? 0)}
               y={y + (j + 0.5) * HYP_LINE_H}
               dy="0.32em"
               fill={lineFill(line.used)}
@@ -331,6 +334,11 @@ export default function ProofTreeView({
   // Purely a paint change — the palette swaps three CSS variables off the root
   // attribute below (theme.ts), so no geometry is touched and nothing relayouts.
   const [outline, setOutline] = useState(false);
+  // Reflow: wrap labels at a much narrower column with bracket-depth indents,
+  // trading height for width so sibling branches fit across the viewport.
+  // Unlike `outline` this is GEOMETRY — it rebuilds the engine (below) rather
+  // than just repainting.
+  const [reflow, setReflow] = useState(false);
   // Zoom factor applied to the whole SVG (1 = 100%). Lets you fit a wide/tall
   // tree into the slice and zoom back into a region.
   const [zoom, setZoom] = useState(1);
@@ -470,9 +478,9 @@ export default function ProofTreeView({
     // via layout.ts module state — the dep is what forces a re-measure when
     // the editor font changes (hence the lint suppression: the dependency is
     // real, just invisible to the linter).
-    () => createLayoutEngine(proofToTree(proof, { fullHyps })),
+    () => createLayoutEngine(proofToTree(proof, { fullHyps }), { reflow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, fullHyps, codeFont],
+    [proof, fullHyps, codeFont, reflow],
   );
 
   // When a new proof loads, reset to "everything expanded" and re-center.
@@ -709,6 +717,7 @@ export default function ProofTreeView({
   // everything) re-centers on that view's top node.
   const viewKey =
     (compact ? "compact:" : "wide:") +
+    (reflow ? "reflow:" : "") +
     (seq.mode === "view"
       ? `seq:${seq.from}>${seq.to}`
       : focusId
@@ -1032,6 +1041,13 @@ export default function ProofTreeView({
         onCompactChange={setCompact}
         outline={outline}
         onOutlineChange={setOutline}
+        reflow={reflow}
+        onReflowChange={(v) => {
+          // Every box is re-measured, so hold the root steady like the other
+          // geometry toggles do.
+          anchorRoot();
+          setReflow(v);
+        }}
         fullHyps={fullHyps}
         onFullHypsChange={(v) => {
           // Every layer's hyp label resizes, so hold the root fixed on screen
@@ -1413,7 +1429,7 @@ export default function ProofTreeView({
                                   ? COMMENT_INDENT
                                   : 0)
                               : -node.data.commentW / 2) +
-                            (line.cont ? CONT_INDENT : 0)
+                            line.indent
                           }
                           y={
                             boxTop -
@@ -1507,7 +1523,7 @@ export default function ProofTreeView({
                               height: LINE_H,
                               // Hanging indent for width-wrapped continuation
                               // lines — same offset the layout budgeted.
-                              paddingLeft: lines[j].cont ? CONT_INDENT : 0,
+                              paddingLeft: lines[j].indent,
                             }}
                           >
                             {line}
@@ -1531,7 +1547,7 @@ export default function ProofTreeView({
                           key={j}
                           // Continuation lines hang-indent by the same offset
                           // the layout budgeted for them.
-                          x={-w / 2 + NODE_PAD + (line.cont ? CONT_INDENT : 0)}
+                          x={-w / 2 + NODE_PAD + line.indent}
                           y={labelTop + (j + 0.5) * LINE_H}
                           dy="0.32em"
                         >
@@ -1776,6 +1792,8 @@ function ControlRail({
   onCompactChange,
   outline,
   onOutlineChange,
+  reflow,
+  onReflowChange,
   fullHyps,
   onFullHypsChange,
   focused,
@@ -1794,6 +1812,8 @@ function ControlRail({
   onCompactChange: (v: boolean) => void;
   outline: boolean;
   onOutlineChange: (v: boolean) => void;
+  reflow: boolean;
+  onReflowChange: (v: boolean) => void;
   fullHyps: boolean;
   onFullHypsChange: (v: boolean) => void;
   focused: boolean;
@@ -1830,6 +1850,12 @@ function ControlRail({
         title="Compact outline layout — every node on its own line, branches indent off a left trunk (off: the wide layered tree)"
         pressed={compact}
         onClick={() => onCompactChange(!compact)}
+      />
+      <RailButton
+        glyph="¶"
+        title="Reflow: wrap labels at a narrow column (breaking at commas, connectives, := and tactic keywords) so branches fit side by side"
+        pressed={reflow}
+        onClick={() => onReflowChange(!reflow)}
       />
       <RailButton
         glyph="□"

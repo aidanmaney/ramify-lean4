@@ -141,18 +141,3 @@ example
               constructor
               · exact hu
               · exact hw
-
-
-open Classical
-
--- theorem two_div_square : ∀ (n : ℤ), 2 ∣ n * n -> 2 ∣ n := by
---   intro n h
-
-
-
-
--- theorem no_coprime_square_eq_double_square :
---     ¬ ∃ m n : ℤ, Int.gcd m n = 1 ∧ m * m = 2 * n * n := by
---   by_contra!
---   have hdiv : (2 : ℤ) ∣ m := by
---     sorry

@@ -3,6 +3,10 @@ import type { ProofStepPosition } from "./paperproof";
 // One line of a goal's local context, e.g. `h : p ∧ q`, with whether the tactic
 // that consumes the goal actually uses it (Paperproof's tacticDependsOn).
 export interface HypLine {
+  // Reflow mode wraps long context lines, so a line can be a continuation of
+  // the one above (no `▸` marker of its own) and carry its own indent.
+  cont?: boolean;
+  indent?: number;
   text: string;
   used: boolean;
 }
@@ -74,6 +78,11 @@ export interface PlacedLink {
 export interface WrappedLine {
   text: string;
   cont: boolean;
+  // Left offset (px) for THIS line, already subtracted from the wrap budget
+  // that measured it. A plain continuation gets CONT_INDENT; in reflow mode it
+  // is computed from bracket depth at the break, so a wrapped argument list
+  // hangs under its opener. Explicit-newline lines get 0.
+  indent: number;
 }
 
 // A visible node enriched with fold state and computed box geometry; this is the
