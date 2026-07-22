@@ -30,6 +30,23 @@ import {
 import type { Proof, ProofStepPosition } from "./paperproof";
 import type { HypLine } from "./types";
 import { proofToTree } from "./proofToTree";
+import {
+  ACCENT_TEXT,
+  COMMENT_FILL,
+  EDIT_BG,
+  EDIT_TEXT,
+  HYP_MARK_FILL,
+  HYP_UNUSED_FILL,
+  HYP_USED_FILL,
+  LINK_STROKE,
+  MUTED_FILL,
+  NODE_STYLES,
+  NODE_TEXT,
+  RAIL_PRESSED,
+  SEQ_STROKE,
+  ensurePaletteStyle,
+  resolveThemeKind,
+} from "./theme";
 
 // The interactive proof tree: layout, folding, zoom/scroll, and the SVG render.
 // It is deliberately source-agnostic — it takes a single `Proof` and knows
@@ -65,14 +82,7 @@ const COMPACT_LEFT = 16;
 // Goals cool blue, tactics warm green — both several steps more saturated than
 // the old near-white pastels so the two node kinds read apart at a glance (the
 // yellow hyp labels and the orange accent stay distinct from both).
-const NODE_STYLES = {
-  goal: { fill: "#dbeafe", stroke: "#1d6fd8" },
-  tactic: { fill: "#d3f8df", stroke: "#15803d" },
-  default: { fill: "#fff", stroke: "#999" },
-};
-// Accent outline for the chosen sequence endpoints, and for the tactic node the
-// editor cursor is currently inside (the source→tree half of the link).
-const SEQ_STROKE = "#dd6b20";
+// Every drawable colour resolves from the editor's theme; see theme.ts.
 
 const ZOOM_MIN = 0.05;
 const ZOOM_MAX = 2;
@@ -103,12 +113,6 @@ function positionContains(
   return beforeOrEq(range.start, p) && !beforeOrEq(range.stop, p);
 }
 
-// Colors of the context block's lines, drawn on the goal box's own fill: hyps
-// the consuming tactic uses keep the full-strength ink (plus a marker in the
-// gutter); the rest recede.
-const HYP_USED_FILL = "#1a365d";
-const HYP_UNUSED_FILL = "#7089a8";
-const HYP_MARK_FILL = "#c05621";
 const HYP_MARK = "▸";
 
 // The context block drawn INSIDE a goal box, above its `⊢ ` line: one line per
@@ -440,13 +444,32 @@ export default function ProofTreeView({
   // clears layout.ts's width cache and, via this state, rebuilds the engine
   // so all geometry is re-measured in the new family. Inert outside the
   // webview: nothing rewrites the root style attribute there.
+  // The palette follows the theme by the same route, and for the same reason:
+  // switching the colour theme rewrites those variables in place. Colours are
+  // `var(--ptw-…)` at the render sites, so the browser repaints them without
+  // React — this state exists only to re-derive the light/dark STAMP the
+  // palette keys on (see theme.ts). Geometry is untouched, unlike the font.
   const [codeFont, setCodeFont] = useState(getCodeFontFamily);
+  const [themeKind, setThemeKind] = useState(resolveThemeKind);
+  ensurePaletteStyle();
   useEffect(() => {
-    const obs = new MutationObserver(() => setCodeFont(refreshCodeFontFamily()));
+    const sync = () => {
+      setCodeFont(refreshCodeFontFamily());
+      setThemeKind(resolveThemeKind());
+    };
+    const obs = new MutationObserver(sync);
     obs.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["style"],
     });
+    // VS Code stamps the theme KIND on the body as a class/attribute; a switch
+    // between two themes of the same kind only moves the variables above, but
+    // a light↔dark switch can land here first.
+    if (document.body)
+      obs.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class", "data-vscode-theme-kind"],
+      });
     return () => obs.disconnect();
   }, []);
 
@@ -911,7 +934,13 @@ export default function ProofTreeView({
     // A positioned box the pinned toolbars/overlays anchor to (via `absolute`),
     // so the whole view is bounded by `height` — full viewport on the page, a
     // panel-sized box in the infoview.
-    <div style={{ position: "relative", width: "100%", height, overflow: "hidden" }}>
+    <div
+      // Scope for the colour palette (theme.ts): every `var(--ptw-…)` below
+      // inherits from here, so the whole tree re-colours by changing this one
+      // attribute.
+      data-ptw-theme={themeKind}
+      style={{ position: "relative", width: "100%", height, overflow: "hidden" }}
+    >
       {/* No top bar: the top edge stays empty so the eye falls straight from
           the infoview's expected-type block onto the tree's root. Everything
           lives on the floating icon rail at the right; the only top-left
@@ -943,7 +972,7 @@ export default function ProofTreeView({
             zIndex: 10,
             fontFamily: "monospace",
             fontSize: 12,
-            color: "#fff",
+            color: ACCENT_TEXT,
             background: SEQ_STROKE,
             padding: "3px 10px",
             borderRadius: 999,
@@ -997,7 +1026,7 @@ export default function ProofTreeView({
             zIndex: 10,
             fontFamily: "monospace",
             fontSize: 13,
-            color: "#666",
+            color: MUTED_FILL,
           }}
         >
           Nothing to display for this proof.
@@ -1100,7 +1129,7 @@ export default function ProofTreeView({
                 <path
                   key={i}
                   fill="none"
-                  stroke="#555"
+                  stroke={LINK_STROKE}
                   strokeWidth={1.5}
                   d={d}
                 />
@@ -1306,7 +1335,7 @@ export default function ProofTreeView({
                       fontSize={COMMENT_FONT_PX}
                       fontFamily={getCodeFontFamily()}
                       fontStyle="italic"
-                      fill="#8b949e"
+                      fill={COMMENT_FILL}
                       // Match the width measurer (no inherited letter-spacing).
                       style={{ letterSpacing: 0 }}
                     >
@@ -1407,7 +1436,7 @@ export default function ProofTreeView({
                           lineHeight: `${LINE_H}px`,
                           letterSpacing: 0,
                           whiteSpace: "pre",
-                          color: "#000",
+                          color: NODE_TEXT,
                         }}
                       >
                         {taggedLines.map((line, j) => (
@@ -1430,6 +1459,7 @@ export default function ProofTreeView({
                       textAnchor="start"
                       fontSize={NODE_FONT_PX}
                       fontFamily={getCodeFontFamily()}
+                      fill={NODE_TEXT}
                       // Match the width measurer in layout.ts, which doesn't include
                       // the page's inherited letter-spacing.
                       style={{ letterSpacing: 0 }}
@@ -1586,8 +1616,8 @@ export default function ProofTreeView({
                           lineHeight: `${LINE_H}px`,
                           letterSpacing: 0,
                           padding: `${NODE_PAD_Y - 1}px ${NODE_PAD - 2}px`,
-                          background: "#fff",
-                          color: "#111",
+                          background: EDIT_BG,
+                          color: EDIT_TEXT,
                           border: `2px solid ${NODE_STYLES.tactic.stroke}`,
                           borderRadius: 4, // match the tactic box corners
                           outline: "none",
@@ -1649,7 +1679,7 @@ function RailButton({
   pressed?: boolean;
   pressedColor?: string;
 }) {
-  const color = pressedColor ?? "#4a5568";
+  const color = pressedColor ?? RAIL_PRESSED;
   return (
     <button
       type="button"
@@ -1657,7 +1687,12 @@ function RailButton({
       onClick={onClick}
       style={
         pressed
-          ? { ...RAIL_BTN, background: color, borderColor: color, color: "#fff" }
+          ? {
+              ...RAIL_BTN,
+              background: color,
+              borderColor: color,
+              color: ACCENT_TEXT,
+            }
           : RAIL_BTN
       }
     >

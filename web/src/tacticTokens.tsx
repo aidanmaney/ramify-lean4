@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { InteractiveCode, type CodeWithInfos } from "@leanprover/infoview";
 import { ensureTaggedStyle } from "./taggedRender";
 import { flattenTaggedText, lineOffsets } from "./taggedText";
+import { TOKEN_COLOR } from "./theme";
 
 // Syntax colouring for tactic node labels (widget only), from the Lean
 // server's OWN semantic tokens — the same `collectSyntaxBasedSemanticTokens` +
@@ -47,24 +48,6 @@ export interface TacticTokenInfo {
   start: LspPos;
   code: CodeWithInfos;
 }
-
-// VS Code's DEFAULT LIGHT theme token colours, hardcoded rather than taken from
-// the `--vscode-symbolIcon-*` theme variables on purpose: node fills in this
-// widget are fixed light pastels (NODE_STYLES), so theme-following token
-// colours would go light-on-light and vanish in a dark theme. Unmapped token
-// types inherit the label's own colour.
-const TOKEN_COLOR: Record<string, string> = {
-  keyword: "#af00db",
-  function: "#795e26",
-  variable: "#001080",
-  property: "#0451a5",
-  number: "#098658",
-  string: "#a31515",
-  comment: "#008000",
-  type: "#267f99",
-  namespace: "#267f99",
-  leanSorryLike: "#c53030",
-};
 
 /**
  * Offsets into `text` of every token, given that `text` starts at document
