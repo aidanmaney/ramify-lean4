@@ -349,38 +349,30 @@ export function proofToTree(
     return best;
   }
 
-  // Where a NEW tactic for a pending goal (no consuming step) would go — the
-  // seam behind the tree's (+) chips. The producing step's SHAPE picks the
-  // insertion form:
+  // Where a NEW tactic for a pending goal would go — the seam behind the
+  // tree's (+) chips. The producing step's SHAPE picks the insertion form:
   //
-  // - `have … := by` body (the goal is SPAWNED and the label ends in `by`):
-  //   next line, one level deeper — inside the by-block.
-  // - only child: plain next line at the producer's own indent.
-  // - one of several, producer ends in `with`: a `| case => ` line (the
-  //   with-block form; anonymous cases fall back to `_`).
-  // - one of several otherwise: a `· ` bullet at the producer's indent.
+  // - producer ends in `with`: a `| case => ` line (the with-block form;
+  //   anonymous cases fall back to `_`).
+  // - one of SEVERAL goalsAfter: a `· ` bullet at the producer's indent.
+  // - otherwise: a plain next line at the producer's indent.
   //
   // `after` is the last-in-source step among the producer's subtrees, so the
-  // new branch lands BELOW its already-written siblings — except for a
-  // by-body, which must stay inside the `by` and so anchors on the producer
-  // itself. Known v1 limit: with SEVERAL pending siblings, each (+) inserts at
-  // the same anchor, so adding them out of source order attaches text to the
-  // wrong goal — Lean's bullets bind by position, and only `case`-named
-  // insertion could do better.
+  // new branch lands BELOW its already-written siblings. Known v1 limit: with
+  // SEVERAL pending siblings, each (+) inserts at the same anchor, so adding
+  // them out of source order attaches text to the wrong goal — Lean's bullets
+  // bind by position, and only `case`-named insertion could do better.
   function addSpecFor(goalId: string, prod: ProofStep): AddSpec {
     const label = prod.tacticString.trimEnd();
-    const spawned = prod.spawnedGoals.some((g) => g.id === goalId);
     const base = prod.position.start.character;
-    if (spawned && label.endsWith("by"))
-      return { kind: "seq", indent: base + 2, after: prod.position };
     let anchor = prod;
     for (const g of stepGoalsAfter(prod)) {
       const b = subtreeLastStep(g.id);
       if (b && cmpPos(b.position.stop, anchor.position.stop) > 0) anchor = b;
     }
-    // The `with` test MUST outrank the only-child rule: an induction with a
-    // single case still needs its `| case =>` marker — a bare next line after
-    // `with` is a syntax error, and a one-case with-block is common
+    // The `with` test MUST outrank the split rule: an induction with a single
+    // case still needs its `| case =>` marker — a bare next line after `with`
+    // is a syntax error, and a one-case with-block is common
     // (`Nat.strong_induction_on`).
     if (label.endsWith("with"))
       return {
@@ -389,7 +381,13 @@ export function proofToTree(
         after: anchor.position,
         caseName: caseName(goals.get(goalId)),
       };
-    if (stepGoalsAfter(prod).length <= 1)
+    // Whether to bullet is decided by `goalsAfter` ALONE — a genuine case
+    // split — never by `stepGoalsAfter`, which folds in `spawnedGoals`. That
+    // conflation is what made a `have … := by`'s CONTINUATION look like one
+    // branch of a two-way split and emit `· tac` where a plain next line
+    // belongs: one continuation + one spawned body counts 2 and isn't a split
+    // at all.
+    if (prod.goalsAfter.length <= 1)
       return { kind: "seq", indent: base, after: anchor.position };
     return { kind: "bullet", indent: base, after: anchor.position };
   }
@@ -444,7 +442,18 @@ export function proofToTree(
       comment: commentByNode.text.get(goalId),
       commentRanges: commentByNode.ranges.get(goalId),
       caseLabel: thisCase === parentCase ? undefined : thisCase,
-      addSpec: !step && producedBy ? addSpecFor(goalId, producedBy) : undefined,
+      // (+) only on an unconsumed goal reached through `goalsAfter`. An
+      // unconsumed SPAWNED goal is not the editing frontier: Paperproof emits
+      // side goals that no tactic ever consumes because they are restatements
+      // of goals already handled inside the branches (factorization.lean's
+      // `induction … with` spawns two, from merged `intro p hpm` binders), and
+      // offering to "solve" those put chips on a complete proof. Measured
+      // across the incomplete-proof corpora, every genuine frontier goal
+      // arrives via goalsAfter and none via spawnedGoals.
+      addSpec:
+        !step && producedBy && producedBy.goalsAfter.some((g) => g.id === goalId)
+          ? addSpecFor(goalId, producedBy)
+          : undefined,
     });
 
     if (!step) return; // leaf: this goal was closed by its tactic

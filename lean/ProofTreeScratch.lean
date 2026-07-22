@@ -162,4 +162,3 @@ theorem three_column_demo (n : ℕ) :
       show (m + 1) * (m + 2) = 2 * (k + m + 1)
       have h : (m + 1) * (m + 2) = m * (m + 1) + 2 * (m + 1) := by ring
       rw [h, hk]
-      ring
