@@ -345,6 +345,9 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
           stop
           text  := String.Pos.Raw.extract raw ⟨0⟩ tight
           tokens
+          -- Where this line's tactic text starts, which is neither the step's
+          -- column nor the bare line indent (see tacticIndentAt).
+          tacticIndent := tacticIndentAt fileMap s.position.start.line
         }
         -- Per token, the innermost info node covering it — the same node the
         -- editor's hover would land on — tagged onto the token's own source

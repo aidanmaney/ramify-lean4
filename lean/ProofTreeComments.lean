@@ -141,7 +141,49 @@ structure TacticEdit where
   text  : String
   /-- Syntax highlighting for `text`, from the server's own semantic tokens. -/
   tokens : Array TacticToken := #[]
+  /-- Column where this step's LINE begins its tactic text — past the indent
+  and past a bullet marker (see `tacticIndentAt`). The widget's (+) insertion
+  indents new sibling tactics to it, because a step's own `start.character` is
+  wrong for split tactics and the bare line indent is wrong for bulleted
+  ones. -/
+  tacticIndent : Nat := 0
   deriving ToJson, FromJson
+
+/-- The column at which `line`'s TACTIC TEXT begins: past the leading
+whitespace, and past a bullet marker (`·`/`.` followed by space) if there is
+one. This is the column a new sibling tactic must be indented to.
+
+Neither of the two obvious answers works alone, which is the whole reason this
+exists. A step's own `start.character` lies whenever Paperproof SPLIT the
+tactic: `rw [a, b]` becomes one step per rule, so the step for `b` starts at
+the rule inside the brackets (col 13 of `      rw [h, hk]`, not the `rw` at
+col 6). But the plain line indent lies in the other direction on a bulleted
+line: in `  · constructor` the indent is 2, while that `constructor`'s own
+branches belong at col 4, under the tactic rather than under the `·`. Skipping
+whitespace-then-bullet gets both right.
+
+A case marker (`| zero => …`) is deliberately NOT skipped: `case` insertions
+write their own `| name =>` and so want the marker's own column. The `.` bullet
+is only recognised before whitespace, so `.foo` dot-notation is not mistaken
+for one. Counting code points matches the LSP `character` the client compares
+against. Not `private`: a probe checks it directly. -/
+def tacticIndentAt (fileMap : FileMap) (line : Nat) : Nat := Id.run do
+  let src := fileMap.source
+  let isSpace (c : Char) := c == ' ' || c == '\t'
+  let mut p := fileMap.lspPosToUtf8Pos ⟨line, 0⟩
+  while !String.Pos.Raw.atEnd src p && isSpace (String.Pos.Raw.get src p) do
+    p := String.Pos.Raw.next src p
+  -- A bullet belongs to the enclosing block; the tactic it introduces starts
+  -- after it, and that is where ITS siblings go.
+  if !String.Pos.Raw.atEnd src p then
+    let c := String.Pos.Raw.get src p
+    if c == '·' || c == '.' then
+      let q := String.Pos.Raw.next src p
+      if !String.Pos.Raw.atEnd src q && isSpace (String.Pos.Raw.get src q) then
+        p := q
+        while !String.Pos.Raw.atEnd src p && isSpace (String.Pos.Raw.get src p) do
+          p := String.Pos.Raw.next src p
+  return (fileMap.utf8PosToLspPos p).character
 
 /-- The end of `s` with all trailing TRIVIA removed: whitespace, and any
 comments that (after whitespace) close the string — iterated, so

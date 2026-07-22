@@ -16,11 +16,15 @@ export interface HypLine {
 source among the producing tactic's already-written branches, so a new bullet
 lands below its finished siblings rather than between the split and them. */
 export interface AddSpec {
-  // seq: plain next line (linear chain, or the body of a `… := by`, whose
-  // deeper indent is already baked into `indent`); bullet: `· `; case:
-  // `| name => ` (with-block).
+  // seq: plain next line; bullet: `· `; case: `| name => ` (with-block).
   kind: "seq" | "bullet" | "case";
+  // Fallback indent, from the producing step's start COLUMN. Only a guess:
+  // Paperproof splits `rw [a, b]` into one step per rule, so such a step
+  // starts mid-line and its column is not the line's indent. The widget
+  // prefers the producer's `TacticEdit.lineIndent`, which is exact — hence
+  // `producer`, which is what it looks that up by.
   indent: number;
+  producer: ProofStepPosition;
   after: ProofStepPosition;
   caseName?: string;
 }

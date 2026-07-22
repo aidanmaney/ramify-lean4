@@ -73,6 +73,10 @@ interface TacticEditEntry {
   text: string;
   /** The server's semantic tokens for `text` — drives the label colouring. */
   tokens?: TacticToken[];
+  /** Column where this step's line begins its tactic text — past the indent
+  and past a bullet marker (see the Lean-side `tacticIndentAt`). What (+)
+  insertions indent new sibling tactics by. */
+  tacticIndent?: number;
 }
 
 // The RPC payload: the CLI's `Proof` shape plus `taggedGoals`, each goal's
@@ -300,12 +304,20 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // clamped by the editor when the edit applies, and the true line length
   // isn't known here (the widget never holds the document text).
   const addTactic = (spec: AddSpec, text: string) => {
-    const e = editByStart.get(
-      `${spec.after.start.line}:${spec.after.start.character}`,
-    );
+    const at2 = (p: { line: number; character: number }) =>
+      editByStart.get(`${p.line}:${p.character}`);
+    const e = at2(spec.after.start);
     const stop = e?.stop ?? spec.after.stop;
     const at = { line: stop.line, character: 1e5 };
-    const indent = " ".repeat(spec.indent);
+    // Where the PRODUCER's line starts its tactic text, not `spec.indent`.
+    // A step's start column lies whenever Paperproof split the tactic —
+    // `rw [a, b]` is one step per rule, so the step for `b` starts at the rule
+    // inside the brackets and indenting by its column put a new tactic 7
+    // columns too deep. The bare line indent lies the other way on a bulleted
+    // line (`  · constructor`), so the server measures past both (see
+    // tacticIndentAt).
+    const cols = at2(spec.producer.start)?.tacticIndent ?? spec.indent;
+    const indent = " ".repeat(cols);
     const prefix =
       spec.kind === "bullet"
         ? "· "

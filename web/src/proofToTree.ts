@@ -378,6 +378,7 @@ export function proofToTree(
       return {
         kind: "case",
         indent: base,
+        producer: prod.position,
         after: anchor.position,
         caseName: caseName(goals.get(goalId)),
       };
@@ -388,8 +389,18 @@ export function proofToTree(
     // belongs: one continuation + one spawned body counts 2 and isn't a split
     // at all.
     if (prod.goalsAfter.length <= 1)
-      return { kind: "seq", indent: base, after: anchor.position };
-    return { kind: "bullet", indent: base, after: anchor.position };
+      return {
+        kind: "seq",
+        indent: base,
+        producer: prod.position,
+        after: anchor.position,
+      };
+    return {
+      kind: "bullet",
+      indent: base,
+      producer: prod.position,
+      after: anchor.position,
+    };
   }
 
   const roots = rootIds(proof);
