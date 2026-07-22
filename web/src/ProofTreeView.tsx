@@ -51,6 +51,7 @@ import {
   NODE_TEXT,
   RAIL_PRESSED,
   SEQ_STROKE,
+  SORRY_FILL,
   ensurePaletteStyle,
   resolveThemeKind,
 } from "./theme";
@@ -1644,12 +1645,15 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {/* (+) chip: a pending goal (no consuming tactic — the
-                      live frontier while writing a proof) offers to ADD one.
-                      Ghost-styled in the tactic look (dashed border, no
-                      fill): the tactic that isn't there yet. Sits just below
-                      the box, aligned on the compact lane; the band gaps
-                      leave it room in every layout mode. */}
+                  {/* Frontier chips: a pending goal (no consuming tactic —
+                      the live frontier while writing a proof) offers to fill
+                      it. `+` opens the editor to type a tactic; `sorry` stubs
+                      it in one click, so a branch can be parked and the rest
+                      of the proof kept elaborating. Both ghost-styled (dashed,
+                      unfilled): the tactic that isn't there yet. They sit just
+                      below the box on the compact lane, and are BUTTONS rather
+                      than one chip plus a modifier — the lens gesture taught
+                      that modifiers on tree nodes silently stop working. */}
                   {type === "goal" &&
                     node.data.addSpec &&
                     onAddTactic &&
@@ -1659,44 +1663,36 @@ export default function ProofTreeView({
                         transform={`translate(${-w / 2 + TRUNK_INSET}, ${
                           boxTop + h + 4
                         })`}
-                        style={{ cursor: "pointer" }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const spec = node.data.addSpec!;
-                          setEditing({
-                            id,
-                            pos: spec.after,
-                            original: "",
-                            value: "",
-                            add: spec,
-                          });
-                        }}
-                        onDoubleClick={(e) => e.stopPropagation()}
                       >
-                        <title>add a tactic for this goal</title>
-                        <rect
-                          x={-10}
-                          y={0}
-                          width={20}
-                          height={15}
-                          rx={4}
-                          fill="transparent"
-                          stroke={NODE_STYLES.tactic.stroke}
-                          strokeWidth={1.2}
-                          strokeDasharray="3 2"
-                        />
-                        <text
+                        <FrontierChip
+                          glyph="+"
+                          title="add a tactic for this goal"
                           x={0}
-                          y={8}
-                          textAnchor="middle"
-                          dy="0.32em"
-                          fontSize={12}
-                          fontFamily="monospace"
-                          fill={NODE_STYLES.tactic.stroke}
-                          style={{ userSelect: "none" }}
-                        >
-                          +
-                        </text>
+                          width={20}
+                          color={NODE_STYLES.tactic.stroke}
+                          onPick={() => {
+                            const spec = node.data.addSpec!;
+                            setEditing({
+                              id,
+                              pos: spec.after,
+                              original: "",
+                              value: "",
+                              add: spec,
+                            });
+                          }}
+                        />
+                        <FrontierChip
+                          glyph="sorry"
+                          title="stub this goal with `sorry`"
+                          x={26}
+                          width={36}
+                          fontSize={9}
+                          color={SORRY_FILL}
+                          // Straight to the document: a stub has nothing to
+                          // type, and the tree redraws off the re-elaboration
+                          // with a real `sorry` node in place of this chip.
+                          onPick={() => onAddTactic(node.data.addSpec!, "sorry")}
+                        />
                       </g>
                     )}
 
@@ -2057,6 +2053,66 @@ function ControlRail({
   );
 }
 
+
+/** One frontier chip under a pending goal (see the call site). Ghost-styled —
+dashed outline, no fill — so it reads as a slot rather than an existing node.
+`x` is its CENTRE in the chip row. */
+function FrontierChip({
+  glyph,
+  title,
+  x,
+  width,
+  color,
+  fontSize = 12,
+  onPick,
+}: {
+  glyph: string;
+  title: string;
+  x: number;
+  width: number;
+  color: string;
+  fontSize?: number;
+  onPick: () => void;
+}) {
+  return (
+    <g
+      transform={`translate(${x},0)`}
+      style={{ cursor: "pointer" }}
+      // stopPropagation on both: a bare click would fall through to the goal
+      // box and fold it, and a double-click would reach the node handler.
+      onClick={(e) => {
+        e.stopPropagation();
+        onPick();
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <title>{title}</title>
+      <rect
+        x={-width / 2}
+        y={0}
+        width={width}
+        height={15}
+        rx={4}
+        fill="transparent"
+        stroke={color}
+        strokeWidth={1.2}
+        strokeDasharray="3 2"
+      />
+      <text
+        x={0}
+        y={8}
+        textAnchor="middle"
+        dy="0.32em"
+        fontSize={fontSize}
+        fontFamily="monospace"
+        fill={color}
+        style={{ userSelect: "none" }}
+      >
+        {glyph}
+      </text>
+    </g>
+  );
+}
 
 // Platform label for the reveal fast-path modifier (⌘ on mac, Ctrl elsewhere),
 // used in tooltips and button titles.

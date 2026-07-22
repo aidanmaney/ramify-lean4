@@ -262,6 +262,9 @@ export const HYP_MARK_FILL = "var(--ptw-hyp-mark)";
 export const COMMENT_FILL = "var(--ptw-comment)";
 /** Case-name badge on a branch goal — hue-free, like the context lines. */
 export const CASE_FILL = "var(--ptw-case)";
+/** The `sorry` frontier chip. Shares the syntax palette's sorry colour, so a
+stub reads the same in the tree as the keyword does in a tactic label. */
+export const SORRY_FILL = "var(--ptw-tok-sorry)";
 export const LINK_STROKE = "var(--ptw-link)";
 export const MUTED_FILL = "var(--ptw-muted)";
 export const EDIT_BG = "var(--ptw-edit-bg)";
