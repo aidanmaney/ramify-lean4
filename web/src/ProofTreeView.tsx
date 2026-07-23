@@ -103,7 +103,13 @@ const HYP_MODES: Record<
   used: {
     glyph: "▸",
     title:
-      "Context: only hypotheses the tactic below actually mentions (click for the ones it introduced too)",
+      "Context: only hypotheses the tactic below actually mentions (click for only the ones the tactic above introduced)",
+    next: "new",
+  },
+  new: {
+    glyph: "↓",
+    title:
+      "Context: only hypotheses the preceding tactic introduced as a binding (click for those plus what the next tactic uses)",
     next: "delta",
   },
   delta: {

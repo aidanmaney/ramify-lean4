@@ -51,7 +51,7 @@ export function hypLine(h: Hypothesis): string {
 // actually uses it (`tacticDependsOn`, fvarIds — same ids as `Hypothesis.id`;
 // a leaf goal has no consumer, so nothing is flagged).
 //
-// Three levels of verbosity, selected by the rail's hyp-mode button:
+// Four levels of verbosity, selected by the rail's hyp-mode button:
 //
 // - `full` — the goal's whole context.
 // - `delta` (default) — the hypotheses the goal GAINED over the goal its own
@@ -59,14 +59,23 @@ export function hypLine(h: Hypothesis): string {
 //   root goal, its binders — gained from the theorem statement), PLUS any older
 //   hypotheses the consuming tactic uses: usage is half the point of showing
 //   the context, so a used hyp is shown even when it isn't new.
+// - `new` — ONLY the hypotheses the PRODUCING tactic introduced, i.e. the
+//   bindings that step added to the context (`intro h`, `obtain ⟨a, ha⟩`,
+//   `induction … with | succ k ih`, `have h :=`), and nothing else — no older
+//   hyps, no "the next tactic uses it" additions. It is `delta` minus that
+//   augmentation, computed as the fvarIds present here but absent from the
+//   producer's `goalBefore`. A ROOT goal has no preceding tactic, so nothing
+//   was introduced and its box shows the `⊢ ` line alone — that is the truth,
+//   not a rendering gap. Same for a tactic that binds nothing (`rw`, `exact`).
 // - `used` — ONLY what the consuming tactic actually mentions. This is the
-//   narrowest honest answer to "what does this step depend on", and it is the
-//   one mode that can legitimately come back EMPTY: a leaf goal has no
-//   consuming tactic, so nothing is used, and its box shows the `⊢ ` line
-//   alone. That is the truth rather than a rendering gap.
+//   narrowest honest answer to "what does this step depend on", and it too can
+//   legitimately come back EMPTY: a leaf goal has no consuming tactic, so
+//   nothing is used, and its box shows the `⊢ ` line alone.
 //
-// Context order is preserved in every mode.
-export type HypMode = "used" | "delta" | "full";
+// `new` and `used` are duals and incomparable — `new` is what the tactic ABOVE
+// bound, `used` is what the tactic BELOW mentions — and both are subsets of
+// `delta` (which is their union). Context order is preserved in every mode.
+export type HypMode = "used" | "new" | "delta" | "full";
 
 function contextFor(
   goal: GoalInfo,
@@ -82,6 +91,15 @@ function contextFor(
   let shown = goal.hyps;
   if (mode === "used") {
     shown = goal.hyps.filter((h) => used.has(h.id));
+  } else if (mode === "new") {
+    // Only what the PRODUCING tactic bound: fvarIds present now but absent from
+    // the goal that tactic consumed. A root goal (no producer) introduced
+    // nothing, so its context is empty.
+    if (!producedBy) shown = [];
+    else {
+      const inherited = new Set(producedBy.goalBefore.hyps.map((h) => h.id));
+      shown = goal.hyps.filter((h) => !inherited.has(h.id));
+    }
   } else if (mode === "delta") {
     const inherited = new Set(producedBy?.goalBefore.hyps.map((h) => h.id));
     shown = goal.hyps.filter((h) => !inherited.has(h.id) || used.has(h.id));
