@@ -14,7 +14,7 @@
 // a single marker node stands in their place. Every edge that pointed INTO the
 // cut set is re-parented onto the marker, so nothing below is orphaned.
 
-import type { ParentEdge, TreeNode } from "./types";
+import type { CombinedPart, ParentEdge, TreeNode } from "./types";
 
 export type ElideCut =
   | { kind: "path"; from: string; to: string } // ancestor→descendant path
@@ -133,7 +133,12 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
   const markerOf = new Map<string, string>();
   const info = new Map<
     string,
-    { ids: string[]; tactics: string[]; combine: boolean }
+    {
+      ids: string[];
+      tactics: string[];
+      parts: CombinedPart[];
+      combine: boolean;
+    }
   >();
   const slotOf = new Map<string, number>();
   for (const cut of cuts) {
@@ -146,11 +151,16 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
       markerOf.set(id, mid);
       top = Math.min(top, index.get(id) ?? Infinity);
     }
-    const tactics = ids
+    const parts = ids
       .map((id) => byId.get(id)!)
       .filter((n) => n.type === "tactic")
-      .map((n) => n.label);
-    info.set(mid, { ids, tactics, combine: cut.kind === "combine" });
+      .map((n) => ({
+        label: n.label,
+        position: n.position,
+        elision: n.elision,
+      }));
+    const tactics = parts.map((p) => p.label);
+    info.set(mid, { ids, tactics, parts, combine: cut.kind === "combine" });
     slotOf.set(mid, top);
   }
   if (info.size === 0) return nodes;
@@ -176,7 +186,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
     if (mid) {
       // A node inside a cut: emit the marker once, in the set's topmost slot.
       if (index.get(n.id) === slotOf.get(mid)) {
-        const { ids, tactics, combine } = info.get(mid)!;
+        const { ids, tactics, parts, combine } = info.get(mid)!;
         // The marker's parents are every edge ENTERING the set from outside —
         // the union over all members (a path yields `from`'s parents; a band
         // may yield several, i.e. a multi-parent marker, which the trunk layout
@@ -194,7 +204,9 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
             ? tactics.join("\n")
             : `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
           parents,
-          elidedCut: { tactics, combined: combine },
+          elidedCut: combine
+            ? { tactics, combined: true, parts }
+            : { tactics },
         });
       }
       continue; // the cut's own nodes are gone

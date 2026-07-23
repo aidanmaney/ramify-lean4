@@ -30,7 +30,13 @@ import {
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import type { AddSpec, HypLine, TreeNode } from "./types";
+import type {
+  AddSpec,
+  CombinedPart,
+  HypLine,
+  TreeNode,
+  WrappedLine,
+} from "./types";
 import {
   positionContains,
   proofToTree,
@@ -899,10 +905,20 @@ export default function ProofTreeView({
   // Every VISIBLE tactic with a span, in the shape `tacticNodeAt` wants.
   const cursorTargets = useMemo(
     () =>
-      nodes
-        .map((n) => n.data)
-        .filter((d) => d.type === "tactic" && d.position)
-        .map((d) => ({ id: d.id, position: d.position! })),
+      nodes.flatMap((n) => {
+        const d = n.data;
+        // A COMBINED node owns SEVERAL source ranges (one per merged tactic).
+        // Offering each of them under the combined node's id is what keeps the
+        // cursor→tree link alive across a merge: the cursor anywhere in the run
+        // resolves to the one node now standing for it.
+        if (d.elidedCut?.combined)
+          return (d.elidedCut.parts ?? [])
+            .filter((p) => p.position)
+            .map((p) => ({ id: d.id, position: p.position! }));
+        return d.type === "tactic" && d.position
+          ? [{ id: d.id, position: d.position }]
+          : [];
+      }),
     [nodes],
   );
   // Per comment range, the node whose strip is SHOWING it. Taken straight from
@@ -1123,12 +1139,18 @@ export default function ProofTreeView({
     if (!anchor && prev) {
       // Nearest to the old viewport's vertical centre AMONG nodes that
       // survived — an id that vanished has no new position to measure against.
+      // The comparison must be in SCROLL space, so the content offset the SVG
+      // is drawn at (MARGIN.top + PAD_Y — and PAD_Y is a whole viewport) has to
+      // be added to the node's content y. Omitting it biased the pick by ~a
+      // screenful, so the "centre" node was one well above the viewport; the
+      // shift below was still correct (a difference cancels the constant), so
+      // it merely held the WRONG node steady.
       let best = Infinity;
       const mid = sy + el.clientHeight / 2;
       for (const n of nodes) {
         const was = prev.get(n.data.id);
         if (!was) continue;
-        const d = Math.abs(was.y * zoom - mid);
+        const d = Math.abs((MARGIN.top + PAD_Y + was.y) * zoom - mid);
         if (d < best) {
           best = d;
           anchor = { id: n.data.id, x: was.x, y: was.y };
@@ -1162,7 +1184,11 @@ export default function ProofTreeView({
     (compact ? "compact:" : "wide:") +
     (reflow ? "reflow:" : "") +
     (brief ? "brief:" : "") +
-    (combine ? "combine:" : "") +
+    // `combine` deliberately does NOT participate in viewKey (same reasoning as
+    // gallery paging below): merging runs must keep the current scroll, not
+    // re-centre on the root. The relayout is held by the `[nodes]` anchor,
+    // which — with no explicit anchor set — pins the surviving node nearest the
+    // viewport centre, so you keep looking at roughly the same material.
     (compact && sideBySide ? "cols:" : "") +
     // Gallery paging deliberately does NOT participate in viewKey: swapping the
     // shown branch must keep the current scroll/pan, not re-center. The
@@ -1615,9 +1641,11 @@ export default function ProofTreeView({
         }}
         combine={combine}
         onCombineChange={(v) => {
-          // Whole runs merge into single nodes — the biggest relayout of all,
-          // so hold the root steady like the other geometry toggles.
-          anchorRoot();
+          // Deliberately NO anchorRoot() here: the run you are looking at is
+          // usually far from the root, and pinning the root scrolls the view
+          // back to the top. Leaving the anchor unset lets the `[nodes]` effect
+          // pin the surviving node nearest the viewport centre instead, which
+          // keeps the new view as close as possible to the old one.
           setCombine(v);
         }}
         hypMode={hypMode}
@@ -1930,7 +1958,18 @@ export default function ProofTreeView({
                         lines.map((l) => l.text),
                         node.data.elision,
                       ) ?? null)
-                    : null;
+                    : // A COMBINED node has no single source range, so it is
+                      // rendered PER PART: each constituent tactic colours and
+                      // hovers its own drawn lines, against its own
+                      // `TacticEdit.text`. `WrappedLine.seg` is the explicit-
+                      // newline segment a line came from; a part's label can
+                      // itself be multi-line, so parts own segment RANGES, not
+                      // single indices.
+                      renderCombinedLines(
+                        node.data.elidedCut?.parts,
+                        lines,
+                        renderTaggedTactic,
+                      );
 
               const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
                 // A node click is an interaction, not a background click — it
@@ -2542,6 +2581,48 @@ const RAIL_BTN: CSSProperties = {
   borderRadius: 3,
   color: "var(--vscode-icon-foreground, #2d3748)",
 };
+
+/**
+ * Rich label lines for a COMBINED node (the ⇉ toggle's merged tactic run).
+ *
+ * A combined node's label is its constituent tactics joined by newlines, so it
+ * has no single source range and the normal one-tactic path can't colour it.
+ * Instead each part renders its OWN drawn lines against its OWN tactic, and the
+ * results concatenate — so a merged run keeps per-token colour and hover popups
+ * exactly as the separate nodes had them.
+ *
+ * The mapping is by `WrappedLine.seg` (the explicit-newline segment a line was
+ * wrapped out of). A part's label may itself contain newlines, so parts own
+ * segment RANGES: part i covers `[segStart, segStart + lineCount)`.
+ *
+ * All-or-nothing: if any part fails to align (or lacks a position), the whole
+ * node falls back to plain text, so a combined box is never half-coloured.
+ */
+function renderCombinedLines(
+  parts: CombinedPart[] | undefined,
+  lines: WrappedLine[],
+  render: ProofTreeViewProps["renderTaggedTactic"],
+): ReactNode[] | null {
+  if (!parts || parts.length === 0 || !render) return null;
+  const out: ReactNode[] = [];
+  let seg = 0;
+  for (const part of parts) {
+    const span = part.label.split("\n").length;
+    const mine = lines.filter((l) => l.seg >= seg && l.seg < seg + span);
+    seg += span;
+    if (mine.length === 0) continue;
+    if (!part.position) return null;
+    const rendered = render(
+      part.position,
+      part.label,
+      mine.map((l) => l.text),
+      part.elision,
+    );
+    if (!rendered || rendered.length !== mine.length) return null;
+    out.push(...rendered);
+  }
+  return out.length === lines.length ? out : null;
+}
 
 function RailButton({
   glyph,

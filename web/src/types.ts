@@ -35,6 +35,18 @@ export interface ParentEdge {
   id: string;
 }
 
+/** One constituent tactic of a COMBINED node (see TreeNode.elidedCut.parts).
+The combined `label` is exactly `parts.map(p => p.label).join("\n")`, so each
+part owns a known run of `WrappedLine.seg` indices — which is what lets the
+render colour, hover and cursor-match every drawn line against its OWN source
+tactic instead of losing all of it to the merge. `elision` is that tactic's
+brief-mode keep-map, carried so combine composes with brief. */
+export interface CombinedPart {
+  label: string;
+  position?: ProofStepPosition;
+  elision?: { original: string; keep: KeepSeg[] };
+}
+
 // Raw node in the proof tree. `id` is a stable key (an mvarId for goals, a
 // derived key for tactics) used for layout ordering and fold state; `label` is
 // the human-readable text drawn in the box (the goal type, or the tactic
@@ -92,7 +104,13 @@ export interface TreeNode {
   // `combined` cut (the ⇉ toggle's automatic linear-run collapse) draws as a
   // normal tactic box whose `label` is the run's tactics stacked. `tactics`
   // holds those labels in order (the `<title>`, and the combined label itself).
-  elidedCut?: { tactics: string[]; combined?: boolean };
+  elidedCut?: {
+    tactics: string[];
+    combined?: boolean;
+    // COMBINED nodes only: the constituent tactics in order — everything the
+    // render needs to treat each drawn line as the tactic it came from.
+    parts?: CombinedPart[];
+  };
 }
 
 /** What a node's Alectryon-style comment flags ask the renderer to do.
@@ -159,6 +177,11 @@ export interface WrappedLine {
   // is computed from bracket depth at the break, so a wrapped argument list
   // hangs under its opener. Explicit-newline lines get 0.
   indent: number;
+  // Index of the EXPLICIT-NEWLINE segment this line was wrapped out of. Only
+  // meaningful where the label is a join of independent texts — a combined
+  // node's stacked tactics (see TreeNode.elidedCut.parts) — which is how the
+  // render maps each drawn line back to the source tactic it came from.
+  seg: number;
 }
 
 // A visible node enriched with fold state and computed box geometry; this is the

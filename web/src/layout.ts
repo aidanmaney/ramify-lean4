@@ -539,7 +539,7 @@ function wrapLine(
     if (measureText(words[i], fontPx, italic) > budget) {
       const cut = fitPrefix(words[i], budget, fontPx, italic);
       const head = words[i].slice(0, cut);
-      out.push({ text: head, cont, indent });
+      out.push({ text: head, cont, indent, seg: 0 });
       depth += depthDelta(head);
       words[i] = words[i].slice(cut);
       continue;
@@ -611,7 +611,7 @@ function wrapLine(
             : usable(seamLast[1])
               ? seamLast[1]
               : cur);
-    out.push({ text: chosen, cont, indent });
+    out.push({ text: chosen, cont, indent, seg: 0 });
     depth = Math.max(0, depth + depthDelta(chosen));
     i += chosen.split(" ").length;
   }
@@ -631,8 +631,13 @@ function wrapText(
 ): WrappedLine[] {
   return text
     .split("\n")
-    .flatMap((segment) =>
-      wrapLine(segment, maxW, fontPx, italic, indentMode, eagerSeams),
+    .flatMap((segment, i) =>
+      // Stamp the segment index so a caller whose label is a JOIN of separate
+      // texts (a combined node's stacked tactics) can map each drawn line back
+      // to the text it came from.
+      wrapLine(segment, maxW, fontPx, italic, indentMode, eagerSeams).map(
+        (l) => ({ ...l, seg: i }),
+      ),
     );
 }
 
