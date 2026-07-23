@@ -1,24 +1,31 @@
-// On-demand elision of a SERIES of nodes — the reverse of linearize. Linearize
-// (`only` in layout.ts) keeps a picked ancestor→descendant path and hides the
-// rest; this hides that path and keeps the rest, collapsing the run into one
-// synthetic marker node the tree flows through.
+// On-demand elision of a set of nodes, collapsing them to a single marker the
+// tree flows through. Two kinds of cut share one mechanism:
+//
+// - **path** (the rail's ⇥, reverse of linearize): a picked ancestor→descendant
+//   path — the goal-structural cut.
+// - **band** (the rail's ⇳): every node whose VERTICAL position falls between
+//   two picked nodes in the compact outline — a purely spatial cut, computed
+//   from post-layout `.y` at pick time and frozen as an explicit id set. It can
+//   span several branches, so its marker may have several parents/children.
 //
 // It is a pure TreeNode[] → TreeNode[] transform run BEFORE the layout engine
 // (like proofToTree's `brief`), so it reuses every bit of layout, folding and
-// rendering: the collapsed run simply isn't in the tree the engine sees, and a
-// single marker node stands where it was. Whatever hung below the run (or off
-// its interior) is re-parented onto the marker, so nothing is orphaned.
+// rendering: the collapsed nodes simply aren't in the tree the engine sees, and
+// a single marker node stands in their place. Every edge that pointed INTO the
+// cut set is re-parented onto the marker, so nothing below is orphaned.
 
 import type { ParentEdge, TreeNode } from "./types";
 
-export interface ElideRun {
-  from: string; // the ancestor endpoint (top of the run)
-  to: string; // the descendant endpoint (bottom of the run)
-}
+export type ElideCut =
+  | { kind: "path"; from: string; to: string } // ancestor→descendant path
+  | { kind: "band"; ids: string[] }; // explicit id set (a vertical band)
 
-/** Stable id for a run's marker node. `»` can't occur in an mvarId key. */
-export function elideId(run: ElideRun): string {
-  return `elide:${run.from}»${run.to}`;
+/** Stable marker id for a cut — also the key removal matches on. `»`/`·` can't
+occur in an mvarId. */
+export function cutId(cut: ElideCut): string {
+  return cut.kind === "path"
+    ? `elide:${cut.from}»${cut.to}`
+    : `elide-band:${[...cut.ids].sort().join("·")}`;
 }
 
 /** The node path from ancestor `from` down to descendant `to` (inclusive), or
@@ -41,47 +48,60 @@ export function pathIds(
   return null;
 }
 
-/** Drop runs whose endpoints no longer name live nodes (after an edit), and
-runs that no longer form a path — so a stale elision can never point at nothing.
-Returns the same array reference when nothing changed. */
-export function pruneRuns(nodes: TreeNode[], runs: ElideRun[]): ElideRun[] {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const live = runs.filter(
-    (r) => byId.has(r.from) && byId.has(r.to) && pathIds(byId, r.from, r.to),
-  );
-  return live.length === runs.length ? runs : live;
+/** The base-node ids a cut collapses, or [] when it no longer resolves (a path
+whose endpoints/lineage vanished, or a band with no live members). */
+export function resolveCut(
+  cut: ElideCut,
+  byId: Map<string, TreeNode>,
+): string[] {
+  if (cut.kind === "path") return pathIds(byId, cut.from, cut.to) ?? [];
+  return cut.ids.filter((id) => byId.has(id));
 }
 
-/** Collapse each run's node-path into one synthetic marker node. Non-overlapping
-runs compose; a marker can even be another run's parent (chained elisions),
-resolved through the `markerOf` remap. */
-export function applyElisions(nodes: TreeNode[], runs: ElideRun[]): TreeNode[] {
-  if (runs.length === 0) return nodes;
+/** Drop cuts that no longer resolve to anything (after an edit). Returns the
+same array reference when nothing changed. */
+export function pruneCuts(nodes: TreeNode[], cuts: ElideCut[]): ElideCut[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  const live = cuts.filter((c) => resolveCut(c, byId).length > 0);
+  return live.length === cuts.length ? cuts : live;
+}
 
-  // Every node that falls inside SOME run → that run's marker id. `fromOf` says
-  // which marker is emitted in which node's slot (the run's `from`).
+/** Collapse each cut's node-set into one synthetic marker node. Non-overlapping
+cuts compose; a marker can even be another cut's parent (chained elisions),
+resolved through the `markerOf` remap. */
+export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
+  if (cuts.length === 0) return nodes;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const index = new Map(nodes.map((n, i) => [n.id, i]));
+
+  // Every node inside SOME cut → that cut's marker id. `slotOf` is the index of
+  // each marker's TOPMOST member, so the marker is emitted in that node's slot
+  // (preserving DFS-preorder position, so compact ordering is unchanged).
   const markerOf = new Map<string, string>();
-  const info = new Map<string, { run: ElideRun; tactics: string[] }>();
-  const fromOf = new Map<string, string>(); // markerId → its run's `from`
-  for (const run of runs) {
-    const ids = pathIds(byId, run.from, run.to);
-    if (!ids) continue;
-    const mid = elideId(run);
-    if (info.has(mid)) continue; // dedupe identical runs
-    for (const id of ids) markerOf.set(id, mid);
+  const info = new Map<string, { ids: string[]; tactics: string[] }>();
+  const slotOf = new Map<string, number>();
+  for (const cut of cuts) {
+    const ids = resolveCut(cut, byId);
+    if (ids.length === 0) continue;
+    const mid = cutId(cut);
+    if (info.has(mid)) continue; // dedupe identical cuts
+    let top = Infinity;
+    for (const id of ids) {
+      markerOf.set(id, mid);
+      top = Math.min(top, index.get(id) ?? Infinity);
+    }
     const tactics = ids
       .map((id) => byId.get(id)!)
       .filter((n) => n.type === "tactic")
       .map((n) => n.label);
-    info.set(mid, { run, tactics });
-    fromOf.set(mid, run.from);
+    info.set(mid, { ids, tactics });
+    slotOf.set(mid, top);
   }
   if (info.size === 0) return nodes;
 
   // Remap a parent edge onto the marker that swallowed it, dropping duplicates
-  // and any edge that would point a node at itself (a marker whose own parent
-  // remapped back into its run).
+  // and any edge that would point a node at itself (a parent inside the same
+  // cut, or a marker whose own parent remapped back into its set).
   const remap = (edges: ParentEdge[], selfId: string): ParentEdge[] => {
     const out: ParentEdge[] = [];
     const seen = new Set<string>();
@@ -98,20 +118,27 @@ export function applyElisions(nodes: TreeNode[], runs: ElideRun[]): TreeNode[] {
   for (const n of nodes) {
     const mid = markerOf.get(n.id);
     if (mid) {
-      // A node inside a run: emit the marker once, in the run's `from` slot
-      // (preserving DFS-preorder position so compact ordering is unchanged).
-      if (n.id === fromOf.get(mid)) {
-        const { run, tactics } = info.get(mid)!;
+      // A node inside a cut: emit the marker once, in the set's topmost slot.
+      if (index.get(n.id) === slotOf.get(mid)) {
+        const { ids, tactics } = info.get(mid)!;
+        // The marker's parents are every edge ENTERING the set from outside —
+        // the union over all members (a path yields `from`'s parents; a band
+        // may yield several, i.e. a multi-parent marker, which the trunk layout
+        // tolerates).
+        const parents = remap(
+          ids.flatMap((id) => byId.get(id)!.parents),
+          mid,
+        );
         out.push({
           id: mid,
           type: "tactic",
           // Sized/measured like any label; the view restyles it as a chip.
           label: `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
-          parents: remap(byId.get(run.from)!.parents, mid),
-          elidedRun: { from: run.from, to: run.to, tactics },
+          parents,
+          elidedCut: { tactics },
         });
       }
-      continue; // the run's own nodes are gone
+      continue; // the cut's own nodes are gone
     }
     out.push({ ...n, parents: remap(n.parents, n.id) });
   }

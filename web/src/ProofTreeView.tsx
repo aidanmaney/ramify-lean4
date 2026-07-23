@@ -38,7 +38,14 @@ import {
   tacticNodeAt,
 } from "./proofToTree";
 import type { HypMode } from "./proofToTree";
-import { type ElideRun, applyElisions, elideId, pathIds, pruneRuns } from "./elide";
+import {
+  type ElideCut,
+  applyElisions,
+  cutId,
+  pathIds,
+  pruneCuts,
+  resolveCut,
+} from "./elide";
 import {
   ACCENT_TEXT,
   CASE_FILL,
@@ -436,13 +443,16 @@ export default function ProofTreeView({
   // selecting two endpoints (first click sets `from`); `view` renders only the
   // path between them — a single chain of goals/tactics with no branching.
   const [seq, setSeq] = useState<Seq>({ mode: "off" });
-  // On-demand elision (the reverse of linearize): the applied runs, each a
-  // picked from→to path collapsed to a marker (see elide.ts). `elidePick` is
-  // the picking mode — off, or the first endpoint chosen (or null while it
-  // awaits the first). Runs persist across cursor moves; a marker click removes
-  // its run.
-  const [elideRuns, setElideRuns] = useState<ElideRun[]>([]);
+  // On-demand elision: the applied cuts (see elide.ts), each a path (the ⇥
+  // reverse-of-linearize) or a vertical band (the ⇳ geometric cut) collapsed to
+  // a marker. Cuts persist across cursor moves; a marker click removes its cut.
+  // Two picking modes, mutually exclusive with each other and with sequence
+  // mode — each is off, or holds the first endpoint chosen (null awaits it).
+  const [elideCuts, setElideCuts] = useState<ElideCut[]>([]);
   const [elidePick, setElidePick] = useState<{ from: string | null } | null>(
+    null,
+  );
+  const [bandPick, setBandPick] = useState<{ from: string | null } | null>(
     null,
   );
   // Focus mode: a goal id whose subtree becomes the whole tree (that goal is
@@ -657,9 +667,9 @@ export default function ProofTreeView({
     // via layout.ts module state — the dep is what forces a re-measure when
     // the editor font changes (hence the lint suppression: the dependency is
     // real, just invisible to the linter).
-    () => createLayoutEngine(applyElisions(baseNodes, elideRuns), { reflow }),
+    () => createLayoutEngine(applyElisions(baseNodes, elideCuts), { reflow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseNodes, elideRuns, codeFont, reflow],
+    [baseNodes, elideCuts, codeFont, reflow],
   );
 
   // Two different events, and conflating them is what made editing painful.
@@ -694,8 +704,9 @@ export default function ProofTreeView({
     setSeq({ mode: "off" });
     setFocusId(null);
     setEditing(null);
-    setElideRuns([]);
+    setElideCuts([]);
     setElidePick(null);
+    setBandPick(null);
     // A different proof's splits are different nodes entirely. (A same-proof
     // EDIT needs no pruning: `pick` is read modulo the live child count, and
     // keys naming a vanished split are simply never looked up.)
@@ -724,7 +735,7 @@ export default function ProofTreeView({
       setSeq({ mode: "off" });
     // Drop any elide-run whose endpoints vanished (or no longer form a path)
     // under the edit — keyed on the base tree, same identity check as above.
-    setElideRuns((rs) => pruneRuns(baseNodes, rs));
+    setElideCuts((cs) => pruneCuts(baseNodes, cs));
     // The source moved under the edit box (usually OUR own committed edit
     // coming back), so its ranges are stale either way.
     setEditing(null);
@@ -935,9 +946,9 @@ export default function ProofTreeView({
     });
   };
 
-  // Elide-run picking: like sequence picking but the chosen path is HIDDEN
+  // Path-elide picking (⇥): like sequence picking but the chosen path is HIDDEN
   // (collapsed to a marker) instead of shown. Validated over the base tree, so
-  // a run always keys on original ids; overlapping an existing run is rejected
+  // a cut always keys on original ids; overlapping an existing cut is rejected
   // (the second pick just becomes the new `from`).
   const commitElide = (a: string, b: string): boolean => {
     const byId = new Map(baseNodes.map((n) => [n.id, n]));
@@ -945,11 +956,48 @@ export default function ProofTreeView({
     const path = fwd ?? pathIds(byId, b, a);
     if (!path) return false;
     const used = new Set<string>();
-    for (const r of elideRuns)
-      for (const pid of pathIds(byId, r.from, r.to) ?? []) used.add(pid);
+    for (const c of elideCuts)
+      for (const pid of resolveCut(c, byId)) used.add(pid);
     if (path.some((pid) => used.has(pid))) return false;
-    const run: ElideRun = fwd ? { from: a, to: b } : { from: b, to: a };
-    setElideRuns((rs) => [...rs, run]);
+    const cut: ElideCut = fwd
+      ? { kind: "path", from: a, to: b }
+      : { kind: "path", from: b, to: a };
+    setElideCuts((cs) => [...cs, cut]);
+    return true;
+  };
+
+  // Band-elide picking (⇳): the GEOMETRIC cut — collapse every node whose
+  // vertical position lies between the two picks in the current compact layout,
+  // regardless of goal lineage (so it can span branches → a multi-parent
+  // marker). The band is read from post-layout `.y` (stable between the two
+  // clicks, since the first pick triggers no relayout) and frozen as base ids.
+  // A marker caught in the band is ABSORBED: its underlying nodes join the new
+  // band and its own cut is dropped, so the result stays one cut per region.
+  const commitBand = (a: string, b: string): boolean => {
+    const pa = nodes.find((n) => n.data.id === a);
+    const pb = nodes.find((n) => n.data.id === b);
+    if (!pa || !pb) return false;
+    const lo = Math.min(pa.y, pb.y);
+    const hi = Math.max(pa.y, pb.y);
+    const byId = new Map(baseNodes.map((n) => [n.id, n]));
+    const ids = new Set<string>();
+    const absorbed = new Set<string>(); // cutIds of markers inside the band
+    for (const pn of nodes) {
+      if (pn.y < lo || pn.y > hi) continue;
+      if (pn.data.elidedCut) {
+        // pn.data.id === the marker's cutId; pull its base nodes back in.
+        absorbed.add(pn.data.id);
+        const cut = elideCuts.find((c) => cutId(c) === pn.data.id);
+        if (cut) for (const pid of resolveCut(cut, byId)) ids.add(pid);
+      } else if (byId.has(pn.data.id)) {
+        ids.add(pn.data.id);
+      }
+    }
+    if (ids.size === 0) return false;
+    setElideCuts((cs) => [
+      ...cs.filter((c) => !absorbed.has(cutId(c))),
+      { kind: "band", ids: [...ids] },
+    ]);
     return true;
   };
 
@@ -959,11 +1007,12 @@ export default function ProofTreeView({
   // ancestor becomes the chain's top); two unrelated nodes can't form a path,
   // so we just restart the selection from the latest.
   const onNodeClick = (id: string, foldable: boolean) => {
-    // A run marker: click removes its run. Works in any mode, so an elision is
-    // always one click from being undone.
+    // An elision marker: click removes its cut (matched by the marker's id =
+    // the cut's id). Works in any mode, so an elision is always one click from
+    // being undone.
     const clicked = nodes.find((n) => n.data.id === id)?.data;
-    if (clicked?.elidedRun) {
-      setElideRuns((rs) => rs.filter((r) => elideId(r) !== id));
+    if (clicked?.elidedCut) {
+      setElideCuts((cs) => cs.filter((c) => cutId(c) !== id));
       return;
     }
     if (elidePick) {
@@ -971,6 +1020,13 @@ export default function ProofTreeView({
       if (first === null || first === id) setElidePick({ from: id });
       else if (commitElide(first, id)) setElidePick({ from: null });
       else setElidePick({ from: id }); // no path / overlap — restart here
+      return;
+    }
+    if (bandPick) {
+      const first = bandPick.from;
+      if (first === null || first === id) setBandPick({ from: id });
+      else if (commitBand(first, id)) setBandPick({ from: null });
+      else setBandPick({ from: id });
       return;
     }
     if (seq.mode === "off") {
@@ -1481,6 +1537,26 @@ export default function ProofTreeView({
             : "elide · click the start node"}
         </div>
       )}
+      {bandPick && (
+        <div
+          style={{
+            position: "absolute",
+            top: headerExtra ? 44 : 8,
+            left: 8,
+            zIndex: 10,
+            fontFamily: "monospace",
+            fontSize: 12,
+            color: ACCENT_TEXT,
+            background: SEQ_STROKE,
+            padding: "3px 10px",
+            borderRadius: 999,
+          }}
+        >
+          {bandPick.from !== null
+            ? "cut · click the bottom node"
+            : "cut · click the top node"}
+        </div>
+      )}
       <ControlRail
         onExpandAll={() => {
           anchorRoot();
@@ -1527,7 +1603,9 @@ export default function ProofTreeView({
         onExitFocus={() => setFocusId(null)}
         seqActive={seq.mode !== "off"}
         onToggleSequence={() => {
-          setElidePick(null); // the two picking modes are mutually exclusive
+          // The three picking modes are mutually exclusive.
+          setElidePick(null);
+          setBandPick(null);
           setSeq((s) =>
             s.mode === "off" ? { mode: "pick", from: null } : { mode: "off" },
           );
@@ -1535,7 +1613,17 @@ export default function ProofTreeView({
         elidePicking={elidePick !== null}
         onToggleElide={() => {
           setSeq({ mode: "off" });
+          setBandPick(null);
           setElidePick((p) => (p ? null : { from: null }));
+        }}
+        // The geometric band cut is only well-defined in the compact stacked
+        // outline, where `y` is a total vertical order (see commitBand).
+        bandEnabled={compact && !sideBySide}
+        bandPicking={bandPick !== null}
+        onToggleBand={() => {
+          setSeq({ mode: "off" });
+          setElidePick(null);
+          setBandPick((p) => (p ? null : { from: null }));
         }}
         onZoomIn={() => zoomBy(1.25)}
         onZoomOut={() => zoomBy(1 / 1.25)}
@@ -1700,7 +1788,8 @@ export default function ProofTreeView({
               const isEndpoint =
                 (seq.mode === "pick" && seq.from === id) ||
                 (seq.mode === "view" && (seq.from === id || seq.to === id)) ||
-                elidePick?.from === id;
+                elidePick?.from === id ||
+                bandPick?.from === id;
               // The tactic node the editor cursor selects gets the same
               // accent (source→tree half of the link; see cursorNodeId for
               // why it's exactly one node).
@@ -1715,10 +1804,11 @@ export default function ProofTreeView({
               const revealable = canReveal && type === "tactic";
               const goalRevealable = canReveal && type === "goal";
               // Double-click on a tactic edits it in place (widget only).
-              const isMarker = !!node.data.elidedRun;
+              const isMarker = !!node.data.elidedCut;
               const editable =
                 seq.mode === "off" &&
                 !elidePick &&
+                !bandPick &&
                 type === "tactic" &&
                 !!position &&
                 !!getTacticEdit &&
@@ -1758,6 +1848,7 @@ export default function ProofTreeView({
               const clickable =
                 seqActive ||
                 !!elidePick ||
+                !!bandPick ||
                 isMarker ||
                 foldable ||
                 revealable ||
@@ -1812,9 +1903,9 @@ export default function ProofTreeView({
                 // A node click is an interaction, not a background click — it
                 // must not dismiss the cursor accent (see the scroll div).
                 e.stopPropagation();
-                // While picking an elide run (or on a run marker), a click is a
-                // pick / un-elide — never a reveal or focus.
-                if (elidePick || isMarker) {
+                // While picking an elide endpoint (or on an elision marker), a
+                // click is a pick / un-elide — never a reveal or focus.
+                if (elidePick || bandPick || isMarker) {
                   onNodeClick(id, foldable);
                   return;
                 }
@@ -1988,7 +2079,7 @@ export default function ProofTreeView({
                     >
                       {isMarker ? (
                         <title>
-                          {`${node.data.elidedRun!.tactics.length} tactics elided — click to restore\n\n${node.data.elidedRun!.tactics.join("\n")}`}
+                          {`${node.data.elidedCut!.tactics.length} tactics elided — click to restore\n\n${node.data.elidedCut!.tactics.join("\n")}`}
                         </title>
                       ) : (
                         taggedLines &&
@@ -2425,12 +2516,14 @@ function RailButton({
   onClick,
   pressed,
   pressedColor,
+  disabled,
 }: {
   glyph: string;
   title: string;
   onClick: () => void;
   pressed?: boolean;
   pressedColor?: string;
+  disabled?: boolean;
 }) {
   const color = pressedColor ?? RAIL_PRESSED;
   return (
@@ -2438,15 +2531,18 @@ function RailButton({
       type="button"
       title={title}
       onClick={onClick}
+      disabled={disabled}
       style={
-        pressed
-          ? {
-              ...RAIL_BTN,
-              background: color,
-              borderColor: color,
-              color: ACCENT_TEXT,
-            }
-          : RAIL_BTN
+        disabled
+          ? { ...RAIL_BTN, opacity: 0.35, cursor: "default" }
+          : pressed
+            ? {
+                ...RAIL_BTN,
+                background: color,
+                borderColor: color,
+                color: ACCENT_TEXT,
+              }
+            : RAIL_BTN
       }
     >
       {glyph}
@@ -2479,6 +2575,9 @@ function ControlRail({
   onToggleSequence,
   elidePicking,
   onToggleElide,
+  bandEnabled,
+  bandPicking,
+  onToggleBand,
   onZoomIn,
   onZoomOut,
   onFit,
@@ -2507,6 +2606,9 @@ function ControlRail({
   onToggleSequence: () => void;
   elidePicking: boolean;
   onToggleElide: () => void;
+  bandEnabled: boolean;
+  bandPicking: boolean;
+  onToggleBand: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
@@ -2590,6 +2692,18 @@ function ControlRail({
         pressed={elidePicking}
         pressedColor={SEQ_STROKE}
         onClick={onToggleElide}
+      />
+      <RailButton
+        glyph="⇳"
+        title={
+          bandEnabled
+            ? "Cut a vertical band: pick a top node, then a bottom node — everything between them (any branch) collapses to a marker (click it to restore)"
+            : "Cut a vertical band (compact stacked layout only)"
+        }
+        pressed={bandPicking}
+        pressedColor={SEQ_STROKE}
+        disabled={!bandEnabled}
+        onClick={onToggleBand}
       />
       {focused && (
         <RailButton
