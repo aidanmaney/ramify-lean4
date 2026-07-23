@@ -1026,11 +1026,10 @@ export default function ProofTreeView({
     (compact ? "compact:" : "wide:") +
     (reflow ? "reflow:" : "") +
     (compact && sideBySide ? "cols:" : "") +
-    // Paging to another branch is a different VIEW, not a fold: the tree it
-    // replaces may be a different height entirely, so re-center on it.
-    (gallery
-      ? `gal:${[...shownChild].map(([k, v]) => `${k}=${v}`).join(",")}:`
-      : "") +
+    // Gallery paging deliberately does NOT participate in viewKey: swapping the
+    // shown branch must keep the current scroll/pan, not re-center. The
+    // relayout it triggers is held steady by the `[nodes]` anchor above (the
+    // trunk above the split is unmoved in compact layout, so scroll stays put).
     (seq.mode === "view"
       ? `seq:${seq.from}>${seq.to}`
       : focusId
