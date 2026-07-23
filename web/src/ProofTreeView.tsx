@@ -38,6 +38,7 @@ import {
   tacticNodeAt,
 } from "./proofToTree";
 import type { HypMode } from "./proofToTree";
+import { type ElideRun, applyElisions, elideId, pathIds, pruneRuns } from "./elide";
 import {
   ACCENT_TEXT,
   CASE_FILL,
@@ -435,6 +436,15 @@ export default function ProofTreeView({
   // selecting two endpoints (first click sets `from`); `view` renders only the
   // path between them — a single chain of goals/tactics with no branching.
   const [seq, setSeq] = useState<Seq>({ mode: "off" });
+  // On-demand elision (the reverse of linearize): the applied runs, each a
+  // picked from→to path collapsed to a marker (see elide.ts). `elidePick` is
+  // the picking mode — off, or the first endpoint chosen (or null while it
+  // awaits the first). Runs persist across cursor moves; a marker click removes
+  // its run.
+  const [elideRuns, setElideRuns] = useState<ElideRun[]>([]);
+  const [elidePick, setElidePick] = useState<{ from: string | null } | null>(
+    null,
+  );
   // Focus mode: a goal id whose subtree becomes the whole tree (that goal is
   // the new layout root); null shows the full proof. Folding still works
   // within the focused subtree.
@@ -635,15 +645,21 @@ export default function ProofTreeView({
   // how the data swaps. Keep the proof reference stable across cursor moves
   // (widget) so the fold/zoom reset below only fires on an actual proof
   // change, not on every re-highlight.
+  // The full tree (pre any on-demand elision) — the space new elide-runs are
+  // picked and validated in, so a run always keys on original node ids.
+  const baseNodes = useMemo(
+    () => proofToTree(proof, { hypMode, brief }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [proof, hypMode, brief, codeFont],
+  );
   const engine = useMemo(
     // `codeFont` isn't read here, but the engine measures every label in it
     // via layout.ts module state — the dep is what forces a re-measure when
     // the editor font changes (hence the lint suppression: the dependency is
     // real, just invisible to the linter).
-    () =>
-      createLayoutEngine(proofToTree(proof, { hypMode, brief }), { reflow }),
+    () => createLayoutEngine(applyElisions(baseNodes, elideRuns), { reflow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, hypMode, codeFont, reflow, brief],
+    [baseNodes, elideRuns, codeFont, reflow],
   );
 
   // Two different events, and conflating them is what made editing painful.
@@ -678,6 +694,8 @@ export default function ProofTreeView({
     setSeq({ mode: "off" });
     setFocusId(null);
     setEditing(null);
+    setElideRuns([]);
+    setElidePick(null);
     // A different proof's splits are different nodes entirely. (A same-proof
     // EDIT needs no pruning: `pick` is read modulo the live child count, and
     // keys naming a vanished split are simply never looked up.)
@@ -704,6 +722,9 @@ export default function ProofTreeView({
       (seq.mode === "view" && (!live.has(seq.from) || !live.has(seq.to)))
     )
       setSeq({ mode: "off" });
+    // Drop any elide-run whose endpoints vanished (or no longer form a path)
+    // under the edit — keyed on the base tree, same identity check as above.
+    setElideRuns((rs) => pruneRuns(baseNodes, rs));
     // The source moved under the edit box (usually OUR own committed edit
     // coming back), so its ranges are stale either way.
     setEditing(null);
@@ -914,11 +935,44 @@ export default function ProofTreeView({
     });
   };
 
-  // A node click means different things per mode: fold/unfold in the tree, or
-  // pick a sequence endpoint. Picking the second endpoint orders the pair by
-  // ancestry (whichever is the ancestor becomes the chain's top); two unrelated
-  // nodes can't form a path, so we just restart the selection from the latest.
+  // Elide-run picking: like sequence picking but the chosen path is HIDDEN
+  // (collapsed to a marker) instead of shown. Validated over the base tree, so
+  // a run always keys on original ids; overlapping an existing run is rejected
+  // (the second pick just becomes the new `from`).
+  const commitElide = (a: string, b: string): boolean => {
+    const byId = new Map(baseNodes.map((n) => [n.id, n]));
+    const fwd = pathIds(byId, a, b);
+    const path = fwd ?? pathIds(byId, b, a);
+    if (!path) return false;
+    const used = new Set<string>();
+    for (const r of elideRuns)
+      for (const pid of pathIds(byId, r.from, r.to) ?? []) used.add(pid);
+    if (path.some((pid) => used.has(pid))) return false;
+    const run: ElideRun = fwd ? { from: a, to: b } : { from: b, to: a };
+    setElideRuns((rs) => [...rs, run]);
+    return true;
+  };
+
+  // A node click means different things per mode: fold/unfold in the tree, pick
+  // a sequence endpoint, pick an elide endpoint, or (on a run marker) un-elide.
+  // Picking the second endpoint orders the pair by ancestry (whichever is the
+  // ancestor becomes the chain's top); two unrelated nodes can't form a path,
+  // so we just restart the selection from the latest.
   const onNodeClick = (id: string, foldable: boolean) => {
+    // A run marker: click removes its run. Works in any mode, so an elision is
+    // always one click from being undone.
+    const clicked = nodes.find((n) => n.data.id === id)?.data;
+    if (clicked?.elidedRun) {
+      setElideRuns((rs) => rs.filter((r) => elideId(r) !== id));
+      return;
+    }
+    if (elidePick) {
+      const first = elidePick.from;
+      if (first === null || first === id) setElidePick({ from: id });
+      else if (commitElide(first, id)) setElidePick({ from: null });
+      else setElidePick({ from: id }); // no path / overlap — restart here
+      return;
+    }
     if (seq.mode === "off") {
       if (foldable) toggle(id);
       return;
@@ -1407,6 +1461,26 @@ export default function ProofTreeView({
               : "click the start node"}
         </div>
       )}
+      {elidePick && (
+        <div
+          style={{
+            position: "absolute",
+            top: headerExtra ? 44 : 8,
+            left: 8,
+            zIndex: 10,
+            fontFamily: "monospace",
+            fontSize: 12,
+            color: ACCENT_TEXT,
+            background: SEQ_STROKE,
+            padding: "3px 10px",
+            borderRadius: 999,
+          }}
+        >
+          {elidePick.from !== null
+            ? "elide · click the end node"
+            : "elide · click the start node"}
+        </div>
+      )}
       <ControlRail
         onExpandAll={() => {
           anchorRoot();
@@ -1452,11 +1526,17 @@ export default function ProofTreeView({
         focused={focusId !== null}
         onExitFocus={() => setFocusId(null)}
         seqActive={seq.mode !== "off"}
-        onToggleSequence={() =>
+        onToggleSequence={() => {
+          setElidePick(null); // the two picking modes are mutually exclusive
           setSeq((s) =>
             s.mode === "off" ? { mode: "pick", from: null } : { mode: "off" },
-          )
-        }
+          );
+        }}
+        elidePicking={elidePick !== null}
+        onToggleElide={() => {
+          setSeq({ mode: "off" });
+          setElidePick((p) => (p ? null : { from: null }));
+        }}
         onZoomIn={() => zoomBy(1.25)}
         onZoomOut={() => zoomBy(1 / 1.25)}
         onFit={fitWidth}
@@ -1619,7 +1699,8 @@ export default function ProofTreeView({
               // in `view`) gets a thick accent outline.
               const isEndpoint =
                 (seq.mode === "pick" && seq.from === id) ||
-                (seq.mode === "view" && (seq.from === id || seq.to === id));
+                (seq.mode === "view" && (seq.from === id || seq.to === id)) ||
+                elidePick?.from === id;
               // The tactic node the editor cursor selects gets the same
               // accent (source→tree half of the link; see cursorNodeId for
               // why it's exactly one node).
@@ -1634,8 +1715,10 @@ export default function ProofTreeView({
               const revealable = canReveal && type === "tactic";
               const goalRevealable = canReveal && type === "goal";
               // Double-click on a tactic edits it in place (widget only).
+              const isMarker = !!node.data.elidedRun;
               const editable =
                 seq.mode === "off" &&
+                !elidePick &&
                 type === "tactic" &&
                 !!position &&
                 !!getTacticEdit &&
@@ -1673,7 +1756,12 @@ export default function ProofTreeView({
               const hoverHighlights =
                 type === "tactic" && !!position && !!onHoverTactic;
               const clickable =
-                seqActive || foldable || revealable || goalRevealable;
+                seqActive ||
+                !!elidePick ||
+                isMarker ||
+                foldable ||
+                revealable ||
+                goalRevealable;
               // Native hover tooltip: ONLY what you can do here. It used to
               // repeat the node's own text, which the box is already showing —
               // noise that buried the one thing a tooltip is good for. The
@@ -1724,6 +1812,12 @@ export default function ProofTreeView({
                 // A node click is an interaction, not a background click — it
                 // must not dismiss the cursor accent (see the scroll div).
                 e.stopPropagation();
+                // While picking an elide run (or on a run marker), a click is a
+                // pick / un-elide — never a reveal or focus.
+                if (elidePick || isMarker) {
+                  onNodeClick(id, foldable);
+                  return;
+                }
                 // In the widget, clicking a positioned tactic reveals its source
                 // rather than folding; fold via goal nodes / the sequence tools.
                 // On editable tactics the reveal defers past the double-click
@@ -1883,14 +1977,22 @@ export default function ProofTreeView({
                       rx={type === "tactic" ? 4 : 6}
                       stroke={accent ? SEQ_STROKE : style.stroke}
                       strokeWidth={accent ? 2 : 1.5}
-                      fill={style.fill}
+                      // A run marker is a dashed, unfilled chip (an absence, like
+                      // the .none elision), not a live green box.
+                      fill={isMarker ? "transparent" : style.fill}
+                      strokeDasharray={isMarker ? "3 3" : undefined}
                       // While the in-place editor overlays this node, its box
                       // (and label, below) hide — the overlay is bigger than
                       // the box, and an accented node would clash through it.
                       visibility={hideForEdit ? "hidden" : undefined}
                     >
-                      {taggedLines && hints.length > 0 && (
-                        <title>{nodeTooltip}</title>
+                      {isMarker ? (
+                        <title>
+                          {`${node.data.elidedRun!.tactics.length} tactics elided — click to restore\n\n${node.data.elidedRun!.tactics.join("\n")}`}
+                        </title>
+                      ) : (
+                        taggedLines &&
+                        hints.length > 0 && <title>{nodeTooltip}</title>
                       )}
                     </rect>
                   )}
@@ -1908,7 +2010,7 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {foldable && !seqActive && !revealable && !hideForEdit && !isElided && (
+                  {foldable && !seqActive && !revealable && !hideForEdit && !isElided && !isMarker && (
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -1965,7 +2067,9 @@ export default function ProofTreeView({
                       textAnchor="start"
                       fontSize={NODE_FONT_PX}
                       fontFamily={getCodeFontFamily()}
-                      fill={NODE_TEXT}
+                      // A run marker's `⋯ N tactics` reads as an absence, so it
+                      // takes the muted comment ink, not full node text.
+                      fill={isMarker ? "var(--ptw-comment)" : NODE_TEXT}
                       // Match the width measurer in layout.ts, which doesn't include
                       // the page's inherited letter-spacing.
                       style={{ letterSpacing: 0 }}
@@ -2373,6 +2477,8 @@ function ControlRail({
   onExitFocus,
   seqActive,
   onToggleSequence,
+  elidePicking,
+  onToggleElide,
   onZoomIn,
   onZoomOut,
   onFit,
@@ -2399,6 +2505,8 @@ function ControlRail({
   onExitFocus: () => void;
   seqActive: boolean;
   onToggleSequence: () => void;
+  elidePicking: boolean;
+  onToggleElide: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
@@ -2475,6 +2583,13 @@ function ControlRail({
         pressed={seqActive}
         pressedColor={SEQ_STROKE}
         onClick={onToggleSequence}
+      />
+      <RailButton
+        glyph="⇥"
+        title="Elide a run of nodes: pick a start node, then an end node — the path between collapses to a marker (click it to restore)"
+        pressed={elidePicking}
+        pressedColor={SEQ_STROKE}
+        onClick={onToggleElide}
       />
       {focused && (
         <RailButton
