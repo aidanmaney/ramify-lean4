@@ -3,6 +3,26 @@ import { InteractiveCode, type CodeWithInfos } from "@leanprover/infoview";
 import { ensureTaggedStyle } from "./taggedRender";
 import { flattenTaggedText, lineOffsets } from "./taggedText";
 import { TOKEN_COLOR } from "./theme";
+import { type KeepSeg, elisionsOf, mapRange } from "./briefLabel";
+
+/** A span to draw on a wrapped line: a coloured token (`type`, optional hover
+`info`), or a `…` elision marker (`ellipsis` = the source it hid). Offsets are
+in collapsed-label space. */
+interface RenderSpan {
+  start: number;
+  end: number;
+  type?: string;
+  info?: CodeWithInfos;
+  ellipsis?: string;
+}
+
+/** Brief-mode elision carried on a tactic node (see types.ts `TreeNode.elision`
+and briefLabel.ts): the original label plus the KEEP map onto the collapsed one.
+Tokens are aligned against `original`, then shifted onto the collapsed label. */
+export interface Elision {
+  original: string;
+  keep: KeepSeg[];
+}
 
 // Syntax colouring for tactic node labels (widget only), from the Lean
 // server's OWN semantic tokens — the same `collectSyntaxBasedSemanticTokens` +
@@ -206,9 +226,10 @@ export function makeTacticRenderer(
   p: { start: LspPos },
   label: string,
   lines: string[],
+  elision?: Elision,
 ) => ReactNode[] | null {
   const cache = new Map<string, ReactNode[] | null>();
-  return (p, label, lines) => {
+  return (p, label, lines, elision) => {
     const e = editAt(p);
     if (!e?.tokens) return null;
     // NUL-joined: a space separator would collide `"a b"+["c"]` with
@@ -220,7 +241,15 @@ export function makeTacticRenderer(
     ].join("\u0000");
     let out = cache.get(key);
     if (out === undefined) {
-      out = renderTacticTokens(e.text, e.start, e.tokens, label, lines, infoAt);
+      out = renderTacticTokens(
+        e.text,
+        e.start,
+        e.tokens,
+        label,
+        lines,
+        infoAt,
+        elision,
+      );
       cache.set(key, out);
     }
     return out;
@@ -244,38 +273,55 @@ export function renderTacticTokens(
   // pre-split this per tactic (see widget.tsx), and rebuilding it per node per
   // render would be pure waste.
   infoAt: Map<string, CodeWithInfos> = new Map(),
+  // Present in brief mode: `label`/`lines` are the COLLAPSED text, and this
+  // carries the ORIGINAL label + the KEEP map. Tokens are aligned against the
+  // original (their positions index into it), then shifted onto the collapsed
+  // label through the KEEP map — a span landing in an elided gap drops.
+  elision?: Elision,
 ): ReactNode[] | null {
   if (tokens.length === 0) return null;
   ensureTaggedStyle(); // the .ptw-tagged font normalisation, shared with goals
-  // Exact: `lines` is `wrapText(label)`, so the label reconstructs them by
-  // construction (the same contract goal labels rely on).
+  // Exact: `lines` is `wrapText(label)`, so the (collapsed) label reconstructs
+  // them by construction (the same contract goal labels rely on).
   const offsets = lineOffsets(label, lines);
   if (!offsets) return null;
-  // Tokens carry absolute document positions, so they resolve against `text`
-  // (the source they index into); shifting by the alignment moves them into
-  // label space, where the lines live. Spans landing outside the label are
-  // clipped away per line below.
-  const align = alignInLabel(text, label);
+  // Align tokens against the label their positions actually index into: the
+  // ORIGINAL label in brief mode, else the label itself.
+  const alignLabel = elision ? elision.original : label;
+  const align = alignInLabel(text, alignLabel);
   if (!align) return null;
   const raw = tokenSpans(text, origin, tokens, infoAt);
   if (!raw) return null;
   // Each token belongs to at most one agreeing segment: the one holding its
   // start. Its end is clipped to that segment, since past it the two texts
-  // part company.
-  const spans = raw.flatMap((s) => {
+  // part company. In brief mode a second shift, through the KEEP map, moves the
+  // span from original-label space to collapsed-label space (dropping any that
+  // land in a `…`).
+  const spans: RenderSpan[] = raw.flatMap((s): RenderSpan[] => {
     const seg = align.find(
       (g) => s.start >= g.srcAt && s.start < g.srcAt + g.len,
     );
     if (!seg) return [];
     const shift = seg.labelAt - seg.srcAt;
-    return [
-      {
-        ...s,
-        start: s.start + shift,
-        end: Math.min(s.end, seg.srcAt + seg.len) + shift,
-      },
-    ];
+    let start = s.start + shift;
+    let end = Math.min(s.end, seg.srcAt + seg.len) + shift;
+    if (elision) {
+      const m = mapRange(elision.keep, start, end);
+      if (!m) return [];
+      start = m.start;
+      end = m.end;
+    }
+    return [{ start, end, type: s.type, info: s.info }];
   });
+  // Each `…` in the collapsed label is a titled pseudo-span, so the emit loop
+  // draws it muted with the elided source as a hover tooltip.
+  if (elision)
+    for (const e of elisionsOf({
+      text: label,
+      keep: elision.keep,
+      original: elision.original,
+    }))
+      spans.push({ start: e.outAt, end: e.outAt + 1, ellipsis: e.hidden });
   // Segments are emitted head-first, but tokens within them are not
   // necessarily in label order (a rule further down the bracket list maps to
   // an earlier label offset than a token after it in the source).
@@ -290,6 +336,20 @@ export function renderTacticTokens(
       if (a >= b || a < cur) continue; // outside this line, or already covered
       if (a > cur) parts.push(label.slice(cur, a));
       const slice = label.slice(a, b);
+      // A `…`: muted, with the text it replaced as a native hover tooltip.
+      if (s.ellipsis !== undefined) {
+        parts.push(
+          <span
+            key={`${a}`}
+            title={s.ellipsis}
+            style={{ color: "var(--ptw-comment)", cursor: "help" }}
+          >
+            {slice}
+          </span>,
+        );
+        cur = b;
+        continue;
+      }
       // The interactive form is used only when its own text is EXACTLY the
       // slice being drawn — the same equality guard the goal labels use. It
       // fails for a token straddling a wrap (this line holds only part of it),
@@ -305,7 +365,7 @@ export function renderTacticTokens(
       ) : (
         slice
       );
-      const color = TOKEN_COLOR[s.type];
+      const color = s.type ? TOKEN_COLOR[s.type] : undefined;
       parts.push(
         color || interactive ? (
           <span key={`${a}`} style={color ? { color } : undefined}>

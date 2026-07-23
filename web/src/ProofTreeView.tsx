@@ -30,7 +30,7 @@ import {
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import type { AddSpec, HypLine } from "./types";
+import type { AddSpec, HypLine, TreeNode } from "./types";
 import {
   positionContains,
   proofToTree,
@@ -353,6 +353,7 @@ export interface ProofTreeViewProps {
     pos: ProofStepPosition,
     label: string,
     lines: string[],
+    elision?: TreeNode["elision"],
   ) => ReactNode[] | null;
   /**
    * Widget-only: insert a NEW tactic for a pending goal (the (+) chip).
@@ -409,6 +410,10 @@ export default function ProofTreeView({
   // Unlike `outline` this is GEOMETRY — it rebuilds the engine (below) rather
   // than just repainting.
   const [reflow, setReflow] = useState(false);
+  // Brief: collapse mechanical boilerplate inside each tactic label to `…`
+  // (see briefLabel.ts). Like reflow this is GEOMETRY — the label text changes,
+  // so it rebuilds the engine and re-measures every box.
+  const [brief, setBrief] = useState(false);
   // Side-by-side branches (compact mode): a branching tactic's subtrees lay
   // out as columns sharing one vertical span instead of stacking down the
   // page. A computeLayout parameter, not an engine rebuild: geometry per
@@ -635,9 +640,10 @@ export default function ProofTreeView({
     // via layout.ts module state — the dep is what forces a re-measure when
     // the editor font changes (hence the lint suppression: the dependency is
     // real, just invisible to the linter).
-    () => createLayoutEngine(proofToTree(proof, { hypMode }), { reflow }),
+    () =>
+      createLayoutEngine(proofToTree(proof, { hypMode, brief }), { reflow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, hypMode, codeFont, reflow],
+    [proof, hypMode, codeFont, reflow, brief],
   );
 
   // Two different events, and conflating them is what made editing painful.
@@ -1025,6 +1031,7 @@ export default function ProofTreeView({
   const viewKey =
     (compact ? "compact:" : "wide:") +
     (reflow ? "reflow:" : "") +
+    (brief ? "brief:" : "") +
     (compact && sideBySide ? "cols:" : "") +
     // Gallery paging deliberately does NOT participate in viewKey: swapping the
     // shown branch must keep the current scroll/pan, not re-center. The
@@ -1429,6 +1436,12 @@ export default function ProofTreeView({
           anchorRoot();
           setReflow(v);
         }}
+        brief={brief}
+        onBriefChange={(v) => {
+          // Labels shorten and every box re-measures — same treatment as reflow.
+          anchorRoot();
+          setBrief(v);
+        }}
         hypMode={hypMode}
         onHypModeChange={(v) => {
           // Every layer's hyp label resizes, so hold the root fixed on screen
@@ -1703,6 +1716,7 @@ export default function ProofTreeView({
                         position,
                         node.data.label,
                         lines.map((l) => l.text),
+                        node.data.elision,
                       ) ?? null)
                     : null;
 
@@ -2351,6 +2365,8 @@ function ControlRail({
   onGalleryChange,
   reflow,
   onReflowChange,
+  brief,
+  onBriefChange,
   hypMode,
   onHypModeChange,
   focused,
@@ -2375,6 +2391,8 @@ function ControlRail({
   onGalleryChange: (v: boolean) => void;
   reflow: boolean;
   onReflowChange: (v: boolean) => void;
+  brief: boolean;
+  onBriefChange: (v: boolean) => void;
   hypMode: HypMode;
   onHypModeChange: (v: HypMode) => void;
   focused: boolean;
@@ -2429,6 +2447,12 @@ function ControlRail({
         title="Reflow: wrap labels at a narrow column (breaking at commas, connectives, := and tactic keywords) so branches fit side by side"
         pressed={reflow}
         onClick={() => onReflowChange(!reflow)}
+      />
+      <RailButton
+        glyph="⋯"
+        title="Brief: collapse boilerplate inside tactics to … (a binding's := derivation, a long [ … ] list), keeping the head and the bindings — hover a … to reveal it"
+        pressed={brief}
+        onClick={() => onBriefChange(!brief)}
       />
       <RailButton
         glyph="□"

@@ -1,4 +1,5 @@
 import type { ProofStepPosition } from "./paperproof";
+import type { KeepSeg } from "./briefLabel";
 
 // One line of a goal's local context, e.g. `h : p ∧ q`, with whether the tactic
 // that consumes the goal actually uses it (Paperproof's tacticDependsOn).
@@ -79,6 +80,12 @@ export interface TreeNode {
   // (`-- .fold`), attributed to this node like any other comment. See
   // proofToTree's parseFlags.
   flags?: NodeFlags;
+  // Brief mode (tactic nodes only): when boilerplate inside the label was
+  // collapsed to `…`, `label` is the COLLAPSED string (what layout measures)
+  // and this carries the original label + the KEEP map back to it, so the
+  // token renderer can shift the source-aligned token spans onto the collapsed
+  // label and reveal each `…`'s hidden text. Absent when nothing collapsed.
+  elision?: { original: string; keep: KeepSeg[] };
 }
 
 /** What a node's Alectryon-style comment flags ask the renderer to do.

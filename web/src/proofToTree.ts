@@ -8,6 +8,7 @@ import type {
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import type { AddSpec, HypLine, NodeFlags, TreeNode } from "./types";
+import { collapseLabel } from "./briefLabel";
 
 // Adapter: Paperproof `Proof` → the renderer's `TreeNode[]`.
 //
@@ -514,11 +515,17 @@ export interface ProofToTreeOptions {
    * the goal gained (plus used) — contexts read additively down the tree.
    */
   hypMode?: HypMode;
+  /**
+   * Brief mode: collapse mechanical boilerplate inside each tactic label to
+   * `…` (see briefLabel.ts). Off by default; a geometry-affecting toggle, so
+   * the engine is rebuilt when it flips (same as reflow).
+   */
+  brief?: boolean;
 }
 
 export function proofToTree(
   proof: Proof,
-  { hypMode = "delta" }: ProofToTreeOptions = {},
+  { hypMode = "delta", brief = false }: ProofToTreeOptions = {},
 ): TreeNode[] {
   const goals = goalIndex(proof);
 
@@ -684,9 +691,17 @@ export function proofToTree(
     if (!step) return; // leaf: this goal was closed by its tactic
 
     const tId = tacticId(goalId);
+    const fullLabel = cleanLabel(step.tacticString, proof.comments ?? []);
+    // Brief mode collapses boilerplate to `…`: the node then carries the
+    // collapsed string as its label (what layout measures) plus the map back
+    // to the original for the token renderer. `null` = nothing collapsed.
+    const collapsed = brief ? collapseLabel(fullLabel) : null;
     nodes.push({
       id: tId,
-      label: cleanLabel(step.tacticString, proof.comments ?? []),
+      label: collapsed ? collapsed.text : fullLabel,
+      elision: collapsed
+        ? { original: collapsed.original, keep: collapsed.keep }
+        : undefined,
       type: "tactic",
       parents: [{ id: goalId }],
       // Carry the tactic's source span so the widget can link this node back to

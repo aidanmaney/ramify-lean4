@@ -1,0 +1,229 @@
+// "Brief mode": collapse mechanical boilerplate WITHIN a tactic label to `…`,
+// keeping the tactic head and the bindings it introduced. The within-tactic
+// analogue of the Alectryon-style `.fold`/`.none` subtree elision — one level
+// finer, since it touches the tactic's own label text.
+//
+// This is a pure string transform (no proof data), so it is trivially testable
+// and shared by both data paths. The output is a COLLAPSED string plus a
+// KEEP map back to the original label: token colouring and hover popups are
+// aligned against the original label (see tacticTokens.tsx) and then shifted
+// through this map into collapsed space, so the surviving tokens keep their
+// colour while the elided ones drop. Each `…` is a single U+2026 char in the
+// collapsed text; the renderer reveals what it replaced via the KEEP gaps.
+//
+// Geometry stays honest because the collapsed string is what layout.ts measures
+// (the label transform runs BEFORE sizeOf) — see proofToTree's `brief` option.
+
+/** One run of the original label carried through verbatim: `len` chars starting
+at `srcAt` in the original label sit at `outAt` in the collapsed text. The gaps
+between consecutive KeepSegs are the elisions (each a single `…`). */
+export interface KeepSeg {
+  outAt: number;
+  srcAt: number;
+  len: number;
+}
+
+export interface CollapsedLabel {
+  /** The collapsed display string (contains `…` at each elision). */
+  text: string;
+  /** Kept runs, in order; gaps between them are the `…`s. */
+  keep: KeepSeg[];
+  /** The untouched original label, for aligning tokens before remapping. */
+  original: string;
+}
+
+const ELLIPSIS = "…";
+const OPENERS = "([{⟨";
+const CLOSERS = ")]}⟩";
+
+// Below this many characters a label is left whole — collapsing a short tactic
+// saves no width and only hides text. A proxy for the pixel width gate the
+// layout applies; the point is only to skip the trivial cases.
+const MIN_LABEL = 26;
+// An elision must remove at least this many chars to be worth a `…` (which is
+// itself one char plus the readability cost of hiding text).
+const MIN_ELIDE = 8;
+
+/** Scan `s` recording, at bracket depth 0: the index of a top-level `:=`, the
+index of a top-level ` with ` keyword, and every top-level `[ … ]` group with
+its inner (depth-1) comma positions. One pass, so the three rules below share it. */
+interface Scan {
+  assign: number; // index of top-level ":=" (-1 if none)
+  withKw: number; // index of the "with" of a top-level " with " (-1 if none)
+  lists: { open: number; close: number; commas: number[] }[]; // top-level `[]`
+}
+
+function scan(s: string): Scan {
+  let depth = 0;
+  let assign = -1;
+  let withKw = -1;
+  const lists: Scan["lists"] = [];
+  // Stack of open `[` groups currently being scanned (only depth-0 ones matter).
+  let listStart = -1;
+  let listCommas: number[] = [];
+  const isWordChar = (c: string | undefined) => !!c && /[\w.]/.test(c);
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (OPENERS.includes(c)) {
+      if (c === "[" && depth === 0) {
+        listStart = i;
+        listCommas = [];
+      }
+      depth++;
+    } else if (CLOSERS.includes(c)) {
+      depth--;
+      if (c === "]" && depth === 0 && listStart >= 0) {
+        lists.push({ open: listStart, close: i, commas: listCommas });
+        listStart = -1;
+      }
+    } else if (depth === 0 && assign < 0 && c === ":" && s[i + 1] === "=") {
+      assign = i;
+    } else if (
+      depth === 0 &&
+      withKw < 0 &&
+      s.startsWith("with", i) &&
+      !isWordChar(s[i - 1]) &&
+      !isWordChar(s[i + 4])
+    ) {
+      withKw = i;
+    } else if (c === "," && depth === 1 && listStart >= 0) {
+      listCommas.push(i);
+    }
+  }
+  return { assign, withKw, lists };
+}
+
+/** The half-open ranges of the original label to hide, from the rules. */
+function elisionRanges(label: string): [number, number][] {
+  const s = scan(label);
+  const ranges: [number, number][] = [];
+  const push = (a: number, b: number) => {
+    if (b - a >= MIN_ELIDE) ranges.push([a, b]);
+  };
+
+  // Rule A — the flagship: the RHS of a top-level `:=` (a binding's derivation)
+  // is boilerplate, while the LHS bindings and any `: type` before the `:=` are
+  // the point. `:= by` opens a subtree the tree already folds, so leave it.
+  if (s.assign >= 0) {
+    let rhs = s.assign + 2;
+    while (rhs < label.length && label[rhs] === " ") rhs++;
+    const rest = label.slice(rhs);
+    if (rest.trim() !== "" && !/^by(\s|$)/.test(rest)) push(rhs, label.length);
+  }
+
+  // Rule B — `rcases`/`cases <scrutinee> with <pattern>`: the scrutinee is the
+  // derivation, the `with` pattern names the cases (content). Collapse between
+  // the head keyword and `with`. (`obtain … := …` is Rule A; `induction` is
+  // left alone — the variable inducted on is short and important.)
+  const mB = /^(\s*)(rcases|cases)\s+/.exec(label);
+  if (mB && s.withKw > mB[0].length) push(mB[0].length, s.withKw);
+
+  // Rule C — an over-long `[ … ]` argument list (`rw`, `simp only`): keep the
+  // opener and the FIRST rule, collapse the rest. Only `[]`, never `⟨⟩` (that
+  // would hide the binding constructor Rule A is careful to keep). Needs >2
+  // top-level items (≥2 commas) to be worth it.
+  for (const g of s.lists) {
+    if (g.commas.length < 2) continue;
+    // Second item begins after the first comma (skip one space).
+    let from = g.commas[0] + 1;
+    if (label[from] === " ") from++;
+    push(from, g.close); // up to, not including, the `]`
+  }
+
+  return ranges;
+}
+
+/** Collapse `label`, or null when nothing collapses (caller keeps the original
+and sets no elision — the render path is then byte-identical to today). */
+export function collapseLabel(label: string): CollapsedLabel | null {
+  if (label.length < MIN_LABEL) return null;
+  const raw = elisionRanges(label);
+  if (raw.length === 0) return null;
+
+  // Merge overlapping/adjacent ranges (Rule A's to-end range can swallow a
+  // Rule C list sitting inside the RHS).
+  raw.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of raw) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+
+  // Assemble the collapsed text and KEEP map by walking the label: kept runs
+  // verbatim, each elided run a single `…`. Spacing around a `…` is normalised
+  // to read like source — one space where the original had a word boundary,
+  // none against a bracket — so `:= <rhs>` becomes `:= …`, `[a, b, c]` becomes
+  // `[a, …]`, `rcases s with p` becomes `rcases … with p`. The synthetic spaces
+  // belong to no KEEP segment (outAt is read off the built text length), so the
+  // token remap stays exact.
+  let text = "";
+  const keep: KeepSeg[] = [];
+  let cursor = 0;
+  let afterElision = false;
+  const last = () => text[text.length - 1];
+  const emitKeep = (from: number, to: number) => {
+    let s = from;
+    let e = to;
+    while (s < e && label[s] === " ") s++;
+    while (e > s && label[e - 1] === " ") e--;
+    if (e <= s) return;
+    // A space after a preceding `…`, unless this run opens with a closer.
+    if (afterElision && text !== "" && !CLOSERS.includes(label[s])) text += " ";
+    afterElision = false;
+    keep.push({ outAt: text.length, srcAt: s, len: e - s });
+    text += label.slice(s, e);
+  };
+  for (const [a, b] of merged) {
+    emitKeep(cursor, a);
+    // A space before the `…`, unless the kept text ends with an opener.
+    if (text !== "" && last() !== " " && !OPENERS.includes(last())) text += " ";
+    text += ELLIPSIS;
+    afterElision = true;
+    cursor = b;
+  }
+  emitKeep(cursor, label.length);
+
+  // A degenerate result (everything elided, or no net shortening) is not worth
+  // it — fall back to the original.
+  if (keep.length === 0 || text.length >= label.length) return null;
+  return { text, keep, original: label };
+}
+
+/** Map an offset range in the ORIGINAL label into collapsed-text space, or null
+if it lands (even partly) inside an elided gap. Used by the token renderer to
+shift a source-aligned token span onto the collapsed label. */
+export function mapRange(
+  keep: KeepSeg[],
+  srcAt: number,
+  srcEnd: number,
+): { start: number; end: number } | null {
+  for (const k of keep) {
+    if (srcAt >= k.srcAt && srcEnd <= k.srcAt + k.len) {
+      const shift = k.outAt - k.srcAt;
+      return { start: srcAt + shift, end: srcEnd + shift };
+    }
+  }
+  return null;
+}
+
+/** The elisions as { outAt (offset of the `…` in the collapsed text), hidden
+(the original substring it replaced) } — for the `…`'s hover reveal. The hidden
+texts come from the gaps between KEEP segments, in order; their positions are
+found by scanning the collapsed text for `…`, which is robust to the synthetic
+spaces the assembler inserts around each marker. */
+export function elisionsOf(c: CollapsedLabel): { outAt: number; hidden: string }[] {
+  const hidden: string[] = [];
+  let prevSrcEnd = 0;
+  for (const k of c.keep) {
+    if (k.srcAt > prevSrcEnd) hidden.push(c.original.slice(prevSrcEnd, k.srcAt));
+    prevSrcEnd = k.srcAt + k.len;
+  }
+  if (prevSrcEnd < c.original.length)
+    hidden.push(c.original.slice(prevSrcEnd));
+  const out: { outAt: number; hidden: string }[] = [];
+  let hi = 0;
+  for (let i = 0; i < c.text.length && hi < hidden.length; i++)
+    if (c.text[i] === ELLIPSIS) out.push({ outAt: i, hidden: hidden[hi++] });
+  return out;
+}
