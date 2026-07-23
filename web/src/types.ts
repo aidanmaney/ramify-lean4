@@ -86,13 +86,13 @@ export interface TreeNode {
   // token renderer can shift the source-aligned token spans onto the collapsed
   // label and reveal each `…`'s hidden text. Absent when nothing collapsed.
   elision?: { original: string; keep: KeepSeg[] };
-  // Present on a SYNTHETIC marker node standing in for an on-demand elided cut
-  // of nodes — either a path (the rail's ⇥) or a vertical band (⇳); see
-  // elide.ts. The view draws it as a dashed chip and clicking it removes the
-  // cut (matched by the marker's own `id` = the cut's id). `tactics` are the
-  // elided tactic labels, in order, for the hover tooltip (and the raw material
-  // for a combined rendering).
-  elidedCut?: { tactics: string[] };
+  // Present on a SYNTHETIC marker node standing in for a collapsed set of nodes
+  // (see elide.ts). Two flavours: an on-demand ELIDE cut (a path via ⇥ or a
+  // vertical band via ⇳) draws as a dashed `⋯` chip clicking removes; a
+  // `combined` cut (the ⇉ toggle's automatic linear-run collapse) draws as a
+  // normal tactic box whose `label` is the run's tactics stacked. `tactics`
+  // holds those labels in order (the `<title>`, and the combined label itself).
+  elidedCut?: { tactics: string[]; combined?: boolean };
 }
 
 /** What a node's Alectryon-style comment flags ask the renderer to do.

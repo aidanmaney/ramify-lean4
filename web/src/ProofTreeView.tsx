@@ -41,6 +41,7 @@ import type { HypMode } from "./proofToTree";
 import {
   type ElideCut,
   applyElisions,
+  combineRuns,
   cutId,
   pathIds,
   pruneCuts,
@@ -422,6 +423,10 @@ export default function ProofTreeView({
   // (see briefLabel.ts). Like reflow this is GEOMETRY — the label text changes,
   // so it rebuilds the engine and re-measures every box.
   const [brief, setBrief] = useState(false);
+  // Combine: automatically merge each maximal LINEAR tactic run into one node
+  // showing the tactics stacked, dropping the pass-through goals between them
+  // (syntactic, not semantic — see elide.ts combineRuns). Engine-tier geometry.
+  const [combine, setCombine] = useState(false);
   // Side-by-side branches (compact mode): a branching tactic's subtrees lay
   // out as columns sharing one vertical span instead of stacking down the
   // page. A computeLayout parameter, not an engine rebuild: geometry per
@@ -667,9 +672,22 @@ export default function ProofTreeView({
     // via layout.ts module state — the dep is what forces a re-measure when
     // the editor font changes (hence the lint suppression: the dependency is
     // real, just invisible to the linter).
-    () => createLayoutEngine(applyElisions(baseNodes, elideCuts), { reflow }),
+    () => {
+      // Combine (auto linear-run collapse) is applied alongside the manual
+      // elide cuts, computed over the nodes the manual cuts DON'T claim so the
+      // two stay disjoint.
+      let cuts = elideCuts;
+      if (combine) {
+        const byId = new Map(baseNodes.map((n) => [n.id, n]));
+        const manual = new Set<string>();
+        for (const c of elideCuts)
+          for (const id of resolveCut(c, byId)) manual.add(id);
+        cuts = [...elideCuts, ...combineRuns(baseNodes, manual)];
+      }
+      return createLayoutEngine(applyElisions(baseNodes, cuts), { reflow });
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseNodes, elideCuts, codeFont, reflow],
+    [baseNodes, elideCuts, combine, codeFont, reflow],
   );
 
   // Two different events, and conflating them is what made editing painful.
@@ -1010,8 +1028,10 @@ export default function ProofTreeView({
     // An elision marker: click removes its cut (matched by the marker's id =
     // the cut's id). Works in any mode, so an elision is always one click from
     // being undone.
+    // (A COMBINED node is not one of these — it's automatic, driven by the
+    // toggle rather than a stored cut, so it just folds like any other node.)
     const clicked = nodes.find((n) => n.data.id === id)?.data;
-    if (clicked?.elidedCut) {
+    if (clicked?.elidedCut && !clicked.elidedCut.combined) {
       setElideCuts((cs) => cs.filter((c) => cutId(c) !== id));
       return;
     }
@@ -1142,6 +1162,7 @@ export default function ProofTreeView({
     (compact ? "compact:" : "wide:") +
     (reflow ? "reflow:" : "") +
     (brief ? "brief:" : "") +
+    (combine ? "combine:" : "") +
     (compact && sideBySide ? "cols:" : "") +
     // Gallery paging deliberately does NOT participate in viewKey: swapping the
     // shown branch must keep the current scroll/pan, not re-center. The
@@ -1592,6 +1613,13 @@ export default function ProofTreeView({
           anchorRoot();
           setBrief(v);
         }}
+        combine={combine}
+        onCombineChange={(v) => {
+          // Whole runs merge into single nodes — the biggest relayout of all,
+          // so hold the root steady like the other geometry toggles.
+          anchorRoot();
+          setCombine(v);
+        }}
         hypMode={hypMode}
         onHypModeChange={(v) => {
           // Every layer's hyp label resizes, so hold the root fixed on screen
@@ -1804,7 +1832,12 @@ export default function ProofTreeView({
               const revealable = canReveal && type === "tactic";
               const goalRevealable = canReveal && type === "goal";
               // Double-click on a tactic edits it in place (widget only).
-              const isMarker = !!node.data.elidedCut;
+              // A COMBINED node is a real (if synthetic) tactic node — the run's
+              // tactics stacked — so it draws and behaves like one: normal box,
+              // foldable, no dashed chip. Only an ELIDE marker gets the `⋯`
+              // chip treatment and the click-to-restore.
+              const isCombined = !!node.data.elidedCut?.combined;
+              const isMarker = !!node.data.elidedCut && !isCombined;
               const editable =
                 seq.mode === "off" &&
                 !elidePick &&
@@ -2567,6 +2600,8 @@ function ControlRail({
   onReflowChange,
   brief,
   onBriefChange,
+  combine,
+  onCombineChange,
   hypMode,
   onHypModeChange,
   focused,
@@ -2598,6 +2633,8 @@ function ControlRail({
   onReflowChange: (v: boolean) => void;
   brief: boolean;
   onBriefChange: (v: boolean) => void;
+  combine: boolean;
+  onCombineChange: (v: boolean) => void;
   hypMode: HypMode;
   onHypModeChange: (v: HypMode) => void;
   focused: boolean;
@@ -2663,6 +2700,12 @@ function ControlRail({
         title="Brief: collapse boilerplate inside tactics to … (a binding's := derivation, a long [ … ] list), keeping the head and the bindings — hover a … to reveal it"
         pressed={brief}
         onClick={() => onBriefChange(!brief)}
+      />
+      <RailButton
+        glyph="⇉"
+        title="Combine: merge each straight run of tactics into one node (stacked), dropping the pass-through goals between them"
+        pressed={combine}
+        onClick={() => onCombineChange(!combine)}
       />
       <RailButton
         glyph="□"

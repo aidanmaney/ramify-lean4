@@ -18,14 +18,15 @@ import type { ParentEdge, TreeNode } from "./types";
 
 export type ElideCut =
   | { kind: "path"; from: string; to: string } // ancestor→descendant path
-  | { kind: "band"; ids: string[] }; // explicit id set (a vertical band)
+  | { kind: "band"; ids: string[] } // explicit id set (a vertical band)
+  | { kind: "combine"; ids: string[] }; // a linear tactic run, shown stacked
 
 /** Stable marker id for a cut — also the key removal matches on. `»`/`·` can't
 occur in an mvarId. */
 export function cutId(cut: ElideCut): string {
   return cut.kind === "path"
     ? `elide:${cut.from}»${cut.to}`
-    : `elide-band:${[...cut.ids].sort().join("·")}`;
+    : `${cut.kind === "combine" ? "combine" : "elide-band"}:${[...cut.ids].sort().join("·")}`;
 }
 
 /** The node path from ancestor `from` down to descendant `to` (inclusive), or
@@ -58,6 +59,58 @@ export function resolveCut(
   return cut.ids.filter((id) => byId.has(id));
 }
 
+/** Maximal linear tactic runs, each returned as a `combine` cut. A run is a
+chain tactic → goal → tactic → … where every intermediate goal is a pass-through
+(single parent, single child) and every step is single-parent/single-child, so
+it has no branching to lose. The cut's id set is the tactics PLUS the pass-through
+goals between them — the boundary goals (the one the first tactic consumes, the
+one the last produces) stay visible, and the run collapses to one node showing
+the tactics stacked. Only runs of ≥2 tactics are worth combining. `exclude` skips
+nodes already claimed by a manual elide cut, keeping the two disjoint. */
+export function combineRuns(
+  nodes: TreeNode[],
+  exclude?: Set<string>,
+): ElideCut[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const children = new Map<string, string[]>();
+  for (const n of nodes)
+    for (const p of n.parents)
+      (children.get(p.id) ?? children.set(p.id, []).get(p.id)!).push(n.id);
+  const soleChild = (id: string): string | null => {
+    const c = children.get(id) ?? [];
+    return c.length === 1 ? c[0] : null;
+  };
+  const soleParent = (id: string) => (byId.get(id)?.parents.length ?? 0) === 1;
+  const blocked = (id: string) => exclude?.has(id) ?? false;
+
+  const runs: ElideCut[] = [];
+  const seen = new Set<string>();
+  // Nodes are in DFS preorder, so a run's TOP tactic is met before any of its
+  // continuations — which are marked `seen` and skipped as starts.
+  for (const start of nodes) {
+    if (start.type !== "tactic" || seen.has(start.id) || blocked(start.id))
+      continue;
+    const ids: string[] = [];
+    let tacticCount = 0;
+    let cur: string | null = start.id;
+    while (cur && byId.get(cur)!.type === "tactic" && !blocked(cur)) {
+      ids.push(cur);
+      tacticCount++;
+      seen.add(cur);
+      const g = soleChild(cur); // the goal this tactic produced
+      if (!g || byId.get(g)!.type !== "goal" || !soleParent(g)) break;
+      const next = soleChild(g); // the tactic that consumes it
+      if (!next || !soleParent(next) || byId.get(next)!.type !== "tactic")
+        break;
+      if (blocked(g) || blocked(next)) break;
+      ids.push(g); // the pass-through goal joins the run
+      cur = next;
+    }
+    if (tacticCount >= 2) runs.push({ kind: "combine", ids });
+  }
+  return runs;
+}
+
 /** Drop cuts that no longer resolve to anything (after an edit). Returns the
 same array reference when nothing changed. */
 export function pruneCuts(nodes: TreeNode[], cuts: ElideCut[]): ElideCut[] {
@@ -78,7 +131,10 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
   // each marker's TOPMOST member, so the marker is emitted in that node's slot
   // (preserving DFS-preorder position, so compact ordering is unchanged).
   const markerOf = new Map<string, string>();
-  const info = new Map<string, { ids: string[]; tactics: string[] }>();
+  const info = new Map<
+    string,
+    { ids: string[]; tactics: string[]; combine: boolean }
+  >();
   const slotOf = new Map<string, number>();
   for (const cut of cuts) {
     const ids = resolveCut(cut, byId);
@@ -94,7 +150,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
       .map((id) => byId.get(id)!)
       .filter((n) => n.type === "tactic")
       .map((n) => n.label);
-    info.set(mid, { ids, tactics });
+    info.set(mid, { ids, tactics, combine: cut.kind === "combine" });
     slotOf.set(mid, top);
   }
   if (info.size === 0) return nodes;
@@ -120,7 +176,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
     if (mid) {
       // A node inside a cut: emit the marker once, in the set's topmost slot.
       if (index.get(n.id) === slotOf.get(mid)) {
-        const { ids, tactics } = info.get(mid)!;
+        const { ids, tactics, combine } = info.get(mid)!;
         // The marker's parents are every edge ENTERING the set from outside —
         // the union over all members (a path yields `from`'s parents; a band
         // may yield several, i.e. a multi-parent marker, which the trunk layout
@@ -132,10 +188,13 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
         out.push({
           id: mid,
           type: "tactic",
-          // Sized/measured like any label; the view restyles it as a chip.
-          label: `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
+          // A `combine` marker IS the run's tactics, stacked (the view draws it
+          // as a normal tactic box); an elide marker is the `⋯ N tactics` chip.
+          label: combine
+            ? tactics.join("\n")
+            : `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
           parents,
-          elidedCut: { tactics },
+          elidedCut: { tactics, combined: combine },
         });
       }
       continue; // the cut's own nodes are gone
