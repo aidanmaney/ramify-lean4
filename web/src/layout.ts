@@ -331,7 +331,11 @@ function trunkLayout(
       }
       return { pn, bottom, right };
     }
-    const trunk = cs[cs.length - 1];
+    // The last child in source order resumes the trunk at the parent's own
+    // indent — except under a CHAIN (a `calc` block), whose links are a list
+    // rather than a split, so every one of them indents and they read as a
+    // column (see TreeNode.chain). `undefined` never matches `c === trunk`.
+    const trunk = n.chain ? undefined : cs[cs.length - 1];
     for (const c of cs) {
       const gap =
         n.type === "goal" && cs.length === 1

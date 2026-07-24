@@ -31,13 +31,16 @@ namespace Ppharness
 /-- `Result` itself has no `ToJson` instance (only `ProofStep`, `GoalInfo`, and
     `Hypothesis` derive one), so we encode its two fields by hand.
     `allGoals` is a `Std.HashSet`, which has no canonical JSON form → dump as a list.
-    `comments` is ours (not the parser's): the command's source comments, for the
-    renderer's comment strips (see ProofTreeComments.lean). -/
-def resultToJson (r : Result) (comments : Array ProofTree.SourceComment) : Json :=
+    `comments` and `calcHoles` are ours (not the parser's): the command's source
+    comments, for the renderer's comment strips, and the unproved `calc` links,
+    for its per-link (+) chips (both from ProofTreeComments.lean). -/
+def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
+    (calcHoles : Array ProofTree.CalcHole) : Json :=
   Json.mkObj [
     ("steps",    toJson r.steps),          -- List ProofStep  (ToJson derived upstream)
     ("allGoals", toJson r.allGoals.toList), -- flatten the goal set into an array
-    ("comments", toJson comments)
+    ("comments", toJson comments),
+    ("calcHoles", toJson calcHoles)
   ]
 
 /-- Run the (MetaM) parser from plain `IO`.
@@ -82,8 +85,12 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
           let comments := match ProofTree.commandRange tree with
             | some range => ProofTree.commentsInRange src fileMap range
             | none => #[]
+          -- Unproved calc links, for the renderer's per-link (+) chips. Unlike
+          -- the widget's tagged goals these are plain data, so they ride the
+          -- CLI wire too (which is what lets a probe check them offline).
+          let calcHoles := ProofTree.collectCalcHoles fileMap tree
           out := out.push (Json.mkObj
-            [("index", toJson idx), ("proof", resultToJson r comments)])
+            [("index", toJson idx), ("proof", resultToJson r comments calcHoles)])
     | none => pure ()
     idx := idx + 1
   return out

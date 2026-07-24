@@ -84,6 +84,9 @@ structure ProofTreeData where
   -- Hover popups for identifier tokens inside tactics (see TacticTokenInfo).
   -- Like taggedGoals, these hold live RPC references, so they are widget-only.
   tokenInfos  : Array TacticTokenInfo := #[]
+  -- Unproved `calc` links (`_ = c := ?_`), so the tree's (+) chips can fill a
+  -- link exactly where it sits. Plain data, so it rides the CLI wire too.
+  calcHoles   : Array CalcHole := #[]
   deriving Server.RpcEncodable
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
@@ -463,7 +466,8 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       taggedGoals,
       comments,
       tacticEdits,
-      tokenInfos
+      tokenInfos,
+      calcHoles   := collectCalcHoles fileMap snap.infoTree
     }
 
 /-- Parameters for `popoutEdit`: the document and the tactic's TIGHT range

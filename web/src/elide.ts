@@ -138,6 +138,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
       tactics: string[];
       parts: CombinedPart[];
       combine: boolean;
+      chain: boolean;
     }
   >();
   const slotOf = new Map<string, number>();
@@ -151,16 +152,26 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
       markerOf.set(id, mid);
       top = Math.min(top, index.get(id) ?? Infinity);
     }
-    const parts = ids
-      .map((id) => byId.get(id)!)
-      .filter((n) => n.type === "tactic")
-      .map((n) => ({
-        label: n.label,
-        position: n.position,
-        elision: n.elision,
-      }));
+    const members = ids.map((id) => byId.get(id)!).filter((n) => n.type === "tactic");
+    const parts = members.map((n) => ({
+      label: n.label,
+      position: n.position,
+      elision: n.elision,
+    }));
     const tactics = parts.map((p) => p.label);
-    info.set(mid, { ids, tactics, parts, combine: cut.kind === "combine" });
+    info.set(mid, {
+      ids,
+      tactics,
+      parts,
+      combine: cut.kind === "combine",
+      // The marker inherits its members' outgoing edges, so it must inherit
+      // the chain flag too or a `calc` swallowed by ⇉ loses its column. The
+      // LAST tactic is the one that has them: a combine run is linear, so
+      // every earlier member's children are inside the cut. (A band cut can
+      // in principle have several members with escaping edges; taking the
+      // last is a judgement call there, not an exact rule.)
+      chain: members[members.length - 1]?.chain ?? false,
+    });
     slotOf.set(mid, top);
   }
   if (info.size === 0) return nodes;
@@ -186,7 +197,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
     if (mid) {
       // A node inside a cut: emit the marker once, in the set's topmost slot.
       if (index.get(n.id) === slotOf.get(mid)) {
-        const { ids, tactics, parts, combine } = info.get(mid)!;
+        const { ids, tactics, parts, combine, chain } = info.get(mid)!;
         // The marker's parents are every edge ENTERING the set from outside —
         // the union over all members (a path yields `from`'s parents; a band
         // may yield several, i.e. a multi-parent marker, which the trunk layout
@@ -204,6 +215,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
             ? tactics.join("\n")
             : `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
           parents,
+          chain,
           elidedCut: combine
             ? { tactics, combined: true, parts }
             : { tactics },

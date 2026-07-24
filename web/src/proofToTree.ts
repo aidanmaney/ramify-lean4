@@ -1,4 +1,5 @@
 import type {
+  CalcHole,
   GoalInfo,
   Hypothesis,
   Proof,
@@ -561,7 +562,41 @@ export function proofToTree(
   // SEVERAL pending siblings, each (+) inserts at the same anchor, so adding
   // them out of source order attaches text to the wrong goal — Lean's bullets
   // bind by position, and only `case`-named insertion could do better.
+  // Unproved `calc` links, keyed by the goal each `?_` stands for. The Lean
+  // side pairs them by metavariable, so this join is exact rather than
+  // positional (see paperproof.ts `CalcHole`).
+  const holeByGoal = new Map<string, CalcHole>(
+    (proof.calcHoles ?? []).map((h) => [h.goalId, h]),
+  );
+
+  /** Grow the chain by inserting a link ABOVE this hole — the only way to
+  extend a calc that stays well-typed (see AddSpec.hole). Absent on the first
+  link, whose LHS is the chain's head rather than a `_`. */
+  function addLinkFor(goalId: string, prod: ProofStep): AddSpec | undefined {
+    const hole = holeByGoal.get(goalId);
+    if (!hole || hole.first) return undefined;
+    return {
+      kind: "calc-link",
+      hole,
+      indent: hole.linkStart.character,
+      producer: prod.position,
+      after: prod.position,
+    };
+  }
+
   function addSpecFor(goalId: string, prod: ProofStep): AddSpec {
+    // A pending goal that is a calc HOLE is filled where it sits: the generic
+    // line insertion below would anchor on the last step written INSIDE the
+    // chain and drop a tactic into the middle of the block, breaking it.
+    const hole = holeByGoal.get(goalId);
+    if (hole)
+      return {
+        kind: "hole",
+        hole,
+        indent: hole.linkStart.character,
+        producer: prod.position,
+        after: prod.position,
+      };
     const label = prod.tacticString.trimEnd();
     const base = prod.position.start.character;
     let anchor = prod;
@@ -686,6 +721,9 @@ export function proofToTree(
         !step && producedBy && producedBy.goalsAfter.some((g) => g.id === goalId)
           ? addSpecFor(goalId, producedBy)
           : undefined,
+      // Grow the chain: only on an unproved link that has a predecessor to
+      // take its `_` from (never the chain's first link).
+      addLink: !step && producedBy ? addLinkFor(goalId, producedBy) : undefined,
     });
 
     if (!step) return; // leaf: this goal was closed by its tactic
@@ -704,6 +742,12 @@ export function proofToTree(
         : undefined,
       type: "tactic",
       parents: [{ id: goalId }],
+      // A `calc` block's children are the chain's links (see TreeNode.chain).
+      // Read off the RAW tacticString rather than a server-side syntax kind
+      // because the flag has to work on BOTH wires, and the CLI's NDJSON ships
+      // no syntax; `calc` is a keyword at the head of the tactic, so the
+      // prefix is the same signal the parser used.
+      chain: /^calc\b/.test(step.tacticString),
       // Carry the tactic's source span so the widget can link this node back to
       // the `.lean` source (see types.ts `TreeNode.position`).
       position: step.position,

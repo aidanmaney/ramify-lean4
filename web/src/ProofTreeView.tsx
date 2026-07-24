@@ -146,6 +146,11 @@ const CHIP_H = 15;
 const CHIP_GAP = 6;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
+const CHIP_W_STEP = 30;
+// What the `step` chip's overlay opens with: the head of a calc link, so the
+// author types only the part that is theirs (`c := by ring`). Committing it
+// unchanged is the no-op of that form (see commitEdit).
+const CALC_LINK_PREFILL = "_ = ";
 // The `.none` elision marker (see ElidedMarker) is the one chip that DOES
 // measure: it carries the directive's own prose, so its width is its text's.
 const CHIP_FONT_PX = 10;
@@ -514,7 +519,11 @@ export default function ProofTreeView({
     // literally unmoved and only the part the edit could have changed shifts.
     anchorOn(cur.id);
     if (cur.add) {
-      if (cur.value.trim() !== "") onAddTactic?.(cur.add, cur.value);
+      // An add commits on any non-empty text — except a prefilled overlay
+      // (the calc `step` chip) that was never typed into, which is the empty
+      // commit of that form and must not write a bare `_ = ` into the source.
+      if (cur.value.trim() !== "" && cur.value !== cur.original)
+        onAddTactic?.(cur.add, cur.value);
     } else if (cur.value !== cur.original) {
       onEditTactic?.(cur.pos, cur.value);
     }
@@ -2289,7 +2298,11 @@ export default function ProofTreeView({
                       >
                         <FrontierChip
                           glyph="+"
-                          title="add a tactic for this goal"
+                          title={
+                            node.data.addSpec.kind === "hole"
+                              ? "fill this calc step in place"
+                              : "add a tactic for this goal"
+                          }
                           // Centred on the incoming lane; the row runs right
                           // from there, each chip starting past the previous
                           // one's width plus CHIP_GAP.
@@ -2322,6 +2335,38 @@ export default function ProofTreeView({
                             onAddTactic(node.data.addSpec!, "sorry");
                           }}
                         />
+                        {/* Grow a `calc` chain: insert a whole new link above
+                            this unproved one, which is the only extension that
+                            stays well-typed (the chain must end at the goal's
+                            RHS, so a link can never just be appended). The
+                            overlay opens prefilled with the `_ = ` a link
+                            starts with. */}
+                        {node.data.addLink && (
+                          <FrontierChip
+                            glyph="step"
+                            title="insert a calc step above this one"
+                            x={
+                              -CHIP_W_ADD / 2 +
+                              CHIP_W_ADD +
+                              CHIP_GAP +
+                              CHIP_W_SORRY +
+                              CHIP_GAP
+                            }
+                            width={CHIP_W_STEP}
+                            fontSize={9}
+                            color={NODE_STYLES.tactic.stroke}
+                            onPick={() => {
+                              const spec = node.data.addLink!;
+                              setEditing({
+                                id,
+                                pos: spec.after,
+                                original: CALC_LINK_PREFILL,
+                                value: CALC_LINK_PREFILL,
+                                add: spec,
+                              });
+                            }}
+                          />
+                        )}
                       </g>
                     )}
 

@@ -249,4 +249,103 @@ def commandRange (tree : Elab.InfoTree) : Option Lean.Syntax.Range :=
       | none   => some r
     | none => acc
 
+/-- An unproved link of a `calc` chain: a `?_` standing where its justification
+goes, plus enough of the enclosing link to write a new one above it.
+
+A calc chain is the one construct here whose work-in-progress state is a HOLE
+rather than a missing tactic — the chain must always end at the goal's RHS, so
+it cannot simply be left short. Written `_ = c := ?_`, the link's goal is
+genuinely pending (it arrives in `goalsAfter`, not `spawnedGoals`), and this is
+what lets the tree fill it exactly where it belongs instead of appending a line
+after the block.
+
+The pairing is EXACT, not positional: a `?_` elaborates to a metavariable whose
+id is the very `GoalInfo.id` the wire carries, so `goalId` joins the two with no
+assumption about the order links are reported in. -/
+structure CalcHole where
+  /-- The `?_`'s metavariable = `GoalInfo.id` on the wire. -/
+  goalId : String
+  /-- The `?_` token itself: replacing exactly this fills the link in place. -/
+  start : Lsp.Position
+  stop  : Lsp.Position
+  /-- Start of the enclosing calc step (`_ = c := ?_`) — its line is where a
+  new link is inserted and its character is the column to indent it to. -/
+  linkStart : Lsp.Position
+  /-- Whether the enclosing step is the chain's FIRST link (`calcFirstStep`).
+  Nothing can be inserted above one: its LHS is the chain's real head rather
+  than a `_` that would absorb a new predecessor's RHS. -/
+  first : Bool
+  deriving ToJson, FromJson
+
+/-- Every `?_` inside a `calc` link, paired with the goal it stands for.
+
+Two independent walks, because neither half knows the other's coordinates. The
+info tree gives goal → hole SPAN (a `Term.syntheticHole` whose elaborated `expr`
+is the metavariable); the SYNTAX gives the link structure, which no info node
+records. Note the calc `_` placeholder is a `Term.hole`, not a syntheticHole,
+so filtering on the kind excludes it — it is not a goal either.
+
+A `?_` that is not inside a calc link is deliberately DROPPED: `refine ⟨?_, ?_⟩`
+holes are better served by the existing `· ` bullet insertion, which is what
+one would write there by hand. -/
+def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcHole :=
+  Id.run do
+    -- The links, as (range, isFirst), from every calc tactic's syntax.
+    let mut links : Array (String.Pos.Raw × String.Pos.Raw × Bool) := #[]
+    let calcs := tree.foldInfo (init := #[]) fun _ info acc =>
+      match info with
+      | .ofTacticInfo ti =>
+        if ti.stx.getKind == ``Lean.calcTactic then acc.push ti.stx else acc
+      | _ => acc
+    for stx in calcs do
+      for (r, isFirst) in calcSteps stx do
+        -- The same calc can surface in several TacticInfos (macro expansion),
+        -- so dedupe by range.
+        unless links.any (fun (s, e, _) => s == r.start && e == r.stop) do
+          links := links.push (r.start, r.stop, isFirst)
+    if links.isEmpty then return #[]
+
+    let mut out : Array CalcHole := #[]
+    let holes := tree.foldInfo (init := #[]) fun _ info acc =>
+      match info with
+      | .ofTermInfo ti =>
+        match ti.expr, ti.stx.getRange? (canonicalOnly := true) with
+        | .mvar id, some r =>
+          if ti.stx.isOfKind ``Lean.Parser.Term.syntheticHole then
+            acc.push (id.name.toString, r)
+          else acc
+        | _, _ => acc
+      | _ => acc
+    for (goalId, r) in holes do
+      -- The SMALLEST containing link, so a nested calc's links can't claim a
+      -- hole belonging to an inner one.
+      let mut best : Option (String.Pos.Raw × String.Pos.Raw × Bool) := none
+      for l@(s, e, _) in links do
+        if s ≤ r.start && r.stop ≤ e then
+          match best with
+          | some (bs, be, _) => if e.byteIdx - s.byteIdx < be.byteIdx - bs.byteIdx then best := some l
+          | none => best := some l
+      if let some (s, _, isFirst) := best then
+        out := out.push {
+          goalId := goalId
+          start := fileMap.utf8PosToLspPos r.start
+          stop := fileMap.utf8PosToLspPos r.stop
+          linkStart := fileMap.utf8PosToLspPos s
+          first := isFirst
+        }
+    return out
+where
+  /-- The `calcFirstStep`/`calcStep` nodes under `stx`, with their ranges.
+  Recursive over raw syntax: a link is not an info node of its own. -/
+  calcSteps (stx : Syntax) : Array (Lean.Syntax.Range × Bool) := Id.run do
+    let mut out := #[]
+    match stx with
+    | .node _ k args =>
+      if k == ``Lean.calcFirstStep || k == ``Lean.calcStep then
+        if let some r := stx.getRange? (canonicalOnly := true) then
+          out := out.push (r, k == ``Lean.calcFirstStep)
+      for a in args do out := out ++ calcSteps a
+    | _ => pure ()
+    return out
+
 end ProofTree

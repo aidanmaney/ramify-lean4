@@ -158,6 +158,42 @@ theorem three_column_demo (n : ℕ) :
       have h : (m + 1) * (m + 2) = m * (m + 1) + 2 * (m + 1) := by ring
       grind
 
+/-- **A `calc`-mode workout.** Three chained computations, contrived on purpose:
+the shapes are the point. A `calc` block reaches the tree as ONE tactic node —
+labelled with its first line, like `induction … with` — whose links arrive as
+SPAWNED goals, so the chain fans out sideways rather than running down the trunk,
+and each link's `by` justification hangs under the goal it proves.
+
+The links deliberately mix relations (`=` with `≤`, `<` with `≤`), so the chains
+lean on `Trans` rather than one relation throughout. Chain 2's first link is
+justified by a TERM rather than a tactic, which is worth seeing in the tree: it
+spawns no goal at all, so a three-link chain draws two branches. -/
+theorem calc_workout (a b : ℝ) (n : ℕ) :
+    (a + b) ^ 2 ≤ 2 * (a ^ 2 + b ^ 2)
+      ∧ (∑ i ∈ Finset.range (n + 1), (2 * i + 1)) = (n + 1) ^ 2
+      ∧ (0 : ℝ) < (a - b) ^ 2 + 1 := by
+  refine ⟨?_, ?_, ?_⟩
+  · -- Chain 1: rewrite to expose the square that has to be discarded, drop it,
+    -- then tidy up. The middle link is the only inequality.
+    have hsq : (0 : ℝ) ≤ (a - b) ^ 2 := sq_nonneg _
+    calc (a + b) ^ 2
+        = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
+      _ ≤ 2 * (a ^ 2 + b ^ 2) - 0 := by linarith
+      _ = 2 * (a ^ 2 + b ^ 2) := by ring
+  · -- Chain 2: the odd-sum identity again, this time as a calc chain inside the
+    -- successor case of an induction — a calc nested under a case split.
+    induction n with
+    | zero => simp
+    | succ k ih =>
+      calc (∑ i ∈ Finset.range (k + 1 + 1), (2 * i + 1))
+          = (∑ i ∈ Finset.range (k + 1), (2 * i + 1)) + (2 * (k + 1) + 1) :=
+            Finset.sum_range_succ (fun i => 2 * i + 1) (k + 1)
+        _ = (k + 1) ^ 2 + (2 * (k + 1) + 1) := by rw [ih]
+        _ = (k + 1 + 1) ^ 2 := by ring
+  · -- Chain 3: two links, `<` then `≤`, so the composite relation is `<`.
+    calc (0 : ℝ) < 1 := by norm_num
+      _ ≤ (a - b) ^ 2 + 1 := by linarith [sq_nonneg (a - b)]
+
 /-- **√2 is irrational, over ℤ.** No coprime integers `m, n` satisfy
 `m * m = 2 * n * n`. This is the Nuprl `root_2_irrat_over_int` translated step
 for step: assert `2 ∣ m`, then `2 ∣ n`, then read off `2 ∼ 1` from coprimality,

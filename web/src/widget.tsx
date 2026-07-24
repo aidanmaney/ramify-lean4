@@ -9,6 +9,7 @@ import {
 } from "@leanprover/infoview";
 import type { Proof, ProofStepPosition } from "./paperproof";
 import type { AddSpec } from "./types";
+import { calcEdit } from "./calcEdit";
 import ProofTreeView from "./ProofTreeView";
 import {
   injectStyleOnce,
@@ -182,6 +183,10 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       steps: resolved.steps,
       allGoals: resolved.allGoals,
       comments: resolved.comments,
+      // Plain data (positions + mvarIds), so it belongs in the stable half and
+      // rides the signature: a hole filled or a link inserted moves the ranges,
+      // and the chips must not keep pointing at where the `?_` used to be.
+      calcHoles: resolved.calcHoles,
     };
     return { proof, sig: JSON.stringify(proof) };
   }, [resolved]);
@@ -354,6 +359,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const addTactic = (spec: AddSpec, text: string) => {
     const at2 = (p: { line: number; character: number }) =>
       editByStart.get(`${p.line}:${p.character}`);
+    // The two `calc` forms act on the hole's own range, not on a line anchor
+    // (see calcEdit — kept pure and separate so a probe can elaborate what it
+    // produces).
+    const calc = calcEdit(spec, text);
+    if (calc) {
+      void ec.api.applyEdit({ changes: { [pos.uri]: [calc] } });
+      return;
+    }
     const e = at2(spec.after.start);
     const stop = e?.stop ?? spec.after.stop;
     const at = { line: stop.line, character: 1e5 };

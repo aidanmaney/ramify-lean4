@@ -50,11 +50,31 @@ export interface SourceComment {
   stop: { line: number; character: number };
 }
 
+/** An unproved link of a `calc` chain — a `?_` sitting where its justification
+goes (see ProofTreeComments.lean's `CalcHole`). Both data paths emit these: it
+is plain data, unlike the widget's ref-carrying tagged goals.
+
+`goalId` is the hole's metavariable, which IS the pending `GoalInfo.id`, so the
+join to the tree needs no assumption about link order. */
+export interface CalcHole {
+  goalId: string;
+  /** The `?_` token itself: replacing exactly this fills the link in place. */
+  start: { line: number; character: number };
+  stop: { line: number; character: number };
+  /** Start of the enclosing calc step — the line a new link is inserted on,
+  and the column to indent it to. */
+  linkStart: { line: number; character: number };
+  /** The chain's FIRST link, which nothing can be inserted above (its LHS is
+  the chain's head, not a `_` that would absorb a new predecessor's RHS). */
+  first: boolean;
+}
+
 /** A complete parsed proof: the node set plus the tactic edges. */
 export interface Proof {
   steps: ProofStep[];
   allGoals: GoalInfo[];
   comments?: SourceComment[];
+  calcHoles?: CalcHole[];
 }
 
 /** One NDJSON line as emitted by the CLI: `{file, data:{index, proof}}`. */

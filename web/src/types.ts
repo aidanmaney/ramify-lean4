@@ -1,4 +1,4 @@
-import type { ProofStepPosition } from "./paperproof";
+import type { CalcHole, ProofStepPosition } from "./paperproof";
 import type { KeepSeg } from "./briefLabel";
 
 // One line of a goal's local context, e.g. `h : p ∧ q`, with whether the tactic
@@ -17,8 +17,21 @@ export interface HypLine {
 source among the producing tactic's already-written branches, so a new bullet
 lands below its finished siblings rather than between the split and them. */
 export interface AddSpec {
-  // seq: plain next line; bullet: `· `; case: `| name => ` (with-block).
-  kind: "seq" | "bullet" | "case";
+  // seq: plain next line; bullet: `· `; case: `| name => ` (with-block);
+  // hole/calc-link: the two `calc` forms, which do NOT insert a line at
+  // `after` — they act on `hole` instead (see below).
+  kind: "seq" | "bullet" | "case" | "hole" | "calc-link";
+  /** `calc` only. `hole` REPLACES the `?_` with `by <tactic>`, filling the
+  link exactly where it sits; `calc-link` INSERTS a whole new link on the
+  hole's line, pushing it down.
+   *
+   * Both exist because a calc chain's work-in-progress state is a HOLE, not a
+   * missing tactic: the chain must end at the goal's RHS, so it can't be left
+   * short, and the line-insertion path below would drop a tactic INSIDE the
+   * block and break it. Inserting a link above a hole is the one always-valid
+   * way to grow a chain — the new link takes the previous RHS as its `_`, and
+   * the hole's goal simply restates from the new RHS. */
+  hole?: CalcHole;
   // Fallback indent, from the producing step's start COLUMN. Only a guess:
   // Paperproof splits `rw [a, b]` into one step per rule, so such a step
   // starts mid-line and its column is not the line's indent. The widget
@@ -79,6 +92,11 @@ export interface TreeNode {
   // into the source. Computed by proofToTree from the producing step's shape;
   // the widget's (+) chip turns it into a document edit.
   addSpec?: AddSpec;
+  // A SECOND insertion offered by the same goal: grow the `calc` chain by
+  // inserting a new link above this one (kind `calc-link`). Only on an
+  // unproved link that isn't the chain's first, so the tree can build a chain
+  // a step at a time while the trailing `?_` keeps it elaborating.
+  addLink?: AddSpec;
   // Goal nodes only: the name of the case this goal IS, when its producing
   // tactic split into named branches (`induction … with | zero | succ`,
   // `by_cases` → `pos`/`neg`). Hygienic suffixes are stripped in proofToTree,
@@ -98,6 +116,18 @@ export interface TreeNode {
   // token renderer can shift the source-aligned token spans onto the collapsed
   // label and reveal each `…`'s hidden text. Absent when nothing collapsed.
   elision?: { original: string; keep: KeepSeg[] };
+  // Tactic nodes only: my children are the LINKS OF A CHAIN (a `calc` block),
+  // so none of them resumes the trunk — the compact layout indents them all
+  // equally and they read as one column.
+  //
+  // A chain is a LIST, not a split. Its links are the steps of one computation
+  // and nothing continues after them (the chain IS the proof of the goal), so
+  // the usual "last child in source order resumes the trunk lane" rule drew a
+  // 3-link chain as two indented links plus one flush-left, which reads as a
+  // branch rejoining rather than a column. A real case split keeps that rule:
+  // there the last branch genuinely is where the proof ends up, and indenting
+  // every branch would walk the trunk right at every split.
+  chain?: boolean;
   // Present on a SYNTHETIC marker node standing in for a collapsed set of nodes
   // (see elide.ts). Two flavours: an on-demand ELIDE cut (a path via ⇥ or a
   // vertical band via ⇳) draws as a dashed `⋯` chip clicking removes; a
