@@ -130,6 +130,26 @@ function elisionRanges(label: string): [number, number][] {
     push(from, g.close); // up to, not including, the `]`
   }
 
+  // Rule D — a `calc` chain's first line. Everything after the keyword is
+  // ALREADY DRAWN, by the tree rather than by this label: the chain's starting
+  // expression is the LHS of the goal box directly above, the first link's
+  // relation is the goal box below, and a `:= by tac` justification is that
+  // tac's own tactic node. So the chain reads as `calc …` over a column of
+  // link goals, which is what a chain is.
+  //
+  // It also normalises a presentation ACCIDENT. `tacticString` is the tactic's
+  // first LINE, so how much of the chain lands in the label depends purely on
+  // where the author broke the source: the same construct measured 16, 50 and
+  // 128 chars across the corpus. The width gate then keeps a genuinely short
+  // head (`calc (a + b) ^ 2`) whole.
+  //
+  // This deliberately INVERTS Rule A here, which is why it must exist at all:
+  // A keeps `:= by` (a folded subtree) and elides a term RHS, but for a calc
+  // the `by` is the redundant half and a term justification is the one part
+  // drawn nowhere else. A's range is a subset of D's and merges into it.
+  const mD = /^\s*calc\s+/.exec(label);
+  if (mD) push(mD[0].length, label.length);
+
   return ranges;
 }
 
