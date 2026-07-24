@@ -30,6 +30,7 @@ import {
 } from "./layout";
 import type { Proof, ProofStepPosition } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
+import { calcSkeleton } from "./calcEdit";
 import type {
   AddSpec,
   CombinedPart,
@@ -498,6 +499,10 @@ export default function ProofTreeView({
     // INSERTS via onAddTactic instead of replacing, empty commits just close,
     // and the goal's own box stays visible under the overlay.
     add?: AddSpec;
+    // Present when this is the `calc` chip: what was typed is the chain's
+    // MIDPOINT, not a tactic, so commit wraps it in the two-link skeleton
+    // (calcSkeleton) around this relation.
+    calcRel?: string;
   } | null>(null);
   // Commit goes through the editor's own edit pipeline (undoable there); a
   // no-op edit just closes the box. The ref mirrors `editing` and is nulled
@@ -523,7 +528,12 @@ export default function ProofTreeView({
       // (the calc `step` chip) that was never typed into, which is the empty
       // commit of that form and must not write a bare `_ = ` into the source.
       if (cur.value.trim() !== "" && cur.value !== cur.original)
-        onAddTactic?.(cur.add, cur.value);
+        onAddTactic?.(
+          cur.add,
+          cur.calcRel
+            ? calcSkeleton(cur.calcRel, cur.value.trim())
+            : cur.value,
+        );
     } else if (cur.value !== cur.original) {
       onEditTactic?.(cur.pos, cur.value);
     }
@@ -2341,6 +2351,37 @@ export default function ProofTreeView({
                             RHS, so a link can never just be appended). The
                             overlay opens prefilled with the `_ = ` a link
                             starts with. */}
+                        {/* Open a chain on a goal that is a relation — the way
+                            IN to calc mode, which the tree otherwise had no
+                            way to offer (a chain can only be GROWN once one
+                            exists). Mutually exclusive with `step` above, so
+                            a goal never carries more than three chips. */}
+                        {node.data.calcRel && (
+                          <FrontierChip
+                            glyph="calc"
+                            title={`start a calc chain (${node.data.calcRel}) — type the first intermediate expression`}
+                            x={
+                              -CHIP_W_ADD / 2 +
+                              CHIP_W_ADD +
+                              CHIP_GAP +
+                              CHIP_W_SORRY +
+                              CHIP_GAP
+                            }
+                            width={CHIP_W_STEP}
+                            fontSize={9}
+                            color={NODE_STYLES.tactic.stroke}
+                            onPick={() => {
+                              setEditing({
+                                id,
+                                pos: node.data.addSpec!.after,
+                                original: "",
+                                value: "",
+                                add: node.data.addSpec!,
+                                calcRel: node.data.calcRel,
+                              });
+                            }}
+                          />
+                        )}
                         {node.data.addLink && (
                           <FrontierChip
                             glyph="step"

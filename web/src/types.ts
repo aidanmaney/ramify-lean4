@@ -97,6 +97,12 @@ export interface TreeNode {
   // unproved link that isn't the chain's first, so the tree can build a chain
   // a step at a time while the trailing `?_` keeps it elaborating.
   addLink?: AddSpec;
+  // The relation a NEW `calc` chain on this goal would chain (`=`, `≤`, …),
+  // when the goal is the shape one can prove that way and isn't already a
+  // link. This is the way IN to calc mode: without it a chain can only be
+  // grown once it exists, and writing the first one by hand is exactly the
+  // step the tree couldn't help with. See proofToTree's calcRelation.
+  calcRel?: string;
   // Goal nodes only: the name of the case this goal IS, when its producing
   // tactic split into named branches (`induction … with | zero | succ`,
   // `by_cases` → `pos`/`neg`). Hygienic suffixes are stripped in proofToTree,

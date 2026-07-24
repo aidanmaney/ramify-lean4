@@ -25,6 +25,27 @@ Both act on the hole's own range, which is what makes them exact:
 - **calc-link** inserts a whole new link on the hole's line, pushing it down.
   The hole's link keeps `_` as its LHS, so it picks up the new link's RHS and
   the chain still ends where the goal needs it to. */
+/** The two-link skeleton that OPENS a chain on a goal that is a relation:
+ *
+ *     calc _ = <mid> := ?_
+ *     _ = _ := ?_          (the caller's insertion path indents this)
+ *
+ * Both endpoints are `_`, which is the whole point: Lean solves them by
+ * unifying the chain against the goal, so the skeleton needs no
+ * pretty-printed terms — nothing here can fail to round-trip back into source.
+ * Measured: `_` works as the first link's LHS and as the last link's RHS, for
+ * `=` and `≤` alike, and the resulting goals print concretely (`a + 0 = a`,
+ * `a = c`) rather than showing metavariables.
+ *
+ * The midpoint is the one thing that CANNOT be inferred — only the author
+ * knows where the chain should go through — so it is what the overlay asks
+ * for. Two links rather than one because a lone link is a `calcFirstStep`,
+ * which nothing can be inserted above: the second link is what the `step`
+ * chip then grows against, so the chain builds forward from the LHS. */
+export function calcSkeleton(rel: string, mid: string): string {
+  return `calc _ ${rel} ${mid} := ?_\n_ ${rel} _ := ?_`;
+}
+
 export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
   const h = spec.hole;
   if (!h) return null;

@@ -176,10 +176,11 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
   · -- Chain 1: rewrite to expose the square that has to be discarded, drop it,
     -- then tidy up. The middle link is the only inequality.
     have hsq : (0 : ℝ) ≤ (a - b) ^ 2 := sq_nonneg _
-    calc (a + b) ^ 2
-        = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
-      _ ≤ 2 * (a ^ 2 + b ^ 2) - 0 := by linarith
-      _ = 2 * (a ^ 2 + b ^ 2) := by ring
+    calc (a + b) ^ 2 = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by sorry
+    -- calc (a + b) ^ 2
+        -- = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
+      -- _ ≤ 2 * (a ^ 2 + b ^ 2) - 0 := by linarith
+      -- _ = 2 * (a ^ 2 + b ^ 2) := by ring
   · -- Chain 2: the odd-sum identity again, this time as a calc chain inside the
     -- successor case of an induction — a calc nested under a case split.
     induction n with

@@ -385,10 +385,18 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         : spec.kind === "case"
           ? `| ${spec.caseName ?? "_"} => `
           : "";
-    // Multi-line input: continuation lines sit one level inside the first.
+    // Multi-line input: continuation lines sit one level inside the first
+    // line's CONTENT, which is past the prefix — not past the bare indent.
+    // With a `· ` bullet (or a `| case => ` marker) the two differ, and
+    // indenting by the bare indent put a continuation at the very column its
+    // own tactic starts at, so Lean read it as a sibling tactic:
+    // `  · have h : p := by` / `    exact hp` fails with "expected '{' or
+    // indented tactic sequence" (elaborated, not reasoned about). It also
+    // matters for the `calc` skeleton, whose second line is a chain link.
+    const inner = " ".repeat(indent.length + prefix.length + 2);
     const body = text
       .split("\n")
-      .map((l, i) => (i === 0 ? indent + prefix + l : indent + "  " + l))
+      .map((l, i) => (i === 0 ? indent + prefix + l : inner + l))
       .join("\n");
     void ec.api.applyEdit({
       changes: {

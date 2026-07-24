@@ -33,6 +33,18 @@ import { collapseLabel } from "./briefLabel";
 // One tactic node per step; key it by the consumed goal (a goal is consumed by
 // at most one tactic in a tree proof), so the id is stable across re-parses.
 const TACTIC_PREFIX = "tactic:";
+
+// Relations `calc` can chain (it needs a `Trans` instance, and these are the
+// ones that realistically carry one), the other tokens that would sit on a
+// goal's spine — their presence means the relation ISN'T the spine — and the
+// binders whose body is not the goal. See calcRelation.
+const CALC_RELS = new Set([
+  "=", "≤", "<", "≥", ">", "≠", "∣", "⊆", "⊂", "↔", "≡", "≈", "∼", "⊑",
+]);
+const SPINE_TOKENS = new Set([...CALC_RELS, "∧", "∨", "→", "¬"]);
+const BINDER_HEADS = new Set(["∀", "∃", "fun", "λ"]);
+const OPENERS = "([{⟨⦃";
+const CLOSERS = ")]}⟩⦄";
 const tacticId = (goalId: string): string => `${TACTIC_PREFIX}${goalId}`;
 
 /** Prefix on every goal-node label (the infoview's own goal convention).
@@ -569,6 +581,33 @@ export function proofToTree(
     (proof.calcHoles ?? []).map((h) => [h.goalId, h]),
   );
 
+  /** The relation a `calc` chain on this goal would be built out of, or
+  undefined when the goal isn't the shape a chain can prove.
+   *
+   * Read off the goal's TYPE STRING, which both wires carry — the alternative
+   * (asking the server for the target's head symbol) would have to
+   * pretty-print it anyway, and this keeps the whole feature source-agnostic.
+   * The test is deliberately conservative: collect the relation-ish tokens at
+   * BRACKET DEPTH 0 and fire only when there is exactly one and it is a
+   * relation `calc` can chain. That is what rules out `a = b ∧ c = d` (three
+   * depth-0 tokens, so the `=` is not the goal's spine) and `∀ m, f m = g m`
+   * (a binder head, whose `=` belongs to the body, not the goal). A false
+   * positive only costs an edit the author can undo; a false negative hides
+   * the affordance entirely, so the bias is toward offering it. */
+  function calcRelation(type: string): string | undefined {
+    if (BINDER_HEADS.has(type.trimStart().split(/\s+/)[0] ?? "")) return undefined;
+    let depth = 0;
+    const found: string[] = [];
+    for (const tok of type.split(/\s+/)) {
+      if (depth === 0 && SPINE_TOKENS.has(tok)) found.push(tok);
+      for (const ch of tok) {
+        if (OPENERS.includes(ch)) depth++;
+        else if (CLOSERS.includes(ch)) depth--;
+      }
+    }
+    return found.length === 1 && CALC_RELS.has(found[0]) ? found[0] : undefined;
+  }
+
   /** Grow the chain by inserting a link ABOVE this hole — the only way to
   extend a calc that stays well-typed (see AddSpec.hole). Absent on the first
   link, whose LHS is the chain's head rather than a `_`. */
@@ -724,6 +763,14 @@ export function proofToTree(
       // Grow the chain: only on an unproved link that has a predecessor to
       // take its `_` from (never the chain's first link).
       addLink: !step && producedBy ? addLinkFor(goalId, producedBy) : undefined,
+      // OPEN a chain: offered on a pending goal that is a relation and isn't
+      // already a link. The two are mutually exclusive on purpose — inside a
+      // chain the chain gesture is `addLink`, outside it is this — so a goal
+      // never shows more than three chips.
+      calcRel:
+        !step && producedBy && goal && !holeByGoal.has(goalId)
+          ? calcRelation(goal.type)
+          : undefined,
     });
 
     if (!step) return; // leaf: this goal was closed by its tactic
