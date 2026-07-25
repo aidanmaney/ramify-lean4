@@ -665,6 +665,96 @@ export function proofToTree(
   );
   const isChain = (step: ProofStep) => /^calc\b/.test(step.tacticString);
 
+  // A calc block that does not PARSE (`calc e` with no subsequent step — the
+  // state you are in while typing one) reaches us from SYNTAX alone: it yields
+  // no step of its own, and because the whole command fails to parse, nothing
+  // below it elaborates either. Measured on the scratch file: a bare `calc`
+  // inside the first of three bullets took the other two chains down with it,
+  // leaving 2 steps where the repaired file has 12. So the tree shows a proof
+  // that just stops, with no hint that a chain was ever started.
+  //
+  // Attaching the chain to a goal is what puts it back on screen, and which
+  // goal depends on how far the block got. Two cases, measured:
+  //
+  // (a) The block half-elaborated — its FIRST link was complete (`calc a = b
+  //     := by omega` with nothing after it), so a step stands for it and that
+  //     step's `goalBefore` is the goal the chain must prove. The step may be
+  //     labelled with the enclosing bullet rather than the calc, so it is
+  //     found by CONTAINMENT of the block's start, innermost first.
+  // (b) The block produced no step at all (`calc e`, no relation yet — the
+  //     user's case). Then the goal is the PENDING one whose producer sits
+  //     closest above it in the source: the tactic the author was working
+  //     under. Ties (several pending siblings of one producer) resolve to the
+  //     first in source order, the same v1 limit `addSpecFor`'s anchor has.
+  //
+  // Containment is half-open, which is what keeps (b) out of (a): the producer
+  // above a bare calc has a trivia-inflated range ending exactly AT the calc's
+  // start, and an inclusive test would hand the chain that tactic's own goal.
+  const brokenChainByGoal = new Map<string, CalcChain>();
+  {
+    const broken = (proof.calcChains ?? [])
+      .filter((c) => c.broken)
+      .sort((a, b) => cmpPos(a.tacticStart, b.tacticStart));
+    if (broken.length) {
+      const producer = new Map<string, ProofStep>();
+      for (const s of proof.steps)
+        for (const g of s.goalsAfter) producer.set(g.id, s);
+      const pendingIds = [...producer.keys()].filter((id) => !stepByGoal.has(id));
+      for (const c of broken) {
+        let target: string | undefined;
+        // (a) innermost step containing the block: steps nest, so the latest
+        // start among the containers is the innermost.
+        let inner: ProofStep | undefined;
+        for (const s of proof.steps) {
+          if (!positionContains(s.position, c.tacticStart)) continue;
+          if (!inner || cmpPos(s.position.start, inner.position.start) > 0) inner = s;
+        }
+        target = inner?.goalBefore.id;
+        // (b) no step at all: the nearest pending goal above.
+        if (!target) {
+          let bestPos: LspPos | undefined;
+          for (const id of pendingIds) {
+            if (brokenChainByGoal.has(id)) continue;
+            const p = producer.get(id)!.position.start;
+            if (cmpPos(p, c.tacticStart) >= 0) continue;
+            if (!bestPos || cmpPos(p, bestPos) > 0) {
+              target = id;
+              bestPos = p;
+            }
+          }
+        }
+        if (target && !brokenChainByGoal.has(target))
+          brokenChainByGoal.set(target, c);
+      }
+    }
+  }
+
+  /** The repair chip for a block that never parsed: one appended link, which
+  hands the step parser back the `colGe` anchor it lacked. Shares the
+  `calc-append` EDIT exactly — a chain that stopped short and one that never
+  parsed both want a link after their last well-formed one. */
+  function repairSpec(
+    goalId: string,
+    chain: CalcChain,
+    prod: ProofStep | undefined,
+  ): AddSpec | undefined {
+    // The block has no goal of its own, so the relation comes from the goal it
+    // was started to prove — which is this one.
+    const rel = spineRelation(goals.get(goalId)?.type ?? "")?.rel;
+    if (!rel) return undefined;
+    // `producer`/`after` go unread for this kind (calcEdit works off `chain`),
+    // but a root goal has no producing step, so fall back to the block itself.
+    const at = prod?.position ?? { start: chain.tacticStart, stop: chain.tacticStart };
+    return {
+      kind: "calc-append",
+      chain,
+      rel,
+      indent: chain.indent,
+      producer: at,
+      after: at,
+    };
+  }
+
   /** The relation a `calc` chain on this goal would be built out of, or
   undefined when the goal isn't the shape a chain can prove.
    *
@@ -693,7 +783,11 @@ export function proofToTree(
    *
    * The two are exclusive by construction (a hole is inside a link, the residue
    * is what the whole block failed to reach) and neither is offered on a
-   * chain's first link, which has nothing to insert above it. */
+   * chain's first link, which has nothing to insert above it.
+   *
+   * A third sense shares the append EDIT exactly and is handled by
+   * `repairSpec` above, since it applies to a goal that need not be pending:
+   * a block that never PARSED also wants one link after its first. */
   function addLinkFor(goalId: string, prod: ProofStep): AddSpec | undefined {
     const hole = holeByGoal.get(goalId);
     if (hole)
@@ -844,7 +938,15 @@ export function proofToTree(
     // test, so they can never disagree about whether a goal is pending.
     const pending =
       !step && !!producedBy && producedBy.goalsAfter.some((g) => g.id === goalId);
-    const addLink = pending ? addLinkFor(goalId, producedBy!) : undefined;
+    // A block that never parsed gets its repair chip whether or not the goal
+    // is pending: when the block's first link WAS complete, a step stands for
+    // it and the goal it consumes is an ordinary interior goal.
+    const brokenChain = brokenChainByGoal.get(goalId);
+    const addLink = brokenChain
+      ? repairSpec(goalId, brokenChain, producedBy)
+      : pending
+        ? addLinkFor(goalId, producedBy!)
+        : undefined;
     const goalText = goal?.type ?? goalId;
     const elided =
       lhsElide && goalText.startsWith(lhsElide)
@@ -885,7 +987,13 @@ export function proofToTree(
           : parentCase && thisCase?.startsWith(parentCase + ".")
             ? thisCase.slice(parentCase.length + 1)
             : thisCase,
-      addSpec: pending ? addSpecFor(goalId, producedBy!) : undefined,
+      // A goal whose calc block failed to parse gets the repair chip ALONE.
+      // The other two would insert above the broken block, leaving it broken —
+      // even `sorry` cannot close a goal the parser never reached.
+      addSpec:
+        pending && !brokenChainByGoal.has(goalId)
+          ? addSpecFor(goalId, producedBy!)
+          : undefined,
       // Grow the chain — insert a link above this hole, or append one to close
       // the chain's residue (see addLinkFor).
       addLink,

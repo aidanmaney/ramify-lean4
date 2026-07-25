@@ -297,15 +297,38 @@ structure CalcChain where
   lastLink : Lsp.Position
   /-- Column the chain's links are written at. -/
   indent : Nat
+  /-- The block failed to PARSE: it has no well-formed subsequent step, so the
+  step parser had no column to anchor on and swallowed whatever followed.
+
+  This is the state you are in while typing a chain — `calc e` and nothing yet —
+  and it is much worse than it looks: the enclosing command fails to parse
+  entirely, so nothing below the calc elaborates and the whole proof drops out
+  of the tree. The syntax survives, though, which is what lets the chain still
+  be reported and one appended link put the proof back. -/
+  broken : Bool
   deriving ToJson, FromJson
+
+/-- One `calc` block: its range, its WELL-FORMED links in source order, and
+whether the block as a whole failed to parse.
+
+Links carrying `Syntax.missing` are dropped rather than reported. In a broken
+block the trailing `calcStep` is the parser's failed attempt to read the next
+tactic as a link — measured, its range covers the following `· trivial` bullet
+verbatim — so its range means nothing and using it to place an insertion would
+write into a neighbouring tactic. The `calcFirstStep` is intact in that state
+(measured `missing=false` with an exact range), which is the one thing needed
+to repair the block. -/
+structure CalcBlock where
+  range : Lean.Syntax.Range
+  links : Array (Lean.Syntax.Range × Bool)
+  broken : Bool
 
 /-- Every `calc` block in the tree, with its links in source order.
 
 Shared by the two collectors below — one keys on the LINKS' ranges, the other
 on the block's — and deduped by the block's range, since the same calc surfaces
 in several `TacticInfo`s under macro expansion. -/
-def calcBlocks (tree : Elab.InfoTree) :
-    Array (Lean.Syntax.Range × Array (Lean.Syntax.Range × Bool)) := Id.run do
+def calcBlocks (tree : Elab.InfoTree) : Array CalcBlock := Id.run do
   let calcs := tree.foldInfo (init := #[]) fun _ info acc =>
     match info with
     | .ofTacticInfo ti =>
@@ -314,10 +337,11 @@ def calcBlocks (tree : Elab.InfoTree) :
   let mut out := #[]
   for stx in calcs do
     let some r := stx.getRange? (canonicalOnly := true) | continue
-    unless out.any (fun (b, _) => b.start == r.start && b.stop == r.stop) do
+    unless out.any (fun b => b.range.start == r.start && b.range.stop == r.stop) do
       let links := (calcSteps stx).qsort
         (fun a b => a.1.start.byteIdx < b.1.start.byteIdx)
-      unless links.isEmpty do out := out.push (r, links)
+      unless links.isEmpty do
+        out := out.push { range := r, links := links, broken := stx.hasMissing }
   return out
 where
   /-- The `calcFirstStep`/`calcStep` nodes under `stx`, with their ranges.
@@ -327,8 +351,10 @@ where
     match stx with
     | .node _ k args =>
       if k == ``Lean.calcFirstStep || k == ``Lean.calcStep then
-        if let some r := stx.getRange? (canonicalOnly := true) then
-          out := out.push (r, k == ``Lean.calcFirstStep)
+        -- A link the parser only half-read is not a link; see `CalcBlock`.
+        if !stx.hasMissing then
+          if let some r := stx.getRange? (canonicalOnly := true) then
+            out := out.push (r, k == ``Lean.calcFirstStep)
       for a in args do out := out ++ calcSteps a
     | _ => pure ()
     return out
@@ -340,21 +366,23 @@ links already prove parses — subsequent links are anchored on it by `colGe`, s
 matching it is safe where guessing (`calc`'s own column plus two) is only a
 convention. A one-link chain has no second link to read, and none of its own
 column is meaningful either (`calc a = b := prf` puts the link mid-line), so it
-falls back to that convention; such a chain is a broken file anyway, since with
-no subsequent step the parser has no anchor and swallows whatever follows the
-block. -/
+falls back to that convention — which is also the BROKEN case, since a block
+with no well-formed subsequent step is exactly the one the parser has no anchor
+for (see `CalcBlock`). Appending there is a repair: it gives the parser its
+anchor back, so everything the block swallowed elaborates again. -/
 def collectCalcChains (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcChain :=
   Id.run do
     let mut out : Array CalcChain := #[]
-    for (block, links) in calcBlocks tree do
-      let start := fileMap.utf8PosToLspPos block.start
-      let indent := match links[1]? with
+    for b in calcBlocks tree do
+      let start := fileMap.utf8PosToLspPos b.range.start
+      let indent := match b.links[1]? with
         | some (r, _) => (fileMap.utf8PosToLspPos r.start).character
         | none => start.character + 2
       out := out.push {
         tacticStart := start
-        lastLink := fileMap.utf8PosToLspPos links.back!.1.stop
+        lastLink := fileMap.utf8PosToLspPos b.links.back!.1.stop
         indent := indent
+        broken := b.broken
       }
     return out
 
@@ -371,7 +399,7 @@ holes are better served by the existing `· ` bullet insertion, which is what
 one would write there by hand. -/
 def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcHole :=
   Id.run do
-    let links := (calcBlocks tree).flatMap (·.2)
+    let links := (calcBlocks tree).flatMap (·.links)
     if links.isEmpty then return #[]
 
     let mut out : Array CalcHole := #[]

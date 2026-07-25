@@ -2308,7 +2308,7 @@ export default function ProofTreeView({
                       than one chip plus a modifier — the lens gesture taught
                       that modifiers on tree nodes silently stop working. */}
                   {type === "goal" &&
-                    node.data.addSpec &&
+                    (node.data.addSpec || node.data.addLink) &&
                     onAddTactic &&
                     seq.mode === "off" &&
                     !isEditing && (
@@ -2317,45 +2317,49 @@ export default function ProofTreeView({
                           boxTop + h + 4
                         })`}
                       >
-                        <FrontierChip
-                          glyph="+"
-                          title={
-                            node.data.addSpec.kind === "hole"
-                              ? "fill this calc step in place"
-                              : "add a tactic for this goal"
-                          }
-                          // Centred on the incoming lane; the row runs right
-                          // from there, each chip starting past the previous
-                          // one's width plus CHIP_GAP.
-                          x={-CHIP_W_ADD / 2}
-                          width={CHIP_W_ADD}
-                          color={NODE_STYLES.tactic.stroke}
-                          onPick={() => {
-                            const spec = node.data.addSpec!;
-                            setEditing({
-                              id,
-                              pos: spec.after,
-                              original: "",
-                              value: "",
-                              add: spec,
-                            });
-                          }}
-                        />
-                        <FrontierChip
-                          glyph="sorry"
-                          title="stub this goal with `sorry`"
-                          x={-CHIP_W_ADD / 2 + CHIP_W_ADD + CHIP_GAP}
-                          width={CHIP_W_SORRY}
-                          fontSize={9}
-                          color={SORRY_FILL}
-                          // Straight to the document: a stub has nothing to
-                          // type, and the tree redraws off the re-elaboration
-                          // with a real `sorry` node in place of this chip.
-                          onPick={() => {
-                            anchorOn(id); // hold this goal put across the redraw
-                            onAddTactic(node.data.addSpec!, "sorry");
-                          }}
-                        />
+                        {node.data.addSpec && (
+                          <>
+                            <FrontierChip
+                              glyph="+"
+                              title={
+                                node.data.addSpec.kind === "hole"
+                                  ? "fill this calc step in place"
+                                  : "add a tactic for this goal"
+                              }
+                              // Centred on the incoming lane; the row runs right
+                              // from there, each chip starting past the previous
+                              // one's width plus CHIP_GAP.
+                              x={-CHIP_W_ADD / 2}
+                              width={CHIP_W_ADD}
+                              color={NODE_STYLES.tactic.stroke}
+                              onPick={() => {
+                                const spec = node.data.addSpec!;
+                                setEditing({
+                                  id,
+                                  pos: spec.after,
+                                  original: "",
+                                  value: "",
+                                  add: spec,
+                                });
+                              }}
+                            />
+                            <FrontierChip
+                              glyph="sorry"
+                              title="stub this goal with `sorry`"
+                              x={-CHIP_W_ADD / 2 + CHIP_W_ADD + CHIP_GAP}
+                              width={CHIP_W_SORRY}
+                              fontSize={9}
+                              color={SORRY_FILL}
+                              // Straight to the document: a stub has nothing to
+                              // type, and the tree redraws off the re-elaboration
+                              // with a real `sorry` node in place of this chip.
+                              onPick={() => {
+                                anchorOn(id); // hold this goal put across the redraw
+                                onAddTactic(node.data.addSpec!, "sorry");
+                              }}
+                            />
+                          </>
+                        )}
                         {/* Grow a `calc` chain: insert a whole new link above
                             this unproved one, which is the only extension that
                             stays well-typed (the chain must end at the goal's
@@ -2405,16 +2409,23 @@ export default function ProofTreeView({
                           <FrontierChip
                             glyph="step"
                             title={
-                              node.data.addLink.kind === "calc-append"
-                                ? `append a link (${node.data.addLink.rel}) to this calc chain`
-                                : "insert a calc step above this one"
+                              node.data.addLink.chain?.broken
+                                ? `finish the \`calc\` block below: add its first ${node.data.addLink.rel} link. Until then the block does not parse, which is why the rest of this proof is missing`
+                                : node.data.addLink.kind === "calc-append"
+                                  ? `append a link (${node.data.addLink.rel}) to this calc chain`
+                                  : "insert a calc step above this one"
                             }
+                            // Alone on the lane when the block is broken: the
+                            // other two chips are suppressed there, since they
+                            // would insert above a block that stays unparsed.
                             x={
-                              -CHIP_W_ADD / 2 +
-                              CHIP_W_ADD +
-                              CHIP_GAP +
-                              CHIP_W_SORRY +
-                              CHIP_GAP
+                              node.data.addSpec
+                                ? -CHIP_W_ADD / 2 +
+                                  CHIP_W_ADD +
+                                  CHIP_GAP +
+                                  CHIP_W_SORRY +
+                                  CHIP_GAP
+                                : -CHIP_W_ADD / 2
                             }
                             width={CHIP_W_STEP}
                             fontSize={9}

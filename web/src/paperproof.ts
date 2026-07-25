@@ -84,6 +84,10 @@ export interface CalcChain {
   lastLink: { line: number; character: number };
   /** Column the chain's links are written at. */
   indent: number;
+  /** The block has no well-formed subsequent step, so it does not PARSE — the
+  state you are in while typing a chain. Nothing below it elaborates, so the
+  chain reaches us from syntax alone, with no step of its own on the wire. */
+  broken: boolean;
 }
 
 /** A complete parsed proof: the node set plus the tactic edges. */
