@@ -64,6 +64,27 @@ structure TacticTokenInfo where
   code  : Widget.CodeWithInfos
   deriving Server.RpcEncodable
 
+/-- The DECLARATION NAME under the cursor (`example` and friends fall back to
+the command's byte offset).
+
+This is the proof's identity for the client, and it exists because the obvious
+answer is wrong in a way that only shows up under editing: the root goal's
+mvarId was standing in for it, and an mvarId is an ELABORATION-ORDER artifact.
+Measured — adding one `calc` link to a theorem changed its own root id (the
+extra `?_` shifts allocation) and renumbered every mvarId in the theorem BELOW
+it in the file, 34 of 34. The client resets scroll and re-centres when this
+changes, so a proof that "changed identity" mid-edit scrolled the author back
+to the top of the proof they were editing. A name does not move when its body
+does. -/
+-- Not `private`: an offline probe checks it against real command syntax.
+partial def declName? (stx : Syntax) : Option Name :=
+  match stx with
+  | .node _ k args =>
+    if k == ``Lean.Parser.Command.declId && args.size > 0 then
+      some args[0]!.getId
+    else args.foldl (fun acc a => acc <|> declName? a) none
+  | _ => none
+
 /-- The wire payload sent to the renderer: the CLI's `{ steps, allGoals }` shape
 plus `taggedGoals`, the interactive (tagged) rendering of each goal. The tagged
 half contains live RPC references, so the whole payload derives
@@ -90,6 +111,14 @@ structure ProofTreeData where
   -- Where a chain that stops SHORT of its goal continues, so the residue goal's
   -- chip can append a link instead of abandoning the chain. Plain data too.
   calcChains  : Array CalcChain := #[]
+  -- Which relations a chain on each PENDING goal could be built out of, from
+  -- the real `Trans` instances (see collectCalcRelations). An entry with empty
+  -- `options` means "looked, not chainable"; no entry at all means the wire
+  -- didn't ship this and the client falls back to its string heuristic.
+  calcRelations : Array CalcRelations := #[]
+  -- Stable identity of the proof under the cursor (see `declName?`): what the
+  -- client keys "is this a different proof?" on, instead of a metavariable id.
+  proofId       : String := ""
   deriving Server.RpcEncodable
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
@@ -463,15 +492,31 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
                 { info := ref, subexprPos := SubExpr.Pos.root }
                 (.text (String.Pos.Raw.extract src tb te))
             }
+    -- `extra := snap.stx` is the whole command: a `calc` that never elaborated
+    -- has no TacticInfo of its own, and this is what still finds it.
+    let calcChains := collectCalcChains fileMap snap.infoTree (extra := some snap.stx)
+    let calcRelations ← collectCalcRelations snap.infoTree <|
+      calcRelationGoals
+        (parsedTree.steps.toArray.map fun s =>
+          { goalBefore := s.goalBefore.id.name.toString
+            goalsAfter := (s.goalsAfter.map (·.id.name.toString)).toArray
+            start := s.position.start
+            stop  := s.position.stop })
+        calcChains
+    let proofId := match declName? snap.stx with
+      | some n => n.toString
+      | none   => s!"@{snapStart}"
     finish {
+      proofId,
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
       taggedGoals,
       comments,
       tacticEdits,
       tokenInfos,
-      calcHoles   := collectCalcHoles fileMap snap.infoTree
-      calcChains  := collectCalcChains fileMap snap.infoTree
+      calcHoles   := collectCalcHoles fileMap snap.infoTree (extra := some snap.stx)
+      calcChains
+      calcRelations
     }
 
 /-- Parameters for `popoutEdit`: the document and the tactic's TIGHT range

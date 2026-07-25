@@ -1,6 +1,8 @@
 import type {
   CalcChain,
   CalcHole,
+  CalcRelOption,
+  CalcRelations,
   GoalInfo,
   Hypothesis,
   Proof,
@@ -57,7 +59,7 @@ LHS and RHS — or null when the type isn't that shape.
  *
  * Shared by two callers that must agree on what "the goal's relation" means:
  * the `calc` chip's offer test, and the chain-link LHS elision below. */
-function spineRelation(
+export function spineRelation(
   type: string,
 ): { rel: string; lhs: string; rhs: string } | null {
   if (BINDER_HEADS.has(type.trimStart().split(/\s+/)[0] ?? "")) return null;
@@ -665,6 +667,38 @@ export function proofToTree(
   );
   const isChain = (step: ProofStep) => /^calc\b/.test(step.tacticString);
 
+  // Which relations a chain on each goal could be built out of, enumerated
+  // server-side from the real `Trans` instances (see ProofTreeComments.lean's
+  // `calcRelationsFor`). An entry with empty `options` is a positive "not
+  // chainable"; NO entry means this wire didn't ship the field, and only then
+  // does the string-level `spineRelation` heuristic stand in.
+  const relsByGoal = new Map<string, CalcRelations>(
+    (proof.calcRelations ?? []).map((r) => [r.goalId, r]),
+  );
+  /** The options for a gesture whose new link must compose back to `T`.
+   *
+   * `want` is the relation the link BELOW already carries, if any: inserting
+   * above a hole leaves that link's relation alone, so only pairs whose SECOND
+   * component is it are sound. Getting this wrong emits a suggestion that does
+   * not elaborate, which is the one failure this feature cannot tolerate.
+   * Opening or appending has no such constraint — both write the second link
+   * themselves — so `want` is left undefined there. */
+  function relOptions(
+    goalId: string,
+    fallbackRel: string | undefined,
+    want?: string,
+  ): CalcRelOption[] | undefined {
+    const entry = relsByGoal.get(goalId);
+    if (!entry)
+      return fallbackRel
+        ? [{ rel: fallbackRel, next: fallbackRel, same: true }]
+        : undefined;
+    const opts = want
+      ? entry.options.filter((o) => o.next === want)
+      : entry.options;
+    return opts.length ? opts : undefined;
+  }
+
   // A calc block that does not PARSE (`calc e` with no subsequent step — the
   // state you are in while typing one) reaches us from SYNTAX alone: it yields
   // no step of its own, and because the whole command fails to parse, nothing
@@ -690,7 +724,13 @@ export function proofToTree(
   // Containment is half-open, which is what keeps (b) out of (a): the producer
   // above a bare calc has a trivia-inflated range ending exactly AT the calc's
   // start, and an inclusive test would hand the chain that tactic's own goal.
-  const brokenChainByGoal = new Map<string, CalcChain>();
+  // Value carries the containing step (case (a)) when there is one: the block
+  // is then ALREADY drawn as a real tactic node, so the repair chip belongs on
+  // that node rather than on a synthesized twin.
+  const brokenChainByGoal = new Map<
+    string,
+    { chain: CalcChain; step?: ProofStep }
+  >();
   {
     const broken = (proof.calcChains ?? [])
       .filter((c) => c.broken)
@@ -724,7 +764,7 @@ export function proofToTree(
           }
         }
         if (target && !brokenChainByGoal.has(target))
-          brokenChainByGoal.set(target, c);
+          brokenChainByGoal.set(target, { chain: c, step: inner });
       }
     }
   }
@@ -738,17 +778,26 @@ export function proofToTree(
     chain: CalcChain,
     prod: ProofStep | undefined,
   ): AddSpec | undefined {
+    // No well-formed link to append AFTER. When the block is a bare `calc`
+    // keyword, that is the state to help with most: write its first two links
+    // (`calc-first`). When it got as far as `calc a = b :=`, the author is
+    // mid-keystroke on the justification and there is no honest edit to
+    // suggest, so the chain is drawn but carries no chip.
+    const first = chain.links < 1;
+    if (first && !chain.firstBare) return undefined;
     // The block has no goal of its own, so the relation comes from the goal it
     // was started to prove — which is this one.
-    const rel = spineRelation(goals.get(goalId)?.type ?? "")?.rel;
+    const rels = relOptions(goalId, spineRelation(goals.get(goalId)?.type ?? "")?.rel);
+    const rel = rels?.[0].rel;
     if (!rel) return undefined;
     // `producer`/`after` go unread for this kind (calcEdit works off `chain`),
     // but a root goal has no producing step, so fall back to the block itself.
     const at = prod?.position ?? { start: chain.tacticStart, stop: chain.tacticStart };
     return {
-      kind: "calc-append",
+      kind: first ? "calc-first" : "calc-append",
       chain,
       rel,
+      rels,
       indent: chain.indent,
       producer: at,
       after: at,
@@ -767,9 +816,18 @@ export function proofToTree(
    * depth-0 tokens, so the `=` is not the goal's spine) and `∀ m, f m = g m`
    * (a binder head, whose `=` belongs to the body, not the goal). A false
    * positive only costs an edit the author can undo; a false negative hides
-   * the affordance entirely, so the bias is toward offering it. */
-  function calcRelation(type: string): string | undefined {
-    return spineRelation(type)?.rel;
+   * the affordance entirely, so the bias is toward offering it.
+   *
+   * Where the server shipped a `Trans` enumeration for this goal, THAT is the
+   * answer and the heuristic is not consulted: it is the real test (does a
+   * chain of this relation compose back to the goal?) rather than a reading of
+   * the printed type, and it declines `Even n ∨ Odd n` and `a ≠ b` — which
+   * genuinely cannot be chained — where the vocabulary alone accepted them. */
+  function calcRelations(
+    goalId: string,
+    type: string,
+  ): CalcRelOption[] | undefined {
+    return relOptions(goalId, spineRelation(type)?.rel);
   }
 
   /** Grow the chain, in whichever of the two senses this pending goal is:
@@ -790,16 +848,22 @@ export function proofToTree(
    * a block that never PARSED also wants one link after its first. */
   function addLinkFor(goalId: string, prod: ProofStep): AddSpec | undefined {
     const hole = holeByGoal.get(goalId);
-    if (hole)
-      return hole.first
-        ? undefined
-        : {
-            kind: "calc-link",
-            hole,
-            indent: hole.linkStart.character,
-            producer: prod.position,
-            after: prod.position,
-          };
+    if (hole) {
+      if (hole.first) return undefined;
+      // The link BELOW keeps its own relation, so a new one above it must
+      // compose with THAT back to it — hence `want`.
+      const own = spineRelation(goals.get(goalId)?.type ?? "")?.rel;
+      const rels = relOptions(goalId, own, relsByGoal.get(goalId)?.rel ?? own);
+      return {
+        kind: "calc-link",
+        hole,
+        rel: rels?.[0].rel ?? own,
+        rels,
+        indent: hole.linkStart.character,
+        producer: prod.position,
+        after: prod.position,
+      };
+    }
     // The residue: produced by a calc block, and pending because the chain
     // owes it. `spineRelation` is what the new link would chain — the residue
     // carries the composite relation, which need not be any single link's.
@@ -807,12 +871,14 @@ export function proofToTree(
     const chain = chainByTactic.get(
       `${prod.position.start.line}:${prod.position.start.character}`,
     );
-    const rel = spineRelation(goals.get(goalId)?.type ?? "")?.rel;
+    const rels = relOptions(goalId, spineRelation(goals.get(goalId)?.type ?? "")?.rel);
+    const rel = rels?.[0].rel;
     if (!chain || !rel) return undefined;
     return {
       kind: "calc-append",
       chain,
       rel,
+      rels,
       indent: chain.indent,
       producer: prod.position,
       after: prod.position,
@@ -942,11 +1008,13 @@ export function proofToTree(
     // is pending: when the block's first link WAS complete, a step stands for
     // it and the goal it consumes is an ordinary interior goal.
     const brokenChain = brokenChainByGoal.get(goalId);
-    const addLink = brokenChain
-      ? repairSpec(goalId, brokenChain, producedBy)
-      : pending
-        ? addLinkFor(goalId, producedBy!)
-        : undefined;
+    // The repair chip ALWAYS rides the `calc` node — the thing it acts on —
+    // never the goal above it: where a step stands for the block that is the
+    // step's own node, and where none does it is the node synthesized below.
+    // The goal must therefore not carry it too, or the same repair is offered
+    // twice, one lane drawing over the node between them.
+    const addLink =
+      brokenChain || !pending ? undefined : addLinkFor(goalId, producedBy!);
     const goalText = goal?.type ?? goalId;
     const elided =
       lhsElide && goalText.startsWith(lhsElide)
@@ -1001,11 +1069,34 @@ export function proofToTree(
       // already part of one. The three are mutually exclusive on purpose —
       // inside a chain the chain gesture is `addLink`, outside it is this — so
       // a goal never shows more than three chips.
-      calcRel:
-        pending && goal && !holeByGoal.has(goalId) && !addLink
-          ? calcRelation(goal.type)
+      calcRels:
+        pending && goal && !holeByGoal.has(goalId) && !addLink && !brokenChain
+          ? calcRelations(goalId, goal.type)
           : undefined,
     });
+
+    // A block that never parsed and has no step of its own is INVENTED here,
+    // so the tree can draw the chain the moment `calc` is typed. It stands
+    // where the calc is, laid out as a chain column, and carries the repair
+    // chip; everything below it is genuinely absent, because the command did
+    // not parse. Emitted before the `!step` return so DFS pre-order — which
+    // combineRuns and elide.ts's slot arithmetic rely on — is preserved.
+    if (brokenChain && !brokenChain.step) {
+      const c = brokenChain.chain;
+      nodes.push({
+        id: `calc:${c.tacticStart.line}:${c.tacticStart.character}`,
+        label: c.text,
+        type: "tactic",
+        parents: [{ id: goalId }],
+        // The REPORTABLE span, never the block's syntax range: a broken block's
+        // range covers the tactic the parser swallowed, and the cursor accent
+        // would let this node claim a neighbour's positions.
+        position: { start: c.tacticStart, stop: c.stop },
+        chain: true,
+        synthetic: true,
+        addLink: repairSpec(goalId, c, producedBy),
+      });
+    }
 
     if (!step) return; // leaf: this goal was closed by its tactic
 
@@ -1044,6 +1135,16 @@ export function proofToTree(
           (g) => g.id,
         ),
       ),
+      // The repair chip for a block that never parsed, when a step DOES stand
+      // for it (its first link was complete, so the block half-elaborated).
+      // It rides the calc's own node — the thing the repair acts on — rather
+      // than the goal above, which is where a chip would point at nothing.
+      // The step may be labelled with the enclosing bullet (`· calc a ≤ b`),
+      // which is exactly why the chain was found by CONTAINMENT.
+      addLink:
+        brokenChain?.step === step
+          ? repairSpec(goalId, brokenChain.chain, producedBy)
+          : undefined,
     });
 
     // A chain's links can drop the LHS the box above them already shows —
@@ -1067,3 +1168,4 @@ export function proofToTree(
   for (const rootId of roots) visitGoal(rootId, []);
   return nodes;
 }
+

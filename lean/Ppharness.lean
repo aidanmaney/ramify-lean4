@@ -35,16 +35,19 @@ namespace Ppharness
     command's source comments, for the renderer's comment strips, and the two
     `calc` editing seams — the unproved links a chain already has, and where a
     chain that stops short of its goal continues (both from
-    ProofTreeComments.lean). -/
+    ProofTreeComments.lean) — plus `calcRelations`, the relations a chain on
+    each pending goal could be built out of. -/
 def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
     (calcHoles : Array ProofTree.CalcHole)
-    (calcChains : Array ProofTree.CalcChain) : Json :=
+    (calcChains : Array ProofTree.CalcChain)
+    (calcRelations : Array ProofTree.CalcRelations) : Json :=
   Json.mkObj [
     ("steps",    toJson r.steps),          -- List ProofStep  (ToJson derived upstream)
     ("allGoals", toJson r.allGoals.toList), -- flatten the goal set into an array
     ("comments", toJson comments),
     ("calcHoles", toJson calcHoles),
-    ("calcChains", toJson calcChains)
+    ("calcChains", toJson calcChains),
+    ("calcRelations", toJson calcRelations)
   ]
 
 /-- Run the (MetaM) parser from plain `IO`.
@@ -94,9 +97,19 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
           -- CLI wire too (which is what lets a probe check them offline).
           let calcHoles := ProofTree.collectCalcHoles fileMap tree
           let calcChains := ProofTree.collectCalcChains fileMap tree
+          -- Same enumeration the widget runs, over the same pending rule; it
+          -- needs only a MetaM context, which the info tree carries.
+          let calcRelations ← ProofTree.collectCalcRelations tree <|
+            ProofTree.calcRelationGoals
+              (r.steps.toArray.map fun s =>
+                { goalBefore := s.goalBefore.id.name.toString
+                  goalsAfter := (s.goalsAfter.map (·.id.name.toString)).toArray
+                  start := s.position.start
+                  stop  := s.position.stop })
+              calcChains
           out := out.push (Json.mkObj
             [("index", toJson idx),
-             ("proof", resultToJson r comments calcHoles calcChains)])
+             ("proof", resultToJson r comments calcHoles calcChains calcRelations)])
     | none => pure ()
     idx := idx + 1
   return out

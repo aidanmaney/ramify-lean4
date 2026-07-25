@@ -306,6 +306,31 @@ structure CalcChain where
   of the tree. The syntax survives, though, which is what lets the chain still
   be reported and one appended link put the proof back. -/
   broken : Bool
+  /-- How many WELL-FORMED links the block has. Zero is `calc` and nothing yet
+  (or `calc a = b :=` with the proof unwritten): there is no link to hang an
+  appended one after, so the chain is reported for VISIBILITY only and the
+  client draws it without a repair chip. -/
+  links : Nat := 0
+  /-- End of the reportable span — the last well-formed link, or the end of the
+  `calc`'s own first line when there is none. NOT the block's syntax range,
+  which in the broken case covers the tactic the parser swallowed (see
+  `CalcBlock`); the client hands this to the cursor accent, so a calc must not
+  be able to claim a neighbour's positions. -/
+  stop : Lsp.Position
+  /-- The block's verbatim source over `[tacticStart, stop)`. The client draws
+  a synthesized node for a chain that never elaborated, and this is its label —
+  verbatim, so it can never disagree with the source the layout measured. -/
+  text : String
+  /-- The FIRST link carries no `:= proof` (`calcFirstStep`'s justification is
+  optional). Repairing such a block by appending a link is WRONG: a bare first
+  step is the chain's starting EXPRESSION, so `calc a ≤ b` followed by
+  `_ ≤ _ := ?_` reads as `(a ≤ b) ≤ _` and fails to synthesize a `Trans`
+  instance (elaborated, not reasoned about). It is also the commonest state
+  while typing — the `:=` simply isn't there yet — so the repair COMPLETES the
+  first link as well as adding the subsequent one. Both halves are needed:
+  measured, completing alone leaves the block still unparsed, since the
+  missing subsequent step is the actual trigger. -/
+  firstBare : Bool := false
   deriving ToJson, FromJson
 
 /-- One `calc` block: its range, its WELL-FORMED links in source order, and
@@ -322,28 +347,76 @@ structure CalcBlock where
   range : Lean.Syntax.Range
   links : Array (Lean.Syntax.Range × Bool)
   broken : Bool
+  /-- The first link has no `:= proof` — see `CalcChain.firstBare`. -/
+  firstBare : Bool := false
 
 /-- Every `calc` block in the tree, with its links in source order.
 
 Shared by the two collectors below — one keys on the LINKS' ranges, the other
 on the block's — and deduped by the block's range, since the same calc surfaces
-in several `TacticInfo`s under macro expansion. -/
-def calcBlocks (tree : Elab.InfoTree) : Array CalcBlock := Id.run do
-  let calcs := tree.foldInfo (init := #[]) fun _ info acc =>
+in several `TacticInfo`s under macro expansion.
+
+Blocks are found by descending SYNTAX, not by matching an info node's own kind:
+a `calc` that never elaborated has no `TacticInfo` of its own, but its syntax
+survives inside the enclosing tactic's (the `by` block, the bullet, the
+`induction`), which is what lets a chain still be reported while it is being
+typed. `extra` is the widget's `snap.stx`, the whole command — the last resort
+for a proof where nothing under the calc elaborated at all.
+
+Zero well-formed links is a REPORTED state, not a skipped one: `calc` and
+nothing yet is precisely what the tree most needs to draw. -/
+def calcBlocks (fileMap : FileMap) (tree : Elab.InfoTree)
+    (extra : Option Syntax := none) : Array CalcBlock := Id.run do
+  let roots := tree.foldInfo (init := extra.toArray) fun _ info acc =>
     match info with
-    | .ofTacticInfo ti =>
-      if ti.stx.getKind == ``Lean.calcTactic then acc.push ti.stx else acc
+    | .ofTacticInfo ti => acc.push ti.stx
     | _ => acc
   let mut out := #[]
-  for stx in calcs do
-    let some r := stx.getRange? (canonicalOnly := true) | continue
-    unless out.any (fun b => b.range.start == r.start && b.range.stop == r.stop) do
-      let links := (calcSteps stx).qsort
-        (fun a b => a.1.start.byteIdx < b.1.start.byteIdx)
-      unless links.isEmpty do
-        out := out.push { range := r, links := links, broken := stx.hasMissing }
+  for root in roots do
+    for stx in calcNodes root do
+      let some r := stx.getRange? (canonicalOnly := true) | continue
+      unless out.any (fun b => b.range.start == r.start && b.range.stop == r.stop) do
+        let cp := fileMap.utf8PosToLspPos r.start
+        -- `hasMissing` is not enough to reject a link the parser invented.
+        -- Measured: after a bare `calc`, the FOLLOWING bullet is read as the
+        -- first link's term (`· trivial` is cdot notation, so nothing is
+        -- missing) and its range covers a neighbouring tactic verbatim. Lean's
+        -- own layout rule rules it out — a link on a later line must be
+        -- indented PAST the `calc`, or it is not part of the block.
+        let links := (calcSteps stx).qsort
+            (fun a b => a.1.start.byteIdx < b.1.start.byteIdx)
+          |>.filter fun (lr, _) =>
+            let lp := fileMap.utf8PosToLspPos lr.start
+            lp.line == cp.line || lp.character > cp.character
+        -- `calcFirstStep := ppIndent(colGe term (" := " term)?)`, so the
+        -- justification is arg 1 and an empty node there means it is absent.
+        let firstBare := match firstStep stx with
+          | some fs => fs.getNumArgs > 1 && fs[1]!.getNumArgs == 0
+          | none => false
+        out := out.push {
+          range := r, links := links, firstBare
+          -- No well-formed link at all IS the broken state: the subsequent-step
+          -- parser had no column to anchor on (see `CalcChain.broken`).
+          broken := stx.hasMissing || links.isEmpty
+        }
   return out
 where
+  /-- The `calcTactic` nodes anywhere under `stx`. -/
+  calcNodes (stx : Syntax) : Array Syntax := Id.run do
+    let mut out := #[]
+    match stx with
+    | .node _ k args =>
+      if k == ``Lean.calcTactic then out := out.push stx
+      for a in args do out := out ++ calcNodes a
+    | _ => pure ()
+    return out
+  /-- The block's `calcFirstStep` node, if it read one at all. -/
+  firstStep (stx : Syntax) : Option Syntax :=
+    match stx with
+    | .node _ k args =>
+      if k == ``Lean.calcFirstStep then some stx
+      else args.foldl (fun acc a => acc <|> firstStep a) none
+    | _ => none
   /-- The `calcFirstStep`/`calcStep` nodes under `stx`, with their ranges.
   Recursive over raw syntax: a link is not an info node of its own. -/
   calcSteps (stx : Syntax) : Array (Lean.Syntax.Range × Bool) := Id.run do
@@ -370,19 +443,37 @@ falls back to that convention — which is also the BROKEN case, since a block
 with no well-formed subsequent step is exactly the one the parser has no anchor
 for (see `CalcBlock`). Appending there is a repair: it gives the parser its
 anchor back, so everything the block swallowed elaborates again. -/
-def collectCalcChains (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcChain :=
-  Id.run do
+def collectCalcChains (fileMap : FileMap) (tree : Elab.InfoTree)
+    (extra : Option Syntax := none) : Array CalcChain := Id.run do
+    let src := fileMap.source
     let mut out : Array CalcChain := #[]
-    for b in calcBlocks tree do
+    for b in calcBlocks fileMap tree extra do
       let start := fileMap.utf8PosToLspPos b.range.start
       let indent := match b.links[1]? with
         | some (r, _) => (fileMap.utf8PosToLspPos r.start).character
         | none => start.character + 2
+      -- The reportable span (see `CalcChain.stop`): through the last
+      -- well-formed link, or to the end of the `calc`'s own line when the
+      -- block has none — never the block's range, which when broken runs on
+      -- into the tactic the parser swallowed.
+      let stopPos := match b.links.back? with
+        | some (r, _) => r.stop
+        | none => Id.run do
+          let mut p := b.range.start
+          while !String.Pos.Raw.atEnd src p && String.Pos.Raw.get src p != '\n' do
+            p := String.Pos.Raw.next src p
+          return p
       out := out.push {
         tacticStart := start
-        lastLink := fileMap.utf8PosToLspPos b.links.back!.1.stop
+        -- Nothing well-formed to append after: the `calc`'s own line is where
+        -- a first link goes, which is where one is written by hand too.
+        lastLink := fileMap.utf8PosToLspPos stopPos
         indent := indent
         broken := b.broken
+        links := b.links.size
+        stop := fileMap.utf8PosToLspPos stopPos
+        text := String.Pos.Raw.extract src b.range.start stopPos
+        firstBare := b.firstBare
       }
     return out
 
@@ -397,9 +488,9 @@ so filtering on the kind excludes it — it is not a goal either.
 A `?_` that is not inside a calc link is deliberately DROPPED: `refine ⟨?_, ?_⟩`
 holes are better served by the existing `· ` bullet insertion, which is what
 one would write there by hand. -/
-def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcHole :=
-  Id.run do
-    let links := (calcBlocks tree).flatMap (·.links)
+def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree)
+    (extra : Option Syntax := none) : Array CalcHole := Id.run do
+    let links := (calcBlocks fileMap tree extra).flatMap (·.links)
     if links.isEmpty then return #[]
 
     let mut out : Array CalcHole := #[]
@@ -433,5 +524,209 @@ def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcHole
           first := isFirst
         }
     return out
+
+/-! ## Which relations a `calc` chain on a goal could be built out of -/
+
+/-- One relation a chain on this goal could start with: the first link's
+relation `rel`, and the relation `next` the SECOND link must carry for the two
+to compose back to the goal's own relation T (`Trans rel next T`).
+
+`same` marks the degenerate pair `rel = next = T`, which is the only one that
+needs no intermediate expression — appending a single `_ T _ := ?_` link
+discharges the goal directly. -/
+structure CalcRelOption where
+  rel  : String
+  next : String
+  same : Bool
+  deriving ToJson, FromJson
+
+/-- The relations offered for a goal. An entry with EMPTY `options` is a
+positive answer ("we looked; this goal is not chainable"), which is why one is
+emitted for every goal examined — the client distinguishes that from the field
+being absent altogether (an older CLI dump), where it falls back to its own
+string-level heuristic. -/
+structure CalcRelations where
+  goalId  : String
+  /-- The goal's own relation symbol, `""` when it has none. -/
+  rel     : String
+  options : Array CalcRelOption
+  deriving ToJson, FromJson
+
+/-- Every goal in the tree, with a `MetaM` context to inspect it in.
+
+Mirrors `collectTaggedGoals` exactly — same `TacticInfo` fold, same
+`mctxAfter`, same first-wins — so a goal's type is decomposed in the very
+context its printed form on the wire came from. -/
+def goalContexts (tree : Elab.InfoTree) :
+    Std.HashMap String (Elab.ContextInfo × MVarId) := Id.run do
+  let tacticNodes := tree.foldInfo (init := #[]) fun ctx info acc =>
+    if let .ofTacticInfo ti := info then acc.push (ctx, ti) else acc
+  let mut out : Std.HashMap String (Elab.ContextInfo × MVarId) := {}
+  for (ctx, ti) in tacticNodes do
+    let printCtx := { ctx with mctx := ti.mctxAfter }
+    for mvarId in ti.goalsBefore ++ ti.goalsAfter do
+      let key := mvarId.name.toString
+      unless out.contains key do out := out.insert key (printCtx, mvarId)
+  return out
+
+/-- A relation's infix symbol, by printing it applied to two variables and
+taking the middle token.
+
+Mathlib's own calc widget does this (`Mathlib/Tactic/Widget/Calc.lean`); the
+arity check is ours, and load-bearing, because this string gets WRITTEN INTO
+SOURCE. It rejects anything that does not print as a plain infix — measured,
+`Nat.ModEq n` prints `x ≡ y [MOD n]` (four tokens) and is correctly declined
+rather than emitted as an unwritable `≡`. -/
+private def relSymbol (r : Expr) : Lean.MetaM (Option String) := do
+  Lean.Meta.forallBoundedTelescope (← Lean.Meta.inferType r) (some 2) fun xs _ => do
+    unless xs.size == 2 do return none
+    let a ← Lean.Meta.inferType xs[0]!
+    let b ← Lean.Meta.inferType xs[1]!
+    Lean.Meta.withLocalDeclD `x a fun x => Lean.Meta.withLocalDeclD `y b fun y => do
+      -- `headBeta` because an instance may state its relation as a LAMBDA
+      -- (core's `Nat.instTransLe` is `Trans (fun a b => a ≤ b) …`), and an
+      -- unreduced redex prints as `(fun a b => a ≤ b) x y` — many tokens, so
+      -- the arity check below would reject a perfectly ordinary `≤`.
+      let s := toString (← Lean.Meta.ppExpr (mkAppN r #[x, y]).headBeta)
+      let parts := s.splitOn " "
+      return if parts.length == 3 then some parts[1]! else none
+
+/-- The relations a `calc` chain proving `mvarId` could start with.
+
+The question `calc` actually asks is "which R and S satisfy `Trans R S T`" for
+the goal's relation T, and there is no API for it — core only ever SYNTHESISES
+`Trans r s ?t` with both inputs known (`mkCalcTrans`), and Mathlib's calc
+widget never touches `Trans` at all, reusing the goal's own relation symbol for
+every step. So: query the instance index with both inputs open, then verify
+each concrete candidate with the very synthesis core would run.
+
+The gate on offering anything at all is that **T chains with ITSELF**. That is
+not a convenience: `Trans Eq r r` and `Trans r Eq r` are core instances holding
+for ANY binary relation, so "some pair verified" is satisfied by `Even n ∨
+Odd n` (measured — `∨ then =` synthesises fine). Requiring `(T, T)` is
+name-free, rejects `∨`/`∧`/`≠`, and is exactly the assumption the two-link
+skeleton the client writes already makes. -/
+def calcRelationsFor (ctx : Elab.ContextInfo) (goalId : String) (mvarId : MVarId)
+    (cap : Nat := 6) : IO CalcRelations := do
+  let none? : CalcRelations := { goalId, rel := "", options := #[] }
+  try
+    -- `withContext`, not the empty lctx `runMetaM` starts in: the goal's type
+    -- is written in terms of its own free variables, so inferring anything
+    -- about it outside its context throws `unknown free variable`.
+    ctx.runMetaM {} <| mvarId.withContext do
+      -- `consumeMData` is load-bearing: a `have`'s CONTINUATION goal arrives
+      -- wrapped in `mdata noImplicitLambda`, and `getCalcRelation?` decomposes
+      -- with `getAppNumArgs`, which sees an `.mdata` head and answers 0 — so a
+      -- perfectly ordinary `⊢ (a + b) ^ 2 ≤ 2 * (a ^ 2 + b ^ 2)` sitting under
+      -- a `have` was declined outright. Found by dumping the raw Expr; the
+      -- string-level heuristic this replaced never saw the wrapper.
+      let goalTy := (← Lean.instantiateMVars (← mvarId.getType)).consumeMData
+      let some (t, a, b) ← Lean.Elab.Term.getCalcRelation? goalTy | return none?
+      let some tsym ← relSymbol t | return none?
+      let α ← Lean.Meta.inferType a
+      let γ ← Lean.Meta.inferType b
+      -- Prop-valued and homogeneous in the midpoint: the overwhelming case,
+      -- and a wrong guess costs a MISSING option, never a wrong one.
+      let r ← Lean.Meta.mkFreshExprMVar
+        (← Lean.mkArrow α (← Lean.mkArrow α (mkSort levelZero)))
+      let s ← Lean.Meta.mkFreshExprMVar
+        (← Lean.mkArrow α (← Lean.mkArrow γ (mkSort levelZero)))
+      let query ← Lean.Meta.mkAppM ``Trans #[r, s, t]
+      let insts ← try Lean.Meta.SynthInstance.getInstances query
+                  catch _ => pure #[]
+      let mut pairs : Array (String × String) := #[]
+      for inst in insts.take 64 do
+        let got ← Lean.withoutModifyingState do
+          let (_, _, concl) ←
+            Lean.Meta.forallMetaTelescopeReducing (← Lean.Meta.inferType inst.val)
+          unless ← Lean.Meta.isDefEq concl query do return none
+          let r' ← Lean.instantiateMVars r
+          let s' ← Lean.instantiateMVars s
+          -- Still open ⇒ this instance is a wildcard nothing pinned (e.g.
+          -- Mathlib's `[IsTrans α r] : Trans r r r`); it names no relation.
+          if r'.hasExprMVar || s'.hasExprMVar then return none
+          let some rs ← relSymbol r' | return none
+          let some ss ← relSymbol s' | return none
+          -- The verify: `mkCalcTrans`'s own test, so an offered pair is one
+          -- the calc elaborator will accept.
+          match ← Lean.Meta.trySynthInstance (← Lean.Meta.mkAppM ``Trans #[r', s', t]) with
+          | .some _ => return some (rs, ss)
+          | _       => return none
+        if let some p := got then pairs := pairs.push p
+      unless pairs.any (fun p => p.1 == tsym && p.2 == tsym) do
+        return { goalId, rel := tsym, options := #[] }
+      -- One option per distinct FIRST relation, preferring the pair whose
+      -- second relation is the goal's own (the most useful continuation), and
+      -- with `(T, T)` first so today's one-click behaviour stays the default.
+      let mut opts : Array CalcRelOption := #[]
+      for (rel, _) in pairs do
+        unless opts.any (·.rel == rel) do
+          let cands := pairs.filter (·.1 == rel)
+          let next := ((cands.find? (·.2 == tsym)).getD cands[0]!).2
+          opts := opts.push { rel, next, same := rel == tsym && next == tsym }
+      let ordered := (opts.filter (·.same)) ++ (opts.filter (!·.same))
+      return { goalId, rel := tsym, options := ordered.take cap }
+  catch _ => return none?
+
+/-- Just enough of a `ProofStep` to apply the pending rule. Abstracted so the
+rule below can live here, in the lib BOTH wires share, rather than being
+written out twice against Paperproof's structure — which this module
+deliberately does not import. -/
+structure CalcGoalStep where
+  goalBefore : String
+  goalsAfter : Array String
+  start      : Lsp.Position
+  stop       : Lsp.Position
+
+/-- Which goals to enumerate relations for.
+
+VERBATIM the client's own rule (`proofToTree.ts`), and it must stay that way —
+a drift shows up as chips silently vanishing, not as an error:
+
+* PENDING — reached through `goalsAfter` (never `stepGoalsAfter`: a spawned
+  goal no tactic consumes is not the frontier, it restates something already
+  handled inside a branch) and consumed by no step;
+* plus the goal a BROKEN block hangs off — the innermost step whose range
+  contains the block's start. Containment is HALF-OPEN, the same fact the
+  cursor accent rests on: the producer above a bare `calc` has a
+  trivia-inflated range ending exactly AT the calc's start, and an inclusive
+  test would hand the chain that tactic's own goal instead. -/
+def calcRelationGoals (steps : Array CalcGoalStep) (chains : Array CalcChain) :
+    Array String := Id.run do
+  let consumed := steps.foldl (init := ({} : Std.HashSet String))
+    fun acc s => acc.insert s.goalBefore
+  let lt (a b : Lsp.Position) : Bool := (compare a b) == .lt
+  let le (a b : Lsp.Position) : Bool := (compare a b) != .gt
+  let mut out : Array String := #[]
+  for s in steps do
+    for g in s.goalsAfter do
+      unless consumed.contains g || out.contains g do out := out.push g
+  for c in chains do
+    if c.broken then
+      let mut inner : Option CalcGoalStep := none
+      for s in steps do
+        if le s.start c.tacticStart && lt c.tacticStart s.stop then
+          match inner with
+          | some i => if le i.start s.start then inner := some s
+          | none   => inner := some s
+      if let some i := inner then
+        unless out.contains i.goalBefore do out := out.push i.goalBefore
+  return out
+
+/-- Relation options for the goals named by `goalIds`.
+
+The caller supplies the ids because the policy — which goals are PENDING —
+lives with the steps, and must stay verbatim the client's own rule in
+`proofToTree.ts` (reached through `goalsAfter`, never `stepGoalsAfter`, plus
+the owner of a broken block). A drift between the two shows up as chips
+silently vanishing, not as an error. -/
+def collectCalcRelations (tree : Elab.InfoTree) (goalIds : Array String) :
+    IO (Array CalcRelations) := do
+  let ctxs := goalContexts tree
+  let mut out : Array CalcRelations := #[]
+  for goalId in goalIds do
+    if let some (ctx, mvarId) := ctxs[goalId]? then
+      out := out.push (← calcRelationsFor ctx goalId mvarId)
+  return out
 
 end ProofTree

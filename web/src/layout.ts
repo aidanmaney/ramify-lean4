@@ -131,6 +131,19 @@ export const HYP_MARK_W = 11;
 // inside the parent box's left edge.
 export const TRUNK_INDENT = 56; // horizontal shift of a branched-off subtree
 export const TRUNK_INSET = 16; // connector column, from a box's left edge
+// The frontier-chip lane (`+`/`sorry`/`calc`/`step`, and the relation picker)
+// hangs BELOW a node's box, outside its band — so unlike the comment strip and
+// case badge it is not reserved by the band arithmetic, and whatever the trunk
+// cursor placed next simply drew on top of it. That was invisible while chips
+// only ever appeared on PENDING goals, which are leaves with a generous
+// TRUNK_GAP_BRANCH under them; it became a real overlap as soon as chips could
+// sit on an interior node (a `calc` whose block is broken, or a goal that has
+// one below it), where the gap is the tight TRUNK_GAP_STEP. `chipH` is added
+// to a node's OCCUPIED extent rather than its band, so the box stays at the
+// band's bottom and every edge/label offset is untouched — only what comes
+// after is pushed down.
+export const CHIP_TOP_GAP = 8; // box bottom → chip top
+export const CHIP_LANE_H = 15; // must equal ProofTreeView's CHIP_H
 const TRUNK_GAP_STEP = 14; // goal → the tactic consuming it (one step, tight)
 const TRUNK_GAP_BRANCH = 24; // tactic → what it generates; between siblings
 const BRANCH_COL_GAP = 18; // horizontal air between side-by-side columns
@@ -265,7 +278,7 @@ function trunkLayout(
     const pn: PlacedNode = { x: x0 + n.w / 2, y: y0 + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
-    let bottom = y0 + band;
+    let bottom = y0 + band + n.chipH;
     let right = x0 + eff;
     // Source order, then the trunk resumption last. Sort is stable, so
     // children whose subtrees hold no tactic at all (rank Infinity) keep their
@@ -801,11 +814,16 @@ export interface LayoutEngineOptions {
   /** Wrap labels and comment strips at a much narrower column, with
    * bracket-depth indentation, so branches fit side by side. */
   reflow?: boolean;
+  /** Reserve room under a node for its frontier-chip lane. Off by default:
+   * `addSpec`/`addLink` are computed on both wires, but only the widget
+   * supplies `onAddTactic` and therefore only the widget DRAWS chips — the
+   * standalone app must not get a band of empty space per pending goal. */
+  chips?: boolean;
 }
 
 export function createLayoutEngine(
   data: TreeNode[],
-  { reflow = false }: LayoutEngineOptions = {},
+  { reflow = false, chips = false }: LayoutEngineOptions = {},
 ) {
   // Stable left-to-right order key for the wide layout, assigned below once
   // `SRC` exists so that siblings there read in SOURCE order too — the wide
@@ -881,13 +899,18 @@ export function createLayoutEngine(
         string,
         ReturnType<typeof sizeOf> &
           ReturnType<typeof commentSize> &
-          ReturnType<typeof caseSize>,
+          ReturnType<typeof caseSize> &
+          Pick<LayoutNode, "chipH">,
       ] => [
         n.id,
         {
           ...sizeOf(n.label, n.hyps, reflow),
           ...commentSize(n.comment, reflow),
           ...caseSize(n.caseLabel),
+          chipH:
+            chips && (n.addSpec || n.addLink)
+              ? CHIP_TOP_GAP + CHIP_LANE_H
+              : 0,
         },
       ],
     ),
@@ -1054,7 +1077,11 @@ export function createLayoutEngine(
         // so siblings clear a strip that outgrows the box.
         return [
           Math.max(node.data.w, node.data.commentW, node.data.caseW) + 40,
-          node.data.caseH + node.data.commentBlockH + node.data.h + 42,
+          node.data.caseH +
+            node.data.commentBlockH +
+            node.data.h +
+            node.data.chipH +
+            42,
         ] as const;
       })
       .decross(stableDecross) // fixed sibling order, immune to folding

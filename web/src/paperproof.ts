@@ -88,6 +88,47 @@ export interface CalcChain {
   state you are in while typing a chain. Nothing below it elaborates, so the
   chain reaches us from syntax alone, with no step of its own on the wire. */
   broken: boolean;
+  /** How many WELL-FORMED links the block has. Zero (`calc` and nothing yet)
+  means there is nothing to append a link AFTER — the chain is reported so the
+  tree can draw it, but it carries no repair spec. */
+  links: number;
+  /** End of the reportable span. NOT the block's syntax range, which when
+  broken runs on into the tactic the parser swallowed. */
+  stop: { line: number; character: number };
+  /** The block's verbatim source over `[tacticStart, stop)` — the label of the
+  synthetic node drawn for a chain that never elaborated. */
+  text: string;
+  /** The FIRST link carries no `:= proof`. A bare first step is the chain's
+  starting EXPRESSION, so appending a link to it reads as `(a ≤ b) ≤ _` and
+  fails to synthesize a `Trans` instance — the repair must COMPLETE it too. */
+  firstBare: boolean;
+}
+
+/** One relation a chain on a goal could START with, and the relation the
+SECOND link must then carry for the two to compose back to the goal's own
+(`Trans rel next T`) — see ProofTreeComments.lean's `CalcRelOption`.
+
+`same` marks the degenerate pair `rel = next = T`: the only one needing no
+intermediate expression, so the only one whose chip commits in a single click. */
+export interface CalcRelOption {
+  rel: string;
+  next: string;
+  same: boolean;
+}
+
+/** The relations offered for one goal, enumerated from the real `Trans`
+instances server-side.
+
+An entry with EMPTY `options` is a positive answer — "we looked; this goal is
+not chainable" — which is why one is emitted for every goal examined. That is
+distinct from the field being absent altogether (an older CLI dump, or a wire
+that doesn't ship it), where the client falls back to its own string-level
+`spineRelation` heuristic. */
+export interface CalcRelations {
+  goalId: string;
+  /** The goal's own relation symbol, `""` when it has none. */
+  rel: string;
+  options: CalcRelOption[];
 }
 
 /** A complete parsed proof: the node set plus the tactic edges. */
@@ -97,6 +138,12 @@ export interface Proof {
   comments?: SourceComment[];
   calcHoles?: CalcHole[];
   calcChains?: CalcChain[];
+  calcRelations?: CalcRelations[];
+  /** Stable identity of the proof — the declaration's name (see
+  ProofTreeWidget.lean's `declName?`). The view keys "is this a different
+  proof?" on this rather than on a root mvarId, which re-elaboration renumbers.
+  Absent on the CLI wire, where `rootIds` stands in. */
+  proofId?: string;
 }
 
 /** One NDJSON line as emitted by the CLI: `{file, data:{index, proof}}`. */

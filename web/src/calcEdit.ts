@@ -42,8 +42,8 @@ Both act on the hole's own range, which is what makes them exact:
  * for. Two links rather than one because a lone link is a `calcFirstStep`,
  * which nothing can be inserted above: the second link is what the `step`
  * chip then grows against, so the chain builds forward from the LHS. */
-export function calcSkeleton(rel: string, mid: string): string {
-  return `calc _ ${rel} ${mid} := ?_\n_ ${rel} _ := ?_`;
+export function calcSkeleton(rel: string, mid: string, next = rel): string {
+  return `calc _ ${rel} ${mid} := ?_\n_ ${next} _ := ?_`;
 }
 
 export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
@@ -51,12 +51,42 @@ export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
   // anchor is the END of the final link's line, so a trailing comment stays
   // glued to the link it annotates; the huge character value is clamped by the
   // editor, which is how every insertion here reaches an unknown line length.
-  if (spec.kind === "calc-append" && spec.chain) {
+  // A `calc` keyword with no link at all: write the first two, under it. Two
+  // because the middle is what the author supplies and the outer ends are `_`
+  // for Lean to unify — the same reason `calcSkeleton` opens with two.
+  if (spec.kind === "calc-first" && spec.chain) {
     const at = { line: spec.chain.lastLink.line, character: 1e5 };
+    const pad = " ".repeat(spec.chain.indent);
     return {
       range: { start: at, end: at },
-      newText: `\n${" ".repeat(spec.chain.indent)}_ ${spec.rel} _ := ?_`,
+      newText: `\n${pad}_ ${spec.rel} ${text} := ?_\n${pad}_ ${spec.rel2 ?? spec.rel} _ := ?_`,
     };
+  }
+  if (spec.kind === "calc-append" && spec.chain) {
+    // A bare first step (`calc a ≤ b`, the `:=` not typed yet) is the chain's
+    // starting EXPRESSION, so a link appended after it reads as `(a ≤ b) ≤ _`
+    // and fails to synthesize `Trans`. Complete it first — and completing
+    // ALONE is not enough either: the missing SUBSEQUENT step is what stops
+    // the block parsing, so both halves go in one edit. All three ways
+    // measured by elaborating them. This edit anchors at the link's own end
+    // rather than end-of-line, the one case where a trailing comment ends up
+    // on the new link instead of the old one.
+    const bare = spec.chain.firstBare;
+    const at = bare
+      ? { ...spec.chain.lastLink }
+      : { line: spec.chain.lastLink.line, character: 1e5 };
+    const head = bare ? " := ?_" : "";
+    const pad = " ".repeat(spec.chain.indent);
+    // A relation OTHER than the one the chain still owes cannot close it on
+    // its own, so it appends TWO links: one to the intermediate expression
+    // (`text`, the only thing that can't be inferred) and one from there to
+    // the goal's own RHS, whose `_` endpoints Lean unifies as always.
+    const newText =
+      head +
+      (spec.rel2 && spec.rel2 !== spec.rel
+        ? `\n${pad}_ ${spec.rel} ${text} := ?_\n${pad}_ ${spec.rel2} _ := ?_`
+        : `\n${pad}_ ${spec.rel} _ := ?_`);
+    return { range: { start: at, end: at }, newText };
   }
   const h = spec.hole;
   if (!h) return null;

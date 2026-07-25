@@ -167,16 +167,7 @@ and each link's `by` justification hangs under the goal it proves.
 The links deliberately mix relations (`=` with `≤`, `<` with `≤`), so the chains
 lean on `Trans` rather than one relation throughout. Chain 2's first link is
 justified by a TERM rather than a tactic, which is worth seeing in the tree: it
-spawns no goal at all, so a three-link chain draws two branches.
-
-Chain 1 deliberately STOPS SHORT of its goal's right-hand side. That still
-elaborates: Lean leaves the remainder as a `calc.step` goal, which reaches the
-tree as an ordinary pending goal badged `calc.step` — and its `step` chip
-appends `_ = _ := ?_`, closing the chain and turning the residue into a hole the
-other chips can fill. Truncating to ONE link instead would not even parse: with
-no second link the step parser has no column to anchor on, so it swallows
-whatever follows the block (the next `·` bullet here), and the whole proof —
-calc node included — disappears from the tree. -/
+spawns no goal at all, so a three-link chain draws two branches. -/
 theorem calc_workout (a b : ℝ) (n : ℕ) :
     (a + b) ^ 2 ≤ 2 * (a ^ 2 + b ^ 2)
       ∧ (∑ i ∈ Finset.range (n + 1), (2 * i + 1)) = (n + 1) ^ 2
@@ -186,8 +177,9 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
     -- then tidy up. The middle link is the only inequality.
     have hsq : (0 : ℝ) ≤ (a - b) ^ 2 := sq_nonneg _
     calc (a + b) ^ 2
-        = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
-      _ ≤ 2 * (a ^ 2 + b ^ 2) - 0 := by linarith
+      = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
+      -- _ ≤ 2 * (a ^ 2 + b ^ 2) - 0 := by linarith
+      -- _ = 2 * (a ^ 2 + b ^ 2) := by ring
   · -- Chain 2: the odd-sum identity again, this time as a calc chain inside the
     -- successor case of an induction — a calc nested under a case split.
     induction n with

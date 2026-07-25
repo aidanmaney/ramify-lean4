@@ -188,6 +188,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       // and the chips must not keep pointing at where the `?_` used to be.
       calcHoles: resolved.calcHoles,
       calcChains: resolved.calcChains,
+      // Plain data too (relation SYMBOLS, not exprs), and it belongs in the
+      // signature for the same reason: a changed relation list means the goal
+      // itself changed, so the offer set must be recomputed with it.
+      calcRelations: resolved.calcRelations,
+      // The proof's identity, and part of the signature: moving the cursor to
+      // a DIFFERENT theorem must invalidate the stable proof even if its text
+      // somehow matched.
+      proofId: resolved.proofId,
     };
     return { proof, sig: JSON.stringify(proof) };
   }, [resolved]);

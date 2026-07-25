@@ -19,6 +19,8 @@ import {
   NODE_PAD_Y,
   ARROW_GAP,
   TRUNK_INSET,
+  CHIP_LANE_H,
+  CHIP_TOP_GAP,
   COMMENT_FONT_PX,
   COMMENT_LINE_H,
   COMMENT_INDENT,
@@ -28,7 +30,7 @@ import {
   refreshCodeFontFamily,
   measureText,
 } from "./layout";
-import type { Proof, ProofStepPosition } from "./paperproof";
+import type { CalcRelOption, Proof, ProofStepPosition } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import { calcSkeleton } from "./calcEdit";
 import type {
@@ -143,7 +145,10 @@ const HYP_MODES: Record<
 
 // Frontier-chip row geometry (see FrontierChip). Widths are fixed rather than
 // measured: both labels are constant, and the row must not resize per node.
-const CHIP_H = 15;
+// Layout reserves exactly CHIP_LANE_H + CHIP_TOP_GAP under a chip-bearing node
+// (see layout.ts), so the drawn height must BE that constant — the two agreeing
+// is what keeps the lane from drawing on whatever comes next.
+const CHIP_H = CHIP_LANE_H;
 const CHIP_GAP = 6;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
@@ -151,10 +156,13 @@ const CHIP_W_STEP = 30;
 // What the `step` chip's overlay opens with: the head of a calc link, so the
 // author types only the part that is theirs (`c := by ring`). Committing it
 // unchanged is the no-op of that form (see commitEdit).
-const CALC_LINK_PREFILL = "_ = ";
+const calcLinkPrefill = (rel: string) => `_ ${rel} `;
 // The `.none` elision marker (see ElidedMarker) is the one chip that DOES
 // measure: it carries the directive's own prose, so its width is its text's.
 const CHIP_FONT_PX = 10;
+// Relation chips in the picker row (see PickerRow): a touch larger than the
+// word chips, since a single glyph carries the whole meaning.
+const PICK_FONT_PX = 12;
 const CHIP_PAD_X = 6;
 
 // Gallery pager geometry (see GalleryPager). It hangs in the gap a branching
@@ -503,11 +511,36 @@ export default function ProofTreeView({
     // INSERTS via onAddTactic instead of replacing, empty commits just close,
     // and the goal's own box stays visible under the overlay.
     add?: AddSpec;
-    // Present when this is the `calc` chip: what was typed is the chain's
-    // MIDPOINT, not a tactic, so commit wraps it in the two-link skeleton
-    // (calcSkeleton) around this relation.
+    // Present when what is being typed is the chain's MIDPOINT rather than a
+    // tactic — the `calc` chip, and any chain gesture whose picked relation
+    // is not the goal's own (which then needs two links, so an intermediate
+    // expression between them). `calcRel`/`calcNext` are the two relations.
+    midpoint?: boolean;
     calcRel?: string;
+    calcNext?: string;
   } | null>(null);
+  // A chain gesture that offers a CHOICE of relation expands the chip lane
+  // into a row of them (see PickerRow) instead of acting immediately. It holds
+  // ranges, so it is dismissed on every path `editing` is — including a shape
+  // change, where the edit that just landed invalidated them.
+  const [picking, setPicking] = useState<{
+    id: string;
+    // `link` types the rest of a prefilled link; the other two type a
+    // midpoint (or, for a `same` append, nothing at all).
+    kind: "open" | "link" | "append" | "first";
+    spec: AddSpec;
+    options: CalcRelOption[];
+  } | null>(null);
+  // Esc closes the picker. It owns no focused element (it is SVG chips), so
+  // unlike the overlay's own Esc this has to listen on the document.
+  useEffect(() => {
+    if (!picking) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPicking(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [picking]);
   // Commit goes through the editor's own edit pipeline (undoable there); a
   // no-op edit just closes the box. The ref mirrors `editing` and is nulled
   // SYNCHRONOUSLY on commit: committing via Enter unmounts the textarea,
@@ -534,9 +567,14 @@ export default function ProofTreeView({
       if (cur.value.trim() !== "" && cur.value !== cur.original)
         onAddTactic?.(
           cur.add,
-          cur.calcRel
-            ? calcSkeleton(cur.calcRel, cur.value.trim())
-            : cur.value,
+          // Opening a chain builds the whole two-link skeleton here; the other
+          // midpoint forms are assembled by calcEdit from the spec's two
+          // relations, so they pass the typed expression through untouched.
+          cur.calcRel && !cur.add.chain && !cur.add.hole
+            ? calcSkeleton(cur.calcRel, cur.value.trim(), cur.calcNext)
+            : cur.midpoint
+              ? cur.value.trim()
+              : cur.value,
         );
     } else if (cur.value !== cur.original) {
       onEditTactic?.(cur.pos, cur.value);
@@ -713,7 +751,12 @@ export default function ProofTreeView({
           for (const id of resolveCut(c, byId)) manual.add(id);
         cuts = [...elideCuts, ...combineRuns(baseNodes, manual)];
       }
-      return createLayoutEngine(applyElisions(baseNodes, cuts), { reflow });
+      return createLayoutEngine(applyElisions(baseNodes, cuts), {
+        reflow,
+        // Only the widget draws chips, so only the widget reserves room for
+        // them (see LayoutEngineOptions.chips).
+        chips: !!onAddTactic,
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [baseNodes, elideCuts, combine, codeFont, reflow],
@@ -721,12 +764,19 @@ export default function ProofTreeView({
 
   // Two different events, and conflating them is what made editing painful.
   //
-  // `proofKey` is the proof's IDENTITY: its root goal's mvarId. Measured
-  // across re-elaborations, that survives edits to the proof BODY (adding a
-  // tactic keeps every existing id and appends one; deleting keeps the root
-  // and 8 of 12 downstream; both keep the root) and differs for a different
-  // theorem. A change here is a genuinely new proof, so reset everything and
-  // re-center.
+  // `proofKey` is the proof's IDENTITY, and it must NOT be derived from
+  // metavariable ids. It used to be the root goal's mvarId, on the measured
+  // basis that adding or deleting a tactic keeps it — but an mvarId is an
+  // ELABORATION-ORDER artifact, and that only holds while the edit doesn't
+  // change how many metavariables are allocated before the root. Adding a
+  // `calc` link does (it introduces a `?_`), so the proof being edited
+  // "became a different proof", reset everything and scrolled the author back
+  // to the top of the very proof they were working in. Measured on the scratch
+  // file: one appended link changed the edited theorem's root id, and
+  // renumbered 34 of 34 ids in the theorem BELOW it. The widget therefore
+  // ships `proofId` — the DECLARATION NAME — which does not move when a body
+  // does; `rootIds` remains the fallback for the CLI wire, where nothing is
+  // ever edited and the picker swaps whole records anyway.
   //
   // `shapeKey` is the node set. It changes on any structural edit, and used to
   // drive the reset — so adding a tactic or deleting one threw away fold,
@@ -736,7 +786,10 @@ export default function ProofTreeView({
   //
   // Both are derived state, adjusted during render rather than in an effect
   // (avoids a cascading re-render).
-  const proofKey = useMemo(() => rootIds(proof).join("\n"), [proof]);
+  const proofKey = useMemo(
+    () => proof.proofId ?? rootIds(proof).join("\n"),
+    [proof],
+  );
   const shapeKey = useMemo(
     () => proof.steps.map((s) => s.goalBefore.id).join("\n"),
     [proof],
@@ -751,6 +804,7 @@ export default function ProofTreeView({
     setSeq({ mode: "off" });
     setFocusId(null);
     setEditing(null);
+    setPicking(null);
     setElideCuts([]);
     setElidePick(null);
     setBandPick(null);
@@ -784,8 +838,11 @@ export default function ProofTreeView({
     // under the edit — keyed on the base tree, same identity check as above.
     setElideCuts((cs) => pruneCuts(baseNodes, cs));
     // The source moved under the edit box (usually OUR own committed edit
-    // coming back), so its ranges are stale either way.
+    // coming back), so its ranges are stale either way. The relation picker
+    // holds ranges too, and the edit that just landed is exactly what
+    // invalidates them.
     setEditing(null);
+    setPicking(null);
   }
 
   // `.fold` flags written in the source (see NodeFlags) seed the collapsed set
@@ -1159,6 +1216,14 @@ export default function ProofTreeView({
 
     let anchor = anchorRef.current;
     anchorRef.current = null; // consume it; unrelated re-renders must not re-shift
+    // A named anchor is only usable if the node is still THERE. Every id here
+    // is an mvarId, and re-elaboration renumbers every goal downstream of an
+    // edit — so `anchorOn(theNodeIWasEditing)` routinely names a node that no
+    // longer exists by the time the new proof arrives. Silently doing nothing
+    // in that case is the worst option: the layout moved and the scroll didn't,
+    // so the tree slides under the viewport. Fall through to the viewport
+    // centre instead, which needs no id to survive in particular.
+    if (anchor && !nodes.some((n) => n.data.id === anchor!.id)) anchor = null;
     if (!anchor && prev) {
       // Nearest to the old viewport's vertical centre AMONG nodes that
       // survived — an id that vanished has no new position to measure against.
@@ -1767,7 +1832,10 @@ export default function ProofTreeView({
         // label clicks stopPropagation, so they never land here): clicking
         // the widget focuses the infoview without moving the editor cursor,
         // and the lingering accent is just clutter at that point.
-        onClick={() => setHlDismissed(true)}
+        onClick={() => {
+          setHlDismissed(true);
+          setPicking(null);
+        }}
       >
         <svg
           width={svgW * zoom}
@@ -1900,6 +1968,7 @@ export default function ProofTreeView({
                 !elidePick &&
                 !bandPick &&
                 type === "tactic" &&
+                !node.data.synthetic &&
                 !!position &&
                 !!getTacticEdit &&
                 !!onEditTactic;
@@ -2306,17 +2375,64 @@ export default function ProofTreeView({
                       unfilled): the tactic that isn't there yet. They sit just
                       below the box on the compact lane, and are BUTTONS rather
                       than one chip plus a modifier — the lens gesture taught
-                      that modifiers on tree nodes silently stop working. */}
-                  {type === "goal" &&
+                      that modifiers on tree nodes silently stop working.
+
+                      A TACTIC node reaches this lane too, in exactly one case:
+                      the `calc` of a block that failed to parse (synthetic or
+                      not), whose repair chip belongs on the calc itself rather
+                      than on the goal above it. */}
+                  {(type === "goal" ||
+                    node.data.synthetic ||
+                    (type === "tactic" && node.data.addLink)) &&
                     (node.data.addSpec || node.data.addLink) &&
                     onAddTactic &&
                     seq.mode === "off" &&
                     !isEditing && (
                       <g
                         transform={`translate(${-w / 2 + TRUNK_INSET}, ${
-                          boxTop + h + 4
+                          boxTop + h + CHIP_TOP_GAP
                         })`}
                       >
+                        {/* Choosing which relation the new link chains REPLACES
+                            the lane, expanding rightward from the chip that was
+                            clicked and collapsing back onto it. */}
+                        {picking?.id === id ? (
+                          <PickerRow
+                            options={picking.options}
+                            onCancel={() => setPicking(null)}
+                            onPick={(o) => {
+                              const kind = picking.kind;
+                              const spec: AddSpec = {
+                                ...picking.spec,
+                                rel: o.rel,
+                                rel2: o.same ? undefined : o.next,
+                              };
+                              setPicking(null);
+                              // The chain already owes exactly this relation:
+                              // one link closes it and there is nothing to
+                              // type, so it commits like `sorry`.
+                              if (kind === "append" && o.same) {
+                                anchorOn(id);
+                                onAddTactic(spec, "");
+                                return;
+                              }
+                              const pre =
+                                kind === "link" ? calcLinkPrefill(o.rel) : "";
+                              // Everything but `link` types a midpoint.
+                              setEditing({
+                                id,
+                                pos: spec.after,
+                                original: pre,
+                                value: pre,
+                                add: spec,
+                                midpoint: kind !== "link",
+                                calcRel: o.rel,
+                                calcNext: o.next,
+                              });
+                            }}
+                          />
+                        ) : (
+                          <>
                         {node.data.addSpec && (
                           <>
                             <FrontierChip
@@ -2360,21 +2476,21 @@ export default function ProofTreeView({
                             />
                           </>
                         )}
-                        {/* Grow a `calc` chain: insert a whole new link above
-                            this unproved one, which is the only extension that
-                            stays well-typed (the chain must end at the goal's
-                            RHS, so a link can never just be appended). The
-                            overlay opens prefilled with the `_ = ` a link
-                            starts with. */}
                         {/* Open a chain on a goal that is a relation — the way
                             IN to calc mode, which the tree otherwise had no
                             way to offer (a chain can only be GROWN once one
-                            exists). Mutually exclusive with `step` above, so
+                            exists). Mutually exclusive with `step` below, so
                             a goal never carries more than three chips. */}
-                        {node.data.calcRel && (
+                        {node.data.calcRels && (
                           <FrontierChip
                             glyph="calc"
-                            title={`start a calc chain (${node.data.calcRel}) — type the first intermediate expression`}
+                            title={
+                              node.data.calcRels.length > 1
+                                ? `start a calc chain — pick the first link's relation (${node.data.calcRels
+                                    .map((o) => o.rel)
+                                    .join(" ")})`
+                                : `start a calc chain (${node.data.calcRels[0].rel}) — type the first intermediate expression`
+                            }
                             x={
                               -CHIP_W_ADD / 2 +
                               CHIP_W_ADD +
@@ -2386,31 +2502,41 @@ export default function ProofTreeView({
                             fontSize={9}
                             color={NODE_STYLES.tactic.stroke}
                             onPick={() => {
+                              const options = node.data.calcRels!;
+                              const spec = node.data.addSpec!;
+                              // One option is no choice: go straight through,
+                              // which is exactly the behaviour that predates
+                              // the picker (and the CLI/fallback path).
+                              if (options.length > 1) {
+                                setPicking({ id, kind: "open", spec, options });
+                                return;
+                              }
                               setEditing({
                                 id,
-                                pos: node.data.addSpec!.after,
+                                pos: spec.after,
                                 original: "",
                                 value: "",
-                                add: node.data.addSpec!,
-                                calcRel: node.data.calcRel,
+                                add: spec,
+                                midpoint: true,
+                                calcRel: options[0].rel,
+                                calcNext: options[0].next,
                               });
                             }}
                           />
                         )}
-                        {/* Grow a `calc` chain, in whichever sense this goal
-                            allows: insert a link ABOVE an unproved one, or —
-                            on the residue a chain that stopped short of its
-                            goal leaves behind — APPEND one, which is the way
-                            back INTO a chain the tree could otherwise only
-                            watch. The append has nothing to type (both ends of
-                            the new link are `_`), so it commits in one click
-                            like `sorry`. */}
+                        {/* Grow a `calc` chain, in whichever sense this node
+                            allows: insert a link ABOVE an unproved one; APPEND
+                            one to the residue a chain that stopped short left
+                            behind; or, on a block that never parsed, add the
+                            link that hands the parser back its anchor. */}
                         {node.data.addLink && (
                           <FrontierChip
                             glyph="step"
                             title={
                               node.data.addLink.chain?.broken
-                                ? `finish the \`calc\` block below: add its first ${node.data.addLink.rel} link. Until then the block does not parse, which is why the rest of this proof is missing`
+                                ? node.data.addLink.kind === "calc-first"
+                                  ? `write this \`calc\` block's first links — type the intermediate expression. Until it has one it does not parse, which is why the rest of this proof is missing`
+                                  : `finish the \`calc\` block: add its next ${node.data.addLink.rel} link. Until then it does not parse, which is why the rest of this proof is missing`
                                 : node.data.addLink.kind === "calc-append"
                                   ? `append a link (${node.data.addLink.rel}) to this calc chain`
                                   : "insert a calc step above this one"
@@ -2432,23 +2558,44 @@ export default function ProofTreeView({
                             color={NODE_STYLES.tactic.stroke}
                             onPick={() => {
                               const spec = node.data.addLink!;
-                              if (spec.kind === "calc-append") {
+                              const options = spec.rels;
+                              const kind =
+                                spec.kind === "calc-append"
+                                  ? "append"
+                                  : spec.kind === "calc-first"
+                                    ? "first"
+                                    : "link";
+                              if (options && options.length > 1) {
+                                setPicking({ id, kind, spec, options });
+                                return;
+                              }
+                              if (kind === "append") {
                                 anchorOn(id); // hold this goal across the redraw
                                 onAddTactic(spec, "");
                                 return;
                               }
+                              // `first` writes BOTH of a bare `calc`'s links,
+                              // so the middle is always the author's to give.
+                              const pre =
+                                kind === "first"
+                                  ? ""
+                                  : calcLinkPrefill(spec.rel ?? "=");
                               setEditing({
                                 id,
                                 pos: spec.after,
-                                original: CALC_LINK_PREFILL,
-                                value: CALC_LINK_PREFILL,
+                                original: pre,
+                                value: pre,
                                 add: spec,
+                                midpoint: kind === "first",
                               });
                             }}
                           />
                         )}
+                          </>
+                        )}
                       </g>
                     )}
+
 
                   {/* Gallery pager: this node branches, but only one branch is
                       showing. Sits in the gap above the children, just RIGHT
@@ -2980,6 +3127,68 @@ function ControlRail({
 dashed outline, no fill — so it reads as a slot rather than an existing node.
 `x` is its LEFT EDGE, so the call site can lay the row out by running a cursor
 across widths; a centre-based x is what let the two chips overlap by 2px. */
+// The relation picker: the chip lane, expanded into one chip per relation a
+// chain here could be built out of (from the server's `Trans` enumeration),
+// plus a cancel. A row of the same ghost chips rather than an HTML menu —
+// the vocabulary is already here, it stays inside the SVG, and it needs no
+// portal or focus management.
+//
+// Widths are MEASURED, not assumed: `≤` and `↔` are not `=`, and a fixed
+// width would clip or straggle. `measureText` measures in the editor's code
+// font, so the chips must PAINT in it too — hence the explicit `fontFamily`,
+// which the rest of the chip vocabulary (UI chrome) does not take.
+function PickerRow({
+  options,
+  onPick,
+  onCancel,
+}: {
+  options: CalcRelOption[];
+  onPick: (o: CalcRelOption) => void;
+  onCancel: () => void;
+}) {
+  const fam = getCodeFontFamily();
+  let cursor = -CHIP_W_ADD / 2;
+  const chips: React.ReactNode[] = [];
+  const push = (
+    key: string,
+    glyph: string,
+    title: string,
+    color: string,
+    onClick: () => void,
+  ) => {
+    const width = Math.max(
+      CHIP_W_ADD,
+      measureText(glyph, PICK_FONT_PX) + 2 * CHIP_PAD_X,
+    );
+    chips.push(
+      <FrontierChip
+        key={key}
+        glyph={glyph}
+        title={title}
+        x={cursor}
+        width={width}
+        fontSize={PICK_FONT_PX}
+        fontFamily={fam}
+        color={color}
+        onPick={onClick}
+      />,
+    );
+    cursor += width + CHIP_GAP;
+  };
+  push("cancel", "×", "cancel", "var(--ptw-comment)", onCancel);
+  for (const o of options)
+    push(
+      o.rel,
+      o.rel,
+      o.same
+        ? `chain with ${o.rel}, the goal's own relation`
+        : `start with ${o.rel}, then ${o.next} — via a Trans instance`,
+      NODE_STYLES.tactic.stroke,
+      () => onPick(o),
+    );
+  return <>{chips}</>;
+}
+
 function FrontierChip({
   glyph,
   title,
@@ -2987,6 +3196,11 @@ function FrontierChip({
   width,
   color,
   fontSize = 12,
+  // Relation glyphs (≤ ∣ ⊆ ↔) are measured to size their chips, and
+  // `measureText` measures in the EDITOR's code font — so those chips must
+  // paint in it too, or the width and the glyph disagree. Everything else
+  // stays UI chrome.
+  fontFamily = "monospace",
   onPick,
 }: {
   glyph: string;
@@ -2995,6 +3209,7 @@ function FrontierChip({
   width: number;
   color: string;
   fontSize?: number;
+  fontFamily?: string;
   onPick: () => void;
 }) {
   return (
@@ -3027,9 +3242,9 @@ function FrontierChip({
         textAnchor="middle"
         dy="0.32em"
         fontSize={fontSize}
-        fontFamily="monospace"
+        fontFamily={fontFamily}
         fill={color}
-        style={{ userSelect: "none" }}
+        style={{ userSelect: "none", letterSpacing: 0 }}
       >
         {glyph}
       </text>

@@ -81,7 +81,11 @@ export function combineRuns(
     return c.length === 1 ? c[0] : null;
   };
   const soleParent = (id: string) => (byId.get(id)?.parents.length ?? 0) === 1;
-  const blocked = (id: string) => exclude?.has(id) ?? false;
+  // A SYNTHETIC `calc` node (a block that never parsed) is never combined: it
+  // maps to no editable tactic, and merging it would hide its repair chip
+  // inside a box that carries no chips at all.
+  const blocked = (id: string) =>
+    (exclude?.has(id) ?? false) || !!byId.get(id)?.synthetic;
 
   const runs: ElideCut[] = [];
   const seen = new Set<string>();

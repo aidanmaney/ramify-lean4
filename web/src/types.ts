@@ -1,4 +1,9 @@
-import type { CalcChain, CalcHole, ProofStepPosition } from "./paperproof";
+import type {
+  CalcChain,
+  CalcHole,
+  CalcRelOption,
+  ProofStepPosition,
+} from "./paperproof";
 import type { KeepSeg } from "./briefLabel";
 
 // One line of a goal's local context, e.g. `h : p ∧ q`, with whether the tactic
@@ -18,9 +23,16 @@ source among the producing tactic's already-written branches, so a new bullet
 lands below its finished siblings rather than between the split and them. */
 export interface AddSpec {
   // seq: plain next line; bullet: `· `; case: `| name => ` (with-block);
-  // hole/calc-link/calc-append: the three `calc` forms, which do NOT insert a
-  // line at `after` — they act on `hole` or `chain` instead (see below).
-  kind: "seq" | "bullet" | "case" | "hole" | "calc-link" | "calc-append";
+  // hole/calc-link/calc-append/calc-first: the `calc` forms, which do NOT
+  // insert a line at `after` — they act on `hole` or `chain` instead (below).
+  kind:
+    | "seq"
+    | "bullet"
+    | "case"
+    | "hole"
+    | "calc-link"
+    | "calc-append"
+    | "calc-first";
   /** `calc` only. `hole` REPLACES the `?_` with `by <tactic>`, filling the
   link exactly where it sits; `calc-link` INSERTS a whole new link on the
   hole's line, pushing it down.
@@ -42,9 +54,25 @@ export interface AddSpec {
    * RHS unifies with the goal's. Nothing has to be typed — the same reason the
    * skeleton's endpoints are `_` — so this chip commits in one click. What it
    * buys is re-entry: the residue becomes an ordinary hole, which every other
-   * calc gesture already understands. */
+   * calc gesture already understands.
+   *
+   * `calc-first` shares the field and writes the chain's FIRST two links under
+   * a `calc` keyword that has none yet — the state you are in the instant you
+   * type `calc`, where there is nothing to append AFTER. It always needs an
+   * intermediate expression (both links' free ends are `_`, so nothing would
+   * pin the middle), which is why it is not just an append with a flag. */
   chain?: CalcChain;
   rel?: string;
+  /** The relation the SECOND link carries, set only when it differs from
+   * `rel` — i.e. when the author picked a first relation that is not the
+   * goal's own. Two links are then written instead of one, and the midpoint
+   * between them becomes the thing the overlay asks for. When absent the
+   * gesture is exactly what it was before relations could be picked. */
+  rel2?: string;
+  /** Every relation this gesture could use, from the server's `Trans`
+   * enumeration. One option means no choice to make, and the chip goes
+   * straight through to its single behaviour rather than opening a picker. */
+  rels?: CalcRelOption[];
   // Fallback indent, from the producing step's start COLUMN. Only a guess:
   // Paperproof splits `rw [a, b]` into one step per rule, so such a step
   // starts mid-line and its column is not the line's indent. The widget
@@ -110,12 +138,14 @@ export interface TreeNode {
   // unproved link that isn't the chain's first, so the tree can build a chain
   // a step at a time while the trailing `?_` keeps it elaborating.
   addLink?: AddSpec;
-  // The relation a NEW `calc` chain on this goal would chain (`=`, `≤`, …),
-  // when the goal is the shape one can prove that way and isn't already a
-  // link. This is the way IN to calc mode: without it a chain can only be
-  // grown once it exists, and writing the first one by hand is exactly the
-  // step the tree couldn't help with. See proofToTree's calcRelation.
-  calcRel?: string;
+  // The relations a NEW `calc` chain on this goal could be built out of, when
+  // the goal is the shape one can prove that way and isn't already a link.
+  // This is the way IN to calc mode: without it a chain can only be GROWN once
+  // one exists, and writing the first by hand is exactly the step the tree
+  // couldn't help with. The first entry is the goal's own relation; the rest
+  // start elsewhere and chain back to it through a `Trans` instance (`=` then
+  // `≤`, the common shape). See proofToTree's calcRelations.
+  calcRels?: CalcRelOption[];
   // Brief mode, `calc` link goals only: the left-hand side this label shows as
   // `_` (the source's own notation), because it is the previous link's RHS and
   // is already drawn in the box above. Holds the text `_` stands in for, so
@@ -154,6 +184,13 @@ export interface TreeNode {
   // there the last branch genuinely is where the proof ends up, and indenting
   // every branch would walk the trunk right at every split.
   chain?: boolean;
+  // A node the tree INVENTED rather than harvested: the `calc` of a block that
+  // failed to parse, so no step stands for it and nothing below it elaborated.
+  // It has a real source `position` (so the cursor accent and hover work) but
+  // no `tacticEdits` entry, hence no editing and no token colouring — and it
+  // must never be swallowed by the ⇉ combine, which would hide its repair chip
+  // inside a merged box.
+  synthetic?: boolean;
   // Present on a SYNTHETIC marker node standing in for a collapsed set of nodes
   // (see elide.ts). Two flavours: an on-demand ELIDE cut (a path via ⇥ or a
   // vertical band via ⇳) draws as a dashed `⋯` chip clicking removes; a
@@ -264,4 +301,10 @@ export interface LayoutNode extends TreeNode {
   // the band and its measured width; both 0 when the goal has no case name.
   caseH: number;
   caseW: number;
+  // Room reserved BELOW the box for the frontier-chip lane (see layout.ts's
+  // CHIP_TOP_GAP). Deliberately NOT part of the band — the box must stay at the
+  // band's bottom, since every edge endpoint and label offset is measured from
+  // there — so it extends only the node's occupied extent, pushing what comes
+  // after it down. 0 unless the engine was built with `chips`.
+  chipH: number;
 }
