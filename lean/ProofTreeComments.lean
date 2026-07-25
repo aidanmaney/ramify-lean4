@@ -277,6 +277,87 @@ structure CalcHole where
   first : Bool
   deriving ToJson, FromJson
 
+/-- Where a chain that stops SHORT of its goal continues.
+
+The dual of `CalcHole`, and the other half of editing a chain from the tree. A
+chain whose links don't reach the goal's RHS still elaborates: Lean leaves the
+remainder as a `calc.step` goal, which arrives on the wire as an ordinary
+pending goal. Continuing it idiomatically means APPENDING a link, and that
+needs two facts the wire doesn't carry — the line the chain currently ends on
+(a step's range covers the whole tactic, trailing trivia and all) and the
+column its links are written at (the author's layout, which nothing else
+records).
+
+Keyed by the `calc` tactic's own start, which is exactly `ProofStep.position.start`
+for the step the residue goal hangs off. -/
+structure CalcChain where
+  /-- The `calc` keyword = `ProofStep.position.start` on the wire. -/
+  tacticStart : Lsp.Position
+  /-- End of the final link: a new one goes after this line. -/
+  lastLink : Lsp.Position
+  /-- Column the chain's links are written at. -/
+  indent : Nat
+  deriving ToJson, FromJson
+
+/-- Every `calc` block in the tree, with its links in source order.
+
+Shared by the two collectors below — one keys on the LINKS' ranges, the other
+on the block's — and deduped by the block's range, since the same calc surfaces
+in several `TacticInfo`s under macro expansion. -/
+def calcBlocks (tree : Elab.InfoTree) :
+    Array (Lean.Syntax.Range × Array (Lean.Syntax.Range × Bool)) := Id.run do
+  let calcs := tree.foldInfo (init := #[]) fun _ info acc =>
+    match info with
+    | .ofTacticInfo ti =>
+      if ti.stx.getKind == ``Lean.calcTactic then acc.push ti.stx else acc
+    | _ => acc
+  let mut out := #[]
+  for stx in calcs do
+    let some r := stx.getRange? (canonicalOnly := true) | continue
+    unless out.any (fun (b, _) => b.start == r.start && b.stop == r.stop) do
+      let links := (calcSteps stx).qsort
+        (fun a b => a.1.start.byteIdx < b.1.start.byteIdx)
+      unless links.isEmpty do out := out.push (r, links)
+  return out
+where
+  /-- The `calcFirstStep`/`calcStep` nodes under `stx`, with their ranges.
+  Recursive over raw syntax: a link is not an info node of its own. -/
+  calcSteps (stx : Syntax) : Array (Lean.Syntax.Range × Bool) := Id.run do
+    let mut out := #[]
+    match stx with
+    | .node _ k args =>
+      if k == ``Lean.calcFirstStep || k == ``Lean.calcStep then
+        if let some r := stx.getRange? (canonicalOnly := true) then
+          out := out.push (r, k == ``Lean.calcFirstStep)
+      for a in args do out := out ++ calcSteps a
+    | _ => pure ()
+    return out
+
+/-- Every `calc` block, with the line and column a NEW LAST link would take.
+
+The column is the SECOND link's, because that is the one the chain's existing
+links already prove parses — subsequent links are anchored on it by `colGe`, so
+matching it is safe where guessing (`calc`'s own column plus two) is only a
+convention. A one-link chain has no second link to read, and none of its own
+column is meaningful either (`calc a = b := prf` puts the link mid-line), so it
+falls back to that convention; such a chain is a broken file anyway, since with
+no subsequent step the parser has no anchor and swallows whatever follows the
+block. -/
+def collectCalcChains (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcChain :=
+  Id.run do
+    let mut out : Array CalcChain := #[]
+    for (block, links) in calcBlocks tree do
+      let start := fileMap.utf8PosToLspPos block.start
+      let indent := match links[1]? with
+        | some (r, _) => (fileMap.utf8PosToLspPos r.start).character
+        | none => start.character + 2
+      out := out.push {
+        tacticStart := start
+        lastLink := fileMap.utf8PosToLspPos links.back!.1.stop
+        indent := indent
+      }
+    return out
+
 /-- Every `?_` inside a `calc` link, paired with the goal it stands for.
 
 Two independent walks, because neither half knows the other's coordinates. The
@@ -290,19 +371,7 @@ holes are better served by the existing `· ` bullet insertion, which is what
 one would write there by hand. -/
 def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcHole :=
   Id.run do
-    -- The links, as (range, isFirst), from every calc tactic's syntax.
-    let mut links : Array (String.Pos.Raw × String.Pos.Raw × Bool) := #[]
-    let calcs := tree.foldInfo (init := #[]) fun _ info acc =>
-      match info with
-      | .ofTacticInfo ti =>
-        if ti.stx.getKind == ``Lean.calcTactic then acc.push ti.stx else acc
-      | _ => acc
-    for stx in calcs do
-      for (r, isFirst) in calcSteps stx do
-        -- The same calc can surface in several TacticInfos (macro expansion),
-        -- so dedupe by range.
-        unless links.any (fun (s, e, _) => s == r.start && e == r.stop) do
-          links := links.push (r.start, r.stop, isFirst)
+    let links := (calcBlocks tree).flatMap (·.2)
     if links.isEmpty then return #[]
 
     let mut out : Array CalcHole := #[]
@@ -319,33 +388,22 @@ def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree) : Array CalcHole
     for (goalId, r) in holes do
       -- The SMALLEST containing link, so a nested calc's links can't claim a
       -- hole belonging to an inner one.
-      let mut best : Option (String.Pos.Raw × String.Pos.Raw × Bool) := none
-      for l@(s, e, _) in links do
-        if s ≤ r.start && r.stop ≤ e then
+      let mut best : Option (Lean.Syntax.Range × Bool) := none
+      for l@(lr, _) in links do
+        if lr.start ≤ r.start && r.stop ≤ lr.stop then
           match best with
-          | some (bs, be, _) => if e.byteIdx - s.byteIdx < be.byteIdx - bs.byteIdx then best := some l
+          | some (br, _) =>
+            if lr.stop.byteIdx - lr.start.byteIdx < br.stop.byteIdx - br.start.byteIdx then
+              best := some l
           | none => best := some l
-      if let some (s, _, isFirst) := best then
+      if let some (lr, isFirst) := best then
         out := out.push {
           goalId := goalId
           start := fileMap.utf8PosToLspPos r.start
           stop := fileMap.utf8PosToLspPos r.stop
-          linkStart := fileMap.utf8PosToLspPos s
+          linkStart := fileMap.utf8PosToLspPos lr.start
           first := isFirst
         }
-    return out
-where
-  /-- The `calcFirstStep`/`calcStep` nodes under `stx`, with their ranges.
-  Recursive over raw syntax: a link is not an info node of its own. -/
-  calcSteps (stx : Syntax) : Array (Lean.Syntax.Range × Bool) := Id.run do
-    let mut out := #[]
-    match stx with
-    | .node _ k args =>
-      if k == ``Lean.calcFirstStep || k == ``Lean.calcStep then
-        if let some r := stx.getRange? (canonicalOnly := true) then
-          out := out.push (r, k == ``Lean.calcFirstStep)
-      for a in args do out := out ++ calcSteps a
-    | _ => pure ()
     return out
 
 end ProofTree

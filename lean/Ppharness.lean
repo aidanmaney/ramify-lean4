@@ -31,16 +31,20 @@ namespace Ppharness
 /-- `Result` itself has no `ToJson` instance (only `ProofStep`, `GoalInfo`, and
     `Hypothesis` derive one), so we encode its two fields by hand.
     `allGoals` is a `Std.HashSet`, which has no canonical JSON form → dump as a list.
-    `comments` and `calcHoles` are ours (not the parser's): the command's source
-    comments, for the renderer's comment strips, and the unproved `calc` links,
-    for its per-link (+) chips (both from ProofTreeComments.lean). -/
+    `comments`, `calcHoles` and `calcChains` are ours (not the parser's): the
+    command's source comments, for the renderer's comment strips, and the two
+    `calc` editing seams — the unproved links a chain already has, and where a
+    chain that stops short of its goal continues (both from
+    ProofTreeComments.lean). -/
 def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
-    (calcHoles : Array ProofTree.CalcHole) : Json :=
+    (calcHoles : Array ProofTree.CalcHole)
+    (calcChains : Array ProofTree.CalcChain) : Json :=
   Json.mkObj [
     ("steps",    toJson r.steps),          -- List ProofStep  (ToJson derived upstream)
     ("allGoals", toJson r.allGoals.toList), -- flatten the goal set into an array
     ("comments", toJson comments),
-    ("calcHoles", toJson calcHoles)
+    ("calcHoles", toJson calcHoles),
+    ("calcChains", toJson calcChains)
   ]
 
 /-- Run the (MetaM) parser from plain `IO`.
@@ -89,8 +93,10 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
           -- the widget's tagged goals these are plain data, so they ride the
           -- CLI wire too (which is what lets a probe check them offline).
           let calcHoles := ProofTree.collectCalcHoles fileMap tree
+          let calcChains := ProofTree.collectCalcChains fileMap tree
           out := out.push (Json.mkObj
-            [("index", toJson idx), ("proof", resultToJson r comments calcHoles)])
+            [("index", toJson idx),
+             ("proof", resultToJson r comments calcHoles calcChains)])
     | none => pure ()
     idx := idx + 1
   return out

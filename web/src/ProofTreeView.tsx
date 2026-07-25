@@ -2393,10 +2393,22 @@ export default function ProofTreeView({
                             }}
                           />
                         )}
+                        {/* Grow a `calc` chain, in whichever sense this goal
+                            allows: insert a link ABOVE an unproved one, or —
+                            on the residue a chain that stopped short of its
+                            goal leaves behind — APPEND one, which is the way
+                            back INTO a chain the tree could otherwise only
+                            watch. The append has nothing to type (both ends of
+                            the new link are `_`), so it commits in one click
+                            like `sorry`. */}
                         {node.data.addLink && (
                           <FrontierChip
                             glyph="step"
-                            title="insert a calc step above this one"
+                            title={
+                              node.data.addLink.kind === "calc-append"
+                                ? `append a link (${node.data.addLink.rel}) to this calc chain`
+                                : "insert a calc step above this one"
+                            }
                             x={
                               -CHIP_W_ADD / 2 +
                               CHIP_W_ADD +
@@ -2409,6 +2421,11 @@ export default function ProofTreeView({
                             color={NODE_STYLES.tactic.stroke}
                             onPick={() => {
                               const spec = node.data.addLink!;
+                              if (spec.kind === "calc-append") {
+                                anchorOn(id); // hold this goal across the redraw
+                                onAddTactic(spec, "");
+                                return;
+                              }
                               setEditing({
                                 id,
                                 pos: spec.after,

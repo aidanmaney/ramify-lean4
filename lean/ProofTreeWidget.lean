@@ -87,6 +87,9 @@ structure ProofTreeData where
   -- Unproved `calc` links (`_ = c := ?_`), so the tree's (+) chips can fill a
   -- link exactly where it sits. Plain data, so it rides the CLI wire too.
   calcHoles   : Array CalcHole := #[]
+  -- Where a chain that stops SHORT of its goal continues, so the residue goal's
+  -- chip can append a link instead of abandoning the chain. Plain data too.
+  calcChains  : Array CalcChain := #[]
   deriving Server.RpcEncodable
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
@@ -468,6 +471,7 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       tacticEdits,
       tokenInfos,
       calcHoles   := collectCalcHoles fileMap snap.infoTree
+      calcChains  := collectCalcChains fileMap snap.infoTree
     }
 
 /-- Parameters for `popoutEdit`: the document and the tactic's TIGHT range

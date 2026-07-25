@@ -1,4 +1,4 @@
-import type { CalcHole, ProofStepPosition } from "./paperproof";
+import type { CalcChain, CalcHole, ProofStepPosition } from "./paperproof";
 import type { KeepSeg } from "./briefLabel";
 
 // One line of a goal's local context, e.g. `h : p ∧ q`, with whether the tactic
@@ -18,9 +18,9 @@ source among the producing tactic's already-written branches, so a new bullet
 lands below its finished siblings rather than between the split and them. */
 export interface AddSpec {
   // seq: plain next line; bullet: `· `; case: `| name => ` (with-block);
-  // hole/calc-link: the two `calc` forms, which do NOT insert a line at
-  // `after` — they act on `hole` instead (see below).
-  kind: "seq" | "bullet" | "case" | "hole" | "calc-link";
+  // hole/calc-link/calc-append: the three `calc` forms, which do NOT insert a
+  // line at `after` — they act on `hole` or `chain` instead (see below).
+  kind: "seq" | "bullet" | "case" | "hole" | "calc-link" | "calc-append";
   /** `calc` only. `hole` REPLACES the `?_` with `by <tactic>`, filling the
   link exactly where it sits; `calc-link` INSERTS a whole new link on the
   hole's line, pushing it down.
@@ -32,6 +32,19 @@ export interface AddSpec {
    * way to grow a chain — the new link takes the previous RHS as its `_`, and
    * the hole's goal simply restates from the new RHS. */
   hole?: CalcHole;
+  /** `calc-append` only: the chain to grow, and the relation the new last link
+   * chains (read off the residue goal, which is what the chain still owes).
+   *
+   * The third calc form, and the only one that acts on a goal OUTSIDE the
+   * chain. A chain whose links stop short of the goal leaves that remainder as
+   * a pending `calc.step` goal; appending `_ <rel> _ := ?_` closes it against
+   * the chain, since the new link's `_` LHS takes the previous RHS and its `_`
+   * RHS unifies with the goal's. Nothing has to be typed — the same reason the
+   * skeleton's endpoints are `_` — so this chip commits in one click. What it
+   * buys is re-entry: the residue becomes an ordinary hole, which every other
+   * calc gesture already understands. */
+  chain?: CalcChain;
+  rel?: string;
   // Fallback indent, from the producing step's start COLUMN. Only a guess:
   // Paperproof splits `rw [a, b]` into one step per rule, so such a step
   // starts mid-line and its column is not the line's indent. The widget

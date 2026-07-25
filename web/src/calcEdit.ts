@@ -47,6 +47,17 @@ export function calcSkeleton(rel: string, mid: string): string {
 }
 
 export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
+  // Append a last link to a chain that stopped short (see AddSpec.chain). The
+  // anchor is the END of the final link's line, so a trailing comment stays
+  // glued to the link it annotates; the huge character value is clamped by the
+  // editor, which is how every insertion here reaches an unknown line length.
+  if (spec.kind === "calc-append" && spec.chain) {
+    const at = { line: spec.chain.lastLink.line, character: 1e5 };
+    return {
+      range: { start: at, end: at },
+      newText: `\n${" ".repeat(spec.chain.indent)}_ ${spec.rel} _ := ?_`,
+    };
+  }
   const h = spec.hole;
   if (!h) return null;
   // Continuation lines of a multi-line entry sit one level inside the link —

@@ -1,4 +1,5 @@
 import type {
+  CalcChain,
   CalcHole,
   GoalInfo,
   Hypothesis,
@@ -653,6 +654,16 @@ export function proofToTree(
   const holeByGoal = new Map<string, CalcHole>(
     (proof.calcHoles ?? []).map((h) => [h.goalId, h]),
   );
+  // The `calc` blocks themselves, keyed the way a step reaches us: a calc
+  // step's `position.start` IS its tactic's start (both come from the same
+  // syntax node), so the residue goal's producer looks its chain up directly.
+  const chainByTactic = new Map<string, CalcChain>(
+    (proof.calcChains ?? []).map((c) => [
+      `${c.tacticStart.line}:${c.tacticStart.character}`,
+      c,
+    ]),
+  );
+  const isChain = (step: ProofStep) => /^calc\b/.test(step.tacticString);
 
   /** The relation a `calc` chain on this goal would be built out of, or
   undefined when the goal isn't the shape a chain can prove.
@@ -671,16 +682,44 @@ export function proofToTree(
     return spineRelation(type)?.rel;
   }
 
-  /** Grow the chain by inserting a link ABOVE this hole — the only way to
-  extend a calc that stays well-typed (see AddSpec.hole). Absent on the first
-  link, whose LHS is the chain's head rather than a `_`. */
+  /** Grow the chain, in whichever of the two senses this pending goal is:
+   *
+   * - a HOLE inside the chain (`_ = c := ?_`) grows by inserting a link ABOVE
+   *   it, the only extension of a well-formed chain that stays well-typed (the
+   *   chain must end at the goal's RHS, so nothing can follow the last link);
+   * - the chain's RESIDUE — a `calc.step` goal, what is left when the links
+   *   stop short of that RHS — grows by APPENDING a link, which is the only
+   *   thing that can close it while staying inside the chain.
+   *
+   * The two are exclusive by construction (a hole is inside a link, the residue
+   * is what the whole block failed to reach) and neither is offered on a
+   * chain's first link, which has nothing to insert above it. */
   function addLinkFor(goalId: string, prod: ProofStep): AddSpec | undefined {
     const hole = holeByGoal.get(goalId);
-    if (!hole || hole.first) return undefined;
+    if (hole)
+      return hole.first
+        ? undefined
+        : {
+            kind: "calc-link",
+            hole,
+            indent: hole.linkStart.character,
+            producer: prod.position,
+            after: prod.position,
+          };
+    // The residue: produced by a calc block, and pending because the chain
+    // owes it. `spineRelation` is what the new link would chain — the residue
+    // carries the composite relation, which need not be any single link's.
+    if (!isChain(prod)) return undefined;
+    const chain = chainByTactic.get(
+      `${prod.position.start.line}:${prod.position.start.character}`,
+    );
+    const rel = spineRelation(goals.get(goalId)?.type ?? "")?.rel;
+    if (!chain || !rel) return undefined;
     return {
-      kind: "calc-link",
-      hole,
-      indent: hole.linkStart.character,
+      kind: "calc-append",
+      chain,
+      rel,
+      indent: chain.indent,
       producer: prod.position,
       after: prod.position,
     };
@@ -794,6 +833,18 @@ export function proofToTree(
     // Slicing the ORIGINAL text (rather than re-joining `_` with the relation
     // and RHS) keeps the spacing the pretty-printer chose, and the startsWith
     // guard means a mismatch simply leaves the label whole.
+    // (+) only on an unconsumed goal reached through `goalsAfter`. An
+    // unconsumed SPAWNED goal is not the editing frontier: Paperproof emits
+    // side goals that no tactic ever consumes because they are restatements of
+    // goals already handled inside the branches (factorization.lean's
+    // `induction … with` spawns two, from merged `intro p hpm` binders), and
+    // offering to "solve" those put chips on a complete proof. Measured across
+    // the incomplete-proof corpora, every genuine frontier goal arrives via
+    // goalsAfter and none via spawnedGoals. The three chip slots share the
+    // test, so they can never disagree about whether a goal is pending.
+    const pending =
+      !step && !!producedBy && producedBy.goalsAfter.some((g) => g.id === goalId);
+    const addLink = pending ? addLinkFor(goalId, producedBy!) : undefined;
     const goalText = goal?.type ?? goalId;
     const elided =
       lhsElide && goalText.startsWith(lhsElide)
@@ -824,28 +875,26 @@ export function proofToTree(
         commentByNode.flags.get(goalId),
         step ? [tacticId(goalId)] : [],
       ),
-      caseLabel: thisCase === parentCase ? undefined : thisCase,
-      // (+) only on an unconsumed goal reached through `goalsAfter`. An
-      // unconsumed SPAWNED goal is not the editing frontier: Paperproof emits
-      // side goals that no tactic ever consumes because they are restatements
-      // of goals already handled inside the branches (factorization.lean's
-      // `induction … with` spawns two, from merged `intro p hpm` binders), and
-      // offering to "solve" those put chips on a complete proof. Measured
-      // across the incomplete-proof corpora, every genuine frontier goal
-      // arrives via goalsAfter and none via spawnedGoals.
-      addSpec:
-        !step && producedBy && producedBy.goalsAfter.some((g) => g.id === goalId)
-          ? addSpecFor(goalId, producedBy)
-          : undefined,
-      // Grow the chain: only on an unproved link that has a predecessor to
-      // take its `_` from (never the chain's first link).
-      addLink: !step && producedBy ? addLinkFor(goalId, producedBy) : undefined,
+      // Lean's tag is the full case PATH (`refine_1.calc.step`), whose head is
+      // the case the goal above already badges — so show only what this goal
+      // adds. Without that, the residue of a chain inside a branch reads as
+      // `refine_1.calc.step` under a box already labelled `refine_1`.
+      caseLabel:
+        thisCase === parentCase
+          ? undefined
+          : parentCase && thisCase?.startsWith(parentCase + ".")
+            ? thisCase.slice(parentCase.length + 1)
+            : thisCase,
+      addSpec: pending ? addSpecFor(goalId, producedBy!) : undefined,
+      // Grow the chain — insert a link above this hole, or append one to close
+      // the chain's residue (see addLinkFor).
+      addLink,
       // OPEN a chain: offered on a pending goal that is a relation and isn't
-      // already a link. The two are mutually exclusive on purpose — inside a
-      // chain the chain gesture is `addLink`, outside it is this — so a goal
-      // never shows more than three chips.
+      // already part of one. The three are mutually exclusive on purpose —
+      // inside a chain the chain gesture is `addLink`, outside it is this — so
+      // a goal never shows more than three chips.
       calcRel:
-        !step && producedBy && goal && !holeByGoal.has(goalId)
+        pending && goal && !holeByGoal.has(goalId) && !addLink
           ? calcRelation(goal.type)
           : undefined,
     });
@@ -858,7 +907,7 @@ export function proofToTree(
     // collapsed string as its label (what layout measures) plus the map back
     // to the original for the token renderer. `null` = nothing collapsed.
     const collapsed = brief ? collapseLabel(fullLabel) : null;
-    const chain = /^calc\b/.test(step.tacticString);
+    const chain = isChain(step);
     nodes.push({
       id: tId,
       label: collapsed ? collapsed.text : fullLabel,

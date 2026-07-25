@@ -187,6 +187,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       // rides the signature: a hole filled or a link inserted moves the ranges,
       // and the chips must not keep pointing at where the `?_` used to be.
       calcHoles: resolved.calcHoles,
+      calcChains: resolved.calcChains,
     };
     return { proof, sig: JSON.stringify(proof) };
   }, [resolved]);

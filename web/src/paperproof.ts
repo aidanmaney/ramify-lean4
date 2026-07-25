@@ -69,12 +69,30 @@ export interface CalcHole {
   first: boolean;
 }
 
+/** A `calc` block, and where it CONTINUES (see ProofTreeComments.lean's
+`CalcChain`).
+
+The dual of `CalcHole`: a chain whose links stop short of the goal's RHS still
+elaborates, leaving the remainder as a `calc.step` goal that reaches the wire as
+an ordinary pending goal. Appending a link is how one continues such a chain by
+hand, and neither fact it needs is derivable client-side — a step's range covers
+the whole tactic (trailing trivia included), and the links' column is the
+author's own layout. Keyed by `ProofStep.position.start` of the calc step. */
+export interface CalcChain {
+  tacticStart: { line: number; character: number };
+  /** End of the final link — a new one goes after this line. */
+  lastLink: { line: number; character: number };
+  /** Column the chain's links are written at. */
+  indent: number;
+}
+
 /** A complete parsed proof: the node set plus the tactic edges. */
 export interface Proof {
   steps: ProofStep[];
   allGoals: GoalInfo[];
   comments?: SourceComment[];
   calcHoles?: CalcHole[];
+  calcChains?: CalcChain[];
 }
 
 /** One NDJSON line as emitted by the CLI: `{file, data:{index, proof}}`. */
