@@ -45,6 +45,79 @@ const SPINE_TOKENS = new Set([...CALC_RELS, "∧", "∨", "→", "¬"]);
 const BINDER_HEADS = new Set(["∀", "∃", "fun", "λ"]);
 const OPENERS = "([{⟨⦃";
 const CLOSERS = ")]}⟩⦄";
+
+/** The single relation on a type's SPINE, with the offsets that split it into
+LHS and RHS — or null when the type isn't that shape.
+ *
+ * Whitespace tokens, each tagged with the bracket depth at its start; the spine
+ * is depth 0. Firing only on exactly one depth-0 spine token is what rules out
+ * `a = b ∧ c = d` (three of them, so no `=` is the spine) and, with the binder
+ * guard, `∀ m, f m = g m` (whose `=` belongs to the body, not the goal).
+ *
+ * Shared by two callers that must agree on what "the goal's relation" means:
+ * the `calc` chip's offer test, and the chain-link LHS elision below. */
+function spineRelation(
+  type: string,
+): { rel: string; lhs: string; rhs: string } | null {
+  if (BINDER_HEADS.has(type.trimStart().split(/\s+/)[0] ?? "")) return null;
+  const spine: { tok: string; start: number }[] = [];
+  let depth = 0;
+  let i = 0;
+  while (i < type.length) {
+    while (i < type.length && /\s/.test(type[i])) i++;
+    if (i >= type.length) break;
+    const start = i;
+    const atDepth = depth;
+    while (i < type.length && !/\s/.test(type[i])) {
+      if (OPENERS.includes(type[i])) depth++;
+      else if (CLOSERS.includes(type[i])) depth--;
+      i++;
+    }
+    const tok = type.slice(start, i);
+    if (atDepth === 0 && SPINE_TOKENS.has(tok)) spine.push({ tok, start });
+  }
+  if (spine.length !== 1 || !CALC_RELS.has(spine[0].tok)) return null;
+  const { tok, start } = spine[0];
+  return {
+    rel: tok,
+    lhs: type.slice(0, start).trimEnd(),
+    rhs: type.slice(start + tok.length).trim(),
+  };
+}
+
+/** Which of a `calc` chain's link goals may show `_` for their left-hand side,
+mapped to the exact text `_` stands in for.
+ *
+ * The source already writes chains this way — only the first link names its LHS,
+ * every later one opens with `_` — and the tree has the same redundancy for the
+ * same reason: a link's LHS is the previous link's RHS, drawn in the box
+ * directly above. So a link elides iff its LHS is some SIBLING link's RHS. That
+ * test is order-free, which matters because the wire order isn't source order
+ * (`stepGoalsAfter` puts `goalsAfter` before `spawnedGoals`, so a chain mixing
+ * `:= by` and `:= ?_` links comes back reversed), and it degrades exactly
+ * right: a TERM-justified link produces no goal at all, so the link after it
+ * finds no sibling RHS to match and keeps its LHS — which is correct, since
+ * with nothing drawn above it that text is not redundant.
+ *
+ * The chain HEAD is excluded separately: its LHS is what the source writes on
+ * the `calc` line itself, and it is already drawn as the LHS of the goal the
+ * chain proves. Without that guard a chain that returns to its start
+ * (`calc a = b … _ = a`) would elide its own head. */
+function chainLhsElisions(
+  links: { id: string; type: string }[],
+  consumed: string | undefined,
+): Map<string, string> {
+  const parts = links.flatMap((g) => {
+    const r = spineRelation(g.type);
+    return r ? [{ id: g.id, lhs: r.lhs, rhs: r.rhs }] : [];
+  });
+  const head = consumed ? spineRelation(consumed)?.lhs : undefined;
+  const out = new Map<string, string>();
+  for (const p of parts)
+    if (p.lhs !== head && parts.some((q) => q !== p && q.rhs === p.lhs))
+      out.set(p.id, p.lhs);
+  return out;
+}
 const tacticId = (goalId: string): string => `${TACTIC_PREFIX}${goalId}`;
 
 /** Prefix on every goal-node label (the infoview's own goal convention).
@@ -595,17 +668,7 @@ export function proofToTree(
    * positive only costs an edit the author can undo; a false negative hides
    * the affordance entirely, so the bias is toward offering it. */
   function calcRelation(type: string): string | undefined {
-    if (BINDER_HEADS.has(type.trimStart().split(/\s+/)[0] ?? "")) return undefined;
-    let depth = 0;
-    const found: string[] = [];
-    for (const tok of type.split(/\s+/)) {
-      if (depth === 0 && SPINE_TOKENS.has(tok)) found.push(tok);
-      for (const ch of tok) {
-        if (OPENERS.includes(ch)) depth++;
-        else if (CLOSERS.includes(ch)) depth--;
-      }
-    }
-    return found.length === 1 && CALC_RELS.has(found[0]) ? found[0] : undefined;
+    return spineRelation(type)?.rel;
   }
 
   /** Grow the chain by inserting a link ABOVE this hole — the only way to
@@ -716,6 +779,10 @@ export function proofToTree(
     // every descendant, so showing it unconditionally would stamp `neg` on all
     // nine goals of a branch; the badge marks where a case is ENTERED.
     parentCase?: string,
+    // Brief mode, `calc` links only: the LHS text this goal may show as `_`
+    // (see chainLhsElisions). Decided by the producing tactic, which is the
+    // only place the sibling links are all in view.
+    lhsElide?: string,
   ): void {
     if (emittedGoals.has(goalId)) return; // a proof tree is acyclic, but be safe
     emittedGoals.add(goalId);
@@ -723,13 +790,23 @@ export function proofToTree(
     const goal = goals.get(goalId);
     const step = stepByGoal.get(goalId);
     const thisCase = caseName(goal);
+    // A chain link may show `_` for its LHS, exactly as the source writes it.
+    // Slicing the ORIGINAL text (rather than re-joining `_` with the relation
+    // and RHS) keeps the spacing the pretty-printer chose, and the startsWith
+    // guard means a mismatch simply leaves the label whole.
+    const goalText = goal?.type ?? goalId;
+    const elided =
+      lhsElide && goalText.startsWith(lhsElide)
+        ? "_" + goalText.slice(lhsElide.length)
+        : undefined;
     nodes.push({
       id: goalId,
       // The turnstile prefix marks goal boxes as GOALS at a glance (same
       // convention as the infoview's goal display). The widget's tagged
       // renderer strips it before matching the interactive print
       // (taggedRender), so keep the two in sync via TURNSTILE.
-      label: TURNSTILE + (goal?.type ?? goalId),
+      label: TURNSTILE + (elided ?? goalText),
+      goalElision: elided ? { hidden: lhsElide! } : undefined,
       type: "goal",
       parents,
       // The producing tactic's source span, for the widget's node↔source link
@@ -781,6 +858,7 @@ export function proofToTree(
     // collapsed string as its label (what layout measures) plus the map back
     // to the original for the token renderer. `null` = nothing collapsed.
     const collapsed = brief ? collapseLabel(fullLabel) : null;
+    const chain = /^calc\b/.test(step.tacticString);
     nodes.push({
       id: tId,
       label: collapsed ? collapsed.text : fullLabel,
@@ -794,7 +872,7 @@ export function proofToTree(
       // because the flag has to work on BOTH wires, and the CLI's NDJSON ships
       // no syntax; `calc` is a keyword at the head of the tactic, so the
       // prefix is the same signal the parser used.
-      chain: /^calc\b/.test(step.tacticString),
+      chain,
       // Carry the tactic's source span so the widget can link this node back to
       // the `.lean` source (see types.ts `TreeNode.position`).
       position: step.position,
@@ -811,8 +889,21 @@ export function proofToTree(
       ),
     });
 
-    for (const child of stepGoalsAfter(step)) {
-      visitGoal(child.id, [{ id: tId }], step, thisCase);
+    // A chain's links can drop the LHS the box above them already shows —
+    // brief-only, since it hides text that is genuinely part of the goal.
+    const children = stepGoalsAfter(step);
+    const linkElisions =
+      brief && chain
+        ? chainLhsElisions(children, step.goalBefore.type)
+        : undefined;
+    for (const child of children) {
+      visitGoal(
+        child.id,
+        [{ id: tId }],
+        step,
+        thisCase,
+        linkElisions?.get(child.id),
+      );
     }
   }
 

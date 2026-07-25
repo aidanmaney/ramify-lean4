@@ -98,7 +98,12 @@ export function ensureTaggedStyle() {
 }
 
 export interface TaggedRenderers {
-  renderTaggedGoal: (goalId: string, lines: string[]) => ReactNode[] | null;
+  renderTaggedGoal: (
+    goalId: string,
+    lines: string[],
+    // Brief mode: the LHS the label replaced with `_` (TreeNode.goalElision).
+    hiddenLhs?: string,
+  ) => ReactNode[] | null;
   renderTaggedHyps: (
     goalId: string,
     lines: string[],
@@ -153,17 +158,40 @@ export function makeTaggedRenderers(
     for (const g of stepGoalsAfter(step)) goalById.set(g.id, g);
   }
 
-  const renderTaggedGoal = (goalId: string, lines: string[]) => {
+  // The cache key needs no elision component: an elided label produces
+  // different `lines`, which are already in the key.
+  const renderTaggedGoal = (
+    goalId: string,
+    lines: string[],
+    hiddenLhs?: string,
+  ) => {
     const key = keyOf(goalId, lines);
     const hit = goalCache.get(key);
     if (hit !== undefined) return hit;
-    const out = computeTaggedGoal(goalId, lines);
+    const out = computeTaggedGoal(goalId, lines, hiddenLhs);
     goalCache.set(key, out);
     return out;
   };
-  const computeTaggedGoal = (goalId: string, lines: string[]) => {
+  const computeTaggedGoal = (
+    goalId: string,
+    lines: string[],
+    hiddenLhs?: string,
+  ) => {
     const ig = tagged.get(goalId);
     if (!ig) return null;
+    // Brief mode elided this link's LHS to `_`. Rebuild the tagged print the
+    // same way — drop the hidden prefix, prepend a plain `_` — so the flat
+    // text matches the shortened label exactly and the equality guard below
+    // still holds. The `_` carries no tag, which is right: it stands for text
+    // that isn't being drawn, so there is no subterm to hover.
+    let fmt = ig.type;
+    if (hiddenLhs) {
+      const flat = flattenTaggedText(fmt);
+      if (!flat.startsWith(hiddenLhs)) return null;
+      const rest = sliceTaggedText(fmt, hiddenLhs.length, flat.length);
+      if (!rest) return null;
+      fmt = { append: [{ text: "_" }, rest] };
+    }
     // Goal labels carry a plain "⊢ " prefix (proofToTree) that the
     // interactive print doesn't — strip it for the text-equality match,
     // then re-attach it as plain text in the identical spot. The measured
@@ -172,7 +200,7 @@ export function makeTaggedRenderers(
     const bare = hasTurnstile
       ? [lines[0].slice(TURNSTILE.length), ...lines.slice(1)]
       : lines;
-    const nodes = taggedLines(ig.type, bare);
+    const nodes = taggedLines(fmt, bare);
     if (!nodes || !hasTurnstile) return nodes;
     return [
       <span key="turnstile-line">

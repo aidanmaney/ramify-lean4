@@ -349,7 +349,11 @@ export interface ProofTreeViewProps {
    * stays infoview-agnostic — widget.tsx implements this with InteractiveCode
    * (see taggedRender.tsx); the standalone app leaves it unset.
    */
-  renderTaggedGoal?: (goalId: string, lines: string[]) => ReactNode[] | null;
+  renderTaggedGoal?: (
+    goalId: string,
+    lines: string[],
+    hiddenLhs?: string,
+  ) => ReactNode[] | null;
   /**
    * Widget-only, same idea for the context lines stacked above a goal's type
    * in its own box: `goalId` is that goal (the lines are its local context —
@@ -1202,7 +1206,10 @@ export default function ProofTreeView({
   const viewKey =
     (compact ? "compact:" : "wide:") +
     (reflow ? "reflow:" : "") +
-    (brief ? "brief:" : "") +
+    // `brief` is out of viewKey for the same reason as `combine` below: it only
+    // shortens label text, so every node keeps its id and its place in the
+    // trunk — re-centring on the root would scroll you away from whatever you
+    // were reading for a change that didn't move the tree's structure at all.
     // `combine` deliberately does NOT participate in viewKey (same reasoning as
     // gallery paging below): merging runs must keep the current scroll, not
     // re-centre on the root. The relayout is held by the `[nodes]` anchor,
@@ -1654,8 +1661,11 @@ export default function ProofTreeView({
         }}
         brief={brief}
         onBriefChange={(v) => {
-          // Labels shorten and every box re-measures — same treatment as reflow.
-          anchorRoot();
+          // Deliberately NO anchorRoot() (unlike reflow, which re-wraps every
+          // box): brief only shortens some labels, so the structure is
+          // unchanged and pinning the root would scroll away from whatever you
+          // were reading. The `[nodes]` anchor holds the node nearest the
+          // viewport centre instead — same treatment as ⇉ combine.
           setBrief(v);
         }}
         combine={combine}
@@ -1969,6 +1979,7 @@ export default function ProofTreeView({
                   ? (renderTaggedGoal?.(
                       id,
                       lines.map((l) => l.text),
+                      node.data.goalElision?.hidden,
                     ) ?? null)
                   : position
                     ? (renderTaggedTactic?.(

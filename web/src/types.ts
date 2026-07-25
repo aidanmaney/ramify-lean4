@@ -103,6 +103,13 @@ export interface TreeNode {
   // grown once it exists, and writing the first one by hand is exactly the
   // step the tree couldn't help with. See proofToTree's calcRelation.
   calcRel?: string;
+  // Brief mode, `calc` link goals only: the left-hand side this label shows as
+  // `_` (the source's own notation), because it is the previous link's RHS and
+  // is already drawn in the box above. Holds the text `_` stands in for, so
+  // the widget's tagged renderer can rebuild the interactive print to match the
+  // shortened label — without it the text-equality guard fails and the whole
+  // goal falls back to plain SVG text, losing its subterm tooltips.
+  goalElision?: { hidden: string };
   // Goal nodes only: the name of the case this goal IS, when its producing
   // tactic split into named branches (`induction … with | zero | succ`,
   // `by_cases` → `pos`/`neg`). Hygienic suffixes are stripped in proofToTree,
