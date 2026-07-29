@@ -1,6 +1,7 @@
 import Lean
 import Services.BetterParser
 import ProofTreeComments
+import ProofTreeRecover
 import ProofWidgets.Component.Basic
 import ProofWidgets.Component.Panel.Basic
 
@@ -42,6 +43,47 @@ that the JS `<InteractiveCode>` resolves on hover via `infoToInteractive`. -/
 structure TaggedGoalEntry where
   goalId : String
   goal   : Widget.InteractiveGoal
+  deriving Server.RpcEncodable
+
+/-- A source span in the shape the CLIENT reads every span in: `{start, stop}`.
+Deliberately not `Lsp.Range`, whose derived `ToJson` emits `end` — see
+`ProofTreeData.declRange`. -/
+structure DeclRange where
+  start : Lsp.Position
+  stop  : Lsp.Position
+  deriving Server.RpcEncodable
+
+/-- One diagnostic of the declaration under the cursor, in the client's own
+span shape.
+
+This RIDES THE PAYLOAD instead of being read off `textDocument/publishDiagnostics`
+client-side, and the reason is a race that made the feature look haunted:
+the notification is EDGE-triggered, and a webview subscribes only after it
+loads — so whenever elaboration finished first (a restart on a small file,
+reliably), no notification ever arrived and the tree drew nothing until the
+next edit. Diagnostics in the payload are LEVEL-triggered: they arrive with
+every response, so the drawn errors can never be out of step with the drawn
+tree.
+
+The source is `doc.diagnosticsRef` — the very ref the publish path and
+`getInteractiveDiagnostics` serve, so nothing here can disagree with the
+editor's own squiggles. NOT `snap.msgLog`, which was the first attempt and is
+EMPTY on this path (see the read site in `getProofTree`). -/
+structure TreeDiag where
+  /-- As published: a multi-line message's end is truncated to `{line+1, 0}`
+  (a VS Code squiggly workaround). Everything client-side anchors on
+  `range.start`, which equals `fullRange.start`. -/
+  range     : DeclRange
+  /-- Same start, true end. -/
+  fullRange : DeclRange
+  /-- LSP numbering: 1 error, 2 warning, 3 information. -/
+  severity  : Nat
+  message   : String
+  isSilent  : Bool := false
+  /-- Mirrors `Lean.Lsp.LeanDiagnosticTag`: 1 unsolvedGoals, 2
+  goalsAccomplished — read off the message's own tags, exactly as
+  `msgToInteractiveDiagnostic` does. -/
+  leanTags  : Array Nat := #[]
   deriving Server.RpcEncodable
 
 /-- The hover popup seam for ONE token of a tactic's source: the token's span
@@ -105,6 +147,11 @@ structure ProofTreeData where
   -- Hover popups for identifier tokens inside tactics (see TacticTokenInfo).
   -- Like taggedGoals, these hold live RPC references, so they are widget-only.
   tokenInfos  : Array TacticTokenInfo := #[]
+  -- Every tactic-sequence child, for the tree's delete gesture (see
+  -- TacticSlot). Plain data, but widget-only in practice: the CLI renders no
+  -- edit affordances, and the client joins these by CONTAINMENT rather than by
+  -- a step key, so the whole set ships rather than one entry per step.
+  deleteSlots : Array TacticSlot := #[]
   -- Unproved `calc` links (`_ = c := ?_`), so the tree's (+) chips can fill a
   -- link exactly where it sits. Plain data, so it rides the CLI wire too.
   calcHoles   : Array CalcHole := #[]
@@ -119,7 +166,51 @@ structure ProofTreeData where
   -- Stable identity of the proof under the cursor (see `declName?`): what the
   -- client keys "is this a different proof?" on, instead of a metavariable id.
   proofId       : String := ""
+  -- Every tactic's name, for the in-place editor's completion list (see
+  -- `tacticNames`). Environment-only — it does not depend on the cursor or on
+  -- which goal is being edited — so it rides the once-per-edit cache rather
+  -- than being recomputed per keystroke.
+  tacticNames   : Array String := #[]
+  /-- The whole DECLARATION's span (`snap.stx`, the command), not the tactics'.
+  The client tells this proof's diagnostics from a neighbouring theorem's with
+  it, and a span derived from the steps will not do: `declaration uses 'sorry'`
+  is reported on the declaration NAME, above every tactic in the proof.
+
+  `DeclRange`, NOT `Lsp.Range`, and that is the whole point of the structure:
+  `Lsp.Range`'s second field is `end`, so its derived `ToJson` emits
+  `{start, end}` while every range the client reads is `{start, stop}`
+  (`ProofStepPosition`). Hit for real — the field decoded to a span whose
+  `stop` was `undefined`, and the client's position compare read `.line` off
+  it. The CLI wire never had the bug because it hand-serializes this field and
+  renames `end` to `stop` there (Ppharness.lean); the two wires disagreeing on
+  one field's key is exactly what "the wire format is a cross-language
+  contract" is about. -/
+  declRange     : Option DeclRange := none
+  /-- Which steps the SUPPLEMENTAL parser synthesized (failed/skipped/term),
+  keyed by `position.start` — `ProofStep` is upstream's type and cannot grow a
+  field. The client styles these dashed and, for `failed`, in danger ink. -/
+  recovered     : Array ProofTree.Recover.RecoveredStep := #[]
+  /-- This DECLARATION's diagnostics (see `TreeDiag` for why they ride the
+  payload rather than the publish notification). Scoped to the command
+  snapshot's own `msgLog`, which is exactly the span the client filter keeps. -/
+  diagnostics   : Array TreeDiag := #[]
   deriving Server.RpcEncodable
+
+/-- Every tactic's user-facing name, for the in-place editor's completion list.
+
+This is what `Lean.Server.Completion.tacticCompletion` is built from — it maps
+`allTacticDocs` into `ResolvableCompletionItem`s — so taking the names directly
+skips the LSP item machinery (and the docstrings, which are the bulk of the
+cost) for a list the client only ever matches a prefix against. Measured, the
+full collector is 215ms for 494 items.
+
+Environment-only: it depends on which tactics are imported, not on the cursor or
+on any goal, so it is computed once per `getProofTree` and rides
+`proofTreeCache` — i.e. once per EDIT, never per keystroke. Not `private`: an
+offline probe checks the count. -/
+def tacticNames (ctx : Elab.ContextInfo) : IO (Array String) :=
+  ctx.runMetaM .empty do
+    return (← Tactic.Doc.allTacticDocs).map (·.userName)
 
 /-- Parameters for `getProofTree`: just the cursor position. The widget passes the
 whole `DocumentPosition`; the extra `uri` field is ignored when decoding as an
@@ -156,17 +247,49 @@ def collectTaggedGoals (infoTree : InfoTree) : IO (Array TaggedGoalEntry) := do
           out := out.push { goalId := key, goal }
   return out
 
+/-- Semantic tokens for NUMERIC LITERALS.
+
+The same gap as `collectConstIdentTokens`, from the other end.
+`collectSyntaxBasedSemanticTokens` pushes a keyword token only for an atom
+whose first character `isIdFirst` (or `#`), so a numeral is skipped outright —
+measured over `calc (a + b) ^ 2`, the characters left with NO token at all are
+exactly `( + ) ^ 2`. In the editor that does not matter: the lean4 TextMate
+grammar has a `constant.numeric.lean4` rule and paints numbers from it. We have
+no grammar, so without this a literal renders in plain foreground while the
+buffer shows it coloured — the one visible difference left after the palette
+itself became theme-accurate.
+
+Brackets and operators are deliberately NOT filled in here: the grammar has no
+rules for them either, so they are unscoped in the buffer too and fall to the
+editor foreground, which is already what the tree paints them. (What colours
+them in the buffer is bracket-pair colourisation, a separate mechanism handled
+client-side — see `renderTacticTokens`.) -/
+partial def collectNumberTokens (stx : Syntax) : Array FileWorker.LeanSemanticToken :=
+  match stx with
+  | .atom info val =>
+    -- `.original` only, so macro-generated numerals (which have no source span
+    -- to colour) are skipped, matching every other collector here.
+    if val.length > 0 && val.front.isDigit && (info matches .original ..) then
+      #[{ stx, type := Lsp.SemanticTokenType.number }]
+    else #[]
+  | .node _ _ args => args.flatMap collectNumberTokens
+  | _ => #[]
+
 /-- Semantic tokens for CONSTANT identifiers — `Nat.Prime`,
 `Nat.strong_induction_on`, `Nat.add_zero`.
 
 The server's own `collectInfoBasedSemanticTokens` deliberately emits tokens
 only for identifiers bound to local `fvar`s and for field projections; a
 constant gets nothing, because in the editor those are coloured by the
-TextMate grammar rather than by semantic tokens. We have no TextMate grammar,
-and — worse — the token list is also what carries the hover popups, so every
-constant in a tactic silently had neither colour nor tooltip. This fills that
-gap from the info tree, mirroring upstream's shape (`deepestNodes`, an
-`.original` head so macro-generated syntax is skipped) and leaving overlap
+TextMate grammar rather than by semantic tokens — WHICH IS FALSE (the shipped
+lean4 grammar has no identifier rule at all; a qualified constant is plain
+foreground in the buffer), but the tokens must exist regardless: the token
+list is also what carries the hover popups, so without this every constant in
+a tactic silently had no tooltip. They ride the pipeline as `.function` and
+are reclassified to `"const"` at the WIRE (see `wireTokenType` in
+getProofTree), which the client leaves unpainted — plain like the buffer —
+while the popup survives. Mirrors upstream's shape (`deepestNodes`, an
+`.original` head so macro-generated syntax is skipped) and leaves overlap
 resolution to `handleOverlappingSemanticTokens` as usual. -/
 def collectConstIdentTokens (tree : InfoTree) : Array FileWorker.LeanSemanticToken :=
   List.toArray <| tree.deepestNodes fun _ info _ => do
@@ -188,6 +311,7 @@ def semanticTokensFor (fileMap : FileMap) (stx : Syntax) (tree : InfoTree)
       FileWorker.collectSyntaxBasedSemanticTokens fileMap stx
         ++ FileWorker.collectInfoBasedSemanticTokens tree
         ++ collectConstIdentTokens tree
+        ++ collectNumberTokens stx
 
 /-- Every `TacticInfo`'s source range, as byte offsets. Used to find the
 SURFACE tactic a split step belongs to (see `surfaceTacticRange`). -/
@@ -350,7 +474,14 @@ environment), and it is in the key; `version` counts every edit
 One entry suffices: the panel follows a single cursor, and switching files or
 proofs just evicts. -/
 initialize proofTreeCache :
-    IO.Ref (Option (String × Nat × Nat × ProofTreeData)) ← IO.mkRef none
+    -- The fourth Nat is the diagnostics count (see the `doc.diagnosticsRef`
+    -- read in getProofTree): diagnostics are REPORTED asynchronously, so a
+    -- request racing the reporter would otherwise cache a payload with a
+    -- partial list under a key that never changes again for this version.
+    -- The count grows monotonically within a version, so it is exactly
+    -- "reporting progress"; once elaboration settles it is stable and cursor
+    -- moves stay cached.
+    IO.Ref (Option ((String × Nat × Nat × Nat) × ProofTreeData)) ← IO.mkRef none
 
 /-- Parse the proof tree for the theorem under the cursor.
 
@@ -369,16 +500,87 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let doc ← readDoc
     let fileMap : FileMap := doc.meta.text
     let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
-    let cacheKey := (doc.meta.uri, doc.meta.version, snapStart)
-    if let some (uri, ver, start, payload) ← proofTreeCache.get then
-      if (uri, ver, start) == cacheKey then
+    -- The FILE's diagnostics, as reported so far. `doc.diagnosticsRef` — the
+    -- very ref `publishDiagnostics` and `getInteractiveDiagnostics` serve —
+    -- and NOT `snap.msgLog`, which looks right and is empty: v4.27's file
+    -- worker rebuilds these compat snapshots from the new incremental
+    -- architecture (FileWorker/Utils.lean `mkCmdSnaps`), and the `cmdState` it
+    -- hands them has its `messages` already drained into the reporting stream.
+    -- The CLI path is different on purpose — `IO.processCommands` populates
+    -- `cmdState.messages`, which is why every offline probe of the msgLog path
+    -- passed while the live widget saw an empty log (measured, by driving the
+    -- real server over LSP and reading the payload).
+    let interactiveDiags ← doc.diagnosticsRef.get
+    let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, interactiveDiags.size)
+    if let some (key, payload) ← proofTreeCache.get then
+      if key == cacheKey then
         return payload
     let finish (payload : ProofTreeData) : RequestM ProofTreeData := do
-      proofTreeCache.set <| some (cacheKey.1, cacheKey.2.1, cacheKey.2.2, payload)
+      proofTreeCache.set <| some (cacheKey, payload)
       return payload
-    let some parsedTree ← RequestM.runTermElabM snap
-      (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree)
-      | finish { steps := [], allGoals := [] }
+    let parsed ← (do
+      match ← RequestM.runTermElabM snap
+        (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree) with
+      | some r => pure r
+      | none => pure { steps := [], allGoals := {} })
+    -- Put back the `at …` clause Paperproof's prettifier drops (see
+    -- `collectRwLocations`). FIRST, before anything reads a label: the tokens
+    -- align against it, brief mode collapses it, the completion list is keyed
+    -- off it — so it has to be the same string everywhere, and on both wires
+    -- (`Ppharness` does exactly this too). `snap.stx` is the whole command,
+    -- which is what still finds a `rw` inside a tactic that failed to
+    -- elaborate.
+    let rwLocs := collectRwLocations fileMap snap.infoTree (extra := some snap.stx)
+    let remapped := { parsed with
+      steps := parsed.steps.map fun (s : Paperproof.Services.ProofStep) =>
+        { s with tacticString :=
+            withRwLocation rwLocs s.position.start s.tacticString } }
+    -- The supplemental parser: synthesize steps for tactics the vendored one
+    -- lost to failure (their info subtree was rolled back; the syntax survives
+    -- in the slots). Runs BEFORE the empty early-out — a proof whose only
+    -- tactic failed parses to zero steps, and this is what stops the tree
+    -- vanishing at exactly that moment. Slots and chains are computed here and
+    -- reused by the payload below; the message log is the failure gate (a
+    -- no-op like `skip` records no step either, so uncovered alone is not
+    -- failed — measured, see ProofTreeRecover).
+    let slots := tacticSlots fileMap snap.infoTree (extra := some snap.stx)
+    let calcChains := collectCalcChains fileMap snap.infoTree (extra := some snap.stx)
+    -- Error starts for the recovery gate, and the payload's diagnostics, both
+    -- from `interactiveDiags` above (see its comment: `snap.msgLog` is EMPTY
+    -- on this path). File-wide is fine for both consumers: recovery tests
+    -- containment in this command's slots, and the client filters to the
+    -- declaration's span.
+    let errorPositions := interactiveDiags.foldl (init := #[]) fun acc d =>
+      if d.severity? == some .error then acc.push d.range.start else acc
+    let treeDiags : Array TreeDiag := interactiveDiags.map fun d =>
+      let full := d.fullRange?.getD d.range
+      { range := ⟨d.range.start, d.range.end⟩
+        fullRange := ⟨full.start, full.end⟩
+        severity := match d.severity? with
+          | some .error => 1 | some .warning => 2 | _ => 3
+        -- `toDiagnostic`'s flattener, NOT `d.message.stripTags`. The two agree
+        -- only when the editor initialised the server with `hasWidgets: false`
+        -- — which a bare LSP probe does and VS Code never does. In widget mode
+        -- an embed's text lives INSIDE the `MsgEmbed` constructor and the
+        -- outer tag's subtext is EMPTY, so `stripTags` walks past all of it
+        -- and every message flattened to "" (measured: 9/9 empty with
+        -- `initializationOptions.hasWidgets: true`, 9/9 full without).
+        message := d.toDiagnostic.message
+        isSilent := d.isSilent?.getD false
+        leanTags := (d.leanTags?.getD #[]).map fun
+          | .unsolvedGoals => 1 | .goalsAccomplished => 2 }
+    let recovA ← Recover.recoverFailed fileMap snap.infoTree remapped.steps slots
+      calcChains errorPositions
+    -- Part B: a TERM-MODE proof (`:= term`, no `by`) parses to nothing at
+    -- all — synthesize its structure from the syntax + TermInfo.
+    let recovB ← Recover.recoverTerm fileMap snap.infoTree (some snap.stx)
+      remapped.steps
+    let recov : Recover.Recovery := {
+      steps := recovA.steps ++ recovB.steps
+      goals := recovA.goals ++ recovB.goals
+      grafts := recovA.grafts ++ recovB.grafts
+      recovered := recovA.recovered ++ recovB.recovered }
+    let parsedTree := recov.apply remapped
     if parsedTree.steps.isEmpty then
       return ← finish { steps := [], allGoals := [] }
     let taggedGoals ← collectTaggedGoals snap.infoTree
@@ -397,8 +599,33 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     -- too, so a token span here means what it means in the editor. Computed
     -- once for the whole command and sliced per tactic below.
     let allTokens := semanticTokensFor fileMap snap.stx snap.infoTree
+    -- CONSTANT tokens go on the wire as `"const"`, a type name of ours, not
+    -- as the `.function` they ride through the semantic pipeline. The buffer
+    -- paints a qualified constant PLAIN — checked against the shipped lean4
+    -- TextMate grammar, which has no identifier rule at all (keywords,
+    -- Prop/Type/Sort, sorry, strings, numerals, attributes — nothing else),
+    -- and the info-based pass covers only fvars and projections — so colouring
+    -- constants function-blue made the tree visibly disagree with the editor
+    -- (the original comment on `collectConstIdentTokens` claimed the grammar
+    -- colours them; it was wrong). The client inherits the label foreground
+    -- for any UNMAPPED type — that rule is load-bearing here — so "const"
+    -- renders plain in both palettes with no client change, while the token
+    -- itself survives to carry its hover popup. Real `.function` tokens from
+    -- the info pass (an fvar applied as a function head) keep their colour,
+    -- which is why this is a wire-side reclassification by START position
+    -- rather than a different enum in the collector: the pipeline (overlap
+    -- resolution included) stays byte-identical to the editor's.
+    let constStarts : Std.HashSet (Nat × Nat) :=
+      (FileWorker.computeAbsoluteLspSemanticTokens fileMap ⟨0⟩ none
+          (collectConstIdentTokens snap.infoTree)).foldl (init := {}) fun acc t =>
+        acc.insert (t.pos.line, t.pos.character)
+    let wireTokenType (t : FileWorker.AbsoluteLspSemanticToken) : String :=
+      if t.type matches .function
+          && constStarts.contains (t.pos.line, t.pos.character) then
+        "const"
+      else
+        Lsp.SemanticTokenType.names[t.type.toNat]!
     -- `Lsp.Position` derives `Ord`; no bespoke comparator to keep in sync.
-    let lePos (a b : Lsp.Position) : Bool := (compare a b).isLE
     -- The editing seam: per distinct step range, the tactic's tight span and
     -- verbatim text (see TacticEdit), plus the tokens falling inside it.
     let src := fileMap.source
@@ -446,12 +673,11 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         let tight := trimmedEnd raw
         let stop := fileMap.utf8PosToLspPos ⟨b.byteIdx + tight.byteIdx⟩
         let tokens := allTokens.filterMap fun t =>
-          if lePos start t.pos && lePos t.tailPos stop then
-            -- `names` is upstream's canonical constructor-name array (it
-            -- carries a sanity-check example against `toJson`); no JSON
-            -- round-trip per token.
+          if posLE start t.pos && posLE t.tailPos stop then
+            -- `wireTokenType`: upstream's canonical name array, except our
+            -- const-filler tokens which cross as "const" (see above).
             some { start := t.pos, stop := t.tailPos,
-                   type := Lsp.SemanticTokenType.names[t.type.toNat]! : TacticToken }
+                   type := wireTokenType t : TacticToken }
           else none
         tacticEdits := tacticEdits.push {
           stepStart := s.position.start
@@ -463,38 +689,82 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
           -- column nor the bare line indent (see tacticIndentAt).
           tacticIndent := indent
         }
-        -- Per token, the innermost info node covering it — the same node the
-        -- editor's hover would land on — tagged onto the token's own source
-        -- text (see TacticTokenInfo). EVERY token is offered, not just the
-        -- identifier-ish ones: a tactic keyword resolves to its `TacticInfo`,
-        -- whose docstring is exactly the reference text you'd otherwise leave
-        -- the widget to read. Tokens with no info node (punctuation, most
-        -- syntactic keywords) simply find nothing and cost nothing.
-        for t in tokens do
-          let tb := fileMap.lspPosToUtf8Pos t.start
-          let te := fileMap.lspPosToUtf8Pos t.stop
-          if seenTok.contains (tb.byteIdx, te.byteIdx) then
-            continue
-          seenTok := seenTok.insert (tb.byteIdx, te.byteIdx)
-          if let some (rs, re, ictx) := hoverIdx.innermost tb.byteIdx then
-            -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates
-            -- the session-scoped id the client hands back to
-            -- `infoToInteractive` when the popup opens.
-            let ref ← match refCache[(rs, re)]? with
-              | some r => pure r
-              | none   => do
-                let r ← Server.WithRpcRef.mk ictx
-                refCache := refCache.insert (rs, re) r
-                pure r
-            tokenInfos := tokenInfos.push {
-              start := t.start
-              code  := .tag
-                { info := ref, subexprPos := SubExpr.Pos.root }
-                (.text (String.Pos.Raw.extract src tb te))
-            }
     -- `extra := snap.stx` is the whole command: a `calc` that never elaborated
     -- has no TacticInfo of its own, and this is what still finds it.
-    let calcChains := collectCalcChains fileMap snap.infoTree (extra := some snap.stx)
+    -- An editing seam for a BROKEN chain, which by definition has no step and so
+    -- got none from the loop above. The client draws a synthesized node for such
+    -- a block (see proofToTree's `calc:<line>:<col>`), and without an entry here
+    -- that node was the one tactic in the tree you could not double-click — in
+    -- the one state where you most want to, since a block that does not parse is
+    -- unfinished text and the repair chip only offers the single canned fix.
+    --
+    -- This is NOT the fabricated entry the alignInLabel invariant warns about.
+    -- Everything in it is real: `[tacticStart, stop)` is a measured range, `text`
+    -- is the server's own verbatim slice of it, and the synthesized node's LABEL
+    -- is that same text — so the label-vs-source alignment the token renderer
+    -- does is an identity here rather than the guesswork it warns of, and the
+    -- block gets syntax colouring it has never had. `stop` is the last
+    -- WELL-FORMED link, never the block's syntax range (which runs on into the
+    -- tactic the parser swallowed), so an edit built from this can never write
+    -- over a neighbour.
+    --
+    -- `seen` skips a chain a step already stands for: that is exactly the
+    -- client's own "no step, so synthesize" condition, keyed the same way.
+    for c in calcChains do
+      let key := (c.tacticStart.line, c.tacticStart.character)
+      if c.broken && !seen.contains key then
+        seen := seen.insert key
+        let tokens := allTokens.filterMap fun t =>
+          if posLE c.tacticStart t.pos && posLE t.tailPos c.stop then
+            some { start := t.pos, stop := t.tailPos,
+                   type := wireTokenType t : TacticToken }
+          else none
+        tacticEdits := tacticEdits.push {
+          stepStart := c.tacticStart
+          start     := c.tacticStart
+          stop      := c.stop
+          text      := c.text
+          tokens
+          tacticIndent := tacticIndentAt fileMap c.tacticStart.line
+        }
+    -- Per token, the innermost info node covering it — the same node the
+    -- editor's hover would land on — tagged onto the token's own source text
+    -- (see TacticTokenInfo). EVERY token is offered, not just the
+    -- identifier-ish ones: a tactic keyword resolves to its `TacticInfo`, whose
+    -- docstring is exactly the reference text you'd otherwise leave the widget
+    -- to read. Tokens with no info node (punctuation, most syntactic keywords)
+    -- simply find nothing and cost nothing.
+    --
+    -- ONE pass over every edit built above, rather than a copy inside each of
+    -- the two loops that build them: an unparsed `calc` block wants exactly the
+    -- same treatment as a tactic (it just has less elaboration behind it, so
+    -- most of its tokens find nothing), and the dedup and ref-sharing below are
+    -- precisely the state that must not diverge between the two.
+    for te in tacticEdits do
+      for t in te.tokens do
+        let tb := fileMap.lspPosToUtf8Pos t.start
+        let tend := fileMap.lspPosToUtf8Pos t.stop
+        if seenTok.contains (tb.byteIdx, tend.byteIdx) then
+          continue
+        seenTok := seenTok.insert (tb.byteIdx, tend.byteIdx)
+        if let some (rs, re, ictx) := hoverIdx.innermost tb.byteIdx then
+          -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates the
+          -- session-scoped id the client hands back to `infoToInteractive` when
+          -- the popup opens. Keyed by the info node's range, so a tactic's
+          -- keyword and its punctuation — which resolve to the same
+          -- `TacticInfo` — share one store entry.
+          let ref ← match refCache[(rs, re)]? with
+            | some r => pure r
+            | none   => do
+              let r ← Server.WithRpcRef.mk ictx
+              refCache := refCache.insert (rs, re) r
+              pure r
+          tokenInfos := tokenInfos.push {
+            start := t.start
+            code  := .tag
+              { info := ref, subexprPos := SubExpr.Pos.root }
+              (.text (String.Pos.Raw.extract src tb tend))
+          }
     let calcRelations ← collectCalcRelations snap.infoTree <|
       calcRelationGoals
         (parsedTree.steps.toArray.map fun s =>
@@ -506,18 +776,41 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let proofId := match declName? snap.stx with
       | some n => n.toString
       | none   => s!"@{snapStart}"
+    -- Any goal's context will do — `allTacticDocs` reads the environment, not
+    -- the goal — so take the first one rather than plumbing a context down.
+    -- Empty when the proof somehow has no goal at all, which the client reads
+    -- as "this wire ships no tactic names" and simply offers none.
+    let tacticNames ← match (goalContexts snap.infoTree).toList.head? with
+      | some (_, (ctx, _)) => tacticNames ctx
+      | none => pure #[]
     finish {
       proofId,
+      tacticNames,
+      declRange := snap.stx.getRange?.map fun r =>
+        ⟨fileMap.utf8PosToLspPos r.start, fileMap.utf8PosToLspPos r.stop⟩,
+      diagnostics := treeDiags,
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
       taggedGoals,
       comments,
       tacticEdits,
       tokenInfos,
+      deleteSlots := slots
+      recovered   := recov.recovered
       calcHoles   := collectCalcHoles fileMap snap.infoTree (extra := some snap.stx)
       calcChains
       calcRelations
     }
+
+/-- One line's worth of goal state, for the lens's inline annotations.
+
+Computed CLIENT-side and passed through: the widget is what holds the proof
+and knows which line each step ends on, and this RPC is only a file writer.
+The companion paints it as an `after` decoration on that line in the lens. -/
+structure GoalAnnotation where
+  line : Nat
+  text : String
+  deriving FromJson, ToJson
 
 /-- Parameters for `popoutEdit`: the document and the tactic's TIGHT range
 (from `TacticEdit`) to select in the lens editor. `action` selects the
@@ -530,6 +823,12 @@ structure PopoutEditParams where
   start  : Lsp.Position
   stop   : Lsp.Position
   action : String := "popout"
+  /-- Inline goal state for the lens (see `GoalAnnotation`). Rides the popout
+  request, and the `annotate` action refreshes it after an edit. Unlike
+  `ThemeColors` the derived `FromJson`'s indifference to defaults is harmless
+  here: this end of the wire is the BUNDLED widget, which ships inside the same
+  build as this file and always sends the field. -/
+  annotations : Array GoalAnnotation := #[]
   deriving FromJson, ToJson
 
 /-- The widget→companion bridge for the "edit in the lens" action (a tactic's
@@ -555,10 +854,143 @@ def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
       ("uri", toJson params.uri),
       ("start", toJson params.start),
       ("stop", toJson params.stop),
-      ("action", toJson params.action)
+      ("action", toJson params.action),
+      ("annotations", toJson params.annotations)
     ]
     IO.FS.writeFile (dir / "popout-request.json") payload.compress
     return "ok"
+
+/-- One LSP semantic token type and the colour the editor's theme paints it. -/
+structure ThemeTokenColor where
+  type  : String
+  color : String
+  deriving ToJson, FromJson
+
+/-- Read one field of a JSON object, falling back to `dflt` when it is absent
+or does not decode.
+
+This is what the two hand-written `FromJson` instances below are made of, and
+the reason they are hand-written at all: the DERIVED instance treats a missing
+key as an error rather than as the field's default, so one absent field fails
+the whole decode. That matters on this wire and nowhere else, because its two
+ends ship separately — the companion is a dev-installed extension that can
+easily be older than the server, and losing the whole palette over one new flag
+is exactly what happened before this. Shared so the rule cannot drift between
+the two structures that depend on it. -/
+private def jsonField {α : Type} [FromJson α] (j : Json) (k : String)
+    (dflt : α) : α :=
+  match j.getObjVal? k >>= fromJson? with
+  | .ok v => v
+  | .error _ => dflt
+
+/-- One of the user's `lean4.input.customTranslations` entries. An ARRAY of
+these rather than a JSON object keyed by abbreviation, for the same reason
+`ThemeColors.colors` is an array: a derived `FromJson` decodes it straight into
+an `Array`, where an object would need map-API surgery. -/
+structure ThemeAbbrev where
+  -- `abbrev` is a Lean keyword, hence the longer name; the JS side matches.
+  abbreviation : String
+  symbol : String
+  deriving ToJson, FromJson
+
+/-- The user's `lean4.input.*` settings, so the in-place tactic editor's unicode
+input matches the buffer's. Settings, not colours — they ride this file for the
+same reason `brackets` and `outline` do: a webview cannot read one.
+
+Only a CUSTOMISED input mode needs this to arrive. The abbreviation table itself
+is bundled with the renderer, so with no companion the editor still expands
+`\dvd` — it just uses vscode-lean4's own defaults, which is what these fields
+default to. -/
+structure InputConfig where
+  /-- `lean4.input.enabled`. -/
+  enabled : Bool := true
+  /-- `lean4.input.leader`. -/
+  leader : String := "\\"
+  /-- `lean4.input.eagerReplacementEnabled`. -/
+  eager : Bool := true
+  /-- `lean4.input.customTranslations`. -/
+  custom : Array ThemeAbbrev := #[]
+  deriving ToJson
+
+/-- Hand-written for the reason spelled out on `ThemeColors`'s instance below:
+this wire's two ends ship separately, so a missing field must default rather
+than fail the whole decode. -/
+instance : FromJson InputConfig where
+  fromJson? j :=
+    .ok { enabled := jsonField j "enabled" true,
+          leader := jsonField j "leader" "\\",
+          eager := jsonField j "eager" true,
+          custom := jsonField j "custom" #[] }
+
+/-- The editor theme's syntax colours, for the tree's own token rendering.
+Empty when the companion isn't installed, which the client reads as "keep the
+built-in palette". -/
+structure ThemeColors where
+  /-- The active theme's name, for the log; the client only uses the rest. -/
+  theme  : String := ""
+  /-- `editor.bracketPairColorization.enabled`. A SETTING rather than a colour,
+  so unlike the six colours it cycles it is not in the webview's `--vscode-*`
+  set and has to come the long way round too. -/
+  brackets : Bool := false
+  /-- `proofTree.outlineOnly` — draw node boxes as borders with no fill. Not a
+  colour at all, but it rides here for the same reason `brackets` does: a
+  webview cannot read a VS Code SETTING, so anything of the kind has to come
+  back through the companion. -/
+  outline : Bool := false
+  /-- `lean4.input.*` — unicode abbreviations for the in-place tactic editor.
+  Settings again, so again the long way round. -/
+  input : InputConfig := {}
+  colors : Array ThemeTokenColor := #[]
+  deriving ToJson
+
+/-- Hand-written because the DERIVED `FromJson` does not honour the field
+defaults above: a missing key is an error, not the default. That matters here
+and nowhere else on this wire, because the two ends ship SEPARATELY — the
+companion is a dev-installed extension that can easily be older than the
+server. With the derived instance, a `theme-colors.json` written before
+`outline` existed failed to decode outright, so `themeColors` fell back to `{}`
+and the user lost the WHOLE PALETTE over one absent flag, until the extension
+host happened to restart and rewrite the file. Every field is therefore
+optional and a bad value is the default, so a new field can only ever be
+ignored by an old reader and defaulted by a new one. -/
+instance : FromJson ThemeColors where
+  fromJson? j :=
+    .ok { theme := jsonField j "theme" "",
+          brackets := jsonField j "brackets" false,
+          outline := jsonField j "outline" false,
+          input := jsonField j "input" {},
+          colors := jsonField j "colors" #[] }
+
+/-- `themeColors` takes nothing; `Unit` is not `RpcEncodable`, so this stands in
+(the same shape as `GetProofTreeParams`). -/
+structure ThemeColorsParams where
+  deriving FromJson, ToJson
+
+/-- Read the palette the companion resolved from the active VS Code theme.
+
+This exists because the return path of the relay is otherwise missing. A webview
+is handed `--vscode-*` variables for the workbench colour REGISTRY only, and
+TextMate/semantic token colours are not in it — the extension API has no
+token-colour member at all (`ColorTheme` exposes nothing but `kind`), so the
+widget cannot ask. Only an extension can read the theme's JSON, and only the
+server can read a file for the widget. Hence: companion writes, this reads.
+
+Deliberately NOT part of `getProofTree`'s payload, and deliberately not cached:
+that payload is keyed on `(uri, version, command start)`, so a theme switch
+would not invalidate it and the colours would not change until the next EDIT.
+This is a few hundred bytes read on demand instead. -/
+@[server_rpc_method]
+def themeColors (_ : ThemeColorsParams) : RequestM (RequestTask ThemeColors) := do
+  RequestM.asTask do
+    let some home ← IO.getEnv "HOME" | return {}
+    let file := System.FilePath.mk home / ".proof-tree-companion" / "theme-colors.json"
+    -- Absent companion, absent file, half-written file: all mean the same
+    -- thing to the client — keep the built-in palette.
+    unless ← file.pathExists do return {}
+    let txt ← IO.FS.readFile file
+    match Json.parse txt >>= fromJson? with
+    | .error _ => return {}
+    | .ok (c : ThemeColors) => return c
 
 end ProofTree
 

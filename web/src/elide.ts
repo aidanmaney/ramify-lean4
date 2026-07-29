@@ -83,9 +83,15 @@ export function combineRuns(
   const soleParent = (id: string) => (byId.get(id)?.parents.length ?? 0) === 1;
   // A SYNTHETIC `calc` node (a block that never parsed) is never combined: it
   // maps to no editable tactic, and merging it would hide its repair chip
-  // inside a box that carries no chips at all.
+  // inside a box that carries no chips at all. A RECOVERED node (a failed or
+  // never-ran tactic the supplemental parser synthesized) is never combined
+  // either — a failed→skipped run IS linear, and merging it would fold the
+  // one box whose dashed/danger styling says what happened into an ordinary
+  // green one.
   const blocked = (id: string) =>
-    (exclude?.has(id) ?? false) || !!byId.get(id)?.synthetic;
+    (exclude?.has(id) ?? false) ||
+    !!byId.get(id)?.synthetic ||
+    !!byId.get(id)?.recovered;
 
   const runs: ElideCut[] = [];
   const seen = new Set<string>();
@@ -220,9 +226,15 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
             : `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
           parents,
           chain,
+          // `parts` rides EVERY marker, not just a combined one. The renderer
+          // only reads them for a combined node (they carry the per-tactic
+          // token alignment), but `parts` is also the marker's source RANGES,
+          // and a ⇥/⇳ cut still stands for the tactics it swallowed: without
+          // them the cursor accent — and anything else resolving a position to
+          // a node — simply loses every position inside the cut.
           elidedCut: combine
             ? { tactics, combined: true, parts }
-            : { tactics },
+            : { tactics, parts },
         });
       }
       continue; // the cut's own nodes are gone

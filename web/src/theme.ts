@@ -135,6 +135,23 @@ const PALETTE_CSS = `
   --ptw-accent: var(--ptw-hue-accent);
   --ptw-accent-text: var(--ptw-bg);
 
+  /* The armed-delete confirm chip. Taken from the editor's OWN error colour
+     rather than derived from a hue of ours: this is the one control that
+     destroys text, and it should read the way the editor's own destructive
+     signals do. Falls back to the syntax palette's sorry red, which is the
+     nearest thing here (both mean "something is wrong at this spot"), so the
+     standalone app and any host without the variable still get a red. */
+  --ptw-danger: var(--vscode-errorForeground, var(--ptw-tok-sorry));
+
+  /* Warning-severity diagnostics ("declaration uses 'sorry'", deprecations).
+     The editor's own warning colour, for the same reason --ptw-danger takes its
+     error one: a diagnostic drawn in the tree should read the way the squiggle
+     for it reads in the buffer. editorWarning.foreground is the registry entry
+     behind that squiggle; the fallback is the accent hue, this palette's only
+     warm colour that isn't the error red.
+     (No backticks in here — this block is a template literal.) */
+  --ptw-warn: var(--vscode-editorWarning-foreground, var(--ptw-hue-accent));
+
   /* Context lines are the densest text in the tree, so they are plain
      foreground with the unused ones dimmed — no hue at all. The dim is 62%,
      not lower: it is real content, and on an already-low-contrast theme
@@ -265,6 +282,12 @@ export const CASE_FILL = "var(--ptw-case)";
 /** The `sorry` frontier chip. Shares the syntax palette's sorry colour, so a
 stub reads the same in the tree as the keyword does in a tactic label. */
 export const SORRY_FILL = "var(--ptw-tok-sorry)";
+/** The armed-delete confirm chip — the only destructive control in the tree.
+Also the ink for an ERROR-severity diagnostic (see diagnostics.ts): both mean
+"this spot is wrong", and the editor's own error colour is behind them both. */
+export const DANGER_FILL = "var(--ptw-danger)";
+/** Warning-severity diagnostic ink. */
+export const WARN_FILL = "var(--ptw-warn)";
 export const LINK_STROKE = "var(--ptw-link)";
 export const MUTED_FILL = "var(--ptw-muted)";
 export const EDIT_BG = "var(--ptw-edit-bg)";
@@ -288,3 +311,42 @@ export const TOKEN_COLOR: Record<string, string> = {
   namespace: "var(--ptw-tok-type)",
   leanSorryLike: "var(--ptw-tok-sorry)",
 };
+
+/** Token types whose colour is a variable of their OWN (`--ptw-tok-<type>`), so
+an editor-supplied palette can override it directly. Derived from TOKEN_COLOR
+rather than listed again, so the two cannot drift: `namespace` is excluded
+because it shares `--ptw-tok-type`, and `leanSorryLike` because it is ours (a
+`sorry` marker), not a thing the editor's theme has an opinion about. */
+export const TOKEN_VARS = new Set(
+  Object.entries(TOKEN_COLOR)
+    .filter(([type, v]) => v === `var(--ptw-tok-${type})`)
+    .map(([type]) => type),
+);
+
+/**
+ * Watch for a live VS Code theme change, calling `onChange` each time.
+ *
+ * There is no event for this: VS Code does NOT reload the webview on a theme
+ * switch, it rewrites the CSS custom properties on the root element's `style`
+ * attribute in place (and stamps the light/dark KIND on the body, which a
+ * light↔dark switch can land on first). So the signal is a MutationObserver
+ * over exactly those two, which is what the infoview's own components do.
+ *
+ * Shared because two independent things need it — the view's own palette and
+ * code font, and the widget's refetch of the companion-resolved token colours —
+ * and "how do you detect a theme flip" should have one answer, not one per
+ * caller. Returns the disconnect, so it drops straight into a `useEffect`.
+ */
+export function observeThemeChange(onChange: () => void): () => void {
+  const obs = new MutationObserver(onChange);
+  obs.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["style"],
+  });
+  if (document.body)
+    obs.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class", "data-vscode-theme-kind"],
+    });
+  return () => obs.disconnect();
+}

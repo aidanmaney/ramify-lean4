@@ -221,7 +221,7 @@ def trimmedEnd (s : String) : String.Pos.Raw := Id.run do
   return ⟨e⟩
 
 /-- End of the line containing `p` (the newline itself, or end of string). -/
-private def lineEnd (src : String) (p : String.Pos.Raw) : String.Pos.Raw := Id.run do
+def lineEnd (src : String) (p : String.Pos.Raw) : String.Pos.Raw := Id.run do
   let mut q := p
   while !String.Pos.Raw.atEnd src q && String.Pos.Raw.get src q != '\n' do
     q := String.Pos.Raw.next src q
@@ -248,6 +248,248 @@ def commandRange (tree : Elab.InfoTree) : Option Lean.Syntax.Range :=
       | some a => some ⟨min a.start r.start, max a.stop r.stop⟩
       | none   => some r
     | none => acc
+
+/-- Compare two LSP positions: is `a` at or before `b`?
+
+The one coding of it on the Lean side, mirroring `posLE` in proofToTree.ts.
+Every containment test here is HALF-OPEN — `[start, stop)` — and this codebase
+has been bitten by that boundary before (the cursor accent's 0-of-86 result
+depends on it), so it is worth exactly one definition. -/
+def posLE (a b : Lsp.Position) : Bool := (compare a b).isLE
+
+/-- The syntax roots the three descents below share: every `TacticInfo`'s own
+`stx`, seeded with `extra`.
+
+`extra` is the widget's `snap.stx`, the whole command — the last resort for a
+tactic that never elaborated, which therefore has no info node of its own but
+whose syntax still survives inside the enclosing one. -/
+def tacticInfoRoots (tree : Elab.InfoTree) (extra : Option Syntax := none) :
+    Array Syntax :=
+  tree.foldInfo (init := extra.toArray) fun _ info acc =>
+    match info with
+    | .ofTacticInfo ti => acc.push ti.stx
+    | _ => acc
+
+/-- Every node of one of `kinds` anywhere under `stx`, outermost first.
+
+Shared by the two syntax descents in this file (tactic sequences for
+`tacticSlots`, `calc` blocks for `calcBlocks`), which are otherwise the same
+walk written twice — and any refinement to it, macro-hygiene handling most
+obviously, has to apply to both. Note a matched node is still descended into:
+a `calc` nests inside a `calc`, and a sequence inside a sequence. -/
+def nodesOfKind (kinds : List SyntaxNodeKind) (stx : Syntax) : Array Syntax :=
+  Id.run do
+    let mut out := #[]
+    match stx with
+    | .node _ k args =>
+      if kinds.contains k then out := out.push stx
+      for a in args do out := out ++ nodesOfKind kinds a
+    | _ => pure ()
+    return out
+
+/-- One tactic AS THE AUTHOR WROTE IT — a direct child of some tactic sequence
+— plus the lexical facts around it that only the source can answer.
+
+This is what a DELETION acts on, and it exists because a Paperproof step range
+is not it. Two measured counterexamples: `intro p hpm` is ONE step whose range
+covers `intro p ` only (the label is a merged display string), and
+`rcases … <;> exact h` is a step covering just the `rcases`. Deleting either
+range strands text. `surfaceTacticRange` cannot fix this — it requires the
+container to start STRICTLY BEFORE the step, and both containers start at the
+same column — and it must not be loosened, since its 86/86 alignment behaviour
+is load-bearing for token colouring and it wants the SMALLEST qualifying node
+where deletion wants the LARGEST.
+
+A direct child of a `tacticSeq` is the right unit with no head-token
+heuristics: `intro p hpm`, `tac <;> tac`, `try simp`, `have … := by …`,
+`induction … with | … | …` (whose syntax DOES cover its alternatives, unlike
+its step range) and `· tac; tac` are each exactly one child.
+
+Deliberately NOT built from `collectTacticRanges` (ProofTreeWidget.lean): that
+is a flat, kind-less list of `TacticInfo` ranges, and a `tacticSeq` carries its
+own info node starting at the same offset as its first child — so any
+largest-container rule over it swallows the whole block for the first tactic of
+every sequence.
+
+The client joins by CONTAINMENT rather than by a step key, which is why every
+block's children are shipped rather than only the ones a step landed on: given
+a slot deep inside a branch, finding the slot of the same enclosing block is a
+containment search, and needs no parent pointers on the wire. -/
+structure TacticSlot where
+  /-- The slot's own span, tightened past trailing trivia (`trimmedEnd`). -/
+  start : Lsp.Position
+  stop  : Lsp.Position
+  /-- The enclosing sequence's start — the block KEY. Two slots are siblings
+  iff these agree. -/
+  blockStart : Lsp.Position
+  /-- Position among the block's children, and how many there are. Together
+  these are the emptiness test: a deletion covering `0 … count-1` leaves the
+  block with no tactic at all, which is where a `sorry` has to go. -/
+  index : Nat
+  count : Nat
+  /-- Nothing but whitespace precedes `start` on its line — so the slot can be
+  removed by whole LINES. False for `· intro h` and `:= by omega`, where whole
+  lines would eat the bullet or the `by`. -/
+  lineStart : Bool
+  /-- Everything after `stop` on the last line is whitespace and/or comments.
+  Computed with `trimmedEnd`, so it agrees with what the tree drew. -/
+  tailIsTrivia : Bool
+  /-- End of that line when `tailIsTrivia`, else `stop`. Replacing through here
+  keeps a `sorry` from inheriting the dead tactic's trailing comment. -/
+  tailStop : Lsp.Position
+  /-- A SIBLING of the same block starts on this slot's line (`intro n; simp`).
+  The delete gesture declines there rather than guessing — unlike `lineStart`,
+  which is false for a bullet body too, where deleting is perfectly well
+  defined. -/
+  prevSameLine : Bool
+  deriving ToJson, FromJson, Inhabited
+
+/-- The `at …` location clause of one `rw`/`rewrite` tactic, verbatim, with
+that tactic's own range. -/
+structure RwLocation where
+  /-- The `rw` tactic's own span; a step of it starts inside `[start, stop)`. -/
+  start : Lsp.Position
+  stop  : Lsp.Position
+  /-- The clause exactly as written — `at hn`, `at hx ⊢`, `at *`. -/
+  text  : String
+  deriving ToJson, Inhabited
+
+/-- Every `rw`/`rewrite` that rewrites somewhere OTHER than the goal.
+
+This exists to undo a loss in the vendored parser rather than to add anything:
+Paperproof's `prettifySteps` matches `rw [$_,*] $(_)?` and then re-synthesizes
+the label as `s!"rw [{rule}]"` — one step per rewrite rule, and the matched
+location clause never referenced again. So `rw [h] at hn` reaches the tree
+labelled `rw [h]`, which is not a display shortening but a different tactic:
+one rewrites the goal, the other a hypothesis, and the tree drew them alike.
+Recovering the clause here rather than forking the parser keeps the vendored
+copy untouched, which is the standing rule for this project.
+
+Found by SYNTAX, like `calcBlocks` and `tacticSlots`, and over the same roots.
+The clause is located by KIND rather than by argument index — the index is
+`rwSeq`'s current shape, not a contract — but only a `location` node starting
+at or after the rule list is taken, so a nested `by … at h` inside a rewrite
+rule cannot be mistaken for this tactic's own. -/
+def collectRwLocations (fileMap : FileMap) (tree : Elab.InfoTree)
+    (extra : Option Syntax := none) : Array RwLocation := Id.run do
+  let src := fileMap.source
+  let roots := tacticInfoRoots tree extra
+  let mut out : Array RwLocation := #[]
+  for root in roots do
+    for stx in nodesOfKind
+        [``Lean.Parser.Tactic.rwSeq, ``Lean.Parser.Tactic.rewriteSeq] root do
+      let some r := stx.getRange? (canonicalOnly := true) | continue
+      let start := fileMap.utf8PosToLspPos r.start
+      let stop  := fileMap.utf8PosToLspPos r.stop
+      -- Macro expansion surfaces one tactic under several `TacticInfo`s.
+      if out.any (fun l => l.start == start && l.stop == stop) then continue
+      let afterRules :=
+        match (nodesOfKind [``Lean.Parser.Tactic.rwRuleSeq] stx)[0]?
+                >>= (·.getRange? (canonicalOnly := true)) with
+        | some rr => rr.stop.byteIdx
+        | none    => r.start.byteIdx
+      let locs := nodesOfKind [``Lean.Parser.Tactic.location] stx
+      let some loc := locs.find? (fun l =>
+          match l.getRange? (canonicalOnly := true) with
+          | some lr => lr.start.byteIdx ≥ afterRules
+          | none    => false)
+        | continue
+      let some lr := loc.getRange? (canonicalOnly := true) | continue
+      out := out.push
+        { start, stop, text := String.Pos.Raw.extract src lr.start lr.stop }
+  return out
+
+/-- Put the clause back on a step's label.
+
+Applied by BOTH wires to every step before anything downstream sees it, so the
+label a node is drawn with, measured at, coloured through and edited against is
+one string everywhere. Two guards keep it idempotent and narrow: only a label
+in the exact shape `prettifySteps` re-synthesizes (`rw [...]`, which it emits
+for `rewrite` too) is touched, and one that already carries the clause — a
+tactic whose label the prettifier left alone — is returned unchanged.
+
+Containment is HALF-OPEN, as everywhere else here. The step's start is the
+rewrite RULE's position for a split step and the bare `]` for the synthetic
+`rfl` that closes one, both of which sit inside the tactic — so every node of
+one `rw` picks up the same clause, which is what makes them read as one tactic. -/
+def withRwLocation (locs : Array RwLocation) (start : Lsp.Position)
+    (label : String) : String := Id.run do
+  unless label.startsWith "rw [" do return label
+  let mut best : Option RwLocation := none
+  for l in locs do
+    if posLE l.start start && !posLE l.stop start then
+      if best.all (fun b => posLE b.start l.start) then best := some l
+  match best with
+  | none => return label
+  | some l => return if label.endsWith l.text then label else label ++ " " ++ l.text
+
+/-- Every tactic-sequence child in the tree, in source order per block.
+
+Descends SYNTAX for the same reason `calcBlocks` does — an unelaborated tactic
+has no info node of its own but its syntax survives inside the enclosing one —
+and takes the same roots (`extra` is the widget's `snap.stx`). Blocks are
+deduped by range, since macro expansion surfaces the same sequence under
+several `TacticInfo`s. -/
+def tacticSlots (fileMap : FileMap) (tree : Elab.InfoTree)
+    (extra : Option Syntax := none) : Array TacticSlot := Id.run do
+  let src := fileMap.source
+  let roots := tacticInfoRoots tree extra
+  let mut blocks : Array (Lean.Syntax.Range × Array Lean.Syntax.Range) := #[]
+  for root in roots do
+    for seq in nodesOfKind
+        [``Lean.Parser.Tactic.tacticSeq1Indented,
+         ``Lean.Parser.Tactic.tacticSeqBracketed] root do
+      let some r := seq.getRange? (canonicalOnly := true) | continue
+      if blocks.any fun (br, _) => br.start == r.start && br.stop == r.stop then
+        continue
+      let kids := seqChildren seq
+      unless kids.isEmpty do
+        blocks := blocks.push (r, kids)
+  let mut out : Array TacticSlot := #[]
+  for (br, kids) in blocks do
+    let blockStart := fileMap.utf8PosToLspPos br.start
+    for i in [0:kids.size] do
+      let kr := kids[i]!
+      -- A canonical range's stop already excludes trailing trivia, but a
+      -- structured tactic's does not always — tighten unconditionally, which
+      -- is idempotent when there is nothing to trim.
+      let tight : String.Pos.Raw :=
+        ⟨kr.start.byteIdx +
+          (trimmedEnd (String.Pos.Raw.extract src kr.start kr.stop)).byteIdx⟩
+      let start := fileMap.utf8PosToLspPos kr.start
+      let stop := fileMap.utf8PosToLspPos tight
+      let lineBeg := fileMap.lspPosToUtf8Pos ⟨start.line, 0⟩
+      let lineStart :=
+        (String.Pos.Raw.extract src lineBeg kr.start).all fun c =>
+          c == ' ' || c == '\t'
+      let le := lineEnd src tight
+      -- The whole tail trims to nothing iff it is whitespace and comments.
+      let tailIsTrivia :=
+        (trimmedEnd (String.Pos.Raw.extract src tight le)).byteIdx == 0
+      out := out.push {
+        start, stop, blockStart, index := i, count := kids.size, lineStart
+        tailIsTrivia
+        tailStop := if tailIsTrivia then fileMap.utf8PosToLspPos le else stop
+        prevSameLine := match kids[i-1]? with
+          | some p => i > 0 && (fileMap.utf8PosToLspPos p.stop).line == start.line
+          | none => false
+      }
+  return out
+where
+  /-- A sequence's direct children. `sepBy1IndentSemicolon` interleaves
+  elements with separators, so the elements are the EVEN indices; a child with
+  no canonical range (the parser's failed attempt) is dropped. -/
+  seqChildren (stx : Syntax) : Array Lean.Syntax.Range := Id.run do
+    let inner :=
+      if stx.getKind == ``Lean.Parser.Tactic.tacticSeqBracketed then stx[1]
+      else stx[0]
+    let args := inner.getArgs
+    let mut out := #[]
+    for i in [0:args.size] do
+      if i % 2 == 0 then
+        if let some r := args[i]!.getRange? (canonicalOnly := true) then
+          out := out.push r
+    return out
 
 /-- An unproved link of a `calc` chain: a `?_` standing where its justification
 goes, plus enough of the enclosing link to write a new one above it.
@@ -367,13 +609,10 @@ Zero well-formed links is a REPORTED state, not a skipped one: `calc` and
 nothing yet is precisely what the tree most needs to draw. -/
 def calcBlocks (fileMap : FileMap) (tree : Elab.InfoTree)
     (extra : Option Syntax := none) : Array CalcBlock := Id.run do
-  let roots := tree.foldInfo (init := extra.toArray) fun _ info acc =>
-    match info with
-    | .ofTacticInfo ti => acc.push ti.stx
-    | _ => acc
+  let roots := tacticInfoRoots tree extra
   let mut out := #[]
   for root in roots do
-    for stx in calcNodes root do
+    for stx in nodesOfKind [``Lean.calcTactic] root do
       let some r := stx.getRange? (canonicalOnly := true) | continue
       unless out.any (fun b => b.range.start == r.start && b.range.stop == r.stop) do
         let cp := fileMap.utf8PosToLspPos r.start
@@ -401,15 +640,6 @@ def calcBlocks (fileMap : FileMap) (tree : Elab.InfoTree)
         }
   return out
 where
-  /-- The `calcTactic` nodes anywhere under `stx`. -/
-  calcNodes (stx : Syntax) : Array Syntax := Id.run do
-    let mut out := #[]
-    match stx with
-    | .node _ k args =>
-      if k == ``Lean.calcTactic then out := out.push stx
-      for a in args do out := out ++ calcNodes a
-    | _ => pure ()
-    return out
   /-- The block's `calcFirstStep` node, if it read one at all. -/
   firstStep (stx : Syntax) : Option Syntax :=
     match stx with
@@ -695,8 +925,8 @@ def calcRelationGoals (steps : Array CalcGoalStep) (chains : Array CalcChain) :
     Array String := Id.run do
   let consumed := steps.foldl (init := ({} : Std.HashSet String))
     fun acc s => acc.insert s.goalBefore
-  let lt (a b : Lsp.Position) : Bool := (compare a b) == .lt
-  let le (a b : Lsp.Position) : Bool := (compare a b) != .gt
+  let lt (a b : Lsp.Position) : Bool := !posLE b a
+  let le := posLE
   let mut out : Array String := #[]
   for s in steps do
     for g in s.goalsAfter do

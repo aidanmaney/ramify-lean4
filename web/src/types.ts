@@ -17,6 +17,31 @@ export interface HypLine {
   used: boolean;
 }
 
+/** What a delete gesture on this node removes (see TreeNode.deleteSpec).
+
+Positions only, so it is source-agnostic and both wires compute it — the actual
+edit needs `TacticSlot`s, which the widget resolves by containment
+(`deleteEdit.ts`). Two readings, one per node type:
+
+- `tactic` — the tactic and any block it OWNS (a `have`'s side proof, a
+  split's branches), NOT its linear continuation.
+- `goal` — everything below the goal. Mid-block that returns the goal to the
+  frontier, where the existing (+) chips take over.
+
+`anchors` are the source positions the extent must reach: the node's own
+position plus, for each owned goal, the LAST step in its subtree. Each is
+resolved to a slot and the union of those slots is the extent — which is why a
+truncated `induction … with` range (it stops on the first `|`) and a bullet
+that belongs to no step both come out right. */
+export interface DeleteSpec {
+  kind: "tactic" | "goal";
+  anchors: ProofStepPosition[];
+  /** Whole lines occupied only by this node's own comment strip, immediately
+  above the extent — they annotate what is being removed and are drawn on it.
+  Empty on a root-goal clear, where the comment is the theorem's docstring. */
+  comments: ProofStepPosition[];
+}
+
 /** How to insert a new tactic for a pending goal (see TreeNode.addSpec).
 `after` is the step whose (tight) end the insertion follows — the LAST step in
 source among the producing tactic's already-written branches, so a new bullet
@@ -138,6 +163,11 @@ export interface TreeNode {
   // unproved link that isn't the chain's first, so the tree can build a chain
   // a step at a time while the trailing `?_` keeps it elaborating.
   addLink?: AddSpec;
+  // What the delete gesture on this node would remove (see DeleteSpec). On a
+  // tactic, itself plus any block it owns; on a goal, its whole proof. Absent
+  // where deleting is not well defined (a root goal with no proof yet, a
+  // synthesized calc node).
+  deleteSpec?: DeleteSpec;
   // The relations a NEW `calc` chain on this goal could be built out of, when
   // the goal is the shape one can prove that way and isn't already a link.
   // This is the way IN to calc mode: without it a chain can only be GROWN once
@@ -186,11 +216,18 @@ export interface TreeNode {
   chain?: boolean;
   // A node the tree INVENTED rather than harvested: the `calc` of a block that
   // failed to parse, so no step stands for it and nothing below it elaborated.
-  // It has a real source `position` (so the cursor accent and hover work) but
-  // no `tacticEdits` entry, hence no editing and no token colouring — and it
-  // must never be swallowed by the ⇉ combine, which would hide its repair chip
-  // inside a merged box.
+  // It has a real source `position` (so the cursor accent and hover work) and a
+  // `tacticEdits` entry of its own, keyed on the chain's start, so it edits and
+  // colours like any other tactic — its label IS the block's verbatim source,
+  // which makes the token alignment an identity. It must never be swallowed by
+  // the ⇉ combine, which would hide its repair chip inside a merged box.
   synthetic?: boolean;
+  /** Set when the SUPPLEMENTAL parser synthesized this tactic's step rather
+  than harvesting it: `failed` (an error landed inside it), `skipped` (after a
+  failure in its block — Lean never ran it), `term` (from a term-mode proof's
+  structure). Drawn dashed; `failed` takes danger ink. Everything else about
+  the node is ordinary — real range, real editing seam. */
+  recovered?: "failed" | "skipped" | "term";
   // Present on a SYNTHETIC marker node standing in for a collapsed set of nodes
   // (see elide.ts). Two flavours: an on-demand ELIDE cut (a path via ⇥ or a
   // vertical band via ⇳) draws as a dashed `⋯` chip clicking removes; a
@@ -200,8 +237,11 @@ export interface TreeNode {
   elidedCut?: {
     tactics: string[];
     combined?: boolean;
-    // COMBINED nodes only: the constituent tactics in order — everything the
-    // render needs to treat each drawn line as the tactic it came from.
+    // The constituent tactics in order, on EVERY marker. A combined node's
+    // render needs them to treat each drawn line as the tactic it came from;
+    // every marker needs them as its source RANGES, since the marker is what
+    // now stands for the run and a position inside the cut must resolve to it
+    // (see `tacticTargets`).
     parts?: CombinedPart[];
   };
 }

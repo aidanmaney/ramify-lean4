@@ -7,15 +7,26 @@ import {
   mapRpcError,
   type PanelWidgetProps,
 } from "@leanprover/infoview";
-import type { Proof, ProofStepPosition } from "./paperproof";
-import type { AddSpec } from "./types";
+import type { Proof, ProofStepPosition, TacticSlot } from "./paperproof";
+import type { AddSpec, DeleteSpec } from "./types";
+import { DEFAULT_ABBREV, type AbbrevConfig } from "./abbreviation";
 import { calcEdit } from "./calcEdit";
+import { deleteEdit } from "./deleteEdit";
+import {
+  filterDiagnostics,
+  proofSpan,
+  type RawDiagnostic,
+  type TreeDiagnostic,
+} from "./diagnostics";
+import { goalAnnotations, type GoalAnnotation } from "./lensGoals";
 import ProofTreeView from "./ProofTreeView";
 import {
   injectStyleOnce,
   makeTaggedRenderers,
   type TaggedGoalEntry,
 } from "./taggedRender";
+import { taggedSubterms } from "./taggedText";
+import { observeThemeChange } from "./theme";
 import {
   makeTacticRenderer,
   type TacticToken,
@@ -68,6 +79,72 @@ function useSectionOrderCss() {
   }, []);
 }
 
+// Floor for the measured frame height. A transient bad measurement (the
+// infoview mid-reflow, a hidden webview reporting zeros) must degrade to a
+// short tree, never to no tree.
+const MIN_FRAME_PX = 240;
+
+/** The tree's frame height: the viewport MINUS the root's own offset from the
+document top, measured live.
+
+A flat `100vh` was the first version and it overhangs: the root sits a little
+way down the infoview's document (the section-order CSS puts the tree first
+within its card, but the infoview's own chrome still stands above it), so a
+100vh frame ends exactly that far BELOW the fold — the bottom edge of the tree
+was never on screen, which is why nothing could ever be anchored to it (the
+pill lived through this) and why the view's `viewport` state over-reported by
+the same offset.
+
+Measured live rather than once, because the offset MOVES: the infoview reflows
+on every cursor move as the blocks around the widget change height, and VS Code
+resizing the panel changes `100vh` but a theme banner appearing above changes
+the offset. The `ResizeObserver` on `document.body` catches the reflows (any
+content change above the tree changes the body's size); the `resize` listener
+catches the webview frame itself. Re-measuring is settled by a 1px hysteresis:
+setting the height changes the body height, which re-fires the observer, which
+re-measures the SAME offset and writes nothing — one bounce, then stable.
+
+ResizeObserver delivery rides the RENDERING steps, like animation frames — so
+a hidden webview delivers nothing (measured in the preview: zero firings,
+including the mandatory on-observe one). That is fine rather than a bug to
+paper over: a hidden tree needs no remeasure, and the pending delivery lands
+on the first rendered frame when the webview becomes visible — which is
+exactly when the answer matters. The explicit `measure()` on mount covers the
+visible-from-birth case without waiting a frame.
+
+Returns the offset in px; the caller renders `calc(100vh - <offset>px)`. The
+ref must be ATTACHED to the element whose top is being measured (the tree's
+root div). Reads happen only in the effect — the `react-hooks/refs` line this
+codebase already walks. */
+function useFrameOffset(): {
+  rootRef: React.RefObject<HTMLDivElement | null>;
+  offset: number;
+} {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => {
+      // Distance from the DOCUMENT's top, not the viewport's: the infoview
+      // page itself scrolls (the tree is its first section, so content below
+      // always overflows), and rect.top alone would shrink the tree by however
+      // far the user happened to have scrolled at measure time.
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      setOffset((prev) => (Math.abs(prev - top) > 1 ? top : prev));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(document.body);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+  return { rootRef, offset };
+}
+
 // One tactic's in-place editing seam, computed server-side (mirror of
 // ProofTreeComments.lean's TacticEdit): the TIGHT range of the tactic text
 // proper (trailing trivia trimmed — Paperproof step ranges include it) and
@@ -98,6 +175,13 @@ type ProofTreeData = Proof & {
   taggedGoals?: TaggedGoalEntry[];
   tacticEdits?: TacticEditEntry[];
   tokenInfos?: TacticTokenInfo[];
+  /** The declaration's diagnostics (ProofTreeWidget.lean `TreeDiag`), already
+  in the client's `{start, stop}` span shape and already scoped to this
+  command's own message log. In the PAYLOAD, not read off the
+  `publishDiagnostics` notification: the notification is edge-triggered and a
+  webview that loads after elaboration finishes never hears it — measured, a
+  restart on the demo file reliably drew no ribbons until the next edit. */
+  diagnostics?: RawDiagnostic[];
 };
 
 // The Lean infoview user-widget entry point. This is the default export bundled
@@ -107,12 +191,125 @@ type ProofTreeData = Proof & {
 // under the cursor and feeds the result to the shared ProofTreeView, wiring the
 // two directions of the node↔source link (see below).
 
+/** The editor theme's syntax colours, refreshed whenever the theme changes.
+ *
+ * The long way round is forced: a webview is given `--vscode-*` variables for
+ * the workbench colour REGISTRY only, and TextMate/semantic token colours are
+ * not in it — the extension API has no token-colour member at all. So the
+ * companion resolves them from the active theme's JSON, and the Lean server
+ * reads that file back to us (`ProofTree.themeColors`).
+ *
+ * The refresh trigger is the same signal the palette itself watches: VS Code
+ * rewrites the CSS variables on the root element in place on a theme change.
+ * The companion writes its file from its own listener, so the two race — hence
+ * the second read shortly after. Both are a few hundred bytes.
+ *
+ * The file also carries SETTINGS (`brackets`, `outline`, `input`), and changing one of
+ * those moves no CSS variable, so the observer alone would never see it. There
+ * is no push channel here — a file written by an extension and read by the
+ * server on demand — so the refetch rides three signals that cost nothing:
+ * `tick` (the document revision, i.e. any re-elaboration), the webview
+ * regaining focus, and the theme observer. Between them, a toggled setting
+ * lands as soon as you type in the buffer or click the tree, without adding a
+ * round trip per cursor move.
+ */
+function useThemeTokenColors(
+  rs: ReturnType<typeof useRpcSession>,
+  tick: number,
+): {
+  colors?: Record<string, string>;
+  brackets: boolean;
+  outline: boolean;
+  abbrev: AbbrevConfig;
+} {
+  const [colors, setColors] = useState<Record<string, string>>();
+  const [brackets, setBrackets] = useState(false);
+  const [outline, setOutline] = useState(false);
+  // vscode-lean4's own defaults until told otherwise, so the editor's unicode
+  // input works with no companion installed — only a customised leader or a
+  // custom translation needs this trip.
+  const [abbrev, setAbbrev] = useState<AbbrevConfig>(DEFAULT_ABBREV);
+  useEffect(() => {
+    let live = true;
+    const fetchOnce = () => {
+      void rs
+        .call<Record<string, never>, ThemeColorsResponse>(
+          "ProofTree.themeColors",
+          {},
+        )
+        .then((r) => {
+          if (!live || !r) return;
+          // The SETTINGS ride whatever came back, including the empty reply an
+          // absent companion produces (whose defaults are the right answer);
+          // only the PALETTE falls back to the built-in one when empty, since
+          // there a missing value and "no companion" mean the same thing.
+          setBrackets(!!r.brackets);
+          setOutline(!!r.outline);
+          if (r.input) {
+            const next: AbbrevConfig = {
+              enabled: r.input.enabled !== false,
+              leader: r.input.leader || DEFAULT_ABBREV.leader,
+              eager: r.input.eager !== false,
+              custom: Object.fromEntries(
+                (r.input.custom ?? []).map((c) => [c.abbreviation, c.symbol]),
+              ),
+            };
+            // Identity-compared, because the config is a ProofTreeView PROP and
+            // a fresh object every refetch would rebuild the editor's
+            // abbreviation session mid-typing.
+            setAbbrev((prev) =>
+              JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
+            );
+          }
+          if (!r.colors?.length) return;
+          setColors(
+            Object.fromEntries(r.colors.map((c) => [c.type, c.color])),
+          );
+        })
+        .catch(() => {
+          // No companion, no file, an older server: keep the built-in palette.
+        });
+    };
+    fetchOnce();
+    const stopObserving = observeThemeChange(() => {
+      fetchOnce();
+      window.setTimeout(fetchOnce, 400);
+    });
+    window.addEventListener("focus", fetchOnce);
+    return () => {
+      live = false;
+      stopObserving();
+      window.removeEventListener("focus", fetchOnce);
+    };
+  }, [rs, tick]);
+  return { colors, brackets, outline, abbrev };
+}
+
+/** `ProofTree.themeColors`'s reply (ProofTreeWidget.lean `ThemeColors`). */
+interface ThemeColorsResponse {
+  theme: string;
+  /** `editor.bracketPairColorization.enabled` — a setting, so it cannot come
+  from the `--vscode-*` variables the six bracket COLOURS do come from. */
+  brackets: boolean;
+  /** `proofTree.outlineOnly` — a setting, so it comes the same long way round. */
+  outline: boolean;
+  /** `lean4.input.*` — settings again (ProofTreeWidget.lean `InputConfig`).
+  Optional: an older companion's file simply has no such key. */
+  input?: {
+    enabled: boolean;
+    leader: string;
+    eager: boolean;
+    custom: { abbreviation: string; symbol: string }[];
+  };
+  colors: { type: string; color: string }[];
+}
+
 export default function ProofTreeWidget(props: PanelWidgetProps) {
   const rs = useRpcSession();
   const ec = useContext(EditorContext);
   const pos = props.pos; // DocumentPosition: { uri, line, character }
   useSectionOrderCss();
-
+  const { rootRef, offset } = useFrameOffset();
   // The cursor is not the only thing that invalidates the tree: the DOCUMENT
   // changes too, and a change that leaves the cursor where it is (every edit
   // the widget itself makes via applyEdit — an in-place tactic commit, a (+)
@@ -129,6 +326,15 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // re-lays-out when the proof's TEXT signature actually changes — an
   // identical re-parse costs one cached round trip and no re-render of the
   // tree. A trailing debounce keeps even that down to one call per burst.
+  //
+  // The notification is ONLY the refresh signal — deliberately not the source
+  // of the diagnostics the tree draws. It is edge-triggered, and a webview
+  // subscribes only after it loads: whenever elaboration finished first (a
+  // restart on a small file, reliably), no notification ever arrived and a
+  // notification-fed ribbon drew nothing until the next edit. The diagnostics
+  // ride the getProofTree PAYLOAD instead (level-triggered — they arrive with
+  // every response, so the drawn errors can never be out of step with the
+  // drawn tree); see `diagnostics` below and TreeDiag in ProofTreeWidget.lean.
   const [docRev, setDocRev] = useState(0);
   const revTimer = useRef<number | null>(null);
   useServerNotificationEffect<{ uri: string }>(
@@ -149,6 +355,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     },
     [],
   );
+
+  const {
+    colors: tokenColors,
+    brackets: colorBrackets,
+    outline: outlineOnly,
+    abbrev,
+  } = useThemeTokenColors(rs, docRev);
 
   // Re-parse whenever the cursor moves; the server's snapshot is cached, so this
   // is cheap, and it is what makes the tree "follow the cursor". The server
@@ -188,6 +401,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       // and the chips must not keep pointing at where the `?_` used to be.
       calcHoles: resolved.calcHoles,
       calcChains: resolved.calcChains,
+      // The supplemental parser's sidecar — plain data keyed on positions, and
+      // it must ride the signature: whether a step is recovered changes how
+      // its node draws, and a re-elaboration that fixes the tactic changes
+      // exactly this.
+      recovered: resolved.recovered,
       // Plain data too (relation SYMBOLS, not exprs), and it belongs in the
       // signature for the same reason: a changed relation list means the goal
       // itself changed, so the offer set must be recomputed with it.
@@ -196,6 +414,16 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       // a DIFFERENT theorem must invalidate the stable proof even if its text
       // somehow matched.
       proofId: resolved.proofId,
+      // The declaration's own span, which `proofSpan` needs to decide which of
+      // the FILE's diagnostics are this proof's. Both wires ship it and it must
+      // be copied here: this object is rebuilt field by field, so a field left
+      // out is silently absent rather than a type error, and without it
+      // proofSpan falls back to the extent of the STEPS — which starts at the
+      // first tactic and so drops every diagnostic reported above one.
+      // `declaration uses 'sorry'` sits on the declaration NAME, so that is
+      // exactly the warning it loses. It rides the signature for free: the
+      // range moves whenever the declaration does.
+      declRange: resolved.declRange,
     };
     return { proof, sig: JSON.stringify(proof) };
   }, [resolved]);
@@ -203,16 +431,25 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     sig: string;
     proof: Proof;
     tacticEdits: TacticEditEntry[];
+    deleteSlots: TacticSlot[];
   } | null>(null);
   if (resolved && incoming && (!stable || stable.sig !== incoming.sig)) {
     setStable({
       sig: incoming.sig,
-      proof: incoming.proof,
+      // `tacticNames` is attached HERE rather than in `incoming`, so it stays
+      // out of `sig`: it is ~500 strings that depend only on the imports, so
+      // stringifying them into every signature comparison would be pure cost
+      // for a value that cannot change while the file is open.
+      proof: { ...incoming.proof, tacticNames: resolved.tacticNames },
       // Edits derive from the same source text as the steps, so refreshing
       // them exactly when the proof signature changes keeps their ranges
       // in sync with the document (positions live in the steps → any shift
       // changes the sig).
       tacticEdits: resolved.tacticEdits ?? [],
+      // Same reasoning as the edits: slots are positions into the same source
+      // text, so they refresh exactly when the proof's signature does and can
+      // never describe a document the tree isn't showing.
+      deleteSlots: resolved.deleteSlots ?? [],
     });
   }
 
@@ -254,6 +491,57 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [stable, interactive],
   );
 
+  // This proof's diagnostics, from the LATEST response's payload (see
+  // ProofTreeData.diagnostics for why they ride the payload and not the
+  // notification). Filtering is here (the wire shape and the proof's own span
+  // are widget-side facts) and ATTACHING is in the view, which is the half
+  // that knows what is drawn — see `diagnostics.ts` for why the two split.
+  //
+  // Off `interactive`, not `stable`, on purpose: `stable` refreshes only when
+  // the proof's TEXT changes, and diagnostics can change without it (a `sorry`
+  // warning appearing as elaboration settles). They are plain data, so unlike
+  // the ref-carrying halves nothing about session lifetime applies — riding
+  // the latest response is just what keeps them current. The span filter still
+  // runs against `stable`'s proof (the tree being drawn): a response from a
+  // different theorem contributes nothing rather than the wrong theorem's
+  // errors while `stable` holds the old tree on screen.
+  const diagnostics: TreeDiagnostic[] = useMemo(
+    () =>
+      stable
+        ? filterDiagnostics(
+            interactive?.diagnostics ?? [],
+            proofSpan(stable.proof),
+          ).kept
+        : [],
+    [interactive, stable],
+  );
+
+  // Completion candidates for the in-place editor, drawn from the goal's own
+  // tagged print — the SAME payload the hover tooltips use, so this costs one
+  // tree walk and nothing on the wire. The goal's subterms come first (a `calc`
+  // link restates part of its goal, which is the case that motivated this),
+  // then each hypothesis's type.
+  //
+  // It lives here rather than in ProofTreeView because `taggedGoals` carries
+  // live RPC refs and so belongs to the widget half; the view stays
+  // source-agnostic and just receives strings.
+  // The walk runs once per RESPONSE, not once per lookup. The lookup is called
+  // from the editor's onChange/onSelect — once per keystroke — and the goal
+  // being edited cannot change while you type into it, so walking on demand
+  // re-derived the same subterm tree (and every hypothesis's) on every
+  // character. Doing every goal eagerly costs more per response than the lazy
+  // form did for one goal, and a response is once per EDIT (debounced, and
+  // server-cached), which is the cheaper side to pay on.
+  const getGoalTerms = useMemo(() => {
+    const byId = new Map<string, string[]>();
+    for (const { goalId, goal } of interactive?.taggedGoals ?? []) {
+      const terms = taggedSubterms(goal.type);
+      for (const h of goal.hyps) terms.push(...taggedSubterms(h.type));
+      byId.set(goalId, terms);
+    }
+    return (goalId: string): string[] => byId.get(goalId) ?? [];
+  }, [interactive]);
+
   // Every companion request rides this one call. `void rs.call(...)` used to
   // swallow rejections whole, which made a broken relay indistinguishable from
   // a dead button — the RPC can fail for real (no HOME, unwritable request
@@ -261,12 +549,17 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // surfaced. Failures now land in the widget's own error banner AND the
   // webview console, so "nothing happened" always has a reason attached.
   const [relayError, setRelayError] = useState<string | null>(null);
-  const callCompanion = (action: string, p: ProofStepPosition) => {
+  const callCompanion = (
+    action: string,
+    p: ProofStepPosition,
+    annotations: GoalAnnotation[] = [],
+  ) => {
     rs.call("ProofTree.popoutEdit", {
       uri: pos.uri,
       start: p.start,
       stop: p.stop,
       action,
+      annotations,
     }).then(
       () => setRelayError(null),
       (e: unknown) => {
@@ -278,19 +571,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     );
   };
 
-  // tree→source: clicking a tactic node reveals its span in the editor —
-  // routed through the COMPANION, not `ec.revealLocation`: vscode-lean4's
-  // reveal targets the FIRST visible editor for the uri (always the main
-  // buffer), while the companion targets the lens when one is open, which is
-  // what closes the tree↔lens loop (the lens cursor move it causes flows
-  // back as highlightPos). Without the companion installed, reveal is inert.
-  // The TIGHT span again (see hoverTactic): a raw step range runs into the
-  // next tactic, so revealing it would select past the tactic in the lens and,
-  // for a structured tactic, select its whole block. The start is what matters
-  // most — it becomes the cursor, and the accent lookup depends on it landing
-  // at the range's start — and tightening never moves it.
-  const reveal = (p: ProofStepPosition) =>
-    callCompanion("reveal", getTacticEdit(p)?.pos ?? p);
 
   // In-place editing: resolve a step's tight edit seam (double-click opens
   // the editor overlay pre-filled with `text`)…
@@ -344,8 +624,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       makeTacticRenderer(
         (p) => editByStart.get(`${p.start.line}:${p.start.character}`),
         infoAt,
+        colorBrackets,
       ),
-    [editByStart, infoAt],
+    [editByStart, infoAt, colorBrackets],
   );
 
   // …and commit by replacing the tight range in the document. Goes through
@@ -414,6 +695,34 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     });
   };
 
+  // Committing a delete. The extent maths lives in `deleteEdit` (pure, so a
+  // probe can elaborate what it produces — the calcEdit precedent), and this
+  // only applies the result through the editor's own pipeline, so it lands as
+  // ONE undo entry like every other write here.
+  const deleteTactic = (spec: DeleteSpec) => {
+    const e = deleteEdit(spec, stable?.deleteSlots ?? []);
+    if (!e) return;
+    void ec.api.applyEdit({
+      changes: {
+        [pos.uri]: [{ range: { start: e.range.start, end: e.range.end }, newText: e.newText }],
+      },
+    });
+  };
+
+  // The region an armed delete would take, painted in the buffer. NOT the
+  // hover relay: the companion clamps that one to a single line, which is
+  // right for "the tactic you are pointing at" and defeats this entirely.
+  const previewRange = (r: ProofStepPosition | null) => {
+    if (r) callCompanion("preview", r);
+    else callCompanion("preview-clear", { start: ORIGIN, stop: ORIGIN });
+  };
+
+  // Undo/redo, relayed because the tree's own edits leave focus in the
+  // webview where ⌘Z reaches nothing (see runEditorCommand in the companion —
+  // it activates the editor group first, since undo acts on what is focused).
+  const undo = (redo: boolean) =>
+    callCompanion(redo ? "redo" : "undo", { start: ORIGIN, stop: ORIGIN });
+
   // Hovering a tactic node paints a decoration over its range in the editor.
   // DEBOUNCED here rather than in the view: every request is a file write by
   // the Lean server plus an fs.watch wake-up in the companion, so firing on
@@ -466,7 +775,74 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // synthetic click on a `vscode://…` anchor (the webview only intercepts
   // TRUSTED clicks, so the synthetic one NAVIGATES the iframe — blank
   // infoview).
-  const popoutEdit = (p: ProofStepPosition) => callCompanion("popout", p);
+  // Inline goal state for the lens, computed from the proof we are already
+  // holding (see lensGoals.ts). It rides the popout itself — one payload per
+  // gesture, no extra round trip — and is refreshed by the effect below.
+  const lensGoals = useMemo(() => {
+    if (!stable) return [];
+    // A failed or never-ran tactic must not annotate its line: `∎` (both goal
+    // lists empty) is exactly what a recovered leaf looks like, and it is a
+    // lie there. Term-mode recovered steps stay in — a complete terminal term
+    // really did close its goal.
+    const recovered = new Set(
+      (stable.proof.recovered ?? [])
+        .filter((r) => r.kind !== "term")
+        .map((r) => `${r.start.line}:${r.start.character}`),
+    );
+    const proof = recovered.size
+      ? {
+          ...stable.proof,
+          steps: stable.proof.steps.filter(
+            (s) =>
+              !recovered.has(
+                `${s.position.start.line}:${s.position.start.character}`,
+              ),
+          ),
+        }
+      : stable.proof;
+    return goalAnnotations(
+      proof,
+      (start) => editByStart.get(`${start.line}:${start.character}`)?.stop,
+    );
+  }, [stable, editByStart]);
+  // Declared BEFORE its readers: the React Compiler bails on a memo whose
+  // closure references a binding declared later (the completion work hit this).
+  const lensOpened = useRef(false);
+  // tree→source: clicking a tactic node reveals its span in the editor —
+  // routed through the COMPANION, not `ec.revealLocation`: vscode-lean4's
+  // reveal targets the FIRST visible editor for the uri (always the main
+  // buffer), while the companion targets the lens when one is open, which is
+  // what closes the tree↔lens loop (the lens cursor move it causes flows
+  // back as highlightPos). Without the companion installed, reveal is inert.
+  // The TIGHT span again (see hoverTactic): a raw step range runs into the
+  // next tactic, so revealing it would select past the tactic in the lens and,
+  // for a structured tactic, select its whole block. The start is what matters
+  // most — it becomes the cursor, and the accent lookup depends on it landing
+  // at the range's start — and tightening never moves it.
+  const reveal = (p: ProofStepPosition) =>
+    // `lensGoals` rides along for the same reason `popout` sends it: the
+    // companion re-paints the lens's inline goal state after a reveal, so
+    // omitting it here published an EMPTY list and wiped the annotations on
+    // every ⌘-click until some later edit happened to refire them.
+    callCompanion("reveal", getTacticEdit(p)?.pos ?? p, lensGoals);
+
+  const popoutEdit = (p: ProofStepPosition) => {
+    lensOpened.current = true;
+    callCompanion("popout", p, lensGoals);
+  };
+  // Annotations are POSITIONAL, so an edit invalidates every one below it. The
+  // companion drops them on the first document change and waits for these; the
+  // widget re-sends whenever the proof it is holding changes, which is exactly
+  // when the lines could have moved. Gated on having opened a lens at least
+  // once this session — otherwise every re-elaboration would write a relay file
+  // for a pane that does not exist. The companion no-ops when no lens is found,
+  // so a closed lens costs one file write per edit burst and nothing more.
+  useEffect(() => {
+    if (!lensOpened.current || lensGoals.length === 0) return;
+    callCompanion("annotate", { start: ORIGIN, stop: ORIGIN }, lensGoals);
+    // callCompanion is re-created every render; the payload is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lensGoals]);
 
   // Until a proof has rendered, surface the three transient states: a genuine
   // RPC failure, the empty "not in a proof" result, or still loading. Once a
@@ -493,7 +869,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // No <details>/summary wrapper: the tree is the panel's content, and every
   // chrome line above it costs vertical room the tree could use.
   return (
-    <div data-ptw-root style={{ marginTop: "0.25rem" }}>
+    <div ref={rootRef} data-ptw-root style={{ marginTop: "0.25rem" }}>
       {/* A failed companion request is otherwise invisible — the gesture just
           does nothing. Surfaced inline (dismissible) rather than as a console
           line nobody opens. */}
@@ -521,14 +897,25 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onReveal={reveal}
         getTacticEdit={getTacticEdit}
         onEditTactic={editTactic}
+        getGoalTerms={getGoalTerms}
+        tokenColors={tokenColors}
+        outline={outlineOnly}
+        abbrev={abbrev}
         onPopoutEdit={popoutEdit}
         highlightPos={{ line: pos.line, character: pos.character }}
-        height="100vh"
+        // The frame ends AT the visible fold, not 100vh past our own offset
+        // (see useFrameOffset). `max(…)` is the transient-measurement floor.
+        height={`max(${MIN_FRAME_PX}px, calc(100vh - ${offset}px))`}
         renderTaggedGoal={renderers?.renderTaggedGoal}
         renderTaggedHyps={renderers?.renderTaggedHyps}
         renderTaggedTactic={renderTaggedTactic}
         onAddTactic={addTactic}
         onHoverTactic={hoverTactic}
+        deleteSlots={stable?.deleteSlots}
+        onDeleteTactic={deleteTactic}
+        onPreviewRange={previewRange}
+        onUndo={undo}
+        diagnostics={diagnostics}
       />
     </div>
   );

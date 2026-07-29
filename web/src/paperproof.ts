@@ -69,6 +69,51 @@ export interface CalcHole {
   first: boolean;
 }
 
+/** One synthesized step's marker — mirrors ProofTreeRecover's RecoveredStep
+field-for-field (the wire is a cross-language contract). */
+export interface RecoveredStep {
+  start: { line: number; character: number };
+  kind: "failed" | "skipped" | "term";
+}
+
+/** One tactic AS THE AUTHOR WROTE IT — a direct child of some tactic sequence
+(see ProofTreeComments.lean's `TacticSlot`).
+
+This is what a DELETION acts on, because a step's range is measurably not it:
+`intro p hpm` is ONE step covering `intro p ` alone (the label is a merged
+display string) and `rcases … <;> exact h` is a step covering just the
+`rcases`, so deleting either range strands text. Conversely `induction … with`
+has a step range TRUNCATED at its first case marker while its syntax covers
+every branch — which is why the slot, not the step, is the unit.
+
+The client joins these by CONTAINMENT rather than by a step key, which is why
+every block's children ship rather than one entry per step: given a slot deep
+inside a branch, finding its ancestor in another block is a containment search
+and needs no parent pointers on the wire. Plain data, so both wires carry it. */
+export interface TacticSlot {
+  start: { line: number; character: number };
+  stop: { line: number; character: number };
+  /** The enclosing sequence's start — the block KEY. Two slots are siblings
+  iff these agree. */
+  blockStart: { line: number; character: number };
+  /** Position among the block's children, and how many there are: together,
+  the test for whether a deletion leaves the block with no tactic at all. */
+  index: number;
+  count: number;
+  /** Nothing but whitespace precedes `start` on its line, so the slot can go
+  by whole LINES. False for `· intro h` and `:= by omega`. */
+  lineStart: boolean;
+  /** Everything after `stop` on the last line is whitespace and/or comments. */
+  tailIsTrivia: boolean;
+  /** End of that line when `tailIsTrivia`, else `stop`. */
+  tailStop: { line: number; character: number };
+  /** A SIBLING of this block starts on this slot's line (`intro n; simp`) —
+  the one shape the gesture declines, rather than guess. Distinct from
+  `lineStart`, which is also false inside a bullet, where deleting is perfectly
+  well defined. */
+  prevSameLine: boolean;
+}
+
 /** A `calc` block, and where it CONTINUES (see ProofTreeComments.lean's
 `CalcChain`).
 
@@ -139,11 +184,31 @@ export interface Proof {
   calcHoles?: CalcHole[];
   calcChains?: CalcChain[];
   calcRelations?: CalcRelations[];
+  /** Every tactic-sequence child, for the delete gesture (see `TacticSlot`).
+  Plain data, so both wires ship it — the standalone app draws no delete
+  affordance, but this is what lets a probe run the real extent maths. */
+  deleteSlots?: TacticSlot[];
+  /** Steps the SUPPLEMENTAL parser synthesized rather than harvested, keyed
+  by `position.start` (`ProofStep` is upstream's type and cannot grow a
+  field). `failed` — an error landed inside the tactic; `skipped` — it sits
+  after a failure in its block, so Lean never ran it; `term` — synthesized
+  from a term-mode proof's structure. The tree styles these dashed, `failed`
+  in danger ink. */
+  recovered?: RecoveredStep[];
+  /** The whole DECLARATION's span — the command, not the tactics. What tells
+  this proof's diagnostics from a neighbouring theorem's; a span derived from
+  the steps will not do, since `declaration uses 'sorry'` is reported on the
+  declaration NAME, above every tactic in the proof. */
+  declRange?: ProofStepPosition;
   /** Stable identity of the proof — the declaration's name (see
   ProofTreeWidget.lean's `declName?`). The view keys "is this a different
   proof?" on this rather than on a root mvarId, which re-elaboration renumbers.
   Absent on the CLI wire, where `rootIds` stands in. */
   proofId?: string;
+  /** Every imported tactic's name, for the in-place editor's completion list
+  (see ProofTreeWidget.lean's `tacticNames`). Environment-only, so it rides the
+  once-per-edit cache. Widget-only: the CLI ships no editor. */
+  tacticNames?: string[];
 }
 
 /** One NDJSON line as emitted by the CLI: `{file, data:{index, proof}}`. */

@@ -32,6 +32,14 @@ rev = "v4.27.0"
 [[lean_lib]]
 name = "ProofTreeComments"
 
+# --- The supplemental parser (file: ProofTreeRecover.lean) -------------------
+# Recovers what the vendored BetterParser structurally cannot see (failed
+# tactics roll their info subtree back; term-mode proofs never make one).
+# The ONE module allowed to import Paperproof types — ProofTreeComments stays
+# plain `import Lean` — and both wires merge its output into the parse result.
+[[lean_lib]]
+name = "ProofTreeRecover"
+
 # --- Our reusable parsing library (file: Ppharness.lean) ---
 [[lean_lib]]
 name = "Ppharness"

@@ -200,6 +200,52 @@ export function alignInLabel(
   return null;
 }
 
+// Bracket-pair colourisation: the editor paints brackets by NESTING DEPTH,
+// cycling six workbench colours, and it does so on top of tokens as a separate
+// mechanism (`editor.bracketPairColorization.enabled`, on by default). For Lean
+// it is the ONLY thing colouring a bracket — measured, the characters left with
+// no semantic token at all in `calc (a + b) ^ 2` are exactly `( + ) ^ 2`, and
+// the lean4 TextMate grammar has no bracket rule either. So without this the
+// tree's brackets are plain foreground while the buffer's are coloured, which
+// is the last visible difference between the two.
+//
+// The six colours are workbench REGISTRY entries, so unlike token colours they
+// ARE exposed to a webview as `--vscode-*` and need no companion round trip;
+// only the on/off setting does.
+const BRACKET_PAIRS: Record<string, string> = {
+  "(": ")",
+  "[": "]",
+  "{": "}",
+  "⟨": "⟩",
+  "⟦": "⟧",
+  "⦃": "⦄",
+};
+const CLOSERS = new Set(Object.values(BRACKET_PAIRS));
+
+/** Nesting depth per character, or null where the character is not a bracket.
+Computed over the WHOLE label so depth carries across a wrapped line, and with a
+STACK rather than a counter so a closer that matches nothing is left uncoloured
+instead of dragging the rest of the line down a level. */
+function bracketDepths(text: string): (number | null)[] {
+  const out: (number | null)[] = new Array(text.length).fill(null);
+  const stack: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (BRACKET_PAIRS[c]) {
+      out[i] = stack.length;
+      stack.push(BRACKET_PAIRS[c]);
+    } else if (CLOSERS.has(c)) {
+      // Only a matching closer pops; `⟩` against an open `(` is a mismatch and
+      // the editor renders it as unexpected, not as depth-0.
+      if (stack.length > 0 && stack[stack.length - 1] === c) {
+        stack.pop();
+        out[i] = stack.length;
+      }
+    }
+  }
+  return out;
+}
+
 /** The slice of a `TacticEdit` entry the renderer needs. */
 export interface TacticTokenSource {
   start: LspPos;
@@ -222,6 +268,10 @@ export interface TacticTokenSource {
 export function makeTacticRenderer(
   editAt: (p: { start: LspPos }) => TacticTokenSource | undefined,
   infoAt: Map<string, CodeWithInfos>,
+  // Mirrors `editor.bracketPairColorization.enabled`; the widget learns it from
+  // the companion, since it is a SETTING rather than a colour and so is not in
+  // the `--vscode-*` set.
+  colorBrackets = false,
 ): (
   p: { start: LspPos },
   label: string,
@@ -249,6 +299,7 @@ export function makeTacticRenderer(
         lines,
         infoAt,
         elision,
+        colorBrackets,
       );
       cache.set(key, out);
     }
@@ -278,6 +329,7 @@ export function renderTacticTokens(
   // original (their positions index into it), then shifted onto the collapsed
   // label through the KEEP map — a span landing in an elided gap drops.
   elision?: Elision,
+  colorBrackets = false,
 ): ReactNode[] | null {
   if (tokens.length === 0) return null;
   ensureTaggedStyle(); // the .ptw-tagged font normalisation, shared with goals
@@ -327,6 +379,32 @@ export function renderTacticTokens(
   // an earlier label offset than a token after it in the source).
   spans.sort((a, b) => a.start - b.start);
 
+  // Only the runs NO token claimed can hold a bracket, so this is applied to
+  // exactly those — it can never override a token's own colour.
+  const depths = colorBrackets ? bracketDepths(label) : null;
+  const plain = (from: number, to: number): ReactNode[] => {
+    if (!depths) return [label.slice(from, to)];
+    const out: ReactNode[] = [];
+    let run = from;
+    for (let k = from; k < to; k++) {
+      if (depths[k] === null) continue;
+      if (k > run) out.push(label.slice(run, k));
+      out.push(
+        <span
+          key={`b${k}`}
+          style={{
+            color: `var(--vscode-editorBracketHighlight-foreground${(depths[k]! % 6) + 1})`,
+          }}
+        >
+          {label[k]}
+        </span>,
+      );
+      run = k + 1;
+    }
+    if (run < to) out.push(label.slice(run, to));
+    return out;
+  };
+
   return offsets.map(([lo, hi], i) => {
     const parts: ReactNode[] = [];
     let cur = lo; // next uncoloured offset within this line
@@ -334,7 +412,7 @@ export function renderTacticTokens(
       const a = Math.max(s.start, lo);
       const b = Math.min(s.end, hi);
       if (a >= b || a < cur) continue; // outside this line, or already covered
-      if (a > cur) parts.push(label.slice(cur, a));
+      if (a > cur) parts.push(...plain(cur, a));
       const slice = label.slice(a, b);
       // A `…`: muted, with the text it replaced as a native hover tooltip.
       if (s.ellipsis !== undefined) {
@@ -377,7 +455,7 @@ export function renderTacticTokens(
       );
       cur = b;
     }
-    if (cur < hi) parts.push(label.slice(cur, hi));
+    if (cur < hi) parts.push(...plain(cur, hi));
     return <span key={i}>{parts}</span>;
   });
 }

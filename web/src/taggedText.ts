@@ -86,3 +86,39 @@ export function lineOffsets(
   }
   return pos === flat.length ? out : null;
 }
+
+/** Every tagged subterm's flat text, innermost first, deduped.
+ *
+ * The tagged goal the widget already ships for hover tooltips is a tree whose
+ * every `tag` wraps exactly one subterm's printed text — so this is a complete
+ * list of the goal's subterms for free, with no RPC and nothing new on the
+ * wire. It exists because a `calc` chain restates parts of its goal at every
+ * link: measured over `proofs/calc.lean`, 5 of 5 link right-hand sides the
+ * author wrote appear here verbatim.
+ *
+ * Whitespace is normalised across ALL whitespace, not just spaces. The goal is
+ * pretty-printed to a width limit, so a wide goal's subterm text carries the
+ * printer's own line breaks and indentation; comparing on spaces alone leaves
+ * those embedded and the candidate never matches what is typed on one line.
+ * That was a real miss in the probe, not a hypothetical.
+ */
+export function taggedSubterms<T>(tt: TaggedText<T>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (t: TaggedText<T>) => {
+    if ("append" in t) {
+      t.append.forEach(walk);
+      return;
+    }
+    if ("tag" in t) {
+      walk(t.tag[1]);
+      const s = flattenTaggedText(t.tag[1]).replace(/\s+/g, " ").trim();
+      if (s && !seen.has(s)) {
+        seen.add(s);
+        out.push(s);
+      }
+    }
+  };
+  walk(tt);
+  return out;
+}

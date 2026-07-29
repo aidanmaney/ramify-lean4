@@ -73,6 +73,20 @@ const MAX_W = WRAP_W + 2 * NODE_PAD;
 // extra height, wide enough that a typical goal still lands in 2-3 lines.
 const REFLOW_CHARS = 44;
 const REFLOW_W = REFLOW_CHARS * CHAR_W;
+// The WIDE reflow: exactly twice the narrow budget. It is the middle setting
+// the mode was missing — narrow reflow trades a lot of height for width, which
+// pays when you want three branches across the viewport and over-pays when you
+// only want the widest boxes brought under control. Everything else about the
+// mode (the seam tiers, the eager break, the nested bracket indent, wrapped
+// hyps) is unchanged; only the budget moves, so the two settings differ in one
+// number and cannot drift apart.
+const REFLOW_WIDE_W = 2 * REFLOW_W;
+
+/** Off, or one of the two reflow budgets. Cycled by the rail's ¶. */
+export type ReflowMode = "off" | "narrow" | "wide";
+/** The wrap budget a mode asks for; `off` keeps the ordinary ~100-col one. */
+const budgetFor = (m: ReflowMode): number =>
+  m === "off" ? WRAP_W : m === "wide" ? REFLOW_WIDE_W : REFLOW_W;
 const MIN_W = 60;
 
 // Measure rendered text width using the very font the SVG draws with, so the box
@@ -693,7 +707,7 @@ function caseSize(
 
 function commentSize(
   text: string | undefined,
-  reflow = false,
+  reflow: ReflowMode = "off",
 ): Pick<LayoutNode, "commentLines" | "commentBlockH" | "commentW"> {
   if (!text)
     return { commentLines: [], commentBlockH: 0, commentW: 0 };
@@ -702,11 +716,11 @@ function commentSize(
   // the node's effective width in both layouts.
   const commentLines = wrapText(
     text,
-    reflow ? REFLOW_W : WRAP_W,
+    budgetFor(reflow),
     COMMENT_FONT_PX,
     true,
     "none",
-    reflow,
+    reflow !== "off",
   );
   const commentW = Math.max(
     ...commentLines.map(
@@ -733,21 +747,22 @@ function commentSize(
 function sizeOf(
   text: string,
   hyps: HypLine[] | undefined,
-  reflow = false,
+  reflow: ReflowMode = "off",
 ): Pick<LayoutNode, "lines" | "w" | "h" | "hypH" | "hyps"> {
+  const budget = budgetFor(reflow);
   const lines = wrapText(
     text,
-    reflow ? REFLOW_W : WRAP_W,
+    budget,
     NODE_FONT_PX,
     false,
-    reflow ? "nested" : "flat",
+    reflow !== "off" ? "nested" : "flat",
   );
   const widest = Math.max(
     ...lines.map(
       (l) => l.indent + measureText(l.text, NODE_FONT_PX),
     ),
   );
-  const cap = reflow ? REFLOW_W + 2 * NODE_PAD : MAX_W;
+  const cap = reflow !== "off" ? budget + 2 * NODE_PAD : MAX_W;
   const labelW = Math.max(MIN_W, Math.min(cap, widest + 2 * NODE_PAD));
   const raw = hyps ?? [];
   // The `▸` gutter exists to tell used hyps from unused ones, so it is
@@ -765,12 +780,12 @@ function sizeOf(
   // paid exactly where it lands: a WRAPPED hyp line no longer matches by text,
   // so it renders as plain text and loses its type tooltip. Unwrapped ones —
   // the majority, and every hyp outside this mode — keep theirs.
-  const hypLines: HypLine[] = !reflow
+  const hypLines: HypLine[] = reflow === "off"
     ? raw
     : raw.flatMap((l) =>
         wrapText(
           l.text,
-          REFLOW_W - gutter,
+          budget - gutter,
           HYP_FONT_PX,
           false,
           "nested",
@@ -813,7 +828,7 @@ export type LayoutEngine = ReturnType<typeof createLayoutEngine>;
 export interface LayoutEngineOptions {
   /** Wrap labels and comment strips at a much narrower column, with
    * bracket-depth indentation, so branches fit side by side. */
-  reflow?: boolean;
+  reflow?: ReflowMode;
   /** Reserve room under a node for its frontier-chip lane. Off by default:
    * `addSpec`/`addLink` are computed on both wires, but only the widget
    * supplies `onAddTactic` and therefore only the widget DRAWS chips — the
@@ -823,7 +838,7 @@ export interface LayoutEngineOptions {
 
 export function createLayoutEngine(
   data: TreeNode[],
-  { reflow = false, chips = false }: LayoutEngineOptions = {},
+  { reflow = "off", chips = false }: LayoutEngineOptions = {},
 ) {
   // Stable left-to-right order key for the wide layout, assigned below once
   // `SRC` exists so that siblings there read in SOURCE order too — the wide

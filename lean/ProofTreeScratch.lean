@@ -72,6 +72,7 @@ theorem sum_range_odd (n : ℕ) :
           = (∑ i ∈ Finset.range n, (2 * i + 1)) + (2 * n + 1)
       ∧ (n % 2 = 0 ∨ n % 2 = 1) := by
   -- Step 1: the identity itself. Everything below is a corollary of it.
+
   have key : ∀ m : ℕ, (∑ i ∈ Finset.range m, (2 * i + 1)) = m ^ 2 := by
     intro m
     induction m with
@@ -178,8 +179,7 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
     have hsq : (0 : ℝ) ≤ (a - b) ^ 2 := sq_nonneg _
     calc (a + b) ^ 2
       = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
-      -- _ ≤ 2 * (a ^ 2 + b ^ 2) - 0 := by linarith
-      -- _ = 2 * (a ^ 2 + b ^ 2) := by ring
+      _ ≤ _ := by linarith
   · -- Chain 2: the odd-sum identity again, this time as a calc chain inside the
     -- successor case of an induction — a calc nested under a case split.
     induction n with

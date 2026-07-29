@@ -34,6 +34,313 @@ function say(msg) {
 const REQUEST_DIR = path.join(os.homedir(), ".proof-tree-companion");
 const REQUEST_FILE = "popout-request.json";
 const CHROME_BACKUP = path.join(REQUEST_DIR, "chrome-backup.json");
+const THEME_FILE = path.join(REQUEST_DIR, "theme-colors.json");
+
+// ---- theme token colours -------------------------------------------------
+// The tree colours tactics from the Lean server's semantic tokens, but it had
+// no way to learn what COLOUR the user's theme paints those with: a webview is
+// given `--vscode-*` variables for the workbench colour REGISTRY only, and
+// TextMate/semantic token colours are not in it. Checked rather than assumed —
+// the whole extension API surface (`vscode.d.ts`) has zero token-colour
+// members, and `ColorTheme` exposes nothing but `kind`. So the tree shipped a
+// fixed Light+/Dark+ palette and drifted from the buffer on any other theme.
+//
+// An extension CAN read the theme, though: the active theme is a contribution
+// of some installed extension, and its JSON is on disk. We resolve it here and
+// leave the answer where the Lean server can hand it to the widget (the relay
+// only runs widget→companion, so this is the return path).
+//
+// Fidelity is close, not exact, and the reason is worth stating: VS Code
+// resolves a colour against the FULL scope stack the TextMate grammar produced
+// for that character (`source.lean meta.tactic keyword.control`), and all we
+// have is one LSP token type. So we ask for a representative scope per type and
+// take the theme's best match for it.
+// VS Code's OWN default map from semantic token type to TextMate scope — the
+// same table it uses when a theme has no `semanticTokenColors` rule for a type.
+// Using the documented mapping rather than a hand-picked scope is what makes
+// this match the buffer, because with `semanticHighlighting` on the buffer
+// resolves Lean's tokens through exactly this table.
+//
+// It replaced a guessed list, and the guesses were wrong in a way only
+// measurement showed: for `variable` it asked for `variable.other`, which
+// Catppuccin does not define, and the sub-scope fallback then picked the
+// SHORTEST `variable.other.*` rule in the file — `variable.other.env`, a rule
+// about shell environment variables — painting every Lean fvar GraphQL-blue
+// instead of the theme's actual `variable.other.readwrite`. The earlier
+// preference for `keyword.control` over `keyword` was likewise asserted rather
+// than measured; the documented answer is plain `keyword`.
+const TOKEN_SCOPES = {
+  keyword: ["keyword"],
+  function: ["entity.name.function", "support.function"],
+  variable: ["variable.other.readwrite", "variable"],
+  property: ["variable.other.property", "variable"],
+  number: ["constant.numeric"],
+  string: ["string"],
+  comment: ["comment"],
+  type: ["entity.name.type", "support.type", "storage.type"],
+  // No `operator` entry on purpose: Lean's server emits no operator tokens
+  // (`collectSyntaxBasedSemanticTokens` only tags atoms starting with an
+  // identifier character) and the lean4 TextMate grammar has no operator rules
+  // either, so `=`/`*`/`:=` are unscoped in the BUFFER too and fall to the
+  // editor foreground — which is already what the tree paints them
+  // (`--ptw-node-text` is `--vscode-editor-foreground`).
+};
+
+/** JSON with comments and trailing commas — what theme files actually are.
+Hand-rolled because this extension deliberately has no build step and no
+dependencies; the string-awareness is the whole point, or a `//` inside a colour
+string would truncate the file. */
+function parseJsonc(text) {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    out += c;
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, "$1"));
+}
+
+/** Path to the active theme's JSON, found through the extension contributing
+it. `workbench.colorTheme` holds the theme's LABEL, which is what the
+contribution is keyed by (older themes key by `id`). */
+function activeThemeFile() {
+  const label = vscode.workspace
+    .getConfiguration("workbench")
+    .get("colorTheme");
+  for (const ext of vscode.extensions.all) {
+    const themes = ext.packageJSON?.contributes?.themes;
+    if (!Array.isArray(themes)) continue;
+    for (const t of themes)
+      if (t && (t.label === label || t.id === label))
+        return path.join(ext.extensionPath, t.path);
+  }
+  return null;
+}
+
+/** A theme plus everything it `include`s, flattened. The INCLUDED theme is the
+base (Dark+ includes dark_vs), so its rules come first and the including file's
+own rules override them. */
+function loadTheme(file, depth = 0) {
+  const empty = { tokenColors: [], semanticTokenColors: {} };
+  if (!file || depth > 8) return empty;
+  let json;
+  try {
+    json = parseJsonc(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    say(`theme: cannot read ${file}: ${e}`);
+    return empty;
+  }
+  const base =
+    typeof json.include === "string"
+      ? loadTheme(path.join(path.dirname(file), json.include), depth + 1)
+      : empty;
+  return {
+    tokenColors: base.tokenColors.concat(
+      Array.isArray(json.tokenColors) ? json.tokenColors : [],
+    ),
+    semanticTokenColors: Object.assign(
+      {},
+      base.semanticTokenColors,
+      json.semanticTokenColors || {},
+    ),
+  };
+}
+
+/** The theme's foreground for a TextMate scope. TextMate resolution: a rule's
+selector matches a scope it PREFIXES (`keyword` matches `keyword.control`), the
+longer selector wins, and ties go to the later rule — hence `>=` scanning
+forward. Descendant selectors (`source.cpp keyword.operator`) need the full
+scope stack to evaluate and are skipped rather than guessed at. */
+function scopeColor(rules, want) {
+  let best = null;
+  let bestLen = -1;
+  // Last resort: a rule MORE specific than what we asked for
+  // (`variable.other.readwrite` when we wanted `variable.other`). Not TextMate
+  // semantics — such a rule would not apply to a bare `variable.other` token —
+  // but it is the theme's own opinion about that family, and the alternative is
+  // falling back to a hard-coded hue from a different theme entirely. Measured:
+  // Catppuccin scopes variables only this way, so without it `variable` and
+  // `property` came back empty (6 of 8 types resolved, now 8).
+  let sub = null;
+  let subLen = Infinity;
+  for (const r of rules) {
+    const fg = r?.settings?.foreground;
+    if (!fg) continue;
+    let scopes = r.scope;
+    if (typeof scopes === "string") scopes = scopes.split(",");
+    if (!Array.isArray(scopes)) continue;
+    for (const s of scopes) {
+      const e = String(s).trim();
+      if (!e || e.includes(" ")) continue;
+      if (want === e || want.startsWith(e + ".")) {
+        if (e.length >= bestLen) {
+          bestLen = e.length;
+          best = fg;
+        }
+      } else if (e.startsWith(want + ".") && e.length < subLen) {
+        // Closest to the family root wins, so `variable.other.readwrite` beats
+        // `variable.other.constant.property.something`.
+        subLen = e.length;
+        sub = fg;
+      }
+    }
+  }
+  return best ?? sub;
+}
+
+/** The user's own overrides, which sit ON TOP of the theme. Both settings may
+be flat or keyed by theme name (`{"[Dark+]": {…}}`), so the active theme's
+section is merged after the flat one. Appended LAST, so they win ties. */
+function customizations(themeName) {
+  const pick = (cfg) => {
+    if (!cfg || typeof cfg !== "object") return [{}];
+    const scoped = cfg[`[${themeName}]`];
+    return scoped && typeof scoped === "object" ? [cfg, scoped] : [cfg];
+  };
+  const ed = vscode.workspace.getConfiguration("editor");
+  const tm = [];
+  for (const c of pick(ed.get("tokenColorCustomizations")))
+    if (Array.isArray(c.textMateRules)) tm.push(...c.textMateRules);
+  const sem = {};
+  for (const c of pick(ed.get("semanticTokenColorCustomizations")))
+    if (c.rules && typeof c.rules === "object") Object.assign(sem, c.rules);
+  return { tokenColors: tm, semanticTokenColors: sem };
+}
+
+/** LSP semantic token type → colour, for the types the tree actually draws. */
+function resolveTokenColors() {
+  const themeName = vscode.workspace
+    .getConfiguration("workbench")
+    .get("colorTheme");
+  const base = loadTheme(activeThemeFile());
+  const custom = customizations(themeName);
+  const theme = {
+    tokenColors: base.tokenColors.concat(custom.tokenColors),
+    semanticTokenColors: Object.assign(
+      {},
+      base.semanticTokenColors,
+      custom.semanticTokenColors,
+    ),
+  };
+  const out = {};
+  for (const type of Object.keys(TOKEN_SCOPES)) {
+    // A theme's own semantic-token colour for this exact type is the most
+    // direct answer there is, so it wins over any scope guess.
+    const sem = theme.semanticTokenColors?.[type];
+    const semFg = typeof sem === "string" ? sem : sem?.foreground;
+    if (typeof semFg === "string" && semFg.startsWith("#")) {
+      out[type] = semFg;
+      continue;
+    }
+    for (const want of TOKEN_SCOPES[type]) {
+      const c = scopeColor(theme.tokenColors, want);
+      if (c) {
+        out[type] = c;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Publish the palette where the Lean server can read it back to the widget. */
+function publishThemeColors() {
+  try {
+    fs.mkdirSync(REQUEST_DIR, { recursive: true });
+    const colors = resolveTokenColors();
+    const name = vscode.workspace
+      .getConfiguration("workbench")
+      .get("colorTheme");
+    // Bracket-pair colourisation is a SETTING, not a colour, so it is not in
+    // the `--vscode-*` set the webview gets — the six colours it cycles are.
+    // Default is on, which is why the tree looked wrong without it.
+    const brackets =
+      vscode.workspace
+        .getConfiguration("editor")
+        .get("bracketPairColorization.enabled") !== false;
+    // Not a colour either, and it rides here for the same reason: a webview
+    // cannot read a VS Code setting, so this file is the only channel the
+    // widget has for one. It is a standing look-of-the-boxes preference
+    // rather than a reading gesture, which is why it is a setting and not a
+    // button on the tree's rail.
+    const outline =
+      vscode.workspace.getConfiguration("proofTree").get("outlineOnly") ===
+      true;
+    // The tree's in-place tactic editor has the buffer's own unicode input
+    // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
+    // The TABLE is bundled with the renderer, so this is only about the user's
+    // customisations — an absent companion still gets the default input mode.
+    // Rides here for the third time for the same reason: a webview cannot read
+    // a VS Code setting.
+    const inputCfg = vscode.workspace.getConfiguration("lean4.input");
+    const custom = inputCfg.get("customTranslations") || {};
+    const input = {
+      enabled: inputCfg.get("enabled") !== false,
+      leader: inputCfg.get("leader") || "\\",
+      eager: inputCfg.get("eagerReplacementEnabled") !== false,
+      // An array, like `colors` below and for the same decoding reason.
+      custom: Object.keys(custom).map((abbreviation) => ({
+        abbreviation,
+        symbol: String(custom[abbreviation]),
+      })),
+    };
+    // An ARRAY of {type, color}, not an object keyed by type: the Lean side
+    // decodes this straight into `Array ThemeTokenColor` with a derived
+    // FromJson, where an object would need map-API surgery.
+    fs.writeFileSync(
+      THEME_FILE,
+      JSON.stringify(
+        {
+          theme: name,
+          brackets,
+          outline,
+          input,
+          colors: Object.keys(colors).map((type) => ({
+            type,
+            color: colors[type],
+          })),
+        },
+        null,
+        1,
+      ),
+    );
+    // Log the palette, not just the count: this is the only place the
+    // resolution is visible, and "the tree's blue vs the buffer's pink" is
+    // diagnosed by reading these against the theme.
+    say(
+      `theme "${name}" (brackets ${brackets ? "on" : "off"}, ` +
+        `outline ${outline ? "on" : "off"}): ` +
+        Object.keys(colors)
+          .map((t) => `${t}=${colors[t]}`)
+          .join(" "),
+    );
+  } catch (e) {
+    say(`theme colours failed: ${e}`);
+  }
+}
 
 // ---- editor-chrome strip -------------------------------------------------
 // There is NO per-window settings API, so anything beyond per-editor options
@@ -50,7 +357,12 @@ const STATIC_STRIP = {
   "workbench.editor.showTabs": "none",
   "breadcrumbs.enabled": false,
   "editor.glyphMargin": false,
-  "editor.folding": false,
+  // NOT `editor.folding: false` any more. It used to be stripped for the last
+  // scrap of gutter, but folding is what buys the lens its vertical room now
+  // (see foldToCursor): a lens on one branch of a `by_cases` can collapse the
+  // other instead of scrolling past it. Disabling folding globally made the
+  // fold commands silent no-ops. The gutter cost is nil in the lens, which has
+  // `lineNumbers: Off`, and leaving it alone is one less global side effect.
   "editor.minimap.enabled": false,
   // Sticky scroll pins the enclosing declaration to the top of the editor —
   // in a lens a few lines tall that is `theorem foo … := by` eating a large
@@ -58,51 +370,36 @@ const STATIC_STRIP = {
   // between tactics, which is exactly the jitter you feel while typing.
   "editor.stickyScroll.enabled": false,
 };
-// The lens font is shrunk so more of the proof fits the same height. This one
-// is DERIVED, not fixed: a literal size would be wrong for anyone whose editor
-// font isn't the default, so it scales the user's own.
+// The lens deliberately does NOT touch `editor.fontSize`. It used to scale it
+// down so more of the proof fit the same height, and that was the one strip
+// felt everywhere OUTSIDE the lens: settings are user-global, so opening a lens
+// resized the text in the main editor and every other window. Shrinking the
+// glyphs to buy four lines is not worth making the file you are actually
+// reading smaller. Everything left in STATIC_STRIP is chrome — margins, tabs,
+// the minimap — whose absence costs nothing to read.
 //
-// It is also the one strip that is unavoidably felt OUTSIDE the lens, so it is
-// user-configurable and can be turned off (`proofTree.lensFontScale: 1`).
-// There is genuinely no per-editor alternative: `TextEditorOptions` exposes
-// only tabSize/indentSize/insertSpaces/cursorStyle/lineNumbers, and decoration
-// render options have no fontSize. Smuggling `font-size` through a
-// decoration's `textDecoration` CSS string does render smaller glyphs per
-// editor, but VS Code measures character advance width from the CONFIGURED
-// font, so the cursor, click hit-testing and selection rectangles all stay on
-// the old grid — unusable in a pane meant for typing — and it wouldn't even
-// gain lines, since line height derives from the fontSize setting rather than
-// the painted glyphs.
-const DEFAULT_LENS_FONT_SCALE = 0.85;
-const DEFAULT_FONT_SIZE = 14; // VS Code's own default, used when unset
-const MIN_FONT_SIZE = 8;
+// There is genuinely no per-editor alternative, which is why the trade existed
+// and why it can't be salvaged: `TextEditorOptions` exposes only
+// tabSize/indentSize/insertSpaces/cursorStyle/lineNumbers, and decoration
+// render options have no fontSize. Smuggling `font-size` through a decoration's
+// `textDecoration` CSS string does paint smaller glyphs per editor, but VS Code
+// measures character advance width from the CONFIGURED font, so cursor, click
+// hit-testing and selection rectangles all stay on the old grid — unusable in a
+// pane meant for typing — and it gains no lines either, since line height
+// derives from the fontSize setting rather than the painted glyphs.
+//
+// The height knob is now `lensShrinkNudges` alone.
 
 /** A numeric setting from `proofTree.*`, falling back when unset/invalid. */
 function tuning(key, fallback) {
   const v = vscode.workspace.getConfiguration("proofTree").get(key);
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
-// Keys to snapshot and restore. `editor.fontSize` has no static target, so it
-// is listed here but valued by `stripValues`.
-const STRIP_KEYS = [...Object.keys(STATIC_STRIP), "editor.fontSize"];
-
-/** What to write, given the user's ORIGINAL values. The font must scale off
- * the original and never off the live setting: another window's lens may have
- * already shrunk it, and re-deriving from that would compound each time. */
-function stripValues(originals) {
-  const scale = tuning("lensFontScale", DEFAULT_LENS_FONT_SCALE);
-  const base =
-    typeof originals["editor.fontSize"] === "number"
-      ? originals["editor.fontSize"]
-      : DEFAULT_FONT_SIZE;
-  // Scale 1 (or anything that rounds back to the original) means "leave my
-  // font alone": write nothing for it, so the setting is never touched and
-  // restore has nothing to undo.
-  const target = Math.max(MIN_FONT_SIZE, Math.round(base * scale));
-  const out = { ...STATIC_STRIP };
-  if (target !== base) out["editor.fontSize"] = target;
-  return out;
-}
+// Keys to snapshot and restore. Every strip now has a static target, so this
+// is exactly STATIC_STRIP's keys. (A crash backup written by an OLDER version
+// may still carry `editor.fontSize`; restore iterates the SNAPSHOT's keys, not
+// this list, so such a backup is still undone correctly.)
+const STRIP_KEYS = Object.keys(STATIC_STRIP);
 let strippedOriginals = null; // in-memory while a lens is open
 
 function readChromeBackup() {
@@ -150,7 +447,7 @@ async function stripEditorChrome() {
   } catch {
     // non-fatal: worst case a crash loses the snapshot
   }
-  for (const [key, val] of Object.entries(stripValues(originals))) {
+  for (const [key, val] of Object.entries(STATIC_STRIP)) {
     await cfg.update(key, val, vscode.ConfigurationTarget.Global);
   }
 }
@@ -223,6 +520,11 @@ function findInfoviewColumn() {
 // The lens group's viewColumn while one is open. viewColumns renumber as
 // groups come and go, so reuse double-checks the group still holds the doc.
 let lensColumn = null;
+// Word wrap is a per-editor TOGGLE (`editor.action.toggleWordWrap`) with no
+// "set" form, so we have to remember whether we already flipped this lens or a
+// second popout would flip it back off. Cleared wherever `lensColumn` is, i.e.
+// when the lens goes away and its editor state with it.
+let lensWrapped = false;
 
 /** How much of the lens to leave ABOVE the tactic. AtTop alone pins it to the
  * very first row, which reads as though the proof began there; a third of the
@@ -246,6 +548,71 @@ function revealAtFraction(ed, selection) {
     new vscode.Range(top, 0, top, 0),
     vscode.TextEditorRevealType.AtTop,
   );
+}
+
+/** A boolean setting from `proofTree.*`, defaulting when unset. */
+function flag(key, fallback) {
+  const v = vscode.workspace.getConfiguration("proofTree").get(key);
+  return typeof v === "boolean" ? v : fallback;
+}
+
+/** Collapse everything that is not on the way to the cursor.
+ *
+ * The lens is a few lines tall, so what costs it most is the proof AROUND the
+ * tactic — the other branch of a `by_cases`, the `have` block you are not in.
+ * `foldAll` then `unfoldRecursively` at the cursor leaves exactly the path to
+ * the tactic open, with its siblings as one-line `⋯` stubs, which is the same
+ * thing the tree does with ⇥ and ⇳ one surface over.
+ *
+ * Best-effort by construction, and deliberately so: folding ranges come from
+ * the language server (or VS Code's indentation fallback when it offers none),
+ * so how much this collapses depends on what Lean's server publishes. If it
+ * publishes nothing the commands are silent no-ops and the lens is exactly as
+ * it was — the failure mode is "no gain", never a broken pane.
+ *
+ * Only ever issued while the lens is the ACTIVE editor: both commands act on
+ * whatever is focused, and folding the MAIN buffer instead would be a
+ * destructive-feeling surprise a long way from where the user is looking. */
+async function foldToCursor(ed) {
+  if (!flag("lensFold", true)) return;
+  if (vscode.window.activeTextEditor !== ed) {
+    say("  fold: lens is not the active editor, skipping");
+    return;
+  }
+  try {
+    await vscode.commands.executeCommand("editor.foldAll");
+    // `foldAll` can hide the cursor's own line; unfolding is by POSITION, not
+    // by what is visible, so the cursor still names the region to open.
+    await vscode.commands.executeCommand("editor.unfoldRecursively");
+  } catch (e) {
+    say(`  fold: ${e}`);
+  }
+}
+
+/** Turn word wrap on for the lens, once.
+ *
+ * The pane is slim and Lean types are long, so the lens spends its width on
+ * horizontal scrolling — which is most of what made it feel cramped. Unlike
+ * the font size this leaks NOWHERE: `toggleWordWrap` is a command that flips
+ * the editor's own session state, not a setting, so no other editor and no
+ * other window sees it.
+ *
+ * Skipped when wrapping is already on globally, since the command is a toggle
+ * with no "set" form and would turn the user's own preference OFF. */
+async function wrapLens(ed) {
+  if (lensWrapped || !flag("lensWordWrap", true)) return;
+  const mode = vscode.workspace.getConfiguration("editor").get("wordWrap");
+  if (mode && mode !== "off") {
+    lensWrapped = true; // already wrapping; nothing to toggle, nothing to undo
+    return;
+  }
+  if (vscode.window.activeTextEditor !== ed) return;
+  try {
+    await vscode.commands.executeCommand("editor.action.toggleWordWrap");
+    lensWrapped = true;
+  } catch (e) {
+    say(`  wrap: ${e}`);
+  }
 }
 
 /** Show `uri` in the lens editor: selection set, tactic a third of the way
@@ -274,6 +641,10 @@ async function showInLens(doc, selection, column) {
   // a structured tactic's range ends deep inside its last nested tactic — so a
   // cursor at the end selects the wrong node. Its start is unambiguous.
   ed.selection = new vscode.Selection(selection.end, selection.start);
+  // Both of these change which lines are visible, so they must run BEFORE the
+  // reveal that positions the tactic a third of the way down.
+  await wrapLens(ed);
+  await foldToCursor(ed);
   revealAtFraction(ed, selection);
   return { ed, selection };
 }
@@ -335,6 +706,7 @@ function findLensColumn(uri) {
     return lensColumn;
   }
   lensColumn = null;
+  lensWrapped = false;
   return null;
 }
 
@@ -386,20 +758,129 @@ function tightenRange(doc, range) {
   return end.isAfter(range.start) ? new vscode.Range(range.start, end) : null;
 }
 
-/** Paint `range` in every visible editor showing `uri`; `null` clears. */
-function highlight(uri, range) {
+// The region an ARMED delete would remove. A separate decoration from the
+// hover highlight, and deliberately: that one says "this is the tactic you are
+// pointing at", this one says "this is about to go", so it takes the editor's
+// own deleted-text colour and spans whole lines.
+/** Set `decoration` on every visible editor showing `uri`, to whatever
+`rangeFor(document)` returns — `null` clears it.
+ *
+ * A document can be visible in more than one group at once (the lens is exactly
+ * that: the same buffer beside the main editor), so every decoration here has
+ * to sweep them all. `rangeFor` takes the document because the range may need
+ * clamping against it, which the hover highlight does and the delete preview
+ * deliberately does not. */
+function paintEveryEditor(uri, decoration, rangeFor) {
   for (const ed of vscode.window.visibleTextEditors) {
     if (uri && ed.document.uri.toString() !== uri.toString()) continue;
-    let paint = null;
-    if (range) {
-      try {
-        paint = tightenRange(ed.document, range);
-      } catch {
-        paint = range; // a stale range after an edit — better than nothing
-      }
-    }
-    ed.setDecorations(highlightDecoration, paint ? [paint] : []);
+    const r = rangeFor(ed.document);
+    ed.setDecorations(decoration, r ? [r] : []);
   }
+}
+
+const previewDecoration = vscode.window.createTextEditorDecorationType({
+  backgroundColor: new vscode.ThemeColor("diffEditor.removedTextBackground"),
+  borderRadius: "2px",
+  isWholeLine: false,
+});
+
+/** Paint the delete-preview span in every visible editor for `uri`.
+ *
+ * NOT run through `tightenRange`: that clamps to the END OF THE START LINE,
+ * which is right for a hover (a structured tactic would otherwise light up its
+ * whole 13-line block) and exactly wrong here — a delete extent is routinely
+ * many lines and showing all of them is the entire point of arming. */
+function preview(uri, range) {
+  paintEveryEditor(uri, previewDecoration, () => range);
+}
+
+// Inline goal state in the lens: `⊢ …` at the end of each tactic's last line,
+// so a proof read in the lens carries its intermediate states the way an
+// Alectryon page does. An `after` decoration costs no lines and no width the
+// code was using, which is the whole reason it fits a pane this small.
+//
+// LENS ONLY, deliberately. The main buffer has the infoview for this, and
+// stamping every tactic line there would be noise competing with the thing the
+// user is editing.
+const goalDecoration = vscode.window.createTextEditorDecorationType({
+  after: {
+    color: new vscode.ThemeColor("editorCodeLens.foreground"),
+    fontStyle: "italic",
+    margin: "0 0 0 2em",
+  },
+  // The text belongs to the LINE, not to the characters around it: without
+  // this a decoration at end-of-line grows as you type past it.
+  rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+});
+
+/** The lens's editor, or null. Reuses the same three-step ladder as reveal. */
+function lensEditor(uri) {
+  const key = uri.toString();
+  const col = findLensColumn(uri);
+  if (col === null) return null;
+  return (
+    vscode.window.visibleTextEditors.find(
+      (e) => e.viewColumn === col && e.document.uri.toString() === key,
+    ) ?? null
+  );
+}
+
+/** Paint (or with an empty list, clear) the lens's inline goal state. */
+function annotate(uri, items) {
+  const ed = lensEditor(uri);
+  if (!ed) return; // no lens open: nothing to annotate, and not an error
+  if (!flag("lensGoals", true)) {
+    ed.setDecorations(goalDecoration, []);
+    return;
+  }
+  const opts = [];
+  for (const a of items) {
+    // The payload is computed from the last parse; the document may have moved
+    // on. A line past the end is simply dropped rather than clamped, since a
+    // goal drawn on the wrong line is worse than one missing.
+    if (typeof a.line !== "number" || a.line < 0 || a.line >= ed.document.lineCount)
+      continue;
+    const end = ed.document.lineAt(a.line).range.end;
+    opts.push({
+      range: new vscode.Range(end, end),
+      renderOptions: { after: { contentText: a.text } },
+    });
+  }
+  ed.setDecorations(goalDecoration, opts);
+}
+
+/** Run an editor command against the doc holding `uri`.
+ *
+ * `undo`/`redo` act on whatever is FOCUSED — there is no document-targeted
+ * undo API — so the group has to be activated first, by the same positional
+ * ladder `popout` uses (the only way an extension can activate an arbitrary
+ * group). Focus therefore moves to the editor. That is unavoidable, and it is
+ * also the better behaviour: you land where the change happened, and every
+ * subsequent ⌘Z is native, which keeps repeats off this one-shot relay
+ * entirely. */
+async function runEditorCommand(uri, command) {
+  const doc = await vscode.workspace.openTextDocument(uri);
+  const lens = findLensColumn(uri);
+  const existing = vscode.window.visibleTextEditors.find(
+    (e) => e.document.uri.toString() === uri.toString(),
+  );
+  const column = lens ?? existing?.viewColumn ?? vscode.ViewColumn.One;
+  // showTextDocument focuses (no preserveFocus), which is what the command
+  // needs; it also handles the case where the doc is open in no group at all.
+  await vscode.window.showTextDocument(doc, { viewColumn: column, preview: false });
+  await vscode.commands.executeCommand(command);
+}
+
+/** Paint `range` in every visible editor showing `uri`; `null` clears. */
+function highlight(uri, range) {
+  paintEveryEditor(uri, highlightDecoration, (doc) => {
+    if (!range) return null;
+    try {
+      return tightenRange(doc, range);
+    } catch {
+      return range; // a stale range after an edit — better than nothing
+    }
+  });
 }
 
 /** tree→source reveal. The lens is the working surface, so it wins when one
@@ -479,12 +960,52 @@ async function popout(uri, selection) {
 
 function activate(context) {
   log = vscode.window.createOutputChannel("Proof Tree Companion");
-  context.subscriptions.push(log, highlightDecoration);
+  context.subscriptions.push(
+    log,
+    highlightDecoration,
+    previewDecoration,
+    goalDecoration,
+  );
+  // Annotations are positional, so the first edit invalidates every one below
+  // it. Drop them immediately and wait for the widget's next `annotate` (it
+  // re-sends whenever the proof it holds changes) rather than leave goals
+  // pinned to lines that have moved.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (e.contentChanges.length === 0) return;
+      const ed = lensEditor(e.document.uri);
+      if (ed) ed.setDecorations(goalDecoration, []);
+    }),
+  );
   say(`activated (pid ${process.pid}), watching ${REQUEST_DIR}`);
   // Crash recovery: a leftover snapshot means a previous session died with a
   // lens open (its global settings still stripped) — restore before
   // anything else.
   void restoreEditorChrome(true);
+  // The tree's syntax colouring follows the editor's theme, and this is the
+  // only place that can resolve it (see TOKEN_SCOPES). Published on activation
+  // and whenever the theme changes; the widget re-reads it through the server.
+  publishThemeColors();
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveColorTheme(() => publishThemeColors()),
+  );
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      // A theme EDIT (tokenColorCustomizations) changes colours without
+      // changing the active theme, so watch the customisation keys too — and
+      // every SETTING the file carries alongside them, or toggling one would
+      // not be seen until the next theme change.
+      if (
+        e.affectsConfiguration("workbench.colorTheme") ||
+        e.affectsConfiguration("editor.tokenColorCustomizations") ||
+        e.affectsConfiguration("editor.semanticTokenColorCustomizations") ||
+        e.affectsConfiguration("editor.bracketPairColorization.enabled") ||
+        e.affectsConfiguration("proofTree.outlineOnly") ||
+        e.affectsConfiguration("lean4.input")
+      )
+        publishThemeColors();
+    }),
+  );
   // Restore the stripped chrome when the lens group closes (its column
   // vanishes from tabGroups, or gets renumbered away — the doc check in
   // popout handles the rare renumber-collision).
@@ -507,6 +1028,7 @@ function activate(context) {
       }
       say("lens closed; restoring editor chrome");
       lensColumn = null;
+      lensWrapped = false;
       void restoreEditorChrome(false);
     }),
   );
@@ -556,7 +1078,12 @@ function activate(context) {
     const target = vscode.Uri.parse(req.uri, true);
     // highlight/clear fire on hover, so they'd drown the log; the rest are
     // deliberate gestures and each one is worth a line.
-    const chatty = req.action === "highlight" || req.action === "clear";
+    const chatty =
+      req.action === "highlight" ||
+      req.action === "clear" ||
+      req.action === "preview" ||
+      req.action === "preview-clear" ||
+      req.action === "annotate";
     if (!chatty)
       say(`request ${req.nonce}: action=${req.action ?? "popout"} uri=${req.uri}`);
     // Every open window runs a companion, so exactly one must react. The
@@ -586,10 +1113,22 @@ function activate(context) {
         highlight(target, range);
       } else if (req.action === "clear") {
         highlight(null, null);
+      } else if (req.action === "preview") {
+        preview(target, range);
+      } else if (req.action === "preview-clear") {
+        preview(null, null);
+      } else if (req.action === "annotate") {
+        annotate(target, req.annotations ?? []);
+      } else if (req.action === "undo" || req.action === "redo") {
+        await runEditorCommand(target, req.action);
       } else if (req.action === "reveal") {
         await reveal(target, range);
+        annotate(target, req.annotations ?? []);
       } else {
         await popout(target, range);
+        // After the lens exists, not before: `annotate` resolves the lens
+        // editor and a fresh split has none until popout returns.
+        annotate(target, req.annotations ?? []);
       }
       if (!chatty) say("  done");
     } catch (e) {

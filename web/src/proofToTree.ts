@@ -11,7 +11,13 @@ import type {
   SourceComment,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import type { AddSpec, HypLine, NodeFlags, TreeNode } from "./types";
+import type {
+  AddSpec,
+  DeleteSpec,
+  HypLine,
+  NodeFlags,
+  TreeNode,
+} from "./types";
 import { collapseLabel } from "./briefLabel";
 
 // Adapter: Paperproof `Proof` → the renderer's `TreeNode[]`.
@@ -144,7 +150,7 @@ export function hypLine(h: Hypothesis): string {
 // Four levels of verbosity, selected by the rail's hyp-mode button:
 //
 // - `full` — the goal's whole context.
-// - `delta` (default) — the hypotheses the goal GAINED over the goal its own
+// - `delta` — the hypotheses the goal GAINED over the goal its own
 //   producing tactic consumed (Paperproof's "introduced here" semantics; for a
 //   root goal, its binders — gained from the theorem statement), PLUS any older
 //   hypotheses the consuming tactic uses: usage is half the point of showing
@@ -157,14 +163,29 @@ export function hypLine(h: Hypothesis): string {
 //   producer's `goalBefore`. A ROOT goal has no preceding tactic, so nothing
 //   was introduced and its box shows the `⊢ ` line alone — that is the truth,
 //   not a rendering gap. Same for a tactic that binds nothing (`rw`, `exact`).
-// - `used` — ONLY what the consuming tactic actually mentions. This is the
-//   narrowest honest answer to "what does this step depend on", and it too can
-//   legitimately come back EMPTY: a leaf goal has no consuming tactic, so
-//   nothing is used, and its box shows the `⊢ ` line alone.
+// - `used` (default) — what the REST OF THE PROOF under this goal actually
+//   depends on: the union of `tacticDependsOn` over every step in the goal's
+//   SUBTREE, not just its immediate consumer. `tacticDependsOn` comes from the
+//   elaborated proof term (Paperproof collects the fvars the mvar assignment
+//   mentions), so implicit uses by `omega`/`linarith`/`simp_all` count — no
+//   counterfactual re-elaboration is needed. Known blind spots, accepted as
+//   data: `decide`-style proofs (the term goes through `of_decide_eq_true` and
+//   mentions no hyp fvars) and delayed-assigned goals (Paperproof reads only
+//   `eAssignment`).
 //
-// `new` and `used` are duals and incomparable — `new` is what the tactic ABOVE
-// bound, `used` is what the tactic BELOW mentions — and both are subsets of
-// `delta` (which is their union). Context order is preserved in every mode.
+//   A goal with NO consuming tactic falls back to `delta`'s rule instead of
+//   coming back empty, and that carve-out is what makes this mode usable as
+//   the default. "What the rest of the proof uses" is undefined when there is
+//   no rest of the proof yet — and a goal with no consumer is precisely the
+//   live FRONTIER, the one being written against, where an empty box reads as
+//   broken rather than as data. `delta` is what such a goal showed before this
+//   became the default, so the fallback can only hold that ground.
+//
+// `new` and `used` are incomparable — `new` is what the tactic ABOVE bound,
+// `used` is what the subtree BELOW mentions — and immediate-consumer usage
+// (the ▸ gutter flag, still per-step) is a subset of `used`, which is a subset
+// of `full`. `delta` contains `new` plus the immediate-consumer part of `used`
+// but not its deeper reaches. Context order is preserved in every mode.
 export type HypMode = "used" | "new" | "delta" | "full";
 
 function contextFor(
@@ -175,12 +196,38 @@ function contextFor(
   // Source flags governing this goal (see NodeFlags): `.no-hyps` drops the
   // context outright, `.h#name` narrows it to a named few.
   flags?: ParsedFlags,
+  // For `used` mode: fvarId → username over the goal's whole subtree (see
+  // `subtreeUsed` in proofToTree). Ids are matched first; usernames are the
+  // fallback for ids the goal's own context has never held — `rw … at h` /
+  // `simp at h` mint a NEW fvarId for `h` in the child goal, so a descendant's
+  // dependency can arrive under an id this goal doesn't know while plainly
+  // meaning its `h`.
+  deepUsed?: Map<string, string>,
 ): HypLine[] {
   if (flags?.noHyps) return [];
   const used = new Set(consumedBy?.tacticDependsOn ?? []);
+  // What this goal gained over the goal its producer consumed, plus anything
+  // its own consumer uses — `delta`'s rule, and the leaf fallback for `used`.
+  const deltaOf = () => {
+    const inherited = new Set(producedBy?.goalBefore.hyps.map((h) => h.id));
+    return goal.hyps.filter((h) => !inherited.has(h.id) || used.has(h.id));
+  };
   let shown = goal.hyps;
   if (mode === "used") {
-    shown = goal.hyps.filter((h) => used.has(h.id));
+    // No consumer means no subtree to read a dependency off, so there is no
+    // honest subtree answer — see the mode's comment above for why the
+    // fallback rather than an empty box.
+    if (!consumedBy) shown = deltaOf();
+    else {
+      const deep = deepUsed ?? new Map<string, string>();
+      const ownIds = new Set(goal.hyps.map((h) => h.id));
+      const fallbackNames = new Set<string>();
+      for (const [id, name] of deep)
+        if (!ownIds.has(id) && name) fallbackNames.add(name);
+      shown = goal.hyps.filter(
+        (h) => deep.has(h.id) || fallbackNames.has(h.username),
+      );
+    }
   } else if (mode === "new") {
     // Only what the PRODUCING tactic bound: fvarIds present now but absent from
     // the goal that tactic consumed. A root goal (no producer) introduced
@@ -191,8 +238,7 @@ function contextFor(
       shown = goal.hyps.filter((h) => !inherited.has(h.id));
     }
   } else if (mode === "delta") {
-    const inherited = new Set(producedBy?.goalBefore.hyps.map((h) => h.id));
-    shown = goal.hyps.filter((h) => !inherited.has(h.id) || used.has(h.id));
+    shown = deltaOf();
   }
   // `.h#name` INTERSECTS with the rail's breadth rather than overriding it, so
   // the two controls compose: a named hyp the current mode wouldn't show stays
@@ -255,12 +301,43 @@ function caseName(goal: GoalInfo | undefined): string | undefined {
 
 // ---- Cursor → tactic node ---------------------------------------------------
 
-const posLE = (a: LspPos, b: LspPos) => cmpPos(a, b) <= 0;
+/** `a` is at or before `b`. Exported so the pure edit modules share ONE coding
+of "compare two LSP positions" with the cursor-accent lookups here. */
+export const posLE = (a: LspPos, b: LspPos) => cmpPos(a, b) <= 0;
 /** HALF-OPEN containment, `[start, stop)`. See the widget's accent notes: step
 ranges include trailing trivia, so consecutive tactics share a boundary
 position and an inclusive end lets a neighbour match. */
 export function positionContains(r: ProofStepPosition, p: LspPos): boolean {
   return posLE(r.start, p) && !posLE(r.stop, p);
+}
+
+/** Every source range that should resolve to a node, as `tacticNodeAt` wants
+them.
+ *
+ * One list for three readers — the cursor accent, the gallery's follow, and
+ * diagnostics — because they are asking the same question and three copies of
+ * it drifted: the gallery's own copy filtered on `d.position`, which an elide
+ * marker never has, so paging could not follow the cursor into a combined run.
+ *
+ * A MARKER owns several ranges, one per tactic it swallowed, and offers each of
+ * them under its own id: the marker is what now stands for that run, so a
+ * position anywhere inside it must resolve to the thing actually on screen.
+ *
+ * Goals are excluded, as they always have been: a goal's `position` is its
+ * PRODUCER's range, so it is always redundant with that tactic's own node. */
+export function tacticTargets(
+  nodes: TreeNode[],
+): { id: string; position: ProofStepPosition }[] {
+  return nodes.flatMap((d) => {
+    const parts = d.elidedCut?.parts;
+    if (parts)
+      return parts
+        .filter((p) => p.position)
+        .map((p) => ({ id: d.id, position: p.position! }));
+    return d.type === "tactic" && d.position
+      ? [{ id: d.id, position: d.position }]
+      : [];
+  });
 }
 
 /**
@@ -285,6 +362,36 @@ export function tacticNodeAt(
   tactics: { id: string; position: ProofStepPosition }[],
   p: LspPos,
 ): string | null {
+  // A tactic that STARTS on the cursor's own line wins outright, and this is
+  // the rule that makes the accent track the cursor the way a reader expects.
+  //
+  // Without it the `prior` rule below — which prefers the nearest tactic that
+  // has already CLOSED — fires far beyond the case-marker/bullet gaps it was
+  // written for, because a `calc` link's term text, a bullet and a comment line
+  // all belong to NO tactic's range. The result was a systematic one-line LAG:
+  // measured on the scratch file's `calc_workout`, the cursor on
+  // `_ ≤ _ := by linarith` (line 181) accented the PREVIOUS link's `ring`, the
+  // cursor on the `calc` head accented the `have` above it, and the cursor on
+  // chain 2's last link accented the next bullet's `calc`. Every one of those
+  // now resolves to the tactic written on that line.
+  //
+  // The cursor may sit BEFORE the line's tactic starts (`= 2 * … := by ring`
+  // is mostly term text, with `ring` at the end) — that still means "this
+  // line", so the first tactic on the line stands in.
+  const onLine = tactics.filter((t) => t.position.start.line === p.line);
+  if (onLine.length > 0) {
+    let best: (typeof tactics)[number] | null = null;
+    for (const t of onLine)
+      if (
+        cmpPos(t.position.start, p) <= 0 &&
+        (!best || cmpPos(best.position.start, t.position.start) < 0)
+      )
+        best = t;
+    if (!best)
+      for (const t of onLine)
+        if (!best || cmpPos(t.position.start, best.position.start) < 0) best = t;
+    return best!.id;
+  }
   const span = (r: ProofStepPosition) =>
     (r.stop.line - r.start.line) * 1e4 + (r.stop.character - r.start.character);
   let inner: (typeof tactics)[number] | null = null;
@@ -600,8 +707,9 @@ function cleanLabel(label: string, comments: SourceComment[]): string {
 
 export interface ProofToTreeOptions {
   /**
-   * Label each tactic with its goal's FULL local context instead of the delta
-   * the goal gained (plus used) — contexts read additively down the tree.
+   * How much of each goal's local context to draw — see `HypMode`. Defaults to
+   * `used` (what the proof below the goal actually depends on), matching the
+   * rail's own starting mode so the two can't drift.
    */
   hypMode?: HypMode;
   /**
@@ -614,9 +722,15 @@ export interface ProofToTreeOptions {
 
 export function proofToTree(
   proof: Proof,
-  { hypMode = "delta", brief = false }: ProofToTreeOptions = {},
+  { hypMode = "used", brief = false }: ProofToTreeOptions = {},
 ): TreeNode[] {
   const goals = goalIndex(proof);
+
+  // Which steps the supplemental parser synthesized (see paperproof.ts
+  // `RecoveredStep`) — joined by position.start, the sidecar's key.
+  const recoveredAt = new Map<string, "failed" | "skipped" | "term">();
+  for (const r of proof.recovered ?? [])
+    recoveredAt.set(`${r.start.line}:${r.start.character}`, r.kind);
 
   // Each goal is consumed by at most one tactic → index steps by goalBefore.
   const stepByGoal = new Map<string, ProofStep>();
@@ -635,6 +749,31 @@ export function proofToTree(
       if (b && cmpPos(b.position.stop, best.position.stop) > 0) best = b;
     }
     return best;
+  }
+
+  // What the rest of the proof under a goal depends on: the union of
+  // `tacticDependsOn` over every step in the goal's subtree, each fvarId
+  // paired with its username — resolved in the reporting step's OWN
+  // `goalBefore.hyps`, the one context where the id is guaranteed live. The
+  // username is what lets an ancestor goal recognise a dependency whose
+  // fvarId was re-minted below it (`rw … at h`); see `contextFor`'s `used`
+  // branch. Memoized per goal — a parent's set unions its children's, so the
+  // walk is linear in practice over a proof-sized tree.
+  const subtreeUsedMemo = new Map<string, Map<string, string>>();
+  function subtreeUsed(goalId: string): Map<string, string> {
+    const memo = subtreeUsedMemo.get(goalId);
+    if (memo) return memo;
+    const out = new Map<string, string>();
+    const s = stepByGoal.get(goalId);
+    if (s) {
+      const nameById = new Map(s.goalBefore.hyps.map((h) => [h.id, h.username]));
+      for (const id of s.tacticDependsOn) out.set(id, nameById.get(id) ?? "");
+      for (const g of stepGoalsAfter(s))
+        for (const [id, name] of subtreeUsed(g.id))
+          if (!out.has(id)) out.set(id, name);
+    }
+    subtreeUsedMemo.set(goalId, out);
+    return out;
   }
 
   // Where a NEW tactic for a pending goal would go — the seam behind the
@@ -885,6 +1024,45 @@ export function proofToTree(
     };
   }
 
+  // The goals a tactic's block OWNS — what a delete on it takes with it.
+  //
+  // Both halves of this rule are load-bearing and both are already justified
+  // elsewhere in this file. Spawned-first is `NodeFlags.targets`' rule: a
+  // `have … := by` opens a side proof AND continues the main line, and "delete
+  // this have" plainly means the former. And the split test reads `goalsAfter`
+  // ALONE, never `stepGoalsAfter` — the same conflation that made a `have`'s
+  // continuation look like one branch of a two-way split (see addSpecFor). A
+  // single `goalsAfter` is a linear continuation, which the tactic does not own
+  // and a delete must leave standing.
+  function ownedGoals(step: ProofStep): string[] {
+    if (step.spawnedGoals.length > 0) return step.spawnedGoals.map((g) => g.id);
+    return step.goalsAfter.length > 1 ? step.goalsAfter.map((g) => g.id) : [];
+  }
+
+  // Where a delete gesture on this node reaches (see types.ts DeleteSpec).
+  // Positions only — the widget resolves each to a `TacticSlot` and unions
+  // them, which is what makes a truncated `induction … with` range and a
+  // bullet belonging to no step both come out right.
+  function deleteSpecFor(
+    kind: "tactic" | "goal",
+    step: ProofStep | undefined,
+    comments: ProofStepPosition[] | undefined,
+  ): DeleteSpec | undefined {
+    if (!step) return undefined;
+    const anchors = [step.position];
+    // A goal's whole proof is everything below it, continuation included —
+    // that IS its proof. A tactic keeps its continuation.
+    const owned =
+      kind === "goal"
+        ? stepGoalsAfter(step).map((g) => g.id)
+        : ownedGoals(step);
+    for (const g of owned) {
+      const last = subtreeLastStep(g);
+      if (last) anchors.push(last.position);
+    }
+    return { kind, anchors, comments: comments ?? [] };
+  }
+
   function addSpecFor(goalId: string, prod: ProofStep): AddSpec {
     // A pending goal that is a calc HOLE is filled where it sits: the generic
     // line insertion below would anchor on the last step written INSIDE the
@@ -1036,7 +1214,16 @@ export function proofToTree(
       // The local context rides the goal node itself and is drawn inside its
       // box, above the `⊢ ` line — the goal and the assumptions it holds under
       // are one thing to read, exactly as the infoview shows them.
-      hyps: goal && contextFor(goal, step, producedBy, hypMode, hypFlags.get(goalId)),
+      hyps:
+        goal &&
+        contextFor(
+          goal,
+          step,
+          producedBy,
+          hypMode,
+          hypFlags.get(goalId),
+          hypMode === "used" ? subtreeUsed(goalId) : undefined,
+        ),
       comment: commentByNode.text.get(goalId),
       commentRanges: commentByNode.ranges.get(goalId),
       // A root goal's own flags (the pre-proof narrative slot) act on the
@@ -1073,6 +1260,15 @@ export function proofToTree(
         pending && goal && !holeByGoal.has(goalId) && !addLink && !brokenChain
           ? calcRelations(goalId, goal.type)
           : undefined,
+      // Clearing a goal removes its whole proof. A ROOT goal is excluded from
+      // the comment sweep rather than from the gesture: its strip is the
+      // theorem's docstring (and any pre-proof narrative), which is not part
+      // of the proof being cleared.
+      deleteSpec: deleteSpecFor(
+        "goal",
+        step,
+        roots.includes(goalId) ? [] : commentByNode.ranges.get(goalId),
+      ),
     });
 
     // A block that never parsed and has no step of its own is INVENTED here,
@@ -1124,6 +1320,9 @@ export function proofToTree(
       // Carry the tactic's source span so the widget can link this node back to
       // the `.lean` source (see types.ts `TreeNode.position`).
       position: step.position,
+      recovered: recoveredAt.get(
+        `${step.position.start.line}:${step.position.start.character}`,
+      ),
       comment: commentByNode.text.get(tId),
       commentRanges: commentByNode.ranges.get(tId),
       // Spawned goals first (see NodeFlags.targets): a `have … := by` opens a
@@ -1145,6 +1344,8 @@ export function proofToTree(
         brokenChain?.step === step
           ? repairSpec(goalId, brokenChain.chain, producedBy)
           : undefined,
+      // Delete this tactic and any block it owns — never its continuation.
+      deleteSpec: deleteSpecFor("tactic", step, commentByNode.ranges.get(tId)),
     });
 
     // A chain's links can drop the LHS the box above them already shows —

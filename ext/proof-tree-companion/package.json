@@ -22,19 +22,32 @@
     "configuration": {
       "title": "Proof Tree Companion",
       "properties": {
-        "proofTree.lensFontScale": {
-          "type": "number",
-          "default": 0.85,
-          "minimum": 0.5,
-          "maximum": 1,
-          "markdownDescription": "Scale applied to `#editor.fontSize#` while the lens is open, so more of the proof fits its few lines. **This is unavoidably global** \u2014 VS Code has no per-editor font API (`TextEditorOptions` covers only tab size, indent, cursor style and line numbers), so the main editor shrinks with it. The original size is restored when the lens closes. Set to `1` to leave your font alone; height and sticky-scroll removal still apply."
+        "proofTree.outlineOnly": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Draw the tree's node boxes as borders with no fill, letting the outline alone carry goal-vs-tactic. Purely how the boxes look — nothing moves and nothing is hidden. A setting rather than a button on the tree's rail because it is a standing preference, not something you reach for while reading a proof."
+        },
+        "proofTree.lensGoals": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show each tactic's resulting goal inline at the end of its line in the lens, so a proof read there carries its intermediate states. Lens only — the main editor has the infoview for this. The text is drawn as a decoration, so it costs no lines and no width the code was using, and it is dropped as soon as you edit (the widget re-sends it once the file re-elaborates)."
+        },
+        "proofTree.lensFold": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Collapse everything that is not on the way to the tactic when opening it in the lens, leaving sibling branches as one-line stubs. The lens is only a few lines tall, and what costs it most is the proof around the tactic. Best-effort: how much collapses depends on the folding ranges the Lean server publishes, and with none it simply does nothing."
+        },
+        "proofTree.lensWordWrap": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Wrap long lines in the lens, so a slim pane does not spend its width on horizontal scrolling. Applies to the lens editor ALONE — it uses the word-wrap toggle command, not the `#editor.wordWrap#` setting, so nothing leaks to your other editors or windows. Skipped when you already wrap globally."
         },
         "proofTree.lensShrinkNudges": {
           "type": "integer",
           "default": 3,
           "minimum": 0,
           "maximum": 8,
-          "markdownDescription": "How far to shrink the lens below the 50% split it opens at. The split is roughly 8-9 nudges tall, so **lower is taller** \u2014 `0` leaves the lens at half the infoview column."
+          "markdownDescription": "How far to shrink the lens below the 50% split it opens at. The split is roughly 8-9 nudges tall, so **lower is taller** — `0` leaves the lens at half the infoview column."
         }
       }
     }

@@ -30,21 +30,46 @@ import {
   refreshCodeFontFamily,
   measureText,
 } from "./layout";
-import type { CalcRelOption, Proof, ProofStepPosition } from "./paperproof";
+import type { ReflowMode } from "./layout";
+import {
+  AbbrevSession,
+  DEFAULT_ABBREV,
+  underlineRuns,
+  type AbbrevConfig,
+  type AbbrevSpan,
+} from "./abbreviation";
+import type {
+  CalcRelOption,
+  Proof,
+  ProofStepPosition,
+  TacticSlot,
+} from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import { calcSkeleton } from "./calcEdit";
+import {
+  completionsAt,
+  type CompletionItem,
+  type CompletionPools,
+} from "./completion";
+import { layoutKeys } from "./layoutKey";
 import type {
   AddSpec,
   CombinedPart,
+  DeleteSpec,
   HypLine,
+  PlacedNode,
   TreeNode,
   WrappedLine,
 } from "./types";
+import { deleteExtent, type DeleteExtent } from "./deleteEdit";
+import { attachDiagnostics, type TreeDiagnostic } from "./diagnostics";
 import {
   positionContains,
   proofToTree,
   rootIds,
   tacticNodeAt,
+  tacticTargets,
+  posLE,
 } from "./proofToTree";
 import type { HypMode } from "./proofToTree";
 import {
@@ -72,7 +97,11 @@ import {
   RAIL_PRESSED,
   SEQ_STROKE,
   SORRY_FILL,
+  DANGER_FILL,
+  WARN_FILL,
+  TOKEN_VARS,
   ensurePaletteStyle,
+  observeThemeChange,
   resolveThemeKind,
 } from "./theme";
 
@@ -84,9 +113,11 @@ import {
 // `onReveal` (tree→source) and `highlightPos` (source→tree).
 
 // Snapshot taken on fold/unfold so we can re-anchor the scroll position to the
-// toggled node after the relayout (see `toggle`).
+// toggled node after the relayout (see `toggle`). `key` is what actually
+// matches it across the relayout — see `layoutKeys`.
 interface Anchor {
   id: string;
+  key: string;
   x: number;
   y: number;
 }
@@ -121,7 +152,7 @@ const HYP_MODES: Record<
   used: {
     glyph: "▸",
     title:
-      "Context: only hypotheses the tactic below actually mentions (click for only the ones the tactic above introduced)",
+      "Context: only hypotheses the rest of the proof below actually uses (click for only the ones the tactic above introduced)",
     next: "new",
   },
   new: {
@@ -140,6 +171,38 @@ const HYP_MODES: Record<
     glyph: "∀",
     title: "Context: every hypothesis in scope (click for only the used ones)",
     next: "used",
+  },
+};
+
+// Reflow is a THREE-state cycle on one rail button, the same shape as
+// HYP_MODES above and for the same reason: two independent booleans would let
+// you ask for both budgets at once, and a second button would spend rail space
+// on a mode you reach for occasionally. `wide` is exactly twice `narrow`'s
+// column (layout.ts REFLOW_WIDE_W) — the setting for bringing the widest boxes
+// under control without paying narrow reflow's full height cost. The glyph
+// carries the current state, since three of them can't be read off a pressed
+// style.
+const REFLOW_MODES: Record<
+  ReflowMode,
+  { glyph: string; title: string; next: ReflowMode }
+> = {
+  off: {
+    glyph: "¶",
+    title:
+      "Reflow: wrap labels at a narrower column so branches fit side by side (click for the wide budget)",
+    next: "wide",
+  },
+  wide: {
+    glyph: "¶",
+    title:
+      "Reflow (wide): labels wrapped at twice the narrow column — reins in the widest boxes without narrow reflow's height cost (click for the narrow budget)",
+    next: "narrow",
+  },
+  narrow: {
+    glyph: "¶",
+    title:
+      "Reflow (narrow): labels wrapped at the tightest column, breaking at commas, connectives, := and tactic keywords (click to turn reflow off)",
+    next: "off",
   },
 };
 
@@ -181,7 +244,180 @@ const clampZoom = (z: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
 // Clamp a scroll offset into [0, max]; used everywhere an effect restores scroll.
 const clampScroll = (v: number, max: number) => Math.max(0, Math.min(max, v));
 
+// How long the tree takes to follow the editor cursor onto a new node.
+//
+// This replaced `behavior: "smooth"`, and the reason is that the UA picks that
+// duration: it is tuned for page navigation and does not scale with how far it
+// is going, so a hop to the very next tactic cost the same as a jump across the
+// proof. Walking the cursor down a proof then left the tree visibly trailing,
+// because each cursor move restarted an animation the one before it had not
+// finished. Short enough to keep up with held-down cursor keys, long enough to
+// still read as movement rather than as a cut.
+const FOLLOW_MS = 130;
+
+/** Base style for a text layer painted in register with the in-place editor's
+textarea — the syntax-colouring mirror behind it and the pending-abbreviation
+underline above it.
+ *
+ * They must agree with the textarea's own metrics to the pixel, and the trap is
+ * INHERITED CSS: a textarea is insulated from ancestor text styles by the UA
+ * stylesheet and a plain div is not. Measured — the app root's `text-align:
+ * center` put the mirror's glyphs 68.5px right of the caret, and an inherited
+ * `text-rendering: optimizeLegibility` would have changed glyph ADVANCES
+ * silently and only for some strings. So `textAlign`/`textRendering`/
+ * `unicodeBidi` are PINNED here rather than left to inherit.
+ *
+ * Shared because two copies of a pinning this fragile is exactly how one of them
+ * drifts: a new ancestor rule shows up as text sliding away from the caret, not
+ * as an error. */
+const editOverlayLayer = (zIndex: number): CSSProperties => ({
+  position: "absolute",
+  inset: 0,
+  zIndex,
+  overflow: "hidden",
+  pointerEvents: "none",
+  boxSizing: "border-box",
+  padding: `${NODE_PAD_Y - 1}px ${NODE_PAD - 2}px`,
+  border: "2px solid transparent",
+  fontFamily: getCodeFontFamily(),
+  fontSize: NODE_FONT_PX,
+  lineHeight: `${LINE_H}px`,
+  letterSpacing: 0,
+  whiteSpace: "pre",
+  textAlign: "left",
+  textRendering: "auto",
+  unicodeBidi: "normal",
+});
+// Past a SCREENFUL the animation is not legible anyway — you cannot track a
+// jump that big by eye — so easing it only spends time. Go straight there. The
+// threshold is the viewport itself, not a fraction of it, so it needs no
+// constant: it is measured off the element at the moment of the move.
+
 const HYP_MARK = "▸";
+
+/**
+ * Where the scroll box must sit for `node` to be comfortably in view.
+ *
+ * ONE function because it is one question, asked by both things that move the
+ * view to a node: the editor-cursor follow and the diagnostic pager. It returns
+ * the CURRENT offsets unchanged when the node already sits inside the
+ * comfortable band, so "nothing to do" is a comparison rather than a second
+ * rule each caller has to get right.
+ *
+ * Vertical is the reading axis in both layout modes: centre the node when it
+ * strays outside the band. Horizontally the modes differ, and the difference is
+ * in their coordinates rather than in taste (see the `[nodes]` anchor's note).
+ * Compact tests the node's LEFT EDGE — a box whose start you can already see is
+ * left alone however far its tail runs, which is what stops the view ratcheting
+ * rightward once per cursor move — and brings it to COMPACT_LEFT from either
+ * side; wide centres the box.
+ */
+function inViewScroll(
+  el: HTMLElement,
+  node: PlacedNode,
+  zoom: number,
+  padX: number,
+  padY: number,
+  compact: boolean,
+): { left: number; top: number } {
+  const cx = (MARGIN.left + padX + node.x) * zoom;
+  const cy = (MARGIN.top + padY + node.y) * zoom;
+  const halfW = (node.data.w / 2) * zoom;
+  const halfH = ((node.data.h + node.data.commentBlockH) / 2) * zoom;
+  const pad = 32;
+  const maxX = el.scrollWidth - el.clientWidth;
+  const maxY = el.scrollHeight - el.clientHeight;
+  let left = el.scrollLeft;
+  let top = el.scrollTop;
+  if (
+    cy - halfH < el.scrollTop + pad ||
+    cy + halfH > el.scrollTop + el.clientHeight - pad
+  )
+    top = clampScroll(cy - el.clientHeight / 2, maxY);
+  if (compact) {
+    const leftEdge = cx - halfW;
+    if (
+      leftEdge < el.scrollLeft + pad ||
+      leftEdge > el.scrollLeft + el.clientWidth - pad
+    )
+      left = clampScroll(leftEdge - COMPACT_LEFT * zoom, maxX);
+  } else if (
+    cx - halfW < el.scrollLeft + pad ||
+    cx + halfW > el.scrollLeft + el.clientWidth - pad
+  ) {
+    left = clampScroll(cx - el.clientWidth / 2, maxX);
+  }
+  return { left, top };
+}
+
+/** The in-flight view move. Held so a second one CANCELS the first rather than
+fighting it — a burst of cursor moves must land exactly where the last one alone
+would. Shared between the cursor follow and the diagnostic pager: they are both
+"move the view", and whichever spoke last wins. */
+type FollowAnim = { raf: number | null; timer: number | null };
+
+/** Ease the scroll box to (left, top) on OUR schedule (FOLLOW_MS), cancelling
+whatever move was in flight.
+ *
+ * A jump longer than a viewport skips the animation: you cannot track one that
+ * big by eye, so easing it only spends time. The rAF loop is backed by a
+ * `setTimeout` that snaps to the target, and that is not padding — a HIDDEN
+ * webview fires no animation frames at all, so without it the move would simply
+ * never happen there. */
+function animateScroll(
+  anim: FollowAnim,
+  el: HTMLElement,
+  left: number,
+  top: number,
+) {
+  if (anim.raf !== null) cancelAnimationFrame(anim.raf);
+  if (anim.timer !== null) window.clearTimeout(anim.timer);
+  const x0 = el.scrollLeft;
+  const y0 = el.scrollTop;
+  const dx = left - x0;
+  const dy = top - y0;
+  const land = () => {
+    anim.raf = null;
+    anim.timer = null;
+    el.scrollLeft = left;
+    el.scrollTop = top;
+  };
+  if (Math.abs(dy) > el.clientHeight || Math.abs(dx) > el.clientWidth) {
+    land();
+    return;
+  }
+  const t0 = performance.now();
+  const step = () => {
+    const t = Math.min(1, (performance.now() - t0) / FOLLOW_MS);
+    // Ease out: leaves immediately, settles gently, so the eye is carried
+    // rather than yanked.
+    const e = 1 - (1 - t) ** 3;
+    el.scrollLeft = x0 + dx * e;
+    el.scrollTop = y0 + dy * e;
+    anim.raf = t < 1 ? requestAnimationFrame(step) : null;
+  };
+  anim.raf = requestAnimationFrame(step);
+  anim.timer = window.setTimeout(() => {
+    if (anim.raf !== null) cancelAnimationFrame(anim.raf);
+    land();
+  }, FOLLOW_MS + 60);
+}
+
+// The diagnostic RIBBON: a bar down the inside of a node's left edge, in the
+// worst severity's ink. Drawn INSIDE the box's own footprint on purpose — the
+// box already reserves NODE_PAD (12) of left padding, so the ribbon sits in
+// space no glyph occupies and the layout is untouched. Reserving a lane for it
+// would have made every proof lay out differently depending on whether it
+// currently elaborates, which is exactly what a diagnostic overlay must not do.
+// Row pitch for the stacked top-left floaters (caller's slot, picking hint,
+// diagnostic pill). They are all one line of 12px text in the same pill chrome,
+// so one constant places the stack instead of a hand-tuned offset per row.
+const FLOATER_H = 36;
+const RIBBON_W = 4;
+// The one the pager is on gets a wider cap. A second colour or a halo would
+// compete with the cursor accent; width is the one channel nothing else here
+// uses.
+const RIBBON_W_SEL = 8;
 
 // The context block drawn INSIDE a goal box, above its `⊢ ` line: one line per
 // hypothesis in scope, the ones the consuming tactic uses marked with a gutter
@@ -322,6 +558,34 @@ export interface ProofTreeViewProps {
    */
   onEditTactic?: (pos: ProofStepPosition, newText: string) => void;
   /**
+   * Widget-only: a goal's subterms, as printed. Feeds the in-place editor's
+   * completion list — a `calc` link restates part of its goal at every step, so
+   * what you are about to type is usually already on screen. Costs nothing on
+   * the wire: it is a walk over the tagged print the hover tooltips already use.
+   */
+  getGoalTerms?: (goalId: string) => string[];
+  /**
+   * Widget-only: the EDITOR theme's syntax colours, keyed by LSP semantic token
+   * type (`{keyword: "#C586C0", …}`). Overrides the built-in Light+/Dark+
+   * palette so the tree's tactic colouring matches the buffer. A webview cannot
+   * read these itself — token colours are not in the `--vscode-*` registry and
+   * the extension API has no member for them — so they arrive the long way
+   * round, resolved by the companion from the active theme's JSON.
+   */
+  tokenColors?: Record<string, string>;
+  /**
+   * Widget-only: outline-only nodes — drop the box fills and let the borders
+   * carry goal-vs-tactic. Purely paint (the palette swaps three CSS variables
+   * off the root attribute below), so nothing relayouts.
+   *
+   * A SETTING rather than a rail button, and deliberately so: it is a standing
+   * preference about how boxes look, not a gesture you reach for while reading
+   * a proof, and the rail is for the latter. It arrives on the same channel as
+   * `tokenColors` — the companion reads `proofTree.outlineOnly` and the server
+   * hands it back — because a webview cannot read VS Code settings either.
+   */
+  outline?: boolean;
+  /**
    * Widget-only, the rich-editing escape hatch behind a tactic's hover-bar
    * `⧉` button: opens the proof in the LENS — a slim editor group under the
    * infoview — with the tactic's range selected (real buffer, so vim/LSP/
@@ -396,6 +660,32 @@ export interface ProofTreeViewProps {
    */
   onAddTactic?: (spec: AddSpec, text: string) => void;
   /**
+   * Widget-only: the tactic-sequence slots the delete gesture resolves its
+   * extent against (`TacticSlot`, keyed by containment — see deleteEdit.ts).
+   * Its presence is what gates the `⊘` button, since without slots there is
+   * no honest extent to offer.
+   */
+  deleteSlots?: TacticSlot[];
+  /**
+   * Widget-only: commit a deletion. `spec` says what the node stands for; the
+   * widget resolves it to a document edit and applies it through the editor's
+   * own pipeline, so it lands on the undo stack like every other write here.
+   */
+  onDeleteTactic?: (spec: DeleteSpec) => void;
+  /**
+   * Widget-only: paint (or clear, with `null`) the region an ARMED delete
+   * would remove. Distinct from `onHoverTactic`, which the companion clamps to
+   * a single line — an extent is routinely many, and showing it is the whole
+   * point of arming.
+   */
+  onPreviewRange?: (range: ProofStepPosition | null) => void;
+  /**
+   * Widget-only: undo / redo in the editor holding the proof. The tree makes
+   * edits while focus is in the WEBVIEW, where ⌘Z reaches nothing, so without
+   * this the only way to undo one is to click into the editor first.
+   */
+  onUndo?: (redo: boolean) => void;
+  /**
    * Widget-only: the pointer entered (`pos`) or left (`null`) a tactic node.
    * The widget paints a decoration over that range in the editor, so hovering
    * the tree lights up the corresponding source — the hover-weight sibling of
@@ -403,6 +693,27 @@ export interface ProofTreeViewProps {
    * here: the view reports raw enter/leave.
    */
   onHoverTactic?: (pos: ProofStepPosition | null) => void;
+  /**
+   * The user's `lean4.input.*` settings, for unicode abbreviations in the
+   * in-place editor (`\dvd` → `∣`). Absent means vscode-lean4's own defaults,
+   * which is the right degrade: the abbreviation table is bundled, so the
+   * feature works with no companion installed — only a customised leader or a
+   * custom translation needs the setting to come back over that channel.
+   */
+  abbrev?: AbbrevConfig;
+  /**
+   * Widget-only: this proof's Lean diagnostics, already filtered to it (see
+   * diagnostics.ts `filterDiagnostics`). The view ATTACHES them to nodes,
+   * because that is the half that knows which nodes exist and what is drawn;
+   * the widget filters, because the LSP wire shape and the proof's span are
+   * its business.
+   *
+   * Purely additive to the render — no engine input, nothing in `viewKey`, and
+   * no reserved geometry: an error draws a ribbon INSIDE its node's box and a
+   * status pill over the corner, so a proof lays out identically with and
+   * without them.
+   */
+  diagnostics?: TreeDiagnostic[];
 }
 
 export default function ProofTreeView({
@@ -410,6 +721,9 @@ export default function ProofTreeView({
   onReveal,
   getTacticEdit,
   onEditTactic,
+  getGoalTerms,
+  tokenColors,
+  outline = false,
   onPopoutEdit,
   highlightPos,
   headerExtra,
@@ -419,30 +733,31 @@ export default function ProofTreeView({
   renderTaggedTactic,
   onAddTactic,
   onHoverTactic,
+  deleteSlots,
+  onDeleteTactic,
+  onPreviewRange,
+  onUndo,
+  abbrev = DEFAULT_ABBREV,
+  diagnostics,
 }: ProofTreeViewProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Accordion: expanding a node collapses its sibling branches, so only one
   // branch is open per level (the "view one branch at a time" mode).
   const [accordion, setAccordion] = useState(true);
-  // Edge hyp labels: the delta a goal gained (default), or its full context
-  // ("all hyps"), so contexts read additively down the tree.
-  // Context verbosity, cycled by the rail (see HYP_MODES): `used` shows only
-  // what the consuming tactic mentions, `delta` what the goal gained (plus
-  // anything used), `full` the whole context.
-  const [hypMode, setHypMode] = useState<HypMode>("delta");
+  // Context verbosity, cycled by the rail (see HYP_MODES): `used` (default)
+  // shows what the proof BELOW the goal depends on, `new` what the tactic
+  // above bound, `delta` what the goal gained (plus anything its own tactic
+  // uses), `full` the whole context.
+  const [hypMode, setHypMode] = useState<HypMode>("used");
   // Layout mode: the compact trunk outline (default — every node gets its own
   // vertical slot, branches indent off a left trunk, read by scrolling), or
   // the wide Sugiyama tree (same-depth nodes share a band).
   const [compact, setCompact] = useState(true);
-  // Outline mode: drop the node fills and let the borders carry the type.
-  // Purely a paint change — the palette swaps three CSS variables off the root
-  // attribute below (theme.ts), so no geometry is touched and nothing relayouts.
-  const [outline, setOutline] = useState(false);
   // Reflow: wrap labels at a much narrower column with bracket-depth indents,
   // trading height for width so sibling branches fit across the viewport.
-  // Unlike `outline` this is GEOMETRY — it rebuilds the engine (below) rather
-  // than just repainting.
-  const [reflow, setReflow] = useState(false);
+  // Unlike the `outline` PROP this is GEOMETRY — it rebuilds the engine (below)
+  // rather than just repainting.
+  const [reflow, setReflow] = useState<ReflowMode>("off");
   // Brief: collapse mechanical boilerplate inside each tactic label to `…`
   // (see briefLabel.ts). Like reflow this is GEOMETRY — the label text changes,
   // so it rebuilds the engine and re-measures every box.
@@ -531,16 +846,164 @@ export default function ProofTreeView({
     spec: AddSpec;
     options: CalcRelOption[];
   } | null>(null);
-  // Esc closes the picker. It owns no focused element (it is SVG chips), so
-  // unlike the overlay's own Esc this has to listen on the document.
+  // The ARMED half of the delete gesture. Deletion is the one destructive
+  // thing the tree can do, so the first click never deletes: it computes the
+  // extent, lights it up in the editor and shows what it will take, and only a
+  // second click commits. That also means an accidental click on `⊘` costs
+  // nothing, which is what lets the button live in the hover bar at all.
+  //
+  // Like `picking` it holds RANGES, so it must be dismissed everywhere that is
+  // — and additionally on `docRev` (the widget clears it by remounting the
+  // prop), since a document change is exactly what invalidates them.
+  const [arming, setArming] = useState<{
+    id: string;
+    spec: DeleteSpec;
+  } | null>(null);
+  // Which node's diagnostic popup is up (hovering its ribbon strip). A custom
+  // popup rather than the strip's native <title>, for the two things a native
+  // tooltip cannot do: appear NOW (the ~1s hover delay is the OS's, not ours —
+  // and reading the error is the whole reason the pointer is on a 12px strip)
+  // and style its content (the severity glyph at a legible size, the message
+  // in the code font). Rendered after the nodes loop like the editor overlay,
+  // so it paints over everything; keyed by node id and looked up per render,
+  // so a node that unmounts under the pointer renders nothing rather than a
+  // stale popup.
+  const [hoverDiag, setHoverDiag] = useState<string | null>(null);
+  // Esc closes the picker and disarms a delete. Neither owns a focused element
+  // (both are SVG chips), so unlike the overlay's own Esc this has to listen on
+  // the document.
   useEffect(() => {
-    if (!picking) return;
+    if (!picking && !arming) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPicking(null);
+      if (e.key !== "Escape") return;
+      setPicking(null);
+      setArming(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [picking]);
+  }, [picking, arming]);
+  // Undo/redo from the tree. The widget's own edits leave focus in the
+  // webview, where ⌘Z reaches nothing at all, so the tree has to offer it.
+  // Skipped while a textarea has focus: the in-place editor's own undo is the
+  // browser's, and it should stay that way.
+  useEffect(() => {
+    if (!onUndo) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+      e.preventDefault();
+      onUndo(e.shiftKey);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onUndo]);
+  // Arming paints the extent in the editor; anything that disarms clears it.
+  // Keyed on the id so re-arming a different node repaints.
+  //
+  // Derived ONCE: the buffer preview, the dimmed-node set and the confirm row's
+  // line count are three readings of the same extent, and computing it three
+  // times over invited them to disagree.
+  const armExtent = useMemo(
+    () =>
+      arming && deleteSlots ? deleteExtent(arming.spec, deleteSlots) : null,
+    [arming, deleteSlots],
+  );
+  useEffect(() => {
+    if (!onPreviewRange) return;
+    onPreviewRange(
+      armExtent ? { start: armExtent.start, stop: armExtent.stop } : null,
+    );
+    return () => onPreviewRange(null);
+  }, [armExtent, onPreviewRange]);
+  // Completion in the in-place editor. Everything it offers is already on
+  // screen or already in the payload, so there is no RPC, no debounce and no
+  // cancellation: the whole thing is a filter over three small local lists.
+  const [completion, setCompletion] = useState<{
+    items: CompletionItem[];
+    index: number;
+  } | null>(null);
+  // Cleared whenever the editor opens on a different node or closes — one place
+  // rather than a line in each of commitEdit / Escape / the two reset branches,
+  // which is how `editing` and `picking` have drifted apart before. Derived
+  // state adjusted during render, like `prevShape` and `prevHlKey` above, since
+  // setting it from an effect would cost a second render every keystroke.
+  // Unicode abbreviations in the in-place editor: `\dvd` → `∣`, the same input
+  // mode the source buffer has, driven by the same upstream package
+  // (`web/src/abbreviation.ts`). Without this the tree could only ever edit
+  // ASCII tactics, which in Lean is most of a sentence short.
+  //
+  // The session owns a shadow copy of the draft, so every path that writes
+  // `editing.value` — onChange, completion acceptance, the clipboard fallback —
+  // has to tell it (`syncAbbrev`), or a later `flush()` would resurrect a stale
+  // draft.
+  //
+  // Held in STATE, not a ref, which is the counter-intuitive part: a mutable
+  // per-session helper is exactly what a ref is for, and it is the one thing
+  // that does not work here. `react-hooks/refs` treats a ref READ inside a
+  // function called from the overlay's JSX as render-phase, and the taint
+  // spreads to every other ref-touching call reachable from there —
+  // `commitEdit` and `acceptCompletion` included, which is how this was found.
+  // As state it is simply a render value, and the session object being mutable
+  // costs nothing: nothing ever compares it.
+  const [abbrevSess, setAbbrevSess] = useState<{
+    id: string;
+    session: AbbrevSession;
+  } | null>(null);
+  // The underline has to be rendered, so the pending spans are state too.
+  // Written only when they actually change, so a keystroke with nothing pending
+  // costs no extra render.
+  const [abbrevSpans, setAbbrevSpans] = useState<AbbrevSpan[]>([]);
+  const putSpans = (next: AbbrevSpan[]) =>
+    setAbbrevSpans((prev) =>
+      prev.length === next.length &&
+      prev.every(
+        (p, i) => p.offset === next[i].offset && p.length === next[i].length,
+      )
+        ? prev
+        : next,
+    );
+  const newAbbrevSession = (initial: string) => {
+    // Captured so the emit can read its own pending spans. The reference is
+    // resolved only when an emit fires, which is always after construction.
+    const self: AbbrevSession = new AbbrevSession(abbrev, initial, (v, c) => {
+      setEditing((e) => e && { ...e, value: v });
+      putSpans(self.pending());
+      // Same restore-after-the-render dance as the clipboard fallback and
+      // completion acceptance, and for the same reason: the textarea is
+      // controlled, and a hidden webview never fires animation frames. The
+      // element is found by DOM walk rather than held in a ref — attaching one
+      // with `ref={…}` is a render-phase USE of that ref, tripping the very
+      // analysis described above (it is why `onScroll` walks to the mirror
+      // too).
+      window.setTimeout(() => {
+        const ta = document.querySelector("[data-ptw-edit] textarea");
+        if (ta instanceof HTMLTextAreaElement) ta.setSelectionRange(c, c);
+      }, 0);
+    });
+    return self;
+  };
+  const syncAbbrev = (id: string, value: string, caret: number) => {
+    if (!abbrevSess || abbrevSess.id !== id) return;
+    abbrevSess.session.sync(value, caret);
+    putSpans(abbrevSess.session.pending());
+  };
+  const editingId = editing?.id ?? null;
+  const [prevEditingId, setPrevEditingId] = useState(editingId);
+  if (editingId !== prevEditingId) {
+    setPrevEditingId(editingId);
+    setCompletion(null);
+    // Both halves of the abbreviation state belong to ONE editor, so they are
+    // reset here rather than in a line of their own in each of commitEdit /
+    // Escape / the two reset branches — the same reasoning as `completion`.
+    setAbbrevSpans([]);
+    setAbbrevSess(
+      editing && abbrev.enabled
+        ? { id: editing.id, session: newAbbrevSession(editing.value) }
+        : null,
+    );
+  }
+
   // Commit goes through the editor's own edit pipeline (undoable there); a
   // no-op edit just closes the box. The ref mirrors `editing` and is nulled
   // SYNCHRONOUSLY on commit: committing via Enter unmounts the textarea,
@@ -550,10 +1013,29 @@ export default function ProofTreeView({
   useEffect(() => {
     editingRef.current = editing;
   }, [editing]);
+  // Declared at component level, like commitEdit and for the same reason: the
+  // confirm row is rendered from an IIFE in the JSX, and react-hooks/refs
+  // treats a function called from there as render-phase — which would taint
+  // the ref `anchorOn` writes. Called from the handler, this is fine.
+  const commitDelete = (id: string, spec: DeleteSpec) => {
+    anchorOn(id);
+    onDeleteTactic!(spec);
+    setArming(null);
+  };
   const commitEdit = () => {
-    const cur = editingRef.current;
+    const cur0 = editingRef.current;
     editingRef.current = null;
-    if (!cur) return;
+    if (!cur0) return;
+    // An abbreviation still being typed must not reach the source: `\alpha`
+    // then Enter writes `α`, the same as it would in the buffer. `flush` is
+    // synchronous precisely so it can be used from here, where there is nothing
+    // to await into.
+    const flushed =
+      abbrevSess?.id === cur0.id ? abbrevSess.session.flush() : undefined;
+    const cur =
+      flushed !== undefined && flushed !== cur0.value
+        ? { ...cur0, value: flushed }
+        : cur0;
     // Pin the node being edited across the relayout the commit will cause,
     // rather than letting the viewport-centre rule guess. A tactic can only
     // affect the proof BELOW it, and the compact layout walks a single y-cursor
@@ -597,6 +1079,7 @@ export default function ProofTreeView({
   const clipboardFallback = async (
     key: "c" | "x" | "v",
     ta: HTMLTextAreaElement,
+    cur: { id: string; value: string },
   ) => {
     const from = ta.selectionStart;
     const to = ta.selectionEnd;
@@ -607,6 +1090,10 @@ export default function ProofTreeView({
     // hidden webview never fires animation frames).
     const put = (value: string, caret: number) => {
       setEditing((cur) => cur && { ...cur, value });
+      // The abbreviation session tracks the draft, so a write that bypasses
+      // onChange has to be reported or its shadow copy goes stale — and a
+      // pasted `\alpha` should be tracked exactly as a typed one is.
+      syncAbbrev(cur.id, value, caret);
       window.setTimeout(() => ta.setSelectionRange(caret, caret), 0);
     };
     try {
@@ -672,6 +1159,14 @@ export default function ProofTreeView({
   const lastLayoutRef = useRef<Map<string, { x: number; y: number }> | null>(
     null,
   );
+  // The editor cursor's node in the layout we last drew, then its ancestors, as
+  // `layoutKeys` keys. Read by the anchor effect when an edit DELETES the node
+  // the cursor was on — commenting a tactic out — so the view can fall back to
+  // the tactic above instead of guessing. Recorded by its own effect below,
+  // declared AFTER the anchor effect so that on a relayout the anchor still sees
+  // the chain as of the previous layout; a cursor move alone updates it in place
+  // (`nodes` is unchanged then, so the anchor effect does not run).
+  const cursorChainRef = useRef<string[]>([]);
   // A zoom-change wants to keep some content point fixed on screen; this carries
   // that intent to the post-render layout effect (mirrors anchorRef for folds).
   const zoomAnchorRef = useRef<{
@@ -702,25 +1197,21 @@ export default function ProofTreeView({
   const [codeFont, setCodeFont] = useState(getCodeFontFamily);
   const [themeKind, setThemeKind] = useState(resolveThemeKind);
   ensurePaletteStyle();
+  // `{keyword: "#C586C0", …}` → `{"--ptw-tok-keyword": "#C586C0", …}`. Only the
+  // types theme.ts actually declares a variable for; anything else the resolver
+  // finds is ignored rather than inventing a variable nothing reads.
+  const tokenColorVars = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [type, color] of Object.entries(tokenColors ?? {}))
+      if (TOKEN_VARS.has(type)) out[`--ptw-tok-${type}`] = color;
+    return out;
+  }, [tokenColors]);
   useEffect(() => {
     const sync = () => {
       setCodeFont(refreshCodeFontFamily());
       setThemeKind(resolveThemeKind());
     };
-    const obs = new MutationObserver(sync);
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["style"],
-    });
-    // VS Code stamps the theme KIND on the body as a class/attribute; a switch
-    // between two themes of the same kind only moves the variables above, but
-    // a light↔dark switch can land here first.
-    if (document.body)
-      obs.observe(document.body, {
-        attributes: true,
-        attributeFilter: ["class", "data-vscode-theme-kind"],
-      });
-    return () => obs.disconnect();
+    return observeThemeChange(sync);
   }, []);
 
   // One layout engine per (proof, hyp-label mode, code font); rebuilding it is
@@ -805,6 +1296,7 @@ export default function ProofTreeView({
     setFocusId(null);
     setEditing(null);
     setPicking(null);
+    setArming(null);
     setElideCuts([]);
     setElidePick(null);
     setBandPick(null);
@@ -843,6 +1335,9 @@ export default function ProofTreeView({
     // invalidates them.
     setEditing(null);
     setPicking(null);
+    // An armed delete holds ranges too, and a shape change means the document
+    // moved under them — exactly what must not be committed blind.
+    setArming(null);
   }
 
   // `.fold` flags written in the source (see NodeFlags) seed the collapsed set
@@ -940,6 +1435,40 @@ export default function ProofTreeView({
     [engine, collapsed, only, focusSet, compact, sideBySide, hide],
   );
 
+  // The nodes an ARMED delete would take. Derived from the EXTENT rather than
+  // from the tree's own subtree walk, deliberately: the extent is what the
+  // edit will actually remove, so dimming anything else would show the user a
+  // preview that does not match the buffer highlight sitting beside it. A node
+  // qualifies by its own source position, which is the producing tactic's for
+  // a goal — exactly the tactic whose text is going.
+  // Every node's extent, resolved once per layout instead of once per node per
+  // RENDER: `deleteExtent` scans the whole slot array, and the render loop only
+  // wanted the boolean "is this deletable" to gate a hover button — so an
+  // unrelated re-render (a hover, a zoom, a scroll) was paying O(nodes × slots)
+  // for an answer that had not changed.
+  const delExtents = useMemo(() => {
+    const out = new Map<string, DeleteExtent | null>();
+    if (!deleteSlots || !onDeleteTactic) return out;
+    for (const n of nodes)
+      if (n.data.deleteSpec && !n.data.synthetic)
+        out.set(n.data.id, deleteExtent(n.data.deleteSpec, deleteSlots));
+    return out;
+  }, [nodes, deleteSlots, onDeleteTactic]);
+  const armedIds = useMemo(() => {
+    const out = new Set<string>();
+    const e = armExtent;
+    if (!arming || !e) return out;
+    // `posLE`, not a hand-rolled comparison: proofToTree.ts is the one coding
+    // of "compare two LSP positions" in the web half, and a second one drifting
+    // from it is this codebase's most-repeated mistake.
+    const within = (p: { line: number; character: number }) =>
+      posLE(e.start, p) && posLE(p, e.stop);
+    for (const n of nodes)
+      if (n.data.id === arming.id || (n.data.position && within(n.data.position.start)))
+        out.add(n.data.id);
+    return out;
+  }, [arming, armExtent, nodes]);
+
   // A cursor move re-arms the dismissed accent (derived state, adjusted
   // during render like prevShape above).
   const hlKey = highlightPos
@@ -983,22 +1512,11 @@ export default function ProofTreeView({
     [proof],
   );
   // Every VISIBLE tactic with a span, in the shape `tacticNodeAt` wants.
+  // The VISIBLE nodes' ranges — what the accent may light up. Built by the
+  // shared `tacticTargets` (see proofToTree.ts), which is also what the gallery
+  // follow and the diagnostics mapping read.
   const cursorTargets = useMemo(
-    () =>
-      nodes.flatMap((n) => {
-        const d = n.data;
-        // A COMBINED node owns SEVERAL source ranges (one per merged tactic).
-        // Offering each of them under the combined node's id is what keeps the
-        // cursor→tree link alive across a merge: the cursor anywhere in the run
-        // resolves to the one node now standing for it.
-        if (d.elidedCut?.combined)
-          return (d.elidedCut.parts ?? [])
-            .filter((p) => p.position)
-            .map((p) => ({ id: d.id, position: p.position! }));
-        return d.type === "tactic" && d.position
-          ? [{ id: d.id, position: d.position }]
-          : [];
-      }),
+    () => tacticTargets(nodes.map((n) => n.data)),
     [nodes],
   );
   // Per comment range, the node whose strip is SHOWING it. Taken straight from
@@ -1029,11 +1547,132 @@ export default function ProofTreeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursorTargets, hlKey, hlDismissed, commentSpans, commentOwner]);
 
+  // Lean's diagnostics, mapped onto the nodes that will draw them.
+  //
+  // Resolved against EVERY node rather than the visible ones — the same
+  // scoping `galleryTarget` needs, and for the same reason: a folded-away or
+  // un-paged error is precisely the one the pager exists to take you to, and
+  // scoping to what is drawn would make the count change as you fold.
+  //
+  // `open` is every goal no tactic consumes, which in the tree is exactly a
+  // goal that is nobody's parent — the fallback a failing tactic's error lands
+  // on, since such a tactic records no `TacticInfo` and so has no node of its
+  // own (the recovery parser now draws many of them, but not the term-position
+  // failures `errToSorry` swallows). Root goals are dropped: their position is
+  // the theorem statement, not a tactic's, so they are not an honest answer to
+  // "which open goal is this about".
+  const diag = useMemo(() => {
+    if (!diagnostics || diagnostics.length === 0) return null;
+    const all = engine.allNodes();
+    const consumed = new Set<string>();
+    for (const n of all) for (const p of n.parents) consumed.add(p.id);
+    const open: { id: string; position: ProofStepPosition }[] = [];
+    const chipped = new Set<string>();
+    for (const n of all) {
+      if (n.type !== "goal" || consumed.has(n.id)) continue;
+      if (n.position) open.push({ id: n.id, position: n.position });
+      if (n.addSpec) chipped.add(n.id);
+    }
+    return attachDiagnostics(
+      tacticTargets(all),
+      diagnostics,
+      { open, chipped },
+    );
+  }, [engine, diagnostics]);
+
+  // Which diagnostic the pager is on, held by KEY rather than by index: the
+  // list is rebuilt on every re-elaboration, and a key is built from the
+  // position and message (diagnostics.ts), so the one you were reading survives
+  // an edit elsewhere. An absent key resolves to the first, which is also the
+  // initial state — so no clamping and no reset effect.
+  const [diagSel, setDiagSel] = useState<string | null>(null);
+  const diagList = diag?.ordered ?? [];
+  const diagIdx = Math.max(
+    0,
+    diagList.findIndex((o) => o.diag.key === diagSel),
+  );
+  const diagCur = diagList[diagIdx] ?? null;
+
+  // Every node's source key for THIS layout. One rebuild per layout rather than
+  // one per reader: `layoutKeys` is an O(n) map build (it carries a per-position
+  // ordinal, since nodes can legitimately share a position), and `anchorOn` used
+  // to rebuild the whole thing to read a single entry.
+  const nodeKeys = useMemo(() => layoutKeys(nodes), [nodes]);
   // Capture a re-anchor on node `id` (or the root) before a relayout, so the
   // post-render `[nodes]` effect can hold that node fixed on screen.
   const anchorOn = (id: string) => {
     const cur = nodes.find((n) => n.data.id === id);
-    if (cur) anchorRef.current = { id, x: cur.x, y: cur.y };
+    // Carry the SOURCE key, not just the id (see `layoutKeys`): a commit that
+    // pins "the node I was editing" is exactly the case where re-elaboration
+    // renumbers that node, and an id-keyed anchor would silently fall through
+    // to the viewport-centre rule.
+    if (cur)
+      anchorRef.current = {
+        id,
+        key: nodeKeys.get(id)!.posKey ?? `I${id}`,
+        x: cur.x,
+        y: cur.y,
+      };
+  };
+
+  /** Candidates for the tactic node being edited, in offer order. */
+  const candidatesFor = (nodeId: string): CompletionPools => {
+    const node = nodes.find((n) => n.data.id === nodeId);
+    // A tactic's context is the goal it consumes — its parent in the tree.
+    const goalId = node?.data.parents[0]?.id;
+    const goal = goalId
+      ? nodes.find((n) => n.data.id === goalId)?.data
+      : undefined;
+    return {
+      // Tier 1. `used` first: `tacticDependsOn` already marks what the
+      // consuming tactic mentions, so that ordering is free and is exactly
+      // "what this step is about".
+      // A HypLine is the whole rendered `name : type`, so the name is the head.
+      // Continuation lines (reflow wraps long context lines) carry no name of
+      // their own and are skipped. A bundle can name several at once
+      // (`a b : ℝ`), so split the head on spaces.
+      hyps: [...(goal?.hyps ?? [])]
+        .filter((h) => !h.cont)
+        .sort((a, b) => Number(b.used) - Number(a.used))
+        .flatMap((h) => h.text.split(" : ")[0].trim().split(/\s+/))
+        .filter((n) => n && n !== "⊢"),
+      // Tier 1.5.
+      terms: goalId && getGoalTerms ? getGoalTerms(goalId) : [],
+      tactics: proof.tacticNames ?? [],
+    };
+  };
+
+  /** Recompute the list from the textarea's current value and caret. */
+  const refreshCompletion = (nodeId: string, value: string, caret: number) => {
+    const pools = candidatesFor(nodeId);
+    const items = completionsAt(value, caret, pools);
+    setCompletion(items.length > 0 ? { items, index: 0 } : null);
+  };
+
+  /** Splice the chosen item in, replacing the span it was matched against.
+   * Reads `editing` rather than `editingRef`: this only ever runs from the
+   * editor's own handlers, where the state is current, and the ref exists
+   * solely to stop a blur re-committing from a stale closure — which has no
+   * bearing here. */
+  const acceptCompletion = (
+    cur: NonNullable<typeof editing>,
+    item: CompletionItem,
+    ta: HTMLTextAreaElement | null,
+  ) => {
+    const value =
+      cur.value.slice(0, item.from) + item.label + cur.value.slice(item.to);
+    const caret = item.from + item.label.length;
+    setEditing((e) => e && { ...e, value });
+    syncAbbrev(cur.id, value, caret); // bypasses onChange — see `put` above
+    setCompletion(null);
+    // The textarea is controlled, so the caret has to be restored after the
+    // render that applies `value` — setTimeout, not rAF: a hidden webview never
+    // fires animation frames. Same reason clipboardFallback does it this way.
+    window.setTimeout(() => {
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(caret, caret);
+    }, 0);
   };
 
   // Anchor on the root: expand-all / collapse-all relayout the whole tree, and
@@ -1208,25 +1847,76 @@ export default function ProofTreeView({
   // under the viewport with nothing holding it. Where no gesture named an
   // anchor, the node nearest the viewport's vertical centre stands in: it is
   // what you were looking at, so pinning it is what "nothing moved" means.
+  //
+  // Except when the node you were ON is the one the edit DELETED, which is
+  // exactly what commenting a tactic out does. Then there is nothing to hold
+  // still, and the viewport-centre rule has to guess from whatever else
+  // survived — badly, because "survived" is by source position and a position
+  // can outlive its place in the tree. Measured on the scratch file, commenting
+  // out `_ ≤ _ := by linarith` (the last well-formed link of a chain, so the
+  // block stops parsing and takes two sibling branches with it): 28 nodes → 10,
+  // every survivor shifting left by 419 as the tree's whole offset changed —
+  // every survivor but one. The `ring` on the line above kept its position key
+  // and moved x 208 → 1236, y 955 → 377, because with the calc unparsed it
+  // hangs somewhere else entirely. Anchor on THAT and the view lurches ~1000px
+  // right, which is the reported rightward drift. So a vanished cursor node
+  // falls back to its nearest surviving ANCESTOR (here the `calc` head one line
+  // up — literally the tactic above the one commented out) and, since the
+  // subtree under it just disappeared, that ancestor is also scrolled into view
+  // rather than merely held put.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const prev = lastLayoutRef.current;
     const { x: sx, y: sy } = lastScrollRef.current;
 
+    // Match nodes to the previous layout by SOURCE POSITION, falling back to the
+    // id — see `layoutKeys` for why the id alone loses exactly the nodes an edit
+    // touched, which is the whole job here.
+    const keys = nodeKeys;
+    const findByKey = (key: string) =>
+      nodes.find((n) => {
+        const k = keys.get(n.data.id)!;
+        return k.posKey === key || k.idKey === key;
+      });
+
     let anchor = anchorRef.current;
     anchorRef.current = null; // consume it; unrelated re-renders must not re-shift
-    // A named anchor is only usable if the node is still THERE. Every id here
-    // is an mvarId, and re-elaboration renumbers every goal downstream of an
-    // edit — so `anchorOn(theNodeIWasEditing)` routinely names a node that no
-    // longer exists by the time the new proof arrives. Silently doing nothing
-    // in that case is the worst option: the layout moved and the scroll didn't,
-    // so the tree slides under the viewport. Fall through to the viewport
-    // centre instead, which needs no id to survive in particular.
-    if (anchor && !nodes.some((n) => n.data.id === anchor!.id)) anchor = null;
+    // A named anchor is only usable if the node is still THERE. Silently doing
+    // nothing when it isn't is the worst option: the layout moved and the scroll
+    // didn't, so the tree slides under the viewport. Fall through to the
+    // viewport centre instead, which needs no node in particular to survive.
+    if (anchor && !findByKey(anchor.key)) anchor = null;
+
+    // The cursor's node was DELETED by this edit (see the note above). Walk its
+    // recorded ancestor chain for the first link that survived and anchor there
+    // instead — the tactic the deleted one hung under. Gated on that node having
+    // been ON SCREEN in the layout we are replacing: if you were reading
+    // somewhere else while an edit landed elsewhere, the thing you are looking
+    // at is what should stay put, and the viewport-centre rule below says so.
+    let refocus = false;
+    const chain = cursorChainRef.current;
+    if (!anchor && prev && chain.length > 0 && !findByKey(chain[0])) {
+      const was0 = prev.get(chain[0]);
+      const screenY0 = was0
+        ? (MARGIN.top + PAD_Y + was0.y) * zoom - sy
+        : Number.NaN;
+      if (screenY0 >= 0 && screenY0 <= el.clientHeight) {
+        for (const key of chain.slice(1)) {
+          const was = prev.get(key);
+          const still = was && findByKey(key);
+          if (was && still) {
+            anchor = { id: still.data.id, key, x: was.x, y: was.y };
+            refocus = true;
+            break;
+          }
+        }
+      }
+    }
+
     if (!anchor && prev) {
       // Nearest to the old viewport's vertical centre AMONG nodes that
-      // survived — an id that vanished has no new position to measure against.
+      // survived — one with no previous position has no movement to measure.
       // The comparison must be in SCROLL space, so the content offset the SVG
       // is drawn at (MARGIN.top + PAD_Y — and PAD_Y is a whole viewport) has to
       // be added to the node's content y. Omitting it biased the pick by ~a
@@ -1236,33 +1926,103 @@ export default function ProofTreeView({
       let best = Infinity;
       const mid = sy + el.clientHeight / 2;
       for (const n of nodes) {
-        const was = prev.get(n.data.id);
+        const k = keys.get(n.data.id)!;
+        const key = k.posKey && prev.has(k.posKey) ? k.posKey : k.idKey;
+        const was = prev.get(key);
         if (!was) continue;
         const d = Math.abs((MARGIN.top + PAD_Y + was.y) * zoom - mid);
         if (d < best) {
           best = d;
-          anchor = { id: n.data.id, x: was.x, y: was.y };
+          anchor = { id: n.data.id, key, x: was.x, y: was.y };
         }
       }
     }
 
-    const now = anchor && nodes.find((n) => n.data.id === anchor!.id);
+    const now = anchor && findByKey(anchor.key);
     if (anchor && now) {
       // Target = old scroll + how far the node moved in content space, clamped
       // to the NEW scrollable range ourselves.
       const maxX = el.scrollWidth - el.clientWidth;
       const maxY = el.scrollHeight - el.clientHeight;
-      el.scrollLeft = clampScroll(sx + (now.x - anchor.x) * zoom, maxX);
+      // Horizontal is followed only in WIDE mode, and the asymmetry is in the
+      // two layouts' coordinates rather than in taste. Wide is a centred
+      // Sugiyama tree: every x carries a global offset that moves whenever the
+      // tree's overall width does, so following the anchor's dx is what CANCELS
+      // that and keeps the view still. Compact pins the root's left edge at
+      // x = 0 and indents from there, so an x is absolute and only moves when
+      // that node's own INDENT changes — following it then scrolls sideways for
+      // a reason the reader has no way to see, and pulls the left-aligned trunk
+      // (the thing you read down) off screen. Measured on the scratch file,
+      // commenting out `_ ≤ _ := by linarith`: in compact the surviving
+      // `calc (a + b) ^ 2` re-indents from x 126 to 255, so following it drifted
+      // the view 129px right — and repeatedly, once per toggle. Same rule the
+      // cursor-tracking effect below already follows for the same reason.
+      el.scrollLeft = clampScroll(
+        compact ? sx : sx + (now.x - anchor.x) * zoom,
+        maxX,
+      );
       el.scrollTop = clampScroll(sy + (now.y - anchor.y) * zoom, maxY);
+      // Holding it steady is not enough when what vanished was the subtree the
+      // reader was actually looking at: the anchor can sit anywhere, including
+      // off screen (the layout usually SHRANK, so the scroll above may also have
+      // been clamped). Bring it back into view — vertically only, and only when
+      // it is outside the comfortable band, matching the cursor-tracking rule
+      // below. Horizontal is deliberately untouched in compact mode, where
+      // re-centring would pull the left-aligned trunk off screen.
+      if (refocus) {
+        const cy = (MARGIN.top + PAD_Y + now.y) * zoom;
+        const halfH = ((now.data.h + now.data.commentBlockH) / 2) * zoom;
+        const pad = 32;
+        if (
+          cy - halfH < el.scrollTop + pad ||
+          cy + halfH > el.scrollTop + el.clientHeight - pad
+        )
+          el.scrollTop = clampScroll(cy - el.clientHeight / 2, maxY);
+      }
     }
 
-    lastLayoutRef.current = new Map(
-      nodes.map((n) => [n.data.id, { x: n.x, y: n.y }]),
-    );
+    // Stored under BOTH keys, so the next relayout can prefer the source
+    // position and still fall back to the id for a node that has none.
+    const next = new Map<string, { x: number; y: number }>();
+    for (const n of nodes) {
+      const k = keys.get(n.data.id)!;
+      const at = { x: n.x, y: n.y };
+      if (k.posKey) next.set(k.posKey, at);
+      next.set(k.idKey, at);
+    }
+    lastLayoutRef.current = next;
     // Intentionally re-runs only on relayout (`nodes`), reading the current `zoom`;
     // zoom changes are handled by their own effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes]);
+
+  // Record the cursor's node and its ancestors for the effect above. Declared
+  // AFTER it on purpose (layout effects run in declaration order), so a relayout
+  // reads the chain belonging to the layout being replaced and only then
+  // overwrites it. A goal is followed up through `parents[0]`: an elide marker
+  // can have several, and the first is the one the trunk drew it under.
+  useLayoutEffect(() => {
+    if (!cursorNodeId) {
+      cursorChainRef.current = [];
+      return;
+    }
+    const keys = nodeKeys;
+    const byId = new Map(nodes.map((n) => [n.data.id, n]));
+    const keyOf = (id: string) => {
+      const k = keys.get(id);
+      return k ? (k.posKey ?? k.idKey) : null;
+    };
+    const chain: string[] = [];
+    const seen = new Set<string>();
+    let cur: string | undefined = cursorNodeId;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const k = keyOf(cur);
+      if (k) chain.push(k);
+      cur = byId.get(cur)?.data.parents[0]?.id;
+    }
+    cursorChainRef.current = chain;
+  }, [cursorNodeId, nodes, nodeKeys]);
 
   // The current view: the full tree, a focused subtree, or one linearized
   // path — in either layout mode. Re-centering keys off this, so entering/
@@ -1270,7 +2030,7 @@ export default function ProofTreeView({
   // everything) re-centers on that view's top node.
   const viewKey =
     (compact ? "compact:" : "wide:") +
-    (reflow ? "reflow:" : "") +
+    (reflow !== "off" ? `reflow:${reflow}:` : "") +
     // `brief` is out of viewKey for the same reason as `combine` below: it only
     // shortens label text, so every node keeps its id and its place in the
     // trunk — re-centring on the root would scroll you away from whatever you
@@ -1359,20 +2119,21 @@ export default function ProofTreeView({
   // node becomes visible and the accent resolves normally.
   const galleryTarget = useMemo(() => {
     if (!gallery || hlKey === "" || hlDismissed || !highlightPos) return null;
-    return tacticNodeAt(
-      engine
-        .allNodes()
-        .filter((d) => d.type === "tactic" && d.position)
-        .map((d) => ({ id: d.id, position: d.position! })),
-      highlightPos,
-    );
+    // EVERY node, not just the visible ones: the branch to page to is by
+    // definition the one not drawn, so `cursorTargets` is null exactly when
+    // this has work to do.
+    return tacticNodeAt(tacticTargets(engine.allNodes()), highlightPos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, gallery, hlKey, hlDismissed]);
-  const [galleryFollowed, setGalleryFollowed] = useState<string | null>(null);
-  if (gallery && galleryTarget && galleryTarget !== galleryFollowed) {
-    setGalleryFollowed(galleryTarget);
+  // Page every gallery split on the root→`id` path to the child that leads
+  // there, so a node hidden behind a pager becomes visible. Shared by the
+  // cursor follow above and the diagnostic pager below — both are "show me
+  // that node", and a second copy of this walk would be a second place for the
+  // source-order indexing to drift.
+  const pageTo = (id: string) => {
+    if (!gallery) return;
     for (const root of rootIds(proof)) {
-      const path = engine.pathBetween(root, galleryTarget);
+      const path = engine.pathBetween(root, id);
       if (!path) continue;
       const want: Record<string, number> = {};
       for (let i = 0; i + 1 < path.length; i++) {
@@ -1385,6 +2146,11 @@ export default function ProofTreeView({
         setPick((prev) => ({ ...prev, ...want }));
       break;
     }
+  };
+  const [galleryFollowed, setGalleryFollowed] = useState<string | null>(null);
+  if (gallery && galleryTarget && galleryTarget !== galleryFollowed) {
+    setGalleryFollowed(galleryTarget);
+    pageTo(galleryTarget);
   }
 
   // source→tree tracking: the accented node follows the editor cursor
@@ -1401,6 +2167,17 @@ export default function ProofTreeView({
   // cursor had not moved at all. That was the unpredictable scroll during
   // editing; the tree only follows a real cursor move now.
   const trackedCursorNode = useRef<string | null>(null);
+  // The in-flight view move (see FollowAnim). One ref, shared with the
+  // diagnostic pager: they are both "move the view", so whichever spoke last
+  // must cancel the other rather than race it.
+  const followAnim = useRef<FollowAnim>({ raf: null, timer: null });
+  useEffect(() => {
+    const a = followAnim.current;
+    return () => {
+      if (a.raf !== null) cancelAnimationFrame(a.raf);
+      if (a.timer !== null) window.clearTimeout(a.timer);
+    };
+  }, []);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !cursorNodeId || hlDismissed) return;
@@ -1410,36 +2187,65 @@ export default function ProofTreeView({
     // Marked tracked only once actually FOUND: a node hidden at cursor-move
     // time still gets tracked when unfolding later reveals it.
     trackedCursorNode.current = hlKey;
-    const cx = (MARGIN.left + PAD_X + node.x) * zoom;
-    const cy = (MARGIN.top + PAD_Y + node.y) * zoom;
-    const halfW = (node.data.w / 2) * zoom;
-    const bandH = node.data.h + node.data.commentBlockH;
-    const halfH = (bandH / 2) * zoom;
-    const pad = 32;
-    const maxX = el.scrollWidth - el.clientWidth;
-    const maxY = el.scrollHeight - el.clientHeight;
-    let left = el.scrollLeft;
-    let top = el.scrollTop;
-    // Vertical is the reading axis (both modes): center the node when it
-    // strays outside the comfortable band.
-    if (cy - halfH < el.scrollTop + pad || cy + halfH > el.scrollTop + el.clientHeight - pad)
-      top = clampScroll(cy - el.clientHeight / 2, maxY);
-    if (compact) {
-      // Left-aligned trunk: never center horizontally (that pulls the trunk
-      // off screen). Only when a node spills past the RIGHT edge, nudge just
-      // enough to bring its left edge to the trunk inset — eyeballed, no
-      // exact centering.
-      if (cx + halfW > el.scrollLeft + el.clientWidth - pad)
-        left = clampScroll(cx - halfW - COMPACT_LEFT * zoom, maxX);
-    } else if (
-      cx - halfW < el.scrollLeft + pad ||
-      cx + halfW > el.scrollLeft + el.clientWidth - pad
-    ) {
-      left = clampScroll(cx - el.clientWidth / 2, maxX);
-    }
+    const { left, top } = inViewScroll(el, node, zoom, PAD_X, PAD_Y, compact);
     if (left === el.scrollLeft && top === el.scrollTop) return;
-    el.scrollTo({ left, top, behavior: "smooth" });
+    animateScroll(followAnim.current, el, left, top);
   }, [cursorNodeId, hlKey, hlDismissed, nodes, zoom, PAD_X, PAD_Y, compact]);
+
+  // The diagnostic pager owes a view move: the node was named, the unfold and
+  // the gallery paging were requested synchronously, and the SCROLL has to wait
+  // for the relayout those cause — so the request is held and the effect below
+  // spends it on the first layout that actually contains the node.
+  //
+  // Guarded by a ref written in the effect, the `trackedCursorNode` pattern
+  // (rather than clearing the state, which cascades a render), and consumed on
+  // the seek OBJECT's identity, so asking for the same node twice moves the
+  // view twice. A node the layout never contains — one inside a sequence or a
+  // focus scope, both narrowings the user asked for and neither worth tearing
+  // down for this — simply leaves the request unspent; if a later unfold does
+  // reveal it, the move happens then, which is the same behaviour the cursor
+  // follow has for a node hidden at cursor-move time.
+  const [diagSeek, setDiagSeek] = useState<{ id: string } | null>(null);
+  const soughtDiag = useRef<{ id: string } | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !diagSeek || soughtDiag.current === diagSeek) return;
+    const node = nodes.find((n) => n.data.id === diagSeek.id);
+    if (!node) return;
+    soughtDiag.current = diagSeek;
+    const { left, top } = inViewScroll(el, node, zoom, PAD_X, PAD_Y, compact);
+    if (left !== el.scrollLeft || top !== el.scrollTop)
+      animateScroll(followAnim.current, el, left, top);
+  }, [diagSeek, nodes, zoom, PAD_X, PAD_Y, compact]);
+
+  // Go to a diagnostic's node: unfold whatever hides it, page the gallery to
+  // it, then scroll it into view once the relayout lands. Unfolding walks the
+  // FIRST parent chain, which is enough — `computeLayout` hides a node only
+  // when ALL its parents are collapsed or hidden.
+  const gotoDiagNode = (id: string | null) => {
+    if (!id) return; // a diagnostic that belongs to the proof but to no node
+    const byId = new Map(engine.allNodes().map((n) => [n.id, n]));
+    setCollapsed((prev) => {
+      let next: Set<string> | null = null;
+      const seen = new Set<string>();
+      let cur: string | undefined = byId.get(id)?.parents[0]?.id;
+      while (cur && !seen.has(cur)) {
+        seen.add(cur);
+        if (prev.has(cur)) (next ??= new Set(prev)).delete(cur);
+        cur = byId.get(cur)?.parents[0]?.id;
+      }
+      return next ?? prev;
+    });
+    pageTo(id);
+    setDiagSeek({ id });
+  };
+  /** Step the pager by `d` (wrapping) and go to what it lands on. */
+  const stepDiag = (d: number) => {
+    if (diagList.length === 0) return;
+    const n = (diagIdx + d + diagList.length) % diagList.length;
+    setDiagSel(diagList[n].diag.key);
+    gotoDiagNode(diagList[n].nodeId);
+  };
 
   // After a zoom change re-renders the (resized) SVG, restore scroll so the
   // intended point stays put: an explicit target (fit) wins, else the anchor
@@ -1609,7 +2415,21 @@ export default function ProofTreeView({
       // attribute.
       data-ptw-theme={themeKind}
       data-ptw-fill={outline ? "none" : undefined}
-      style={{ position: "relative", width: "100%", height, overflow: "hidden" }}
+      style={{
+        position: "relative",
+        width: "100%",
+        height,
+        overflow: "hidden",
+        // The EDITOR's own token colours, when something upstream could read
+        // them (widget + companion). Set INLINE and on `--ptw-tok-*` — the
+        // derived variables, not the `--ptw-raw-*` inputs — so they replace the
+        // built-in palette's `color-mix` outright rather than being softened by
+        // it: that softening exists because a vendor palette is calibrated for
+        // its OWN background, which is precisely not true of colours read from
+        // the theme in use. Inline also beats theme.ts's stylesheet without a
+        // specificity contest.
+        ...tokenColorVars,
+      }}
     >
       {/* No top bar: the top edge stays empty so the eye falls straight from
           the infoview's expected-type block onto the tree's root. Everything
@@ -1637,7 +2457,7 @@ export default function ProofTreeView({
         <div
           style={{
             position: "absolute",
-            top: headerExtra ? 44 : 8,
+            top: headerExtra ? 8 + FLOATER_H : 8,
             left: 8,
             zIndex: 10,
             fontFamily: "monospace",
@@ -1659,7 +2479,7 @@ export default function ProofTreeView({
         <div
           style={{
             position: "absolute",
-            top: headerExtra ? 44 : 8,
+            top: headerExtra ? 8 + FLOATER_H : 8,
             left: 8,
             zIndex: 10,
             fontFamily: "monospace",
@@ -1679,7 +2499,7 @@ export default function ProofTreeView({
         <div
           style={{
             position: "absolute",
-            top: headerExtra ? 44 : 8,
+            top: headerExtra ? 8 + FLOATER_H : 8,
             left: 8,
             zIndex: 10,
             fontFamily: "monospace",
@@ -1706,10 +2526,9 @@ export default function ProofTreeView({
         }}
         accordion={accordion}
         onAccordionChange={setAccordion}
+        onUndo={onUndo}
         compact={compact}
         onCompactChange={setCompact}
-        outline={outline}
-        onOutlineChange={setOutline}
         sideBySide={sideBySide}
         gallery={gallery}
         onGalleryChange={setGallery}
@@ -1794,6 +2613,43 @@ export default function ProofTreeView({
           Nothing to display for this proof.
         </div>
       )}
+      {diagCur && (
+        <DiagnosticPill
+          index={diagIdx}
+          count={diagList.length}
+          diag={diagCur.diag}
+          // Clickable when there is anywhere to go: a drawn node to seek in
+          // the tree, or (widget) the source position to reveal — the latter
+          // is what makes the click work even for a node-less diagnostic.
+          clickable={!!diagCur.nodeId || !!onReveal}
+          // The top-left floaters stack: the caller's slot (standalone only),
+          // then whichever picking hint is up (the three are mutually
+          // exclusive), then this. Each row is FLOATER_H apart — they are all
+          // one line of 12px text in the same pill chrome, so one constant
+          // covers them rather than a per-row measurement.
+          top={
+            (headerExtra ? 8 + FLOATER_H : 8) +
+            (seq.mode !== "off" || elidePick || bandPick ? FLOATER_H : 0)
+          }
+          onStep={stepDiag}
+          // "Take me to it" means BOTH surfaces: the tree (unfold, page,
+          // scroll — gotoDiagNode) and the SOURCE (the editor's cursor onto
+          // the error, through the same lens-aware reveal a node click uses;
+          // a diagnostic's range is already the shape onReveal takes, and the
+          // widget's tacticEdits lookup simply misses and falls through to
+          // the raw range). The reveal also makes the click WORK for a
+          // diagnostic that resolves to no node — `declaration uses 'sorry'`,
+          // an unfinished branch — which used to be the one case where the
+          // pill had the message but nowhere to take you. The cursor move it
+          // causes flows back as highlightPos, so the accent lands wherever
+          // the error's line resolves — agreeing with the ribboned node by
+          // construction, both being derived from the same range.start.
+          onGo={() => {
+            gotoDiagNode(diagCur.nodeId);
+            onReveal?.(diagCur.diag.range);
+          }}
+        />
+      )}
       {/* Headroom veil: a short strip the content scrolls UNDER, fading it
           out before it reaches the top edge — so the floating overlays (the
           sequence hint, the standalone picker) sit on calm ground instead of
@@ -1835,6 +2691,7 @@ export default function ProofTreeView({
         onClick={() => {
           setHlDismissed(true);
           setPicking(null);
+          setArming(null);
         }}
       >
         <svg
@@ -1921,7 +2778,13 @@ export default function ProofTreeView({
                 />
               );
             })}
-            {nodes.map((node) => {
+            {/* `ni` keys the diagnostic ribbon's clipPath id. The node's own
+                id would be the obvious choice and is the wrong one: mvarIds,
+                elide markers (`»`, `·`) and `calc:<line>:<col>` all carry
+                characters that have no business in a `url(#…)` fragment. The
+                index is stable within a render, which is all a clip reference
+                needs. */}
+            {nodes.map((node, ni) => {
               const { w, h, hypH, hyps, lines, type, id, foldable, position } =
                 node.data;
               // The node's band is caseH + commentBlockH + h with the box
@@ -1963,12 +2826,17 @@ export default function ProofTreeView({
               // chip treatment and the click-to-restore.
               const isCombined = !!node.data.elidedCut?.combined;
               const isMarker = !!node.data.elidedCut && !isCombined;
+              // A SYNTHETIC node (the `calc` of a block that failed to parse) is
+              // editable too, and deliberately: it is the one node standing for
+              // text that is unfinished, and its repair chip offers only the one
+              // canned fix. The server ships it a `tacticEdits` entry keyed on
+              // the chain's own start, so the lookup below resolves; the handler
+              // still bails if it doesn't (the CLI ships no edits at all).
               const editable =
                 seq.mode === "off" &&
                 !elidePick &&
                 !bandPick &&
                 type === "tactic" &&
-                !node.data.synthetic &&
                 !!position &&
                 !!getTacticEdit &&
                 !!onEditTactic;
@@ -1991,16 +2859,61 @@ export default function ProofTreeView({
               // note stands in for the whole tactic (and the subtree already
               // hidden below it), rather than hanging off a still-drawn box.
               const isElided = elided.has(id) && seq.mode === "off";
+              // A step the supplemental parser synthesized: `failed` carries
+              // an error, `skipped` never ran, `term` came from a term-mode
+              // proof's structure. Failed/skipped draw DASHED — the tactic is
+              // text, not an accomplished step — and failed takes danger ink.
+              // What Lean says is wrong here (widget only). `worst` is the
+              // severity the ink takes; the list is what the tooltip reads.
+              // Corner radius of the box, shared with the diagnostic ribbon
+              // below — the ribbon is CLIPPED to this exact shape, so the two
+              // must be one number rather than two that agree today.
+              const boxRx = type === "tactic" ? 4 : 6;
+              const nodeDiags = diag?.byNode.get(id);
+              const diagSev = diag?.worst.get(id) ?? null;
+              const diagInk =
+                diagSev === 1 ? DANGER_FILL : diagSev === 2 ? WARN_FILL : null;
+              const diagSelected = !!diagCur && diagCur.nodeId === id;
+              const recovered = node.data.recovered;
+              const recoveredStroke =
+                recovered === "failed"
+                  ? DANGER_FILL
+                  : recovered === "skipped"
+                    ? "var(--ptw-comment)"
+                    : null;
               // A goal with descendants can become the root of a focused view
               // (⌥-click, or the hover bar's ◎); pointless for the current
               // focus root.
               const focusable =
                 type === "goal" && foldable && !seqActive && id !== focusId;
+              // Deleting. Offered wherever the extent is well defined and the
+              // node stands for exactly one region of source: never on a
+              // COMBINED or elided marker (which map to several tactics — the
+              // same reason editing is off there), and never on the synthetic
+              // `calc` of a block that never parsed, whose text is what the
+              // repair chip exists to fix. A goal with no proof yet has no
+              // deleteSpec at all, so pending leaves fall out for free.
+              // Looked up, not recomputed (see `delExtents`). A declined
+              // extent — a sibling shares the start line — must not even show
+              // the button: arming it would offer nothing.
+              const delExtent =
+                seq.mode === "off" &&
+                !elidePick &&
+                !bandPick &&
+                !isMarker &&
+                !isCombined
+                  ? (delExtents.get(id) ?? null)
+                  : null;
+              const deletable = !!delExtent;
+              const isArming = arming?.id === id;
               // Secondary actions live in a hover bar with button-sized
               // targets (see NodeActionBar) instead of tiny corner glyphs or
               // modifier gestures: goals get reveal/focus, tactics the lens.
+              // The bar STAYS while armed even without a hover, since the
+              // confirm row replaces it and must survive the pointer leaving.
               const hasBar =
-                !isEditing && (goalRevealable || focusable || popoutable);
+                !isEditing &&
+                (goalRevealable || focusable || popoutable || deletable);
               // Hovering a positioned tactic lights its range up in the editor.
               const hoverHighlights =
                 type === "tactic" && !!position && !!onHoverTactic;
@@ -2029,7 +2942,19 @@ export default function ProofTreeView({
                   ? `${HYP_MARK} = used by the tactic below`
                   : null,
               ].filter(Boolean);
-              const nodeTooltip = hints.map((h) => `· ${h}`).join("\n");
+              // Diagnostics lead the tooltip and keep their full text: the
+              // message IS the content here, where the action hints are a
+              // reminder. Separated from them by a blank line rather than
+              // bulleted, so a multi-line Lean message reads as itself.
+              const diagTip = (nodeDiags ?? [])
+                .map((d) => `${d.severity === 1 ? "⨯" : "⚠"} ${d.message}`)
+                .join("\n\n");
+              const nodeTooltip = [
+                diagTip,
+                hints.map((h) => `· ${h}`).join("\n"),
+              ]
+                .filter(Boolean)
+                .join("\n\n");
               // Widget-only interactive context lines, same idea (null keeps
               // the plain text for that line).
               const taggedHyps =
@@ -2108,6 +3033,15 @@ export default function ProofTreeView({
                 <g
                   key={id}
                   transform={`translate(${node.x},${node.y})`}
+                  // Everything an armed delete would take fades, so the tree
+                  // shows the same answer the editor's highlight does. Paint
+                  // only — nothing moves, and the fade is on the group so the
+                  // node's action bar dims with it.
+                  opacity={
+                    arming && armedIds.has(id) && id !== arming.id
+                      ? 0.35
+                      : undefined
+                  }
                   onClick={clickable && !isEditing ? handleClick : undefined}
                   onDoubleClick={
                     editable && !isEditing
@@ -2150,7 +3084,7 @@ export default function ProofTreeView({
                   {/* With a tagged label, the native tooltip retreats to the box
                       rect (padding/border) so it doesn't stack on the hover
                       type-tooltips the interactive text pops itself. */}
-                  {!taggedLines && hints.length > 0 && (
+                  {!taggedLines && nodeTooltip !== "" && (
                     <title>{nodeTooltip}</title>
                   )}
                   {/* Case badge: the name of the branch this goal IS
@@ -2236,13 +3170,32 @@ export default function ProofTreeView({
                       height={h}
                       // Tight corners on tactics — they're EDITABLE, and a pill
                       // reads as a label; goals keep slightly softer corners.
-                      rx={type === "tactic" ? 4 : 6}
-                      stroke={accent ? SEQ_STROKE : style.stroke}
-                      strokeWidth={accent ? 2 : 1.5}
+                      rx={boxRx}
+                      // Stroke priority: the cursor accent, then what the node
+                      // IS (a recovered failed/skipped tactic), then what Lean
+                      // says about it. The first two are already danger-inked
+                      // where they overlap, so the order costs nothing and
+                      // keeps "which node am I on" the loudest signal.
+                      stroke={
+                        accent
+                          ? SEQ_STROKE
+                          : (recoveredStroke ?? diagInk ?? style.stroke)
+                      }
+                      strokeWidth={
+                        accent || recovered === "failed" || diagSev === 1
+                          ? 2
+                          : 1.5
+                      }
                       // A run marker is a dashed, unfilled chip (an absence, like
-                      // the .none elision), not a live green box.
-                      fill={isMarker ? "transparent" : style.fill}
-                      strokeDasharray={isMarker ? "3 3" : undefined}
+                      // the .none elision), not a live green box — and so is a
+                      // recovered failed/skipped tactic: the text exists, the
+                      // step it claims to be does not.
+                      fill={
+                        isMarker || recoveredStroke ? "transparent" : style.fill
+                      }
+                      strokeDasharray={
+                        isMarker || recoveredStroke ? "3 3" : undefined
+                      }
                       // While the in-place editor overlays this node, its box
                       // (and label, below) hide — the overlay is bigger than
                       // the box, and an accented node would clash through it.
@@ -2254,9 +3207,76 @@ export default function ProofTreeView({
                         </title>
                       ) : (
                         taggedLines &&
-                        hints.length > 0 && <title>{nodeTooltip}</title>
+                        nodeTooltip !== "" && <title>{nodeTooltip}</title>
                       )}
                     </rect>
+                  )}
+
+                  {/* Diagnostic ribbon: the box's left edge THICKENED in the
+                      worst severity's ink — a cap flush with the border, not a
+                      bar floating inside it. It is a full-height rect CLIPPED
+                      to the box's own rounded rect, which is what makes the two
+                      merge: the cap inherits the corner radius exactly (a path
+                      of its own could not, since the radius exceeds the cap's
+                      width) and its right edge is the only one that shows, so
+                      it reads as one shape with the stroke it sits under.
+                      Selected is wider, never a different colour or opacity —
+                      hue is already carrying severity, and a dimmed cap stopped
+                      looking like part of the border.
+
+                      INSIDE the box on purpose: the left padding (NODE_PAD) is
+                      already reserved and no glyph sits there, so a proof lays
+                      out identically whether or not it currently elaborates —
+                      the one thing an error overlay must not change.
+
+                      The MESSAGE is read by hovering the ribbon: the invisible
+                      strip below widens the cap's hit area to the whole left
+                      padding and carries the diagnostics as its own <title>.
+                      That target has to exist because the node-level tooltip
+                      is NOT reachable on a widget node: a tagged label's
+                      <title> retreats to the box rect (so it can't stack on
+                      the interactive text's own type popups), and the
+                      foreignObject label then covers nearly all of the rect —
+                      measured in the preview, the message was in the DOM and
+                      effectively nowhere on screen. Clicks still bubble to the
+                      node's <g>, so folding/revealing through the strip works
+                      unchanged. */}
+                  {diagInk && !isElided && !hideForEdit && (
+                    <>
+                      <clipPath id={`ptw-box-${ni}`}>
+                        <rect
+                          x={-w / 2}
+                          y={boxTop}
+                          width={w}
+                          height={h}
+                          rx={boxRx}
+                        />
+                      </clipPath>
+                      <rect
+                        x={-w / 2}
+                        y={boxTop}
+                        width={diagSelected ? RIBBON_W_SEL : RIBBON_W}
+                        height={h}
+                        fill={diagInk}
+                        clipPath={`url(#ptw-box-${ni})`}
+                        style={{ pointerEvents: "none" }}
+                      />
+                      <rect
+                        x={-w / 2}
+                        y={boxTop}
+                        width={NODE_PAD}
+                        height={h}
+                        fill="transparent"
+                        style={{ cursor: "help" }}
+                        // The custom popup (see `hoverDiag`), NOT a native
+                        // <title>: instant, and styled. Deliberately no dwell —
+                        // a 12px strip is not crossed by accident.
+                        onMouseEnter={() => setHoverDiag(id)}
+                        onMouseLeave={() =>
+                          setHoverDiag((cur) => (cur === id ? null : cur))
+                        }
+                      />
+                    </>
                   )}
 
                   {/* The goal's local context, stacked inside the box above
@@ -2631,7 +3651,7 @@ export default function ProofTreeView({
                       tall and the compact gap above it (TRUNK_GAP_STEP) is
                       shorter than the bar, so the corner placement would
                       collide with the goal box above. */}
-                  {hasBar && hoverId === id && (
+                  {hasBar && (hoverId === id || isArming) && (
                     <NodeActionBar
                       placement={type === "tactic" ? "right" : "top-right"}
                       // Both placements OVERLAP the box by BAR_OVERLAP. That
@@ -2678,9 +3698,35 @@ export default function ProofTreeView({
                               },
                             ]
                           : []),
+                        // Last in the bar, and the only DESTRUCTIVE action, so
+                        // it is the furthest from where the pointer arrives.
+                        // One click only arms it (see `arming`).
+                        ...(deletable && !isArming
+                          ? [
+                              {
+                                glyph: "⊘",
+                                danger: true,
+                                title:
+                                  type === "goal"
+                                    ? "Delete this goal's proof"
+                                    : "Delete this tactic",
+                                onClick: () =>
+                                  setArming({
+                                    id,
+                                    spec: node.data.deleteSpec!,
+                                  }),
+                              },
+                            ]
+                          : []),
                       ]}
                     />
                   )}
+
+                  {/* The ARMED confirm row, in the chip lane's own place under
+                      the box — the picker-row idiom, and the same reason: it
+                      stays inside the SVG with no portal and no focus to
+                      manage. The count is what the user is actually deciding
+                      about, so the chip says it. */}
                 </g>
               );
             })}
@@ -2695,6 +3741,142 @@ export default function ProofTreeView({
                 box. It widens to its content live (from the measured longest
                 line) but its HEIGHT is fixed, and neither pushes the layout
                 around — it's a transient overlay, not a node. */}
+            {/* The ARMED confirm row. Rendered AFTER the nodes loop for the
+                same reason the editor overlay is: it hangs BELOW the box, in
+                the chip lane's place, and nothing reserves that space for it
+                (`chipH` is only budgeted where an add/link chip lives). Inside
+                the node's own <g> every later sibling would paint over it —
+                out here it paints over everything, which for a transient
+                confirmation is right. The picker-row idiom otherwise: SVG
+                chips, no portal, no focus to manage. */}
+            {arming &&
+              (() => {
+                const an = nodes.find((n) => n.data.id === arming.id);
+                const ext = armExtent;
+                if (!an || !ext) return null;
+                const { w, h } = an.data;
+                const boxTop = (an.data.caseH + an.data.commentBlockH - h) / 2;
+                // No glyph on the confirm chip: the `⊘` said "you may delete
+                // here", and once armed that is settled — what is left to read
+                // is the COUNT, and repeating the symbol beside it only
+                // competes with the number for the eye.
+                const label = ext.empties
+                  ? `replace ${ext.lines} with sorry`
+                  : `delete ${ext.lines} line${ext.lines === 1 ? "" : "s"}`;
+                const wide = measureText(label, CHIP_FONT_PX) + 2 * CHIP_PAD_X;
+                return (
+                  <g
+                    transform={`translate(${an.x - w / 2 + TRUNK_INSET}, ${
+                      an.y + boxTop + h + CHIP_TOP_GAP
+                    })`}
+                  >
+                    <FrontierChip
+                      glyph={label}
+                      title={`Confirm — ${CMD}Z in the editor undoes it`}
+                      x={-CHIP_W_ADD / 2}
+                      width={wide}
+                      color={DANGER_FILL}
+                      fontSize={CHIP_FONT_PX}
+                      fontFamily={getCodeFontFamily()}
+                      // Pinning the node being removed: the compact layout
+                      // walks one y-cursor in DFS order, so everything above
+                      // the edit is literally unmoved, and once the node
+                      // itself is gone the anchor falls through to the
+                      // nearest surviving ancestor.
+                      onPick={() => commitDelete(arming.id, arming.spec)}
+                    />
+                    <FrontierChip
+                      glyph="×"
+                      title="Cancel"
+                      x={-CHIP_W_ADD / 2 + wide + CHIP_GAP}
+                      width={CHIP_W_ADD}
+                      color="var(--ptw-comment)"
+                      fontFamily={getCodeFontFamily()}
+                      onPick={() => setArming(null)}
+                    />
+                  </g>
+                );
+              })()}
+
+            {/* The diagnostic popup (see `hoverDiag`): what the ribbon strip
+                shows INSTANTLY on hover, instead of a native <title> with the
+                OS's own delay and take-it-or-leave-it styling. After the nodes
+                loop like the editor overlay, and for the same reason — it
+                hangs off the box with nothing reserving room for it, so inside
+                the node's own <g> every later sibling would paint over it.
+                pointer-events: none throughout, so it can never trap the hover
+                that keeps it up or eat a click meant for what is under it. */}
+            {hoverDiag &&
+              (() => {
+                const dn = nodes.find((n) => n.data.id === hoverDiag);
+                const list = diag?.byNode.get(hoverDiag);
+                if (!dn || !list || list.length === 0) return null;
+                const { w, h } = dn.data;
+                const boxTop = (dn.data.caseH + dn.data.commentBlockH - h) / 2;
+                return (
+                  <foreignObject
+                    x={dn.x - w / 2 + NODE_PAD}
+                    y={dn.y + boxTop + h + 4}
+                    width={1}
+                    height={1}
+                    style={{ overflow: "visible", pointerEvents: "none" }}
+                  >
+                    <div
+                      style={{
+                        width: "max-content",
+                        maxWidth: 460,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                        padding: "6px 9px",
+                        borderRadius: 3,
+                        background:
+                          "var(--vscode-editorWidget-background, rgba(255,255,255,0.97))",
+                        borderWidth: 1,
+                        borderStyle: "solid",
+                        borderColor:
+                          list[0].severity === 1 ? DANGER_FILL : WARN_FILL,
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+                      }}
+                    >
+                      {list.map((d) => (
+                        <div
+                          key={d.key}
+                          style={{ display: "flex", gap: 7, alignItems: "baseline" }}
+                        >
+                          <span
+                            style={{
+                              fontFamily: "monospace",
+                              fontSize: 15,
+                              lineHeight: "15px",
+                              color: d.severity === 1 ? DANGER_FILL : WARN_FILL,
+                            }}
+                          >
+                            {d.severity === 1 ? "⨯" : "⚠"}
+                          </span>
+                          <span
+                            style={{
+                              fontFamily: getCodeFontFamily(),
+                              fontSize: 11,
+                              lineHeight: "15px",
+                              whiteSpace: "pre-wrap",
+                              // The PILL's exact pair (background above, ink
+                              // here), never a --ptw-* fallback: those follow
+                              // the page theme while the background's fallback
+                              // is light, which is the recorded light-on-light
+                              // trap from the completion list.
+                              color: "var(--vscode-icon-foreground, #2d3748)",
+                            }}
+                          >
+                            {d.message}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </foreignObject>
+                );
+              })()}
+
             {editing &&
               (() => {
                 const en = nodes.find((n) => n.data.id === editing.id);
@@ -2727,6 +3909,28 @@ export default function ProofTreeView({
                   ? 1
                   : editing.original.split("\n").length;
                 const fh = openLines * LINE_H + 2 * NODE_PAD_Y;
+                // Syntax colouring WHILE editing: a mirror element behind a
+                // see-through textarea, which is the only way to paint rich
+                // text under a real caret. The colours are the SAVED source's
+                // tokens realigned onto the draft — `renderTaggedTactic` already
+                // tolerates its label and the source disagreeing (that is what
+                // `alignInLabel` is for, since `tacticString` is a display
+                // string), so a draft is just another such string and needs no
+                // new alignment machinery. Typing at the end and deleting from
+                // the end both align exactly; a mid-string edit keeps colour up
+                // to the edit point and loses it after.
+                //
+                // Skipped for ADD and MIDPOINT overlays: those hang off a GOAL
+                // node, whose `position` is its PRODUCER's range, so the tokens
+                // would be a different tactic's entirely.
+                const editHighlight =
+                  !editing.add && !editing.midpoint && en.data.position
+                    ? (renderTaggedTactic?.(
+                        en.data.position,
+                        editing.value,
+                        valueLines,
+                      ) ?? null)
+                    : null;
                 return (
                   <g transform={`translate(${en.x},${en.y})`}>
                     <foreignObject
@@ -2736,16 +3940,109 @@ export default function ProofTreeView({
                       height={fh}
                       style={{ overflow: "visible" }}
                     >
+                      {/* Positioning context for the completion list, which
+                          hangs BELOW the box and so must escape it — the
+                          foreignObject already allows that (overflow: visible)
+                          and the overlay paints after every node. */}
+                      <div
+                        data-ptw-edit=""
+                        style={{
+                          position: "relative",
+                          width: "100%",
+                          height: "100%",
+                        }}
+                      >
+                      {/* The mirror: the same text, same metrics, coloured —
+                          painted BEHIND a textarea whose glyphs are transparent
+                          but whose caret and selection are the real thing. It
+                          is inert (pointer-events: none, aria-hidden): the
+                          textarea above owns every gesture, and the token
+                          hover popups must not fight the caret. Its border is
+                          transparent so the content boxes coincide with the
+                          textarea's real 2px one. */}
+                      {editHighlight && (
+                        <div
+                          data-ptw-mirror=""
+                          aria-hidden
+                          style={{
+                            ...editOverlayLayer(0),
+                            // Behind the textarea, so it carries the fill and
+                            // the glyphs; the textarea above goes transparent.
+                            borderRadius: 4,
+                            background: EDIT_BG,
+                            color: EDIT_TEXT,
+                          }}
+                        >
+                          {valueLines.map((line, j) => (
+                            <div key={j} style={{ height: LINE_H }}>
+                              {editHighlight[j] ?? line}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <textarea
                         autoFocus
                         value={editing.value}
                         spellCheck={false}
-                        onChange={(e) =>
-                          setEditing(
-                            (cur) => cur && { ...cur, value: e.target.value },
+                        // Keep the mirror's scroll locked to ours: the box is
+                        // fixed-height, so a long draft scrolls. Found by DOM
+                        // walk rather than a ref — `react-hooks/refs` forbids
+                        // reading a component-level ref inside a function called
+                        // from JSX, and it taints every other ref-touching call
+                        // in the same handler (`commitEdit` included).
+                        onScroll={(e) => {
+                          const m = e.currentTarget.parentElement?.querySelector(
+                            "[data-ptw-mirror]",
+                          );
+                          if (m instanceof HTMLElement) {
+                            m.scrollTop = e.currentTarget.scrollTop;
+                            m.scrollLeft = e.currentTarget.scrollLeft;
+                          }
+                        }}
+                        onChange={(e) => {
+                          const { value, selectionStart } = e.target;
+                          setEditing((cur) => cur && { ...cur, value });
+                          refreshCompletion(editing.id, value, selectionStart);
+                          syncAbbrev(editing.id, value, selectionStart);
+                        }}
+                        // A caret move with no edit changes what is being
+                        // completed too (clicking into the middle of a word).
+                        onSelect={(e) => {
+                          const ta = e.currentTarget;
+                          if (completion)
+                            refreshCompletion(
+                              editing.id,
+                              ta.value,
+                              ta.selectionStart,
+                            );
+                          // A caret that LEAVES a pending abbreviation replaces
+                          // it — the buffer's own rule. `sync` is idempotent, so
+                          // it does not matter that this also fires after every
+                          // keystroke's onChange.
+                          syncAbbrev(editing.id, ta.value, ta.selectionStart);
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // A click MOVES the caret, which may take it out of a
+                          // pending abbreviation. `onSelect` is React's own
+                          // synthesised event and is not reliably delivered
+                          // (the headless harness never fired it at all), so
+                          // the two plain DOM events that definitely follow a
+                          // caret move drive this as well — `sync` is
+                          // idempotent, so the overlap costs nothing.
+                          syncAbbrev(
+                            editing.id,
+                            e.currentTarget.value,
+                            e.currentTarget.selectionStart,
+                          );
+                        }}
+                        onKeyUp={(e) =>
+                          syncAbbrev(
+                            editing.id,
+                            e.currentTarget.value,
+                            e.currentTarget.selectionStart,
                           )
                         }
-                        onClick={(e) => e.stopPropagation()}
                         onDoubleClick={(e) => e.stopPropagation()}
                         onCopy={() => (nativeClip.current = true)}
                         onCut={() => (nativeClip.current = true)}
@@ -2767,9 +4064,58 @@ export default function ProofTreeView({
                             nativeClip.current = false;
                             window.setTimeout(() => {
                               if (!nativeClip.current)
-                                void clipboardFallback(k, ta);
+                                void clipboardFallback(k, ta, editing);
                             }, 0);
                             return;
+                          }
+                          // Tab expands a pending abbreviation, and takes
+                          // priority over the completion list's own Tab: that
+                          // is what Tab means in the buffer, and the two can
+                          // hardly collide (nothing this completes contains a
+                          // leader). Falls through when nothing is pending.
+                          if (e.key === "Tab" && !mod) {
+                            if (abbrevSess?.session.expand()) {
+                              e.preventDefault();
+                              putSpans([]);
+                              return;
+                            }
+                          }
+                          // The completion list owns these keys while it is
+                          // open, and only then — `⌘/Ctrl-Enter` is checked
+                          // FIRST so "always commits" stays true even with a
+                          // selection showing, and Escape falls through to
+                          // cancelling the edit only on a SECOND press.
+                          if (completion && !mod) {
+                            const n = completion.items.length;
+                            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                              e.preventDefault();
+                              const d = e.key === "ArrowDown" ? 1 : n - 1;
+                              setCompletion({
+                                ...completion,
+                                index: (completion.index + d) % n,
+                              });
+                              return;
+                            }
+                            if (e.key === "Enter" || e.key === "Tab") {
+                              const sel = completion.items[completion.index];
+                              // Accepting an item you have already typed in full
+                              // changes nothing, so Enter there means COMMIT —
+                              // otherwise finishing a tactic name exactly would
+                              // cost two Enters, one to "accept" a no-op and one
+                              // to commit. Tab still just closes the list.
+                              if (e.key === "Enter" && sel.exact) {
+                                setCompletion(null);
+                              } else {
+                                e.preventDefault();
+                                acceptCompletion(editing, sel, ta);
+                                return;
+                              }
+                            }
+                            if (e.key === "Escape") {
+                              e.preventDefault();
+                              setCompletion(null);
+                              return;
+                            }
                           }
                           if (e.key === "Escape") {
                             e.preventDefault();
@@ -2795,8 +4141,17 @@ export default function ProofTreeView({
                           lineHeight: `${LINE_H}px`,
                           letterSpacing: 0,
                           padding: `${NODE_PAD_Y - 1}px ${NODE_PAD - 2}px`,
-                          background: EDIT_BG,
-                          color: EDIT_TEXT,
+                          // With a mirror behind, the glyphs come from IT and
+                          // this element contributes only the caret, the
+                          // selection and the border. Without one, every style
+                          // is exactly as before — so a failure to align tokens
+                          // degrades to today's plain editor rather than to an
+                          // invisible one.
+                          position: "relative",
+                          zIndex: 1,
+                          background: editHighlight ? "transparent" : EDIT_BG,
+                          color: editHighlight ? "transparent" : EDIT_TEXT,
+                          caretColor: EDIT_TEXT,
                           border: `2px solid ${NODE_STYLES.tactic.stroke}`,
                           borderRadius: 4, // match the tactic box corners
                           outline: "none",
@@ -2813,6 +4168,140 @@ export default function ProofTreeView({
                           userSelect: "text",
                         }}
                       />
+                      {abbrevSpans.length > 0 && (
+                        // The pending-abbreviation underline: the same text at
+                        // the same metrics, painted in TRANSPARENT ink so only
+                        // the underline shows. It sits ABOVE the textarea
+                        // rather than below, because without a mirror the
+                        // textarea's own background is opaque and would hide
+                        // it; it draws nothing but thin rules, so the glyphs
+                        // and the caret read straight through.
+                        <div
+                          aria-hidden
+                          style={{
+                            ...editOverlayLayer(2),
+                            // Ink invisible: this layer contributes underlines
+                            // and nothing else.
+                            color: "transparent",
+                          }}
+                        >
+                          {underlineRuns(editing.value, abbrevSpans).map(
+                            (runs, j) => (
+                              <div key={j} style={{ height: LINE_H }}>
+                                {runs.map((r, k) =>
+                                  r.mark ? (
+                                    <span
+                                      key={k}
+                                      style={{
+                                        textDecoration: "underline",
+                                        textDecorationColor: EDIT_TEXT,
+                                      }}
+                                    >
+                                      {r.text}
+                                    </span>
+                                  ) : (
+                                    <span key={k}>{r.text}</span>
+                                  ),
+                                )}
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      )}
+                      {completion && (
+                        <div
+                          // mousedown, NOT click, and preventDefault: the
+                          // textarea's onBlur COMMITS the edit, so letting the
+                          // press move focus would commit and unmount the
+                          // editor out from under the item being clicked.
+                          onMouseDown={(e) => e.preventDefault()}
+                          style={{
+                            position: "absolute",
+                            top: fh + 2,
+                            left: 0,
+                            minWidth: Math.min(fw, 240),
+                            maxWidth: 520,
+                            maxHeight: 168,
+                            overflowY: "auto",
+                            zIndex: 2,
+                            // The editor overlay's OWN palette, not the
+                            // `--vscode-editorWidget-*` chrome the rail uses:
+                            // those carry light fallbacks for the standalone
+                            // app, and pairing them with theme-following text
+                            // gave light-on-light on the selected row in a dark
+                            // theme — the same "fix one half and get the mirror
+                            // bug" trap that ties the node fills to the token
+                            // palette.
+                            background: EDIT_BG,
+                            color: EDIT_TEXT,
+                            border: `1px solid ${NODE_STYLES.tactic.stroke}`,
+                            borderRadius: 3,
+                            fontFamily: getCodeFontFamily(),
+                            fontSize: NODE_FONT_PX,
+                            lineHeight: `${LINE_H}px`,
+                            letterSpacing: 0,
+                            boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
+                          }}
+                        >
+                          {completion.items.map((it, i) => (
+                            <div
+                              key={`${it.kind}:${it.label}`}
+                              onClick={(e) =>
+                                acceptCompletion(
+                                  editing,
+                                  it,
+                                  // No ref: walk to the overlay wrapper and
+                                  // take its textarea. The mousedown above
+                                  // already kept focus there.
+                                  e.currentTarget
+                                    .closest("[data-ptw-edit]")
+                                    ?.querySelector("textarea") ?? null,
+                                )
+                              }
+                              onMouseEnter={() =>
+                                setCompletion((c) => c && { ...c, index: i })
+                              }
+                              style={{
+                                display: "flex",
+                                gap: 8,
+                                alignItems: "baseline",
+                                padding: "1px 6px",
+                                cursor: "pointer",
+                                whiteSpace: "pre",
+                                // Accent + accent-text are a designed pair, so
+                                // the selected row contrasts in either theme.
+                                background:
+                                  i === completion.index
+                                    ? "var(--ptw-accent)"
+                                    : "transparent",
+                                color:
+                                  i === completion.index
+                                    ? "var(--ptw-accent-text)"
+                                    : EDIT_TEXT,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                }}
+                              >
+                                {it.label}
+                              </span>
+                              <span
+                                style={{
+                                  marginLeft: "auto",
+                                  opacity: 0.55,
+                                  fontSize: COMMENT_FONT_PX,
+                                }}
+                              >
+                                {it.kind}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      </div>
                     </foreignObject>
                   </g>
                 );
@@ -2896,6 +4385,141 @@ function renderCombinedLines(
   return out.length === lines.length ? out : null;
 }
 
+/** Small square button for the diagnostic pill's pager. Not `RailButton`: that
+one is 26px and carries the rail's own chrome, which inside a pill reads as a
+second widget rather than as part of this one. */
+const PILL_BTN: CSSProperties = {
+  width: 14,
+  height: 16,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  fontFamily: "monospace",
+  fontSize: 12,
+  lineHeight: 1,
+  color: "inherit",
+};
+
+/**
+ * The proof's diagnostics, as one status line with a pager.
+ *
+ * TOP-left, stacked under the caller's slot and any picking hint (`top` is
+ * computed at the call site). It started bottom-left, where a status bar
+ * belongs, and that was wrong HERE for a reason specific to the host: the
+ * widget's frame is `height: 100vh` while its root sits a little way down the
+ * infoview's own document, so the frame ends that far BELOW the fold and
+ * anything anchored to its bottom edge is never on screen. Top is the only
+ * edge of this frame guaranteed visible.
+ *
+ * It shows ONE diagnostic at a time rather than a list, since the tree itself
+ * is the list: every one of them is already ribboned on its own node, and what
+ * this adds is a way to walk them and a place to read the full message.
+ *
+ * `‹`/`›` step and navigate together — stepping to a diagnostic you then have
+ * to go and find would be half a feature. Clicking the message goes to the
+ * current one on BOTH surfaces: the tree (unfold, page, scroll) and, in the
+ * widget, the SOURCE — the editor's cursor lands on the error through the same
+ * reveal a node click uses. The reveal half is also what gives a diagnostic
+ * with no drawn node (Lean reports plenty at the enclosing block) a working
+ * click; only in the standalone app, which has no editor, does such a one
+ * truly have nowhere to go — said with the cursor, not by disappearing.
+ */
+function DiagnosticPill({
+  index,
+  count,
+  diag,
+  clickable,
+  top,
+  onStep,
+  onGo,
+}: {
+  index: number;
+  count: number;
+  diag: TreeDiagnostic;
+  clickable: boolean;
+  top: number;
+  onStep: (d: number) => void;
+  onGo: () => void;
+}) {
+  const err = diag.severity === 1;
+  const ink = err ? DANGER_FILL : WARN_FILL;
+  return (
+    <div
+      // A click here must not reach the background handler, which dismisses
+      // the cursor accent and every armed/picking row.
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        left: 8,
+        top,
+        zIndex: 10,
+        // Clear of the rail at top-right, which is 26px of button plus its 8px
+        // inset.
+        maxWidth: "calc(100% - 60px)",
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        fontFamily: "monospace",
+        fontSize: 11,
+        padding: "3px 7px",
+        borderRadius: 3,
+        background:
+          "var(--vscode-editorWidget-background, rgba(255,255,255,0.92))",
+        borderWidth: 1,
+        borderStyle: "solid",
+        borderColor: ink,
+        color: "var(--vscode-icon-foreground, #2d3748)",
+      }}
+    >
+      <span style={{ color: ink }}>{err ? "⨯" : "⚠"}</span>
+      {count > 1 && (
+        <>
+          <button
+            type="button"
+            style={PILL_BTN}
+            title="Previous problem"
+            onClick={() => onStep(-1)}
+          >
+            ‹
+          </button>
+          <span style={{ color: MUTED_FILL }}>
+            {index + 1}/{count}
+          </span>
+          <button
+            type="button"
+            style={PILL_BTN}
+            title="Next problem"
+            onClick={() => onStep(1)}
+          >
+            ›
+          </button>
+        </>
+      )}
+      <span
+        onClick={onGo}
+        title={diag.message}
+        style={{
+          // The first line is the headline of a Lean message; the rest is the
+          // goal state, which is what the tooltip (and the node's own box) is
+          // for. Truncation is CSS, so the width is the viewport's rather than
+          // a guessed character count.
+          minWidth: 0,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          cursor: clickable ? "pointer" : "default",
+        }}
+      >
+        {diag.message.split("\n")[0]}
+      </span>
+    </div>
+  );
+}
+
 function RailButton({
   glyph,
   title,
@@ -2941,10 +4565,9 @@ function ControlRail({
   onCollapseAll,
   accordion,
   onAccordionChange,
+  onUndo,
   compact,
   onCompactChange,
-  outline,
-  onOutlineChange,
   sideBySide,
   onSideBySideChange,
   gallery,
@@ -2974,16 +4597,15 @@ function ControlRail({
   onCollapseAll: () => void;
   accordion: boolean;
   onAccordionChange: (v: boolean) => void;
+  onUndo?: (redo: boolean) => void;
   compact: boolean;
   onCompactChange: (v: boolean) => void;
-  outline: boolean;
-  onOutlineChange: (v: boolean) => void;
   sideBySide: boolean;
   onSideBySideChange: (v: boolean) => void;
   gallery: boolean;
   onGalleryChange: (v: boolean) => void;
-  reflow: boolean;
-  onReflowChange: (v: boolean) => void;
+  reflow: ReflowMode;
+  onReflowChange: (v: ReflowMode) => void;
   brief: boolean;
   onBriefChange: (v: boolean) => void;
   combine: boolean;
@@ -3015,6 +4637,25 @@ function ControlRail({
         gap: 4,
       }}
     >
+      {/* Document actions, divided off from the view controls below: these
+          change the FILE, everything else changes only how it is drawn. They
+          exist because the tree's own edits leave focus in the webview, where
+          the editor's ⌘Z never arrives. */}
+      {onUndo && (
+        <>
+          <RailButton
+            glyph="↶"
+            title={`Undo in the editor (${CMD}Z) — focus moves to the editor, so further undos are native`}
+            onClick={() => onUndo(false)}
+          />
+          <RailButton
+            glyph="↷"
+            title={`Redo in the editor (${CMD}⇧Z)`}
+            onClick={() => onUndo(true)}
+          />
+          <div style={{ height: 6 }} />
+        </>
+      )}
       <RailButton glyph="⊞" title="Expand all" onClick={onExpandAll} />
       <RailButton glyph="⊟" title="Collapse all" onClick={onCollapseAll} />
       <div style={{ height: 6 }} />
@@ -3024,10 +4665,15 @@ function ControlRail({
         pressed={accordion}
         onClick={() => onAccordionChange(!accordion)}
       />
+      {/* The button is the WIDE tree, not the compact one: compact is the
+          default and the reading mode, so the rail should offer the departure
+          from it rather than ask you to keep a toggle pressed to stay home.
+          The state stays `compact` (the layouts' own names); only which way
+          the button reads is inverted. */}
       <RailButton
-        glyph="≡"
-        title="Compact outline layout — every node on its own line, branches indent off a left trunk (off: the wide layered tree)"
-        pressed={compact}
+        glyph="⋔"
+        title="Wide layered tree — the Sugiyama layout, same-depth nodes across one horizontal band (off: the compact outline, every node on its own line off a left trunk)"
+        pressed={!compact}
         onClick={() => onCompactChange(!compact)}
       />
       <RailButton
@@ -3043,10 +4689,10 @@ function ControlRail({
         onClick={() => onGalleryChange(!gallery)}
       />
       <RailButton
-        glyph="¶"
-        title="Reflow: wrap labels at a narrow column (breaking at commas, connectives, := and tactic keywords) so branches fit side by side"
-        pressed={reflow}
-        onClick={() => onReflowChange(!reflow)}
+        glyph={REFLOW_MODES[reflow].glyph}
+        title={REFLOW_MODES[reflow].title}
+        pressed={reflow !== "off"}
+        onClick={() => onReflowChange(REFLOW_MODES[reflow].next)}
       />
       <RailButton
         glyph="⋯"
@@ -3060,18 +4706,18 @@ function ControlRail({
         pressed={combine}
         onClick={() => onCombineChange(!combine)}
       />
-      <RailButton
-        glyph="□"
-        title="Outline only — drop the node fills, keep the borders"
-        pressed={outline}
-        onClick={() => onOutlineChange(!outline)}
-      />
+      {/* Outline-only is NOT here: it is a standing preference about how boxes
+          look rather than a gesture, so it lives in the companion's settings
+          (`proofTree.outlineOnly`) and arrives as a prop. */}
       <RailButton
         glyph={HYP_MODES[hypMode].glyph}
         title={HYP_MODES[hypMode].title}
         // Pressed whenever the context is NOT the default breadth, so the rail
-        // shows at a glance that something is being filtered or expanded.
-        pressed={hypMode !== "delta"}
+        // shows at a glance that something is being filtered or expanded. Home
+        // is `used`; a rail button offers the DEPARTURE from home rather than
+        // asking you to hold it pressed to stay there (the ⋔ layout button's
+        // reasoning — keep the two in step if either default moves).
+        pressed={hypMode !== "used"}
         onClick={() => onHypModeChange(HYP_MODES[hypMode].next)}
       />
       <div style={{ height: 6 }} />
@@ -3402,6 +5048,9 @@ interface NodeAction {
   glyph: string;
   title: string;
   onClick: () => void;
+  /** Destructive: the glyph takes the editor's error colour so the one action
+  that removes text does not look like the three that only navigate. */
+  danger?: boolean;
 }
 function NodeActionBar({
   placement = "top-right",
@@ -3465,7 +5114,9 @@ function NodeActionBar({
               dominantBaseline="central"
               fontSize={13}
               fontFamily="monospace"
-              fill="var(--vscode-icon-foreground, #2d3748)"
+              fill={
+                a.danger ? DANGER_FILL : "var(--vscode-icon-foreground, #2d3748)"
+              }
             >
               {a.glyph}
             </text>

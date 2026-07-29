@@ -1,6 +1,7 @@
 import Lean
 import Services.BetterParser
 import ProofTreeComments
+import ProofTreeRecover
 
 /-!
 # Ppharness
@@ -40,15 +41,33 @@ namespace Ppharness
 def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
     (calcHoles : Array ProofTree.CalcHole)
     (calcChains : Array ProofTree.CalcChain)
-    (calcRelations : Array ProofTree.CalcRelations) : Json :=
+    (calcRelations : Array ProofTree.CalcRelations)
+    (deleteSlots : Array ProofTree.TacticSlot)
+    (declRange : Option Lsp.Range)
+    (recovered : Array ProofTree.Recover.RecoveredStep) : Json :=
   Json.mkObj [
     ("steps",    toJson r.steps),          -- List ProofStep  (ToJson derived upstream)
     ("allGoals", toJson r.allGoals.toList), -- flatten the goal set into an array
     ("comments", toJson comments),
     ("calcHoles", toJson calcHoles),
     ("calcChains", toJson calcChains),
-    ("calcRelations", toJson calcRelations)
-  ]
+    ("calcRelations", toJson calcRelations),
+    -- Plain data, like the calc seams above, so it rides this wire too even
+    -- though the standalone app draws no delete affordance: it is what lets a
+    -- probe run the REAL client-side extent maths offline.
+    ("deleteSlots", toJson deleteSlots),
+    -- The whole DECLARATION's span, not the tactics'. The diagnostics surface
+    -- needs it to tell this proof's errors from a neighbouring theorem's, and a
+    -- span derived from the steps is not enough: `declaration uses 'sorry'` is
+    -- reported on the declaration NAME, above every tactic in the proof.
+    ("declRange", match declRange with
+      | some r => Json.mkObj [("start", toJson r.start), ("stop", toJson r.end)]
+      | none => Json.null)
+  ] |> fun base =>
+    -- Emitted only when nonempty: what keeps the complete-proof corpus
+    -- byte-identical through gen.sh (recovery fires 0 times on it).
+    if recovered.isEmpty then base
+    else base.setObjVal! "recovered" (toJson recovered)
 
 /-- Run the (MetaM) parser from plain `IO`.
     Each node inside the InfoTree carries its own `ContextInfo` (env + mctx) which
@@ -80,23 +99,61 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
   let trees    := frontendState.commandState.infoState.trees.toList
   let finalEnv := frontendState.commandState.env                  -- env AFTER all decls are added
   let fileMap  := inputCtx.fileMap
+  -- Error positions gate the failed-tactic recovery below: a slot with no
+  -- step is only FAILED if an error landed inside it (a no-op like `skip`
+  -- records no step either — measured, see ProofTreeRecover).
+  let errorPositions := frontendState.commandState.messages.toList.foldl
+    (init := #[]) fun acc m =>
+      if m.severity matches .error then
+        acc.push (fileMap.leanPosToLspPos m.pos)
+      else acc
   let mut out := #[]
   let mut idx := 0
   for tree in trees do
     match ← runParser finalEnv fileMap tree with
-    | some r =>
+    | some r0 =>
+        -- Put back the `at …` clause Paperproof's prettifier drops (see
+        -- `collectRwLocations`). Done here, before anything else reads a label,
+        -- so `tacticString` means the same thing on both wires — the widget
+        -- does exactly this too.
+        let rwLocs := ProofTree.collectRwLocations fileMap tree
+        let r1 := { r0 with steps := r0.steps.map fun s =>
+          { s with tacticString :=
+              ProofTree.withRwLocation rwLocs s.position.start s.tacticString } }
+        -- The supplemental parser: synthesize steps for tactics the vendored
+        -- one lost to failure (their info subtree was rolled back; the syntax
+        -- survives in tacticSlots). Merged HERE, before anything reads the
+        -- result, so recovered steps are ordinary steps downstream — and
+        -- before the empty guard below, which is what stops a proof whose
+        -- only tactic failed from vanishing entirely.
+        let slots := ProofTree.tacticSlots fileMap tree
+        let calcChains := ProofTree.collectCalcChains fileMap tree
+        let recovA ← ProofTree.Recover.recoverFailed fileMap tree r1.steps slots
+          calcChains errorPositions
+        -- Part B: a TERM-MODE proof (`:= term`, no `by`) parses to nothing at
+        -- all — synthesize its structure from the syntax + TermInfo.
+        let recovB ← ProofTree.Recover.recoverTerm fileMap tree
+          (ProofTree.Recover.commandStx? tree) r1.steps
+        let recov : ProofTree.Recover.Recovery := {
+          steps := recovA.steps ++ recovB.steps
+          goals := recovA.goals ++ recovB.goals
+          grafts := recovA.grafts ++ recovB.grafts
+          recovered := recovA.recovered ++ recovB.recovered }
+        let r := recov.apply r1
         -- Drop trees that produced no proof (keeps output to real theorems only).
         if !(r.steps.isEmpty && r.allGoals.isEmpty) then
           -- The command's comments ride along; the InfoTree never holds them
           -- (they're parser trivia), so re-lex the command's source range.
-          let comments := match ProofTree.commandRange tree with
+          let cmdRange := ProofTree.commandRange tree
+          let comments := match cmdRange with
             | some range => ProofTree.commentsInRange src fileMap range
             | none => #[]
+          let declRange := cmdRange.map fun r =>
+            ⟨fileMap.utf8PosToLspPos r.start, fileMap.utf8PosToLspPos r.stop⟩
           -- Unproved calc links, for the renderer's per-link (+) chips. Unlike
           -- the widget's tagged goals these are plain data, so they ride the
           -- CLI wire too (which is what lets a probe check them offline).
           let calcHoles := ProofTree.collectCalcHoles fileMap tree
-          let calcChains := ProofTree.collectCalcChains fileMap tree
           -- Same enumeration the widget runs, over the same pending rule; it
           -- needs only a MetaM context, which the info tree carries.
           let calcRelations ← ProofTree.collectCalcRelations tree <|
@@ -109,7 +166,8 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
               calcChains
           out := out.push (Json.mkObj
             [("index", toJson idx),
-             ("proof", resultToJson r comments calcHoles calcChains calcRelations)])
+             ("proof", resultToJson r comments calcHoles calcChains calcRelations
+                          slots declRange recov.recovered)])
     | none => pure ()
     idx := idx + 1
   return out
