@@ -93,13 +93,60 @@ function scan(s: string): Scan {
   return { assign, withKw, lists };
 }
 
+/** The keyword rules are ASYMMETRIC, and the asymmetry is the whole point —
+measured against the corpus, applying one rule to every tactic was half right
+and half backwards.
+//
+BINDERS (`have`, `by_contra`, `by_cases`, `obtain`, …) NAME or STATE something
+the rest of the proof uses, and there the statement is the content while the
+command word is ceremony: `have hp1 : p ∣ 1 := (Nat.dvd_add_right hpfac).mp
+hpdvd` reads `… hp1 : p ∣ 1 := …`, which is the register a paper uses ("we
+have hp1 : p ∣ 1"). Rule E1 drops their keyword.
+
+Every OTHER tactic keeps its keyword, because there the keyword is the one
+part a reader skims by — it CLASSIFIES the move (rewrite / closer / case
+split) — while the arguments are the noise. `rw [ih]` → `… [ih]` was the
+counterexample that settled it: two characters saved, and you can no longer
+tell a rewrite from a simp set from a linarith hint list. Their long
+ARGUMENTS are elided instead, verb-forward, by Rule E2 below.
+
+EXCLUDED from E1 even though they bind: `rcases`/`cases` (Rule B already
+collapses their scrutinee, so dropping the head as well leaves a bare
+`… with h | h` — measured, exactly what it produced) and `induction` (the
+variable inducted on is the content). `calc` is Rule D's. */
+const BINDER_KW =
+  /^(have|let|obtain|set|suffices|show|use|exists|refine|intro|intros|rintro|by_cases|by_contra|specialize)\b/;
+/** Rule E2's heads: tactics whose ARGUMENTS are the boilerplate. Not the
+complement of BINDER_KW by construction — an unknown or custom tactic matches
+neither, and is left entirely alone, which is the conservative default for a
+label we cannot classify. `simp only` and friends match as a UNIT, or the
+`only` is left dangling with nothing in front of it. */
+const VERB_KW =
+  /^(exact\??|apply|rw|rewrite|erw|nth_rewrite|simp\w*|simpa|dsimp|norm_num|norm_cast|push_cast|push_neg|field_simp|ring_nf|linarith|nlinarith|polyrith|positivity|gcongr|omega|decide|aesop|tauto|itauto|trivial|assumption|contradiction|constructor|left|right|rfl|ring|abel|group|module|linear_combination|revert|subst|substs|convert|congr|ext|change|unfold|delta|conv|bound|hint|first|repeat|try|all_goals|any_goals|focus)(\s+only)?\b/;
+
 /** The half-open ranges of the original label to hide, from the rules. */
-function elisionRanges(label: string): [number, number][] {
+function elisionRanges(label: string, short: boolean): [number, number][] {
   const s = scan(label);
   const ranges: [number, number][] = [];
   const push = (a: number, b: number) => {
     if (b - a >= MIN_ELIDE) ranges.push([a, b]);
   };
+
+  // Rule E1 — a BINDER's command word, replaced by the `…` itself, so the
+  // statement leads: `have hp1 : p ∣ 1 := …` reads `… hp1 : p ∣ 1 := …`.
+  //
+  // It bypasses BOTH width gates, unlike every other rule, and that is the
+  // point rather than an oversight: `by_contra hle` is 13 characters and a
+  // keyword is 4-6, so MIN_LABEL and MIN_ELIDE would between them skip almost
+  // every case this rule exists for. The rule is about NOISE, not width.
+  //
+  // Gated on something REMAINING: a bare `constructor` is nothing but its
+  // command word, and collapsing it to `…` would erase the step instead of
+  // shortening it — losing even that anything is there.
+  const mE = BINDER_KW.exec(label);
+  if (mE && label.slice(mE[0].length).trim() !== "") ranges.push([0, mE[0].length]);
+  // Everything below is a WIDTH saving, so it keeps the short-label gate.
+  if (short) return ranges;
 
   // Rule A — the flagship: the RHS of a top-level `:=` (a binding's derivation)
   // is boilerplate, while the LHS bindings and any `: type` before the `:=` are
@@ -122,6 +169,7 @@ function elisionRanges(label: string): [number, number][] {
   // opener and the FIRST rule, collapse the rest. Only `[]`, never `⟨⟩` (that
   // would hide the binding constructor Rule A is careful to keep). Needs >2
   // top-level items (≥2 commas) to be worth it.
+  const beforeC = ranges.length;
   for (const g of s.lists) {
     if (g.commas.length < 2) continue;
     // Second item begins after the first comma (skip one space).
@@ -129,6 +177,24 @@ function elisionRanges(label: string): [number, number][] {
     if (label[from] === " ") from++;
     push(from, g.close); // up to, not including, the `]`
   }
+
+  // Rule E2 — a NON-binder's ARGUMENTS, leaving the verb in front:
+  // `exact ⟨k + 1, Or.inl (by omega)⟩` reads `exact …`. The mirror image of
+  // E1, and the asymmetry is the design (see BINDER_KW): here the command
+  // word is the skim anchor and the argument is the noise, so the `…` goes
+  // where E1 keeps text and the text stays where E1 puts the `…`.
+  //
+  // Unlike E1 this is a WIDTH rule and keeps both gates — it sits past the
+  // `short` return and goes through `push` — so `rw [ih]`, `exact hp` and
+  // `push_neg at hle` stay whole, which is right: they already fit, and the
+  // argument is short enough to read.
+  //
+  // It DEFERS to Rule C: where a long `[ … ]` list fired, `rw [a, …]` keeps
+  // the first rewrite rule, which is strictly more than `rw …` and was a
+  // deliberate earlier decision. C's range is a subset of E2's, so without
+  // this the merge would swallow it.
+  const mE2 = VERB_KW.exec(label);
+  if (mE2 && ranges.length === beforeC) push(mE2[0].length, label.length);
 
   // Rule D — a `calc` chain's first line. Everything after the keyword is
   // ALREADY DRAWN, by the tree rather than by this label: the chain's starting
@@ -156,17 +222,23 @@ function elisionRanges(label: string): [number, number][] {
 /** Collapse `label`, or null when nothing collapses (caller keeps the original
 and sets no elision — the render path is then byte-identical to today). */
 export function collapseLabel(label: string): CollapsedLabel | null {
-  if (label.length < MIN_LABEL) return null;
-  const raw = elisionRanges(label);
+  // The width-driven rules (A-D) are skipped on a short label, but Rule E is
+  // not — see its comment. So the gate is passed DOWN rather than applied here.
+  const raw = elisionRanges(label, label.length < MIN_LABEL);
   if (raw.length === 0) return null;
 
   // Merge overlapping/adjacent ranges (Rule A's to-end range can swallow a
-  // Rule C list sitting inside the RHS).
+  // Rule C list sitting inside the RHS). Two ranges separated only by
+  // WHITESPACE count as adjacent: they would otherwise emit `… …`, which says
+  // nothing twice and reads as a rendering fault. (Rule E's command word and
+  // Rule B's scrutinee are exactly one space apart — the case that forced
+  // this, before rcases/cases were excluded from E for the better reason.)
   raw.sort((a, b) => a[0] - b[0]);
   const merged: [number, number][] = [];
   for (const [a, b] of raw) {
     const last = merged[merged.length - 1];
-    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    if (last && label.slice(last[1], Math.max(last[1], a)).trim() === "")
+      last[1] = Math.max(last[1], b);
     else merged.push([a, b]);
   }
 

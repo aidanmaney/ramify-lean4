@@ -25,9 +25,10 @@ theorem flag_demo (n : ℕ) (hn : 2 ≤ n) :
       rw [Nat.add_zero]
     exact h
   · -- .none this branch is just `Nat.even_or_odd`
-    -- Elided outright, with the note above standing in for it. Unlike `.fold`
-    -- there is no way to open it — the source has decided it is not part of
-    -- the picture.
+    -- Elided into the trunk, with the note above standing in for it: the
+    -- tactic and its whole branch collapse to one dashed ghost. Unlike
+    -- `.fold` the fold controls do not reach it — the source has decided it
+    -- is not part of the picture — but the ghost itself opens on a click.
     rcases Nat.even_or_odd n with he | ho
     · left
       exact he

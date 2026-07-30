@@ -71,22 +71,31 @@ const MAX_W = WRAP_W + 2 * NODE_PAD;
 // Reflow mode's budget: a much narrower column, so several branches fit across
 // the viewport at once (the point of the mode). Narrow enough to be worth the
 // extra height, wide enough that a typical goal still lands in 2-3 lines.
-const REFLOW_CHARS = 44;
-const REFLOW_W = REFLOW_CHARS * CHAR_W;
-// The WIDE reflow: exactly twice the narrow budget. It is the middle setting
-// the mode was missing — narrow reflow trades a lot of height for width, which
-// pays when you want three branches across the viewport and over-pays when you
-// only want the widest boxes brought under control. Everything else about the
-// mode (the seam tiers, the eager break, the nested bracket indent, wrapped
-// hyps) is unchanged; only the budget moves, so the two settings differ in one
-// number and cannot drift apart.
-const REFLOW_WIDE_W = 2 * REFLOW_W;
+export const REFLOW_CHARS = 44;
+// The budget is CONTINUOUS, set in columns by the rail's ¶ slider. It used to
+// be two fixed stops (44, and exactly twice that) because a cycling button can
+// only offer a handful — but the right column depends on the proof, the
+// viewport and how many branches you are trying to get across it, which is a
+// judgement only the reader can make. The stops survive as landmarks: 44 is
+// still the default (and what "narrow reflow" meant), 88 what "wide" meant.
+// Everything else about the mode — the seam tiers, the eager break, the nested
+// bracket indent, wrapped hyps — is independent of the number, so widening or
+// narrowing moves exactly one thing.
+export const REFLOW_MIN_CHARS = 20;
+// The top of the range is the ORDINARY budget, so sliding all the way right
+// lands on the same label width the tree wraps at with reflow off — the two
+// then differ only in reflow's own rules (nested indent, eager breaks, and
+// wrapped context lines, which cost their type tooltips). That is what makes
+// the slider's far end continuous with `off` rather than a cliff.
+export const REFLOW_MAX_CHARS = MAX_CHARS;
 
-/** Off, or one of the two reflow budgets. Cycled by the rail's ¶. */
-export type ReflowMode = "off" | "narrow" | "wide";
+/** Off, or a wrap budget in COLUMNS (see the rail's ¶ slider). */
+export type ReflowMode = "off" | number;
 /** The wrap budget a mode asks for; `off` keeps the ordinary ~100-col one. */
 const budgetFor = (m: ReflowMode): number =>
-  m === "off" ? WRAP_W : m === "wide" ? REFLOW_WIDE_W : REFLOW_W;
+  m === "off"
+    ? WRAP_W
+    : Math.max(REFLOW_MIN_CHARS, Math.min(REFLOW_MAX_CHARS, m)) * CHAR_W;
 const MIN_W = 60;
 
 // Measure rendered text width using the very font the SVG draws with, so the box
@@ -136,6 +145,12 @@ export const HYP_LINE_H = 13;
 // Width of the left gutter holding the "used by the consuming tactic" markers;
 // reserved only when some line is marked, so unmarked contexts stay tight.
 export const HYP_MARK_W = 11;
+// Extra leading between a context's DATA group and its PROPOSITIONS group
+// (contextFor orders data first and stamps `HypLine.sep` on the first prop
+// line of a mixed block). The divider hairline is drawn in this gap; sizeOf
+// reserves it and HypBlock offsets by it — the usual measurer/render pair
+// that must agree.
+export const HYP_SEP_H = 7;
 
 // ---- Compact ("trunk") layout geometry -------------------------------------
 // The compact mode lays the proof out as a scrolling outline (Nuprl-style):
@@ -145,6 +160,20 @@ export const HYP_MARK_W = 11;
 // inside the parent box's left edge.
 export const TRUNK_INDENT = 56; // horizontal shift of a branched-off subtree
 export const TRUNK_INSET = 16; // connector column, from a box's left edge
+// The SPINE variant (the ⊦ layout): TWO side-by-side tracks — goals stack
+// down the left track, and each TACTIC box stands in its own track to the
+// RIGHT, beside the seam between the goal it consumes and the goals it
+// produces, instead of taking a trunk slot of its own. The tactic drops only
+// a few pixels below its goal (enough to show the connector stub — `│——tac`)
+// and its box is free to OVERLAP the next goal's band in y, because the two
+// tracks are exclusive in x by construction: a tactic's left edge clears its
+// own goal's box and every node its vertical range crosses. That x-clearing
+// is what buys the height — the goal→goal distance collapses from
+// gap + tactic band + gap to drop + half a band + clearance.
+export const ASIDE_X = TRUNK_INSET + 14; // floor: an aside tactic clears the lane
+const ASIDE_DROP = 4; // goal bottom → its tactic's band top
+const ASIDE_CLEAR = 10; // stub y → the continuation's band top
+const ASIDE_TRACK_GAP = 24; // right edge of the goal track → the tactic track
 // The frontier-chip lane (`+`/`sorry`/`calc`/`step`, and the relation picker)
 // hangs BELOW a node's box, outside its band — so unlike the comment strip and
 // case badge it is not reserved by the band arithmetic, and whatever the trunk
@@ -192,6 +221,12 @@ function trunkLayout(
   // overlap" argument changes shape: columns overlap in y but are exclusive
   // in x by construction (each starts past the previous column's right edge).
   sideBySide = false,
+  // Spine mode: tactic boxes stand in a right-hand track (see the ASIDE_*
+  // constants). `"track"` is the ALIGNED variant: after placement every aside
+  // tactic is slid out to one shared column x, so the two tracks read as
+  // columns — it relies on the caller capping goal widths (the view forces
+  // reflow's budget), since the column sits past the widest goal box.
+  aside: boolean | "track" = false,
 ): {
   nodes: PlacedNode[];
   links: PlacedLink[];
@@ -206,6 +241,12 @@ function trunkLayout(
   const nodes: PlacedNode[] = [];
   const links: PlacedLink[] = [];
   let width = 0;
+  // Spine modes: the y below which the tactic track is free. Two consecutive
+  // aside tactics can otherwise overlap in y — a tall tactic box reaches past
+  // the short goal under it, and the NEXT tactic's drop point knows nothing
+  // of it (it is computed from its own goal's bottom). Saved/restored around
+  // side-by-side columns, which restart y and are x-exclusive anyway.
+  let trackFloor = -Infinity;
 
   // A node's effective width: the box, or a strip hanging past it.
   const effOf = (n: LayoutNode): number => {
@@ -259,6 +300,24 @@ function trunkLayout(
         { y0: hy, y1: contentTop - ARROW_GAP, lo: childLane, hi: childLane },
       ];
     }
+    // Spine mode (an aside tactic's outgoing link): ride the TRUNK lane the
+    // link carries, from the tactic's box middle — where the incoming elbow's
+    // horizontal stub crosses that lane — straight down into a trunk child,
+    // or │└ into an indented one. Deriving the lane from the tactic's own
+    // left edge (the ordinary rule below) would run it through the goal
+    // boxes stacked left of the track.
+    if (l.lane !== undefined) {
+      const srcBoxMid = l.source.y + (sd.caseH + sd.commentBlockH) / 2;
+      if (Math.abs(tLeft - (l.lane - TRUNK_INSET)) < 0.5)
+        return [
+          { y0: srcBoxMid, y1: contentTop - ARROW_GAP, lo: l.lane, hi: l.lane },
+        ];
+      const landY = contentTop + td.h / 2;
+      return [
+        { y0: srcBoxMid, y1: landY, lo: l.lane, hi: l.lane },
+        { y0: landY, y1: landY, lo: l.lane, hi: tLeft - ARROW_GAP },
+      ];
+    }
     if (Math.abs(tLeft - sLeft) < 0.5)
       return [{ y0: startY, y1: contentTop - ARROW_GAP, lo: col, hi: col }];
     const landY = contentTop + td.h / 2;
@@ -289,6 +348,16 @@ function trunkLayout(
     // nodes' strips hang indented off the incoming lane (COMMENT_INDENT) —
     // either may be the widest (effOf).
     const eff = effOf(n);
+    // Spine mode: a parented tactic stands in the RIGHT track. Its x is
+    // provisional here — after its children are placed (back on the trunk,
+    // see the aside branch below), it is slid right until it clears its own
+    // goal's box and every node its vertical range crosses. Mutating pn.x
+    // after the fact is safe for the same reason column packing relies on:
+    // links hold PlacedNode references, so geometry follows the node.
+    const isAside = !!aside && n.type === "tactic" && n.parents.length > 0;
+    // The track is a shared column (exactly shared in "track" mode), so a
+    // tactic may not start above the previous track occupant's bottom.
+    if (isAside) y0 = Math.max(y0, trackFloor);
     const pn: PlacedNode = { x: x0 + n.w / 2, y: y0 + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
@@ -304,15 +373,39 @@ function trunkLayout(
       // which silently corrupts a sort.
       return ra === rb ? 0 : ra - rb;
     });
-    if (sideBySide && cs.length > 1) {
+    // Proof OBLIGATIONS a tactic generated (TreeNode.side — a conditional
+    // rewrite's side condition) are not peers of the main line, so they must
+    // never take the trunk. Partition them out, keeping source order within
+    // each half. The two compact modes want the main child in OPPOSITE slots:
+    // stacked resumes the trunk with its LAST child, columns with its FIRST.
+    //
+    // Putting obligations first in stacked mode draws them ABOVE the
+    // continuation even though their proof text comes last — a deliberate
+    // local source-order inversion, and exactly how a `have`'s side proof
+    // already reads. `cs` is left untouched when nothing is stamped, which is
+    // every proof containing no conditional rewrite.
+    const mainCs = cs.filter((c) => !c.side);
+    const sideCs = cs.filter((c) => c.side);
+    const order =
+      sideCs.length === 0 || mainCs.length === 0
+        ? cs
+        : sideBySide
+          ? [...mainCs, ...sideCs]
+          : [...sideCs, ...mainCs];
+    if (sideBySide && order.length > 1) {
       // All columns start at the SAME y — that identical band top is what the
       // renderer's over-the-top connector routing relies on.
       const top = bottom + TRUNK_GAP_BRANCH;
       // The right contour of every column placed so far in THIS split.
       const contour: Span[] = [];
       let colX = x0;
-      for (const c of cs) {
+      // Columns restart y, so each starts from the floor as it stood at the
+      // split; the max over columns carries forward below the split.
+      const floorAtSplit = trackFloor;
+      let floorAfter = trackFloor;
+      for (const c of order) {
         const isFirst = colX === x0;
+        trackFloor = floorAtSplit;
         // Place PROVISIONALLY past everything (no collisions possible), then
         // slide the whole column left until its left profile sits
         // BRANCH_COL_GAP from the contour at the nearest approach. Shifting
@@ -355,23 +448,78 @@ function trunkLayout(
         colX = Math.max(colX, colRight) + BRANCH_COL_GAP;
         bottom = Math.max(bottom, r.bottom);
         right = Math.max(right, colRight);
+        floorAfter = Math.max(floorAfter, trackFloor);
       }
+      trackFloor = floorAfter;
       return { pn, bottom, right };
     }
-    // The last child in source order resumes the trunk at the parent's own
-    // indent — except under a CHAIN (a `calc` block), whose links are a list
-    // rather than a split, so every one of them indents and they read as a
-    // column (see TreeNode.chain). `undefined` never matches `c === trunk`.
-    const trunk = n.chain ? undefined : cs[cs.length - 1];
-    for (const c of cs) {
-      const gap =
-        n.type === "goal" && cs.length === 1
-          ? TRUNK_GAP_STEP
+    // The last child resumes the trunk at the parent's own indent — last in
+    // SOURCE order normally, but last of the MAIN children where a tactic
+    // generated obligations (see `order` above), so the mathematics keeps the
+    // trunk and the obligations branch off it. Excepted under a CHAIN (a
+    // `calc` block), whose links are a list rather than a split, so every one
+    // of them indents and they read as a column (see TreeNode.chain).
+    // `undefined` never matches `c === trunk`.
+    const trunk = n.chain ? undefined : order[order.length - 1];
+    // Spine mode: this tactic leaves the trunk, so its children resume just
+    // under the connector STUB (its box middle — where the incoming elbow's
+    // horizontal lands) instead of under its whole band. That is the mode's
+    // entire vertical saving: goal → goal collapses from
+    // gap + band + gap to drop + half a band + ASIDE_CLEAR, and the box's
+    // lower half overlaps the continuation's band in y, which the x-clearing
+    // pass below makes safe. `bottom` still floors at the box's own bottom so
+    // a LEAF tactic (nothing below it) can't be overlapped by a later
+    // sibling, and so a tall box in the track pushes what follows down.
+    const stubY = y0 + n.caseH + n.commentBlockH + n.h / 2;
+    const boxBottom = y0 + band + n.chipH;
+    const mark = nodes.length;
+    if (isAside) bottom = stubY + ASIDE_CLEAR;
+    for (const c of order) {
+      // A SPLIT keeps TRUNK_GAP_BRANCH between its branches even in spine
+      // mode — the gallery pager lives in that gap — but the FIRST child sits
+      // right at the resumed cursor (the ASIDE_CLEAR above already spaced it).
+      const gap = isAside
+        ? c === order[0]
+          ? 0
+          : TRUNK_GAP_BRANCH
+        : n.type === "goal" && order.length === 1
+          ? c.type === "tactic" && aside
+            ? ASIDE_DROP
+            : TRUNK_GAP_STEP
           : TRUNK_GAP_BRANCH;
       const r = place(c, c === trunk ? x0 : x0 + TRUNK_INDENT, bottom + gap);
-      links.push({ source: pn, target: r.pn });
+      // An aside tactic's outgoing links carry the trunk lane (the goal
+      // column's, x0 + TRUNK_INSET) — its own left edge is in the right-hand
+      // track and useless as a lane origin. See PlacedLink.lane.
+      links.push(
+        isAside
+          ? { source: pn, target: r.pn, lane: x0 + TRUNK_INSET }
+          : { source: pn, target: r.pn },
+      );
       bottom = r.bottom;
       right = Math.max(right, r.right);
+    }
+    if (isAside) {
+      // Slide the box into the right track: past the lane, past its own
+      // goal's box, and past every node placed under it whose band crosses
+      // the box's vertical range — the trunk continuation it overlaps by
+      // construction, and any branch box tall enough to reach it.
+      const parentPn = placed.get(n.parents[0].id);
+      let clearX = Math.max(
+        x0 + ASIDE_X,
+        parentPn
+          ? parentPn.x + parentPn.data.w / 2 + ASIDE_TRACK_GAP
+          : x0 + ASIDE_X,
+      );
+      for (const o of nodes.slice(mark)) {
+        const b = nodeSpan(o);
+        if (b.y0 < boxBottom && y0 < b.y1)
+          clearX = Math.max(clearX, b.hi + ASIDE_TRACK_GAP);
+      }
+      pn.x = clearX + n.w / 2;
+      right = Math.max(right, clearX + eff);
+      bottom = Math.max(bottom, boxBottom);
+      trackFloor = boxBottom + ASIDE_DROP;
     }
     return { pn, bottom, right };
   }
@@ -380,6 +528,26 @@ function trunkLayout(
   for (const r of visible.filter((n) => n.parents.length === 0)) {
     if (nodes.length > 0) cursor += TRUNK_GAP_BRANCH;
     cursor = place(r, 0, cursor).bottom;
+  }
+  // Aligned tracks: slide EVERY aside tactic out to one shared column — its
+  // left edge at the widest non-track ink (goal boxes, strips, badges) plus
+  // the track gap. Safe against goals because each tactic's per-node clearX
+  // is by construction ≤ this maximum, and safe against other tactics
+  // because trackFloor already keeps the track y-exclusive. Skipped under
+  // side-by-side columns, where one global column would collide with the
+  // column packing (columns are x-exclusive by contour, and a shared x
+  // across them breaks exactly that).
+  if (aside === "track" && !sideBySide) {
+    const isTrack = (pn: PlacedNode) =>
+      pn.data.type === "tactic" && pn.data.parents.length > 0;
+    let trackX = 0;
+    for (const pn of nodes)
+      if (!isTrack(pn))
+        trackX = Math.max(
+          trackX,
+          pn.x - pn.data.w / 2 + effOf(pn.data) + ASIDE_TRACK_GAP,
+        );
+    for (const pn of nodes) if (isTrack(pn)) pn.x = trackX + pn.data.w / 2;
   }
   // Width is computed AFTER placement, not tracked during it: contour packing
   // shifts whole columns left after their nodes were pushed, so a running
@@ -796,7 +964,15 @@ function sizeOf(
           // lines to do it — the wrong side of that trade.
           false,
         ).map(
-          (w) => ({ text: w.text, used: l.used, cont: w.cont, indent: w.indent }),
+          // `sep` rides only the FIRST fragment of a wrapped line — the
+          // divider sits above the hyp, not inside it.
+          (w) => ({
+            text: w.text,
+            used: l.used,
+            cont: w.cont,
+            indent: w.indent,
+            sep: w.cont ? undefined : l.sep,
+          }),
         ),
       );
   const hypW =
@@ -809,7 +985,12 @@ function sizeOf(
         gutter +
         2 * NODE_PAD
       : 0;
-  const hypH = hypLines.length > 0 ? hypLines.length * HYP_LINE_H + HYP_GAP : 0;
+  // A mixed data/props block carries at most one `sep` (contextFor's
+  // invariant), whose divider needs its own leading — reserve it here or the
+  // shifted lines below it spill past the label (HypBlock must agree).
+  const sepExtra = hypLines.some((l) => l.sep) ? HYP_SEP_H : 0;
+  const hypH =
+    hypLines.length > 0 ? hypLines.length * HYP_LINE_H + sepExtra + HYP_GAP : 0;
   return {
     lines,
     hyps: hypLines,
@@ -1037,6 +1218,10 @@ export function createLayoutEngine(
     // Seeds the same fixpoint sweep the fold rule uses, so a hidden node takes
     // its subtree with it for free. Drives the gallery (one branch at a time).
     hide?: Set<string> | null,
+    // Compact-mode only: the SPINE variant — goals keep the trunk, tactic
+    // boxes hang off the lane to the right (see trunkLayout's `aside`);
+    // `"track"` additionally aligns every tactic to one shared column x.
+    aside: boolean | "track" = false,
   ): {
     nodes: PlacedNode[];
     links: PlacedLink[];
@@ -1079,7 +1264,7 @@ export function createLayoutEngine(
         ...SIZE.get(n.id)!,
       }));
 
-    if (compact) return trunkLayout(visible, srcRank, sideBySide);
+    if (compact) return trunkLayout(visible, srcRank, sideBySide, aside);
 
     const graph = graphStratify().parentData((d: LayoutNode) =>
       d.parents.map((p): [string, LinkDatum] => [p.id, undefined]),

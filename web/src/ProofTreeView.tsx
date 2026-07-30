@@ -13,6 +13,7 @@ import {
   HYP_FONT_PX,
   HYP_LINE_H,
   HYP_MARK_W,
+  HYP_SEP_H,
   LINE_H,
   NODE_FONT_PX,
   NODE_PAD,
@@ -29,6 +30,9 @@ import {
   getCodeFontFamily,
   refreshCodeFontFamily,
   measureText,
+  REFLOW_CHARS,
+  REFLOW_MIN_CHARS,
+  REFLOW_MAX_CHARS,
 } from "./layout";
 import type { ReflowMode } from "./layout";
 import {
@@ -80,6 +84,7 @@ import {
   pathIds,
   pruneCuts,
   resolveCut,
+  stepElidable,
 } from "./elide";
 import {
   ACCENT_TEXT,
@@ -174,6 +179,43 @@ const HYP_MODES: Record<
   },
 };
 
+// The layout cycle, on the rail button that used to be the compact↔wide
+// toggle. Three states, so it follows HYP_MODES' shape: the glyph shows the
+// CURRENT mode (three states can't be read off a pressed style), pressed
+// means "not home". `stacked` is home — the reading mode — so the cycle
+// offers the departures in order of distance from it: the spine is compact
+// with the tactics stood aside, wide is a different layout entirely.
+type LayoutMode = "stacked" | "spine" | "tracks" | "wide";
+const LAYOUT_MODES: Record<
+  LayoutMode,
+  { glyph: string; title: string; next: LayoutMode }
+> = {
+  stacked: {
+    glyph: "☰",
+    title:
+      "Layout: compact outline — every node on its own line off a left trunk (click for the goal spine: goals tight on the left, tactics in their own track to the right)",
+    next: "spine",
+  },
+  spine: {
+    glyph: "⊦",
+    title:
+      "Layout: goal spine — two tracks, goals stacked tight on the left and each tactic beside its step in a right-hand track (click for aligned tracks: goals wrapped to a modest width, every tactic at one x)",
+    next: "tracks",
+  },
+  tracks: {
+    glyph: "∥",
+    title:
+      "Layout: aligned tracks — the spine with goals wrapped to a modest width, so every tactic starts at the SAME x and the two tracks read as columns (click for the wide layered tree)",
+    next: "wide",
+  },
+  wide: {
+    glyph: "⋔",
+    title:
+      "Layout: wide layered tree — Sugiyama, same-depth nodes across one horizontal band (click for the compact outline)",
+    next: "stacked",
+  },
+};
+
 // Reflow is a THREE-state cycle on one rail button, the same shape as
 // HYP_MODES above and for the same reason: two independent booleans would let
 // you ask for both budgets at once, and a second button would spend rail space
@@ -182,29 +224,15 @@ const HYP_MODES: Record<
 // under control without paying narrow reflow's full height cost. The glyph
 // carries the current state, since three of them can't be read off a pressed
 // style.
-const REFLOW_MODES: Record<
-  ReflowMode,
-  { glyph: string; title: string; next: ReflowMode }
-> = {
-  off: {
-    glyph: "¶",
-    title:
-      "Reflow: wrap labels at a narrower column so branches fit side by side (click for the wide budget)",
-    next: "wide",
-  },
-  wide: {
-    glyph: "¶",
-    title:
-      "Reflow (wide): labels wrapped at twice the narrow column — reins in the widest boxes without narrow reflow's height cost (click for the narrow budget)",
-    next: "narrow",
-  },
-  narrow: {
-    glyph: "¶",
-    title:
-      "Reflow (narrow): labels wrapped at the tightest column, breaking at commas, connectives, := and tactic keywords (click to turn reflow off)",
-    next: "off",
-  },
-};
+// The ¶ slider's top notch, one step past the widest real budget, is OFF —
+// reflow's own rules stood down, which is what a reader sliding rightward is
+// asking for by the time they reach the ordinary wrap width. Encoding it as a
+// position rather than a separate button keeps the whole control one gesture:
+// open, drag, done.
+const REFLOW_OFF_STOP = REFLOW_MAX_CHARS + 1;
+const reflowToStop = (m: ReflowMode) => (m === "off" ? REFLOW_OFF_STOP : m);
+const stopToReflow = (v: number): ReflowMode =>
+  v >= REFLOW_OFF_STOP ? "off" : v;
 
 // Frontier-chip row geometry (see FrontierChip). Widths are fixed rather than
 // measured: both labels are constant, and the row must not resize per node.
@@ -216,12 +244,13 @@ const CHIP_GAP = 6;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
 const CHIP_W_STEP = 30;
-// What the `step` chip's overlay opens with: the head of a calc link, so the
-// author types only the part that is theirs (`c := by ring`). Committing it
-// unchanged is the no-op of that form (see commitEdit).
-const calcLinkPrefill = (rel: string) => `_ ${rel} `;
-// The `.none` elision marker (see ElidedMarker) is the one chip that DOES
-// measure: it carries the directive's own prose, so its width is its text's.
+// What a chain gesture's overlay asks for: the new link's RIGHT-HAND SIDE,
+// and nothing else — the relation is already picked and the justification is
+// written as a `sorry` for the second half of the gesture to type over (see
+// calcEdit's STUB). `_` is the answer that CLOSES a chain against its goal, so
+// it is prefilled wherever closing is what the gesture means; an empty commit
+// backs out everywhere.
+const CLOSE_RHS = "_";
 const CHIP_FONT_PX = 10;
 // Relation chips in the picker row (see PickerRow): a touch larger than the
 // word chips, since a single glyph carries the whole meaning.
@@ -447,12 +476,31 @@ function HypBlock({
   // Marker gutter (reserved by sizeOf only when something is marked), and the
   // left edge text starts at.
   const textX = x + (anyUsed ? HYP_MARK_W : 0);
+  // Data/props divider: contextFor stamps `sep` on the first PROPOSITIONS
+  // line of a mixed block (at most one per block); everything from it down
+  // shifts by HYP_SEP_H — the leading sizeOf reserved — and a hairline is
+  // drawn centred in the gap. Both text paths and the gutter must apply the
+  // same shift, or markers drift off their lines.
+  const sepIndex = lines.findIndex((l) => l.sep);
+  const sepOff = (j: number) =>
+    sepIndex >= 0 && j >= sepIndex ? HYP_SEP_H : 0;
   // Dim only as contrast: when nothing is marked, everything keeps full ink.
   const lineFill = (used: boolean) =>
     anyUsed && !used ? HYP_UNUSED_FILL : HYP_USED_FILL;
 
   return (
     <>
+      {sepIndex >= 0 && (
+        <line
+          x1={x}
+          x2={x + width}
+          y1={y + sepIndex * HYP_LINE_H + HYP_SEP_H / 2}
+          y2={y + sepIndex * HYP_LINE_H + HYP_SEP_H / 2}
+          stroke={HYP_UNUSED_FILL}
+          strokeWidth={1}
+          opacity={0.45}
+        />
+      )}
       {/* Gutter markers for used hyps are plain SVG in both render paths, so
           the tagged overlay only replaces the line text. */}
       {anyUsed && (
@@ -465,7 +513,12 @@ function HypBlock({
         >
           {lines.map((line, j) =>
             line.used && !line.cont ? (
-              <tspan key={j} x={x} y={y + (j + 0.5) * HYP_LINE_H} dy="0.32em">
+              <tspan
+                key={j}
+                x={x}
+                y={y + sepOff(j) + (j + 0.5) * HYP_LINE_H}
+                dy="0.32em"
+              >
                 {HYP_MARK}
               </tspan>
             ) : null,
@@ -481,7 +534,7 @@ function HypBlock({
           x={textX}
           y={y}
           width={Math.max(0, x + width - textX)}
-          height={lines.length * HYP_LINE_H}
+          height={lines.length * HYP_LINE_H + (sepIndex >= 0 ? HYP_SEP_H : 0)}
           style={{ overflow: "visible" }}
         >
           <div
@@ -500,6 +553,10 @@ function HypBlock({
                   height: HYP_LINE_H,
                   color: lineFill(line.used),
                   paddingLeft: line.indent ?? 0,
+                  // The divider's leading (the hairline itself is SVG, shared
+                  // with the plain path). Margin, not padding: padding would
+                  // push the text down INSIDE its line box.
+                  marginTop: line.sep ? HYP_SEP_H : 0,
                 }}
               >
                 {taggedLines[j] ?? line.text}
@@ -520,7 +577,7 @@ function HypBlock({
             <tspan
               key={j}
               x={textX + (line.indent ?? 0)}
-              y={y + (j + 0.5) * HYP_LINE_H}
+              y={y + sepOff(j) + (j + 0.5) * HYP_LINE_H}
               dy="0.32em"
               fill={lineFill(line.used)}
             >
@@ -658,7 +715,10 @@ export interface ProofTreeViewProps {
    * what the user typed. widget.tsx turns it into a document insertion via
    * the editor's own edit pipeline.
    */
-  onAddTactic?: (spec: AddSpec, text: string) => void;
+  onAddTactic?: (
+    spec: AddSpec,
+    text: string,
+  ) => ProofStepPosition | null | void;
   /**
    * Widget-only: the tactic-sequence slots the delete gesture resolves its
    * extent against (`TacticSlot`, keyed by containment — see deleteEdit.ts).
@@ -749,15 +809,39 @@ export default function ProofTreeView({
   // above bound, `delta` what the goal gained (plus anything its own tactic
   // uses), `full` the whole context.
   const [hypMode, setHypMode] = useState<HypMode>("used");
-  // Layout mode: the compact trunk outline (default — every node gets its own
-  // vertical slot, branches indent off a left trunk, read by scrolling), or
-  // the wide Sugiyama tree (same-depth nodes share a band).
-  const [compact, setCompact] = useState(true);
+  // Layout mode, a three-way cycle on one rail button (see LAYOUT_MODES):
+  // the compact trunk outline (default — every node gets its own vertical
+  // slot, branches indent off a left trunk, read by scrolling), the SPINE
+  // (compact, but goals keep the trunk and each tactic hangs off the lane to
+  // the right — tighter, more per screen), or the wide Sugiyama tree
+  // (same-depth nodes share a band). `compact`/`aside` are the derived booleans
+  // the rest of the view (and the layout engine) actually reads, so the ~30
+  // existing `compact` sites needed no change when spine arrived.
+  const [layout, setLayout] = useState<LayoutMode>("stacked");
+  const compact = layout !== "wide";
+  // What the layout engine's `aside` parameter gets: false, plain spine, or
+  // the aligned-track variant (see trunkLayout).
+  const aside =
+    layout === "tracks" ? ("track" as const) : layout === "spine";
   // Reflow: wrap labels at a much narrower column with bracket-depth indents,
   // trading height for width so sibling branches fit across the viewport.
   // Unlike the `outline` PROP this is GEOMETRY — it rebuilds the engine (below)
   // rather than just repainting.
   const [reflow, setReflow] = useState<ReflowMode>("off");
+  // Whether the ¶ button is expanded into its width slider (see ReflowControl).
+  const [reflowOpen, setReflowOpen] = useState(false);
+  // Aligned-tracks mode NEEDS boxes capped at a modest width — a single
+  // page-wide goal would push the whole shared tactic column out to its edge —
+  // so it forces reflow's default budget when the user hasn't set one; an
+  // explicit ¶ setting still wins. Reflow rather than a goal-only cap because
+  // context lines are usually what bound a goal's width, and reflow is the one
+  // mode that wraps them.
+  //
+  // Derived ONCE and read by both the engine and the rail: the ¶ button shows
+  // pressed (and its slider reads the forced column) whenever this is set, or
+  // the control would say "off" while the tree is visibly wrapped.
+  const forcedReflow =
+    layout === "tracks" && reflow === "off" ? REFLOW_CHARS : undefined;
   // Brief: collapse mechanical boilerplate inside each tactic label to `…`
   // (see briefLabel.ts). Like reflow this is GEOMETRY — the label text changes,
   // so it rebuilds the engine and re-measures every box.
@@ -833,7 +917,27 @@ export default function ProofTreeView({
     midpoint?: boolean;
     calcRel?: string;
     calcNext?: string;
+    // The SECOND half of a calc gesture: typing over the `sorry` the first
+    // half wrote (see calcEdit's STUB). It is an ordinary in-place tactic
+    // edit — the node is real and the range is its own — with one rule of its
+    // own: an EMPTY commit writes nothing, so backing out at this point
+    // leaves the `sorry` standing rather than blanking the justification and
+    // breaking the link.
+    fill?: boolean;
   } | null>(null);
+  // A `sorry` a calc gesture just wrote, waiting for the re-elaboration to
+  // draw it. When the node appears the in-place editor opens on it, empty:
+  // that is the second half of the two-part flow, and it costs no new overlay
+  // machinery because the stub is a real editable tactic node.
+  //
+  // Matched by SOURCE POSITION, never by id — an insertion renumbers exactly
+  // the mvarIds around it, which is the rule this file keeps relearning. The
+  // consuming check additionally requires the node to BE a `sorry`, so a
+  // request left unclaimed (an edit that failed to elaborate) can't later
+  // open an editor on some unrelated tactic.
+  const [pendingFill, setPendingFill] = useState<ProofStepPosition | null>(
+    null,
+  );
   // A chain gesture that offers a CHOICE of relation expands the chip lane
   // into a row of them (see PickerRow) instead of acting immediately. It holds
   // ranges, so it is dismissed on every path `editing` is — including a shape
@@ -869,19 +973,21 @@ export default function ProofTreeView({
   // so a node that unmounts under the pointer renders nothing rather than a
   // stale popup.
   const [hoverDiag, setHoverDiag] = useState<string | null>(null);
-  // Esc closes the picker and disarms a delete. Neither owns a focused element
-  // (both are SVG chips), so unlike the overlay's own Esc this has to listen on
-  // the document.
+  // Esc closes the picker, disarms a delete and folds the ¶ slider away. None
+  // of them owns a focused element worth listening on (two are SVG chips, and
+  // the slider's own focus is the range input), so unlike the overlay's own Esc
+  // this has to listen on the document.
   useEffect(() => {
-    if (!picking && !arming) return;
+    if (!picking && !arming && !reflowOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       setPicking(null);
       setArming(null);
+      setReflowOpen(false);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [picking, arming]);
+  }, [picking, arming, reflowOpen]);
   // Undo/redo from the tree. The widget's own edits leave focus in the
   // webview, where ⌘Z reaches nothing at all, so the tree has to offer it.
   // Skipped while a textarea has focus: the in-place editor's own undo is the
@@ -1043,11 +1149,11 @@ export default function ProofTreeView({
     // literally unmoved and only the part the edit could have changed shifts.
     anchorOn(cur.id);
     if (cur.add) {
-      // An add commits on any non-empty text — except a prefilled overlay
-      // (the calc `step` chip) that was never typed into, which is the empty
-      // commit of that form and must not write a bare `_ = ` into the source.
-      if (cur.value.trim() !== "" && cur.value !== cur.original)
-        onAddTactic?.(
+      // An add commits on any non-empty text: an empty one is how every form
+      // here backs out, and for the calc forms it must never write a link
+      // with no right-hand side.
+      if (cur.value.trim() !== "") {
+        const at = onAddTactic?.(
           cur.add,
           // Opening a chain builds the whole two-link skeleton here; the other
           // midpoint forms are assembled by calcEdit from the spec's two
@@ -1058,7 +1164,11 @@ export default function ProofTreeView({
               ? cur.value.trim()
               : cur.value,
         );
-    } else if (cur.value !== cur.original) {
+        // Part two: the gesture wrote a `sorry`, so queue the editor to open
+        // on it as soon as the redraw brings it in (see pendingFill).
+        if (at) setPendingFill(at);
+      }
+    } else if (cur.fill ? cur.value.trim() !== "" : cur.value !== cur.original) {
       onEditTactic?.(cur.pos, cur.value);
     }
     setEditing(null);
@@ -1225,6 +1335,10 @@ export default function ProofTreeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [proof, hypMode, brief, codeFont],
   );
+  // Every tactic the step cut (hover-bar ⋯) is offered on. Computed in one
+  // pass per base tree: the test walks a subtree, so asking it per drawn node
+  // per render would be cubic.
+  const elidableIds = useMemo(() => stepElidable(baseNodes), [baseNodes]);
   const engine = useMemo(
     // `codeFont` isn't read here, but the engine measures every label in it
     // via layout.ts module state — the dep is what forces a re-measure when
@@ -1243,14 +1357,15 @@ export default function ProofTreeView({
         cuts = [...elideCuts, ...combineRuns(baseNodes, manual)];
       }
       return createLayoutEngine(applyElisions(baseNodes, cuts), {
-        reflow,
+        // See forcedReflow: aligned tracks wraps even when ¶ is off.
+        reflow: forcedReflow ?? reflow,
         // Only the widget draws chips, so only the widget reserves room for
         // them (see LayoutEngineOptions.chips).
         chips: !!onAddTactic,
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseNodes, elideCuts, combine, codeFont, reflow],
+    [baseNodes, elideCuts, combine, codeFont, reflow, forcedReflow],
   );
 
   // Two different events, and conflating them is what made editing painful.
@@ -1298,6 +1413,9 @@ export default function ProofTreeView({
     setPicking(null);
     setArming(null);
     setElideCuts([]);
+    // A different proof entirely: whatever stub was waiting to be typed over
+    // belongs to the old one.
+    setPendingFill(null);
     setElidePick(null);
     setBandPick(null);
     // A different proof's splits are different nodes entirely. (A same-proof
@@ -1340,20 +1458,42 @@ export default function ProofTreeView({
     setArming(null);
   }
 
-  // `.fold` flags written in the source (see NodeFlags) seed the collapsed set
-  // ONCE per proof — a starting view, not a lock: unfolding by hand from there
-  // works exactly as it does anywhere else, which is the whole difference
-  // between `.fold` and `.none`. Keyed on the proof's identity like the reset
-  // above, and adjusted during render for the same reason; a first mount seeds
-  // too (the reset only fires on a CHANGE), and it runs after the reset in the
-  // same render, so on a new proof the seed is what survives.
+  // Display flags written in the source (see NodeFlags) seed the view ONCE per
+  // proof — a starting view, not a lock: both directives can be undone by hand
+  // from there exactly as the equivalent gesture can. Keyed on the proof's
+  // identity like the reset above, and adjusted during render for the same
+  // reason; a first mount seeds too (the reset only fires on a CHANGE), and it
+  // runs after the reset in the same render, so on a new proof the seed is
+  // what survives.
+  //
+  // `.fold` seeds the collapsed set. `.none` seeds a `step` ElideCut — the
+  // hover bar's ◌, written into the proof instead of clicked: the tactic and
+  // the blocks it opened leave the tree and the trunk closes up over a ghost,
+  // which restores them on a click. Seeded from `baseNodes` rather than the
+  // engine's, since applying that very cut is what removes the flagged node
+  // from the engine's tree.
+  //
+  // A `.none` on a ROOT GOAL (the pre-proof narrative slot) targets the tactic
+  // that opens the proof, so its target ids are already tactic ids and the
+  // same cut applies to them; a `.none` on a tactic acts on that tactic
+  // itself.
   const [seededFor, setSeededFor] = useState<string | null>(null);
   if (seededFor !== proofKey) {
     setSeededFor(proofKey);
-    const seed = engine
-      .allNodes()
-      .flatMap((n) => (n.flags?.fold ? (n.flags.targets ?? []) : []));
+    const seed = baseNodes.flatMap((n) =>
+      n.flags?.fold ? (n.flags.targets ?? []) : [],
+    );
     if (seed.length > 0) setCollapsed(new Set(seed));
+    const cuts: ElideCut[] = [];
+    for (const n of baseNodes) {
+      if (!n.flags?.elide) continue;
+      const note = n.flags.note;
+      if (n.type === "tactic") cuts.push({ kind: "step", id: n.id, note });
+      else
+        for (const t of n.flags.targets ?? [])
+          cuts.push({ kind: "step", id: t, note });
+    }
+    if (cuts.length > 0) setElideCuts(cuts);
   }
 
   // In `view` mode, restrict the layout to the chosen path's nodes (or null if
@@ -1397,20 +1537,14 @@ export default function ProofTreeView({
   // the same fixpoint sweep the fold rule uses — so hiding a branch's root
   // takes its whole subtree with it, and no separate reachability pass is
   // needed here.
-  // …joined with the subtrees the SOURCE elided, via a `.none` comment flag
-  // (see NodeFlags). Same mechanism, different author: one is a view gesture,
-  // the other a directive written into the proof, and both mean "these nodes
-  // are not part of the picture".
-  const elided = useMemo(() => {
-    const m = new Map<string, string[]>();
-    for (const n of engine.allNodes())
-      if (n.flags?.elide && n.flags.targets?.length)
-        m.set(n.id, n.flags.targets);
-    return m;
-  }, [engine]);
-
+  //
+  // The SOURCE's own elisions (`.none`) used to join this set. They don't any
+  // more: a `.none` seeds a `step` ElideCut instead (see the seed block
+  // above), which is a different and better mechanism for the same idea —
+  // the nodes leave the tree entirely rather than being masked out of it, and
+  // what stands in their place is the ghost, which restores on a click.
   const hide = useMemo(() => {
-    if (splits.size === 0 && elided.size === 0) return null;
+    if (splits.size === 0) return null;
     const h = new Set<string>();
     for (const [id, cs] of splits) {
       const keep = shownChild.get(id)!;
@@ -1418,9 +1552,8 @@ export default function ProofTreeView({
         if (j !== keep) h.add(c);
       });
     }
-    for (const cs of elided.values()) for (const c of cs) h.add(c);
     return h;
-  }, [splits, shownChild, elided]);
+  }, [splits, shownChild]);
 
   const { nodes, links, extent } = useMemo(
     () =>
@@ -1431,9 +1564,43 @@ export default function ProofTreeView({
         compact,
         sideBySide,
         hide,
+        aside,
       ),
-    [engine, collapsed, only, focusSet, compact, sideBySide, hide],
+    [engine, collapsed, only, focusSet, compact, sideBySide, hide, aside],
   );
+
+  // Part two of a calc gesture, claimed the moment the stub it wrote is drawn
+  // (see pendingFill): open the in-place editor on that `sorry`, empty, so the
+  // author types the tactic straight into the link they just created. Escape —
+  // or an empty commit — leaves the `sorry` exactly as it stands, which is the
+  // whole reason the first half writes one instead of a hole.
+  //
+  // Adjusted during render (the prevShape/prevHlKey pattern) rather than in an
+  // effect, so the editor opens in the same paint as the node. Guarded on the
+  // node actually BEING a `sorry` tactic, so a request the elaboration never
+  // honoured expires harmlessly instead of opening an editor on a neighbour.
+  if (pendingFill && !editing && getTacticEdit && onEditTactic) {
+    const target = nodes.find(
+      (n) =>
+        n.data.type === "tactic" &&
+        n.data.label === "sorry" &&
+        n.data.position &&
+        n.data.position.start.line === pendingFill.start.line &&
+        n.data.position.start.character === pendingFill.start.character,
+    );
+    if (target) {
+      const q = getTacticEdit(target.data.position!);
+      setPendingFill(null);
+      if (q)
+        setEditing({
+          id: target.data.id,
+          pos: q.pos,
+          original: q.text,
+          value: "",
+          fill: true,
+        });
+    }
+  }
 
   // The nodes an ARMED delete would take. Derived from the EXTENT rather than
   // from the tree's own subtree walk, deliberately: the extent is what the
@@ -2029,8 +2196,12 @@ export default function ProofTreeView({
   // leaving a focus or sequence (or switching layout mode, which repositions
   // everything) re-centers on that view's top node.
   const viewKey =
-    (compact ? "compact:" : "wide:") +
-    (reflow !== "off" ? `reflow:${reflow}:` : "") +
+    layout +
+    ":" +
+    // Only WHETHER reflow is on, never its column: crossing in or out of the
+    // mode re-centres (the whole tree's proportions change), but a slider step
+    // must leave the scroll alone — see onReflowChange.
+    (reflow !== "off" ? "reflow:" : "") +
     // `brief` is out of viewKey for the same reason as `combine` below: it only
     // shortens label text, so every node keeps its id and its place in the
     // trunk — re-centring on the root would scroll you away from whatever you
@@ -2527,8 +2698,8 @@ export default function ProofTreeView({
         accordion={accordion}
         onAccordionChange={setAccordion}
         onUndo={onUndo}
-        compact={compact}
-        onCompactChange={setCompact}
+        layout={layout}
+        onLayoutChange={setLayout}
         sideBySide={sideBySide}
         gallery={gallery}
         onGalleryChange={setGallery}
@@ -2537,10 +2708,18 @@ export default function ProofTreeView({
           setSideBySide(v);
         }}
         reflow={reflow}
+        forcedReflow={forcedReflow}
+        reflowOpen={reflowOpen}
+        onReflowOpenChange={setReflowOpen}
         onReflowChange={(v) => {
-          // Every box is re-measured, so hold the root steady like the other
-          // geometry toggles do.
-          anchorRoot();
+          // Pin the root only when ENTERING or LEAVING the mode, which
+          // repositions everything. A slider step must not: dragging the width
+          // is a continuous adjustment you watch, and re-centring on the root
+          // at every column would drag the viewport away from the very boxes
+          // you are sizing. Leaving the anchor unset there lets the `[nodes]`
+          // effect pin the node nearest the viewport centre instead — the
+          // treatment brief and ⇉ combine already get.
+          if ((v === "off") !== (reflow === "off")) anchorRoot();
           setReflow(v);
         }}
         brief={brief}
@@ -2692,6 +2871,10 @@ export default function ProofTreeView({
           setHlDismissed(true);
           setPicking(null);
           setArming(null);
+          // The ¶ slider is a floater over the tree, so clicking the tree is
+          // "done with it" — the rail sits outside this container, so its own
+          // clicks (the ¶ button included) never land here.
+          setReflowOpen(false);
         }}
       >
         <svg
@@ -2743,6 +2926,27 @@ export default function ProofTreeView({
                 const childLane = tLeft + TRUNK_INSET;
                 const hy = bandTop - ARROW_GAP * 2;
                 d = `M${col},${startY} L${col},${hy} L${childLane},${hy} L${childLane},${contentTop - ARROW_GAP}`;
+              } else if (compact && link.lane !== undefined) {
+                // Spine mode: an aside tactic's outgoing link rides the TRUNK
+                // lane the layout stamped on it, from the tactic's box middle
+                // — exactly where the incoming elbow's horizontal stub crosses
+                // that lane, so the trunk reads as one continuous line with a
+                // `——tac` stub off it. Straight down into a trunk child; │└
+                // into an indented one. A lane derived from the tactic's own
+                // left edge (the ordinary rule below) would cross the goal
+                // boxes stacked left of the track. MIRRORED in layout.ts
+                // linkSpans.
+                const lane = link.lane;
+                const srcBoxMid =
+                  link.source.y +
+                  (link.source.data.caseH + link.source.data.commentBlockH) /
+                    2;
+                if (Math.abs(tLeft - (lane - TRUNK_INSET)) < 0.5) {
+                  d = `M${lane},${srcBoxMid} L${lane},${contentTop - ARROW_GAP}`;
+                } else {
+                  const landY = contentTop + link.target.data.h / 2;
+                  d = `M${lane},${srcBoxMid} L${lane},${landY} L${tLeft - ARROW_GAP},${landY}`;
+                }
               } else if (compact) {
                 // Orthogonal connector dropped from a column just inside the
                 // parent box's left edge: straight down into a same-indent
@@ -2855,10 +3059,6 @@ export default function ProofTreeView({
               // hides; an ADD's overlay hangs below it and the goal must stay
               // readable while you answer it.
               const hideForEdit = isEditing && !editing?.add;
-              // A `.none`-flagged tactic is REPLACED by its elision marker: the
-              // note stands in for the whole tactic (and the subtree already
-              // hidden below it), rather than hanging off a still-drawn box.
-              const isElided = elided.has(id) && seq.mode === "off";
               // A step the supplemental parser synthesized: `failed` carries
               // an error, `skipped` never ran, `term` came from a term-mode
               // proof's structure. Failed/skipped draw DASHED — the tactic is
@@ -2905,6 +3105,28 @@ export default function ProofTreeView({
                   ? (delExtents.get(id) ?? null)
                   : null;
               const deletable = !!delExtent;
+              // Elide this tactic INTO the trunk (its hover-bar ⋯): the tactic
+              // and any block it opened are lifted out, leaving a small dashed
+              // ghost — the trunk closing up over it where something follows,
+              // the subtree simply gone where nothing does. The complement of
+              // folding, which hides what is BELOW a goal and leaves the node
+              // standing: this is for a subtree you have finished reading.
+              //
+              // Offered wherever the cut would do anything (see `stepIds` —
+              // only a childless tactic is declined), and never on a marker, a
+              // combined run or the synthetic `calc` of a block that never
+              // parsed — the same three the delete gesture declines, and for
+              // the same reason: they stand for no single tactic, and the
+              // synthetic one's whole purpose is the repair chip it carries.
+              const elidable =
+                seq.mode === "off" &&
+                !elidePick &&
+                !bandPick &&
+                type === "tactic" &&
+                !isMarker &&
+                !isCombined &&
+                !node.data.synthetic &&
+                elidableIds.has(id);
               const isArming = arming?.id === id;
               // Secondary actions live in a hover bar with button-sized
               // targets (see NodeActionBar) instead of tiny corner glyphs or
@@ -2913,7 +3135,11 @@ export default function ProofTreeView({
               // confirm row replaces it and must survive the pointer leaving.
               const hasBar =
                 !isEditing &&
-                (goalRevealable || focusable || popoutable || deletable);
+                (goalRevealable ||
+                  focusable ||
+                  popoutable ||
+                  elidable ||
+                  deletable);
               // Hovering a positioned tactic lights its range up in the editor.
               const hoverHighlights =
                 type === "tactic" && !!position && !!onHoverTactic;
@@ -3159,58 +3385,63 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {/* An elided tactic draws no box — the marker below IS the
-                      node. Everything else (label, hyps, fold glyph) is
-                      likewise suppressed when isElided. */}
-                  {!isElided && (
-                    <rect
-                      x={-w / 2}
-                      y={boxTop}
-                      width={w}
-                      height={h}
-                      // Tight corners on tactics — they're EDITABLE, and a pill
-                      // reads as a label; goals keep slightly softer corners.
-                      rx={boxRx}
-                      // Stroke priority: the cursor accent, then what the node
-                      // IS (a recovered failed/skipped tactic), then what Lean
-                      // says about it. The first two are already danger-inked
-                      // where they overlap, so the order costs nothing and
-                      // keeps "which node am I on" the loudest signal.
-                      stroke={
-                        accent
-                          ? SEQ_STROKE
-                          : (recoveredStroke ?? diagInk ?? style.stroke)
-                      }
-                      strokeWidth={
-                        accent || recovered === "failed" || diagSev === 1
-                          ? 2
-                          : 1.5
-                      }
-                      // A run marker is a dashed, unfilled chip (an absence, like
-                      // the .none elision), not a live green box — and so is a
-                      // recovered failed/skipped tactic: the text exists, the
-                      // step it claims to be does not.
-                      fill={
-                        isMarker || recoveredStroke ? "transparent" : style.fill
-                      }
-                      strokeDasharray={
-                        isMarker || recoveredStroke ? "3 3" : undefined
-                      }
-                      // While the in-place editor overlays this node, its box
-                      // (and label, below) hide — the overlay is bigger than
-                      // the box, and an accented node would clash through it.
-                      visibility={hideForEdit ? "hidden" : undefined}
-                    >
-                      {isMarker ? (
-                        <title>
-                          {`${node.data.elidedCut!.tactics.length} tactics elided — click to restore\n\n${node.data.elidedCut!.tactics.join("\n")}`}
-                        </title>
-                      ) : (
-                        taggedLines &&
-                        nodeTooltip !== "" && <title>{nodeTooltip}</title>
-                      )}
-                    </rect>
-                  )}
+                  <rect
+                    x={-w / 2}
+                    y={boxTop}
+                    width={w}
+                    height={h}
+                    // Tight corners on tactics — they're EDITABLE, and a pill
+                    // reads as a label; goals keep slightly softer corners.
+                    rx={boxRx}
+                    // Stroke priority: the cursor accent, then what the node
+                    // IS (a recovered failed/skipped tactic), then what Lean
+                    // says about it. The first two are already danger-inked
+                    // where they overlap, so the order costs nothing and
+                    // keeps "which node am I on" the loudest signal.
+                    stroke={
+                      accent
+                        ? SEQ_STROKE
+                        : (recoveredStroke ?? diagInk ?? style.stroke)
+                    }
+                    strokeWidth={
+                      accent || recovered === "failed" || diagSev === 1
+                        ? 2
+                        : 1.5
+                    }
+                    // A run marker is a dashed, unfilled chip (an absence, like
+                    // the .none elision), not a live green box — and so is a
+                    // recovered failed/skipped tactic: the text exists, the
+                    // step it claims to be does not.
+                    fill={
+                      isMarker || recoveredStroke ? "transparent" : style.fill
+                    }
+                    strokeDasharray={
+                      isMarker || recoveredStroke ? "3 3" : undefined
+                    }
+                    // While the in-place editor overlays this node, its box
+                    // (and label, below) hide — the overlay is bigger than
+                    // the box, and an accented node would clash through it.
+                    visibility={hideForEdit ? "hidden" : undefined}
+                  >
+                    {isMarker ? (
+                      // The marker's own PREVIEW: everything it swallowed,
+                      // in full. A ghost's box shows one truncated line, so
+                      // this is where the tactic (and any block it opened)
+                      // is actually readable without restoring it.
+                      <title>
+                        {`${
+                          node.data.elidedCut!.ghost
+                            ? node.data.elidedCut!.note
+                              ? "elided into the trunk by a .none flag in the source"
+                              : "elided into the trunk"
+                            : `${node.data.elidedCut!.tactics.length} tactics elided`
+                        } — click to restore\n\n${node.data.elidedCut!.tactics.join("\n")}`}
+                      </title>
+                    ) : (
+                      taggedLines &&
+                      nodeTooltip !== "" && <title>{nodeTooltip}</title>
+                    )}
+                  </rect>
 
                   {/* Diagnostic ribbon: the box's left edge THICKENED in the
                       worst severity's ink — a cap flush with the border, not a
@@ -3241,7 +3472,7 @@ export default function ProofTreeView({
                       effectively nowhere on screen. Clicks still bubble to the
                       node's <g>, so folding/revealing through the strip works
                       unchanged. */}
-                  {diagInk && !isElided && !hideForEdit && (
+                  {diagInk && !hideForEdit && (
                     <>
                       <clipPath id={`ptw-box-${ni}`}>
                         <rect
@@ -3292,7 +3523,7 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {foldable && !seqActive && !revealable && !hideForEdit && !isElided && !isMarker && (
+                  {foldable && !seqActive && !revealable && !hideForEdit && !isMarker && (
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -3305,7 +3536,7 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {isElided ? null : taggedLines ? (
+                  {taggedLines ? (
                     // HTML overlay in the exact line geometry of the tspans
                     // below: block top at the centered stack's top, one
                     // LINE_H-high box per wrapped line. Line texts equal the
@@ -3372,21 +3603,6 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {/* What a `.none` flag removed. Drawn IN PLACE of the tactic
-                      box (which is suppressed above): the note stands in for
-                      the whole tactic and the subtree already hidden below it,
-                      so the tree says "there was more here" in one dashed chip
-                      instead of a live box trailing a secondary strip. */}
-                  {isElided && !isEditing && (
-                    <g
-                      transform={`translate(${-w / 2}, ${
-                        boxTop + (h - CHIP_H) / 2
-                      })`}
-                    >
-                      <ElidedMarker note={node.data.flags?.note} x={0} />
-                    </g>
-                  )}
-
                   {/* Frontier chips: a pending goal (no consuming tactic —
                       the live frontier while writing a proof) offers to fill
                       it. `+` opens the editor to type a tactic; `sorry` stubs
@@ -3428,21 +3644,18 @@ export default function ProofTreeView({
                                 rel2: o.same ? undefined : o.next,
                               };
                               setPicking(null);
-                              // The chain already owes exactly this relation:
-                              // one link closes it and there is nothing to
-                              // type, so it commits like `sorry`.
-                              if (kind === "append" && o.same) {
-                                anchorOn(id);
-                                onAddTactic(spec, "");
-                                return;
-                              }
+                              // Every form asks for the new link's right-hand
+                              // side. Appending with the relation the chain
+                              // already owes can be closed by `_`, so that is
+                              // prefilled and one Enter is still the whole
+                              // gesture; a relation that has to reach the goal
+                              // through a second link needs a real expression.
                               const pre =
-                                kind === "link" ? calcLinkPrefill(o.rel) : "";
-                              // Everything but `link` types a midpoint.
+                                kind === "append" && o.same ? CLOSE_RHS : "";
                               setEditing({
                                 id,
                                 pos: spec.after,
-                                original: pre,
+                                original: "",
                                 value: pre,
                                 add: spec,
                                 midpoint: kind !== "link",
@@ -3509,7 +3722,7 @@ export default function ProofTreeView({
                                 ? `start a calc chain — pick the first link's relation (${node.data.calcRels
                                     .map((o) => o.rel)
                                     .join(" ")})`
-                                : `start a calc chain (${node.data.calcRels[0].rel}) — type the first intermediate expression`
+                                : `start a calc chain (${node.data.calcRels[0].rel}) — type the first link's right-hand side, then its proof`
                             }
                             x={
                               -CHIP_W_ADD / 2 +
@@ -3558,8 +3771,8 @@ export default function ProofTreeView({
                                   ? `write this \`calc\` block's first links — type the intermediate expression. Until it has one it does not parse, which is why the rest of this proof is missing`
                                   : `finish the \`calc\` block: add its next ${node.data.addLink.rel} link. Until then it does not parse, which is why the rest of this proof is missing`
                                 : node.data.addLink.kind === "calc-append"
-                                  ? `append a link (${node.data.addLink.rel}) to this calc chain`
-                                  : "insert a calc step above this one"
+                                  ? `append a link (${node.data.addLink.rel}) to this calc chain — type its right-hand side, or \`_\` to close the chain here`
+                                  : "insert a calc step above this one — type its right-hand side"
                             }
                             // Alone on the lane when the block is broken: the
                             // other two chips are suppressed there, since they
@@ -3589,22 +3802,17 @@ export default function ProofTreeView({
                                 setPicking({ id, kind, spec, options });
                                 return;
                               }
-                              if (kind === "append") {
-                                anchorOn(id); // hold this goal across the redraw
-                                onAddTactic(spec, "");
-                                return;
-                              }
-                              // `first` writes BOTH of a bare `calc`'s links,
-                              // so the middle is always the author's to give.
-                              const pre =
-                                kind === "first"
-                                  ? ""
-                                  : calcLinkPrefill(spec.rel ?? "=");
+                              // Every form asks for the new link's right-hand
+                              // side. Appending closes the chain when it is
+                              // `_`, so that is prefilled and Enter alone is
+                              // still the whole gesture; the other two write a
+                              // link the chain must pass THROUGH, which only
+                              // the author can name.
                               setEditing({
                                 id,
                                 pos: spec.after,
-                                original: pre,
-                                value: pre,
+                                original: "",
+                                value: kind === "append" ? CLOSE_RHS : "",
                                 add: spec,
                                 midpoint: kind === "first",
                               });
@@ -3665,6 +3873,31 @@ export default function ProofTreeView({
                       x={w / 2 - BAR_OVERLAP}
                       y={type === "tactic" ? boxTop + h / 2 : boxTop}
                       actions={[
+                        // FIRST in the bar: the reading gesture, and the one
+                        // reached most often while working down a proof. The
+                        // bar is entered from the box, so the first slot is
+                        // both the nearest and the safest — the mirror of
+                        // ⊘ being last.
+                        ...(elidable
+                          ? [
+                              {
+                                // NOT `⋯`, which is the rail's BRIEF mode: the
+                                // two are different elisions (one cuts nodes
+                                // out of the tree, the other shortens a label)
+                                // and sharing a glyph made them genuinely hard
+                                // to tell apart. `◌` is the dashed ghost this
+                                // one leaves behind.
+                                glyph: "◌",
+                                title:
+                                  "Elide into the trunk — this tactic and anything it opened, leaving a ghost to click back open",
+                                onClick: () =>
+                                  setElideCuts((cs) => [
+                                    ...cs,
+                                    { kind: "step" as const, id },
+                                  ]),
+                              },
+                            ]
+                          : []),
                         ...(goalRevealable
                           ? [
                               {
@@ -4560,20 +4793,137 @@ function RailButton({
   );
 }
 
+/** The ¶ control: a rail button that EXPANDS into a width slider, because the
+right wrap column is a judgement about this proof in this viewport and not
+something a two-stop cycle can guess. The unit is COLUMNS (characters), which
+is the unit the wrap budget is actually defined in (`REFLOW_*_CHARS` — the
+slider hands over the very number `budgetFor` multiplies by the character
+width), so the readout is the setting rather than a label for it.
+
+The panel opens to the LEFT: the rail is pinned to the viewport's right edge,
+so anything hanging off the other side would be off screen. It is dismissed
+like every other transient surface here (its own button, a background click,
+Escape), and the top notch of the slider is OFF, so one gesture covers the
+whole range including leaving the mode. */
+function ReflowControl({
+  reflow,
+  forced,
+  onChange,
+  open,
+  onOpenChange,
+}: {
+  reflow: ReflowMode;
+  // The budget the LAYOUT is imposing while `reflow` is off (aligned tracks —
+  // see forcedReflow). The control reports the effective state, not the
+  // setting: with the tree visibly wrapped, an unpressed ¶ reading "off" is
+  // simply wrong.
+  forced?: number;
+  onChange: (v: ReflowMode) => void;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const effective = forced ?? reflow;
+  // The thumb sits on the forced column too, and the OFF notch is dropped
+  // while forcing — a notch that silently does nothing is the same lie from
+  // the other end. Sliding away from it sets an explicit budget as usual.
+  const cols = forced ?? reflowToStop(reflow);
+  const maxStop = forced ? REFLOW_MAX_CHARS : REFLOW_OFF_STOP;
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <RailButton
+        glyph="¶"
+        title={
+          forced
+            ? `Reflow at ${forced} columns, required by the ∥ aligned-tracks layout (a shared tactic column needs bounded goal boxes) — click for the width slider to change it`
+            : reflow === "off"
+              ? "Reflow: wrap labels at a narrower column so branches fit side by side — click for the width slider"
+              : `Reflow at ${reflow} columns: labels (and context lines) wrapped there, breaking at commas, connectives, := and tactic keywords — click for the width slider`
+        }
+        pressed={effective !== "off"}
+        // Opening also ENGAGES the mode, so one click still gets you reflow
+        // exactly as the old cycling button did — the slider is then already
+        // open to tune it. Closing never changes the setting.
+        onClick={() => {
+          if (!open && reflow === "off" && !forced) onChange(REFLOW_CHARS);
+          onOpenChange(!open);
+        }}
+      />
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            right: "100%",
+            marginRight: 4,
+            top: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "0 10px",
+            height: RAIL_BTN.height,
+            boxSizing: "border-box",
+            background: "var(--vscode-editorWidget-background, #fff)",
+            border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+            borderRadius: 3,
+            color: "var(--vscode-icon-foreground, #2d3748)",
+            fontSize: 11,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <input
+            type="range"
+            min={REFLOW_MIN_CHARS}
+            max={maxStop}
+            step={1}
+            value={cols}
+            // Every step re-measures every box, which is the same work the old
+            // toggle did once — see the timing note in CLAUDE.md for why a
+            // drag can afford it per step.
+            onChange={(e) => onChange(stopToReflow(Number(e.target.value)))}
+            style={{
+              width: 116,
+              // Follows the theme like everything else drawn here; the range
+              // input's own chrome is otherwise the UA's blue.
+              accentColor: "var(--ptw-accent)",
+            }}
+          />
+          <span
+            style={{
+              // The readout is the one number the control is about, so it gets
+              // fixed width — otherwise the slider shifts under the pointer as
+              // the digits change.
+              width: 46,
+              textAlign: "right",
+              fontFamily: "monospace",
+              // Dimmed means "not a setting of yours" — off, or a column the
+              // layout is imposing.
+              opacity: effective === "off" || forced ? 0.6 : 1,
+            }}
+          >
+            {effective === "off" ? "off" : `${effective} col`}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ControlRail({
   onExpandAll,
   onCollapseAll,
   accordion,
   onAccordionChange,
   onUndo,
-  compact,
-  onCompactChange,
+  layout,
+  onLayoutChange,
   sideBySide,
   onSideBySideChange,
   gallery,
   onGalleryChange,
   reflow,
+  forcedReflow,
   onReflowChange,
+  reflowOpen,
+  onReflowOpenChange,
   brief,
   onBriefChange,
   combine,
@@ -4598,14 +4948,17 @@ function ControlRail({
   accordion: boolean;
   onAccordionChange: (v: boolean) => void;
   onUndo?: (redo: boolean) => void;
-  compact: boolean;
-  onCompactChange: (v: boolean) => void;
+  layout: LayoutMode;
+  onLayoutChange: (v: LayoutMode) => void;
   sideBySide: boolean;
   onSideBySideChange: (v: boolean) => void;
   gallery: boolean;
   onGalleryChange: (v: boolean) => void;
   reflow: ReflowMode;
+  forcedReflow?: number;
   onReflowChange: (v: ReflowMode) => void;
+  reflowOpen: boolean;
+  onReflowOpenChange: (v: boolean) => void;
   brief: boolean;
   onBriefChange: (v: boolean) => void;
   combine: boolean;
@@ -4665,16 +5018,13 @@ function ControlRail({
         pressed={accordion}
         onClick={() => onAccordionChange(!accordion)}
       />
-      {/* The button is the WIDE tree, not the compact one: compact is the
-          default and the reading mode, so the rail should offer the departure
-          from it rather than ask you to keep a toggle pressed to stay home.
-          The state stays `compact` (the layouts' own names); only which way
-          the button reads is inverted. */}
+      {/* Three layouts on one button (see LAYOUT_MODES): the glyph shows the
+          CURRENT mode, pressed means "not the stacked home". */}
       <RailButton
-        glyph="⋔"
-        title="Wide layered tree — the Sugiyama layout, same-depth nodes across one horizontal band (off: the compact outline, every node on its own line off a left trunk)"
-        pressed={!compact}
-        onClick={() => onCompactChange(!compact)}
+        glyph={LAYOUT_MODES[layout].glyph}
+        title={LAYOUT_MODES[layout].title}
+        pressed={layout !== "stacked"}
+        onClick={() => onLayoutChange(LAYOUT_MODES[layout].next)}
       />
       <RailButton
         glyph="◫"
@@ -4688,11 +5038,12 @@ function ControlRail({
         pressed={gallery}
         onClick={() => onGalleryChange(!gallery)}
       />
-      <RailButton
-        glyph={REFLOW_MODES[reflow].glyph}
-        title={REFLOW_MODES[reflow].title}
-        pressed={reflow !== "off"}
-        onClick={() => onReflowChange(REFLOW_MODES[reflow].next)}
+      <ReflowControl
+        reflow={reflow}
+        forced={forcedReflow}
+        onChange={onReflowChange}
+        open={reflowOpen}
+        onOpenChange={onReflowOpenChange}
       />
       <RailButton
         glyph="⋯"
@@ -4893,51 +5244,6 @@ function FrontierChip({
         style={{ userSelect: "none", letterSpacing: 0 }}
       >
         {glyph}
-      </text>
-    </g>
-  );
-}
-
-// What a `.none` flag left behind: a dashed, hue-free marker hanging where the
-// elided subtree would have been, carrying whatever prose the directive
-// comment wrote after its flags. Alectryon's flags can silently drop a
-// sentence's output; in a TREE that would read as a proof that simply stops,
-// so the elision says so — and says why, when the author bothered to.
-//
-// Deliberately not interactive: `.fold` is the toggleable one. This is inert
-// by design, so the two directives stay visibly different things.
-function ElidedMarker({ note, x }: { note?: string; x: number }) {
-  const text = note ? `… ${note}` : "…";
-  const w = measureText(text, CHIP_FONT_PX) + 2 * CHIP_PAD_X;
-  return (
-    <g transform={`translate(${x},0)`} style={{ cursor: "default" }}>
-      <title>
-        {note
-          ? `elided by a .none flag in the source — ${note}`
-          : "elided by a .none flag in the source"}
-      </title>
-      <rect
-        x={0}
-        y={0}
-        width={w}
-        height={CHIP_H}
-        rx={4}
-        fill="transparent"
-        stroke="var(--ptw-comment)"
-        strokeWidth={1}
-        strokeDasharray="2 3"
-      />
-      <text
-        x={CHIP_PAD_X}
-        y={CHIP_H / 2}
-        dy="0.32em"
-        fontSize={CHIP_FONT_PX}
-        fontFamily={getCodeFontFamily()}
-        fontStyle="italic"
-        fill="var(--ptw-comment)"
-        style={{ userSelect: "none", letterSpacing: 0 }}
-      >
-        {text}
       </text>
     </g>
   );

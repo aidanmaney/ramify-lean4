@@ -15,6 +15,13 @@ export interface HypLine {
   indent?: number;
   text: string;
   used: boolean;
+  // First line of the PROPOSITIONS group when the block also shows data above
+  // it: contextFor orders a context data-then-props (Paperproof's `isProof`
+  // classification — "data"/"universe" vs "proof"), and this line opens the
+  // second group. Drawn with a hairline divider and HYP_SEP_H of extra
+  // leading, which sizeOf reserves — set on at most one line per block, and
+  // never when either group is empty.
+  sep?: boolean;
 }
 
 /** What a delete gesture on this node removes (see TreeNode.deleteSpec).
@@ -62,24 +69,27 @@ export interface AddSpec {
   link exactly where it sits; `calc-link` INSERTS a whole new link on the
   hole's line, pushing it down.
    *
-   * Both exist because a calc chain's work-in-progress state is a HOLE, not a
-   * missing tactic: the chain must end at the goal's RHS, so it can't be left
-   * short, and the line-insertion path below would drop a tactic INSIDE the
-   * block and break it. Inserting a link above a hole is the one always-valid
-   * way to grow a chain — the new link takes the previous RHS as its `_`, and
-   * the hole's goal simply restates from the new RHS. */
+   * Both act on a `?_` the AUTHOR wrote: the tree's own gestures no longer
+   * write holes (see calcEdit's STUB — a hole is an unsolved goal, i.e. an
+   * error that breaks the file while the chain is unfinished, where a stub is
+   * a warning and a complete term). A hand-written hole is still a perfectly
+   * good work-in-progress state, and these two are what the tree offers on
+   * one: fill it, or grow the chain above it. Inserting a link above is
+   * always valid — the new link takes the previous RHS as its `_`, and the
+   * hole's goal simply restates from the new RHS. */
   hole?: CalcHole;
   /** `calc-append` only: the chain to grow, and the relation the new last link
    * chains (read off the residue goal, which is what the chain still owes).
    *
    * The third calc form, and the only one that acts on a goal OUTSIDE the
    * chain. A chain whose links stop short of the goal leaves that remainder as
-   * a pending `calc.step` goal; appending `_ <rel> _ := ?_` closes it against
-   * the chain, since the new link's `_` LHS takes the previous RHS and its `_`
-   * RHS unifies with the goal's. Nothing has to be typed — the same reason the
-   * skeleton's endpoints are `_` — so this chip commits in one click. What it
-   * buys is re-entry: the residue becomes an ordinary hole, which every other
-   * calc gesture already understands.
+   * a pending `calc.step` goal; appending `_ <rel> <rhs> := by sorry` closes
+   * it against the chain, since the new link's `_` LHS takes the previous RHS.
+   * `<rhs>` is prefilled `_`, which unifies with the goal's own RHS — so Enter
+   * alone is still the whole gesture, and anything else lands the chain
+   * somewhere the author chose. What it buys is re-entry: the stub is an
+   * ordinary editable tactic node, which is where the second half of the
+   * gesture types.
    *
    * `calc-first` shares the field and writes the chain's FIRST two links under
    * a `calc` keyword that has none yet — the state you are in the instant you
@@ -214,6 +224,26 @@ export interface TreeNode {
   // there the last branch genuinely is where the proof ends up, and indenting
   // every branch would walk the trunk right at every split.
   chain?: boolean;
+  // GOAL nodes only: I am a proof OBLIGATION this tactic generated, not the
+  // mathematics continuing — a conditional rewrite's side condition
+  // (`rw [Nat.sub_add_cancel]` leaving `b ≤ a`). The compact layout keeps the
+  // MAIN goal on the trunk and branches obligations off it.
+  //
+  // This cannot be read off the wire generically: measured through ppharness,
+  // both children of such a `rw` arrive in `goalsAfter` with `[anonymous]`
+  // case tags, so nothing distinguishes them but their ORDER (Lean puts the
+  // main goal first) and the tactic that produced them. So it is set from the
+  // tactic FAMILY, the same label-driven mechanism `chain` uses for `calc`
+  // (see MAIN_FIRST_RE in proofToTree.ts) — which is what makes it work on
+  // both wires with no server change.
+  side?: boolean;
+  // GOAL nodes only: I arrived in my producer's `spawnedGoals` rather than its
+  // `goalsAfter` — a block that tactic OPENED (a `have … := by`'s side proof)
+  // rather than the main line continuing. The distinction is erased at emission
+  // (`stepGoalsAfter` concatenates the two), so it is stamped here for the one
+  // consumer that needs it: the step elision (`elide.ts`), whose whole question
+  // is "which single child continues the trunk once this tactic is cut out".
+  spawned?: boolean;
   // A node the tree INVENTED rather than harvested: the `calc` of a block that
   // failed to parse, so no step stands for it and nothing below it elaborated.
   // It has a real source `position` (so the cursor accent and hover work) and a
@@ -243,6 +273,15 @@ export interface TreeNode {
     // now stands for the run and a position inside the cut must resolve to it
     // (see `tacticTargets`).
     parts?: CombinedPart[];
+    // A STEP cut (elide.ts's `step`): one tactic and the blocks it opened,
+    // lifted out so its goal-before flows straight into its continuation. The
+    // marker is drawn as a small dashed SHADOW of the tactic rather than the
+    // `⋯ N tactics` chip — the tactic is still nominally there, just stood
+    // down to a whisper you can click back open.
+    ghost?: boolean;
+    // A `.none` source flag's own prose (see NodeFlags.note), shown as the
+    // ghost's label in place of the tactic preview.
+    note?: string;
   };
 }
 
@@ -260,11 +299,22 @@ export interface NodeFlags {
   collapsing the tactic would take the goals with it, leaving nothing to say
   what was folded away. */
   fold?: boolean;
-  /** `.none`: the targets are dropped from the layout outright, with no fold
-  glyph to bring them back. */
+  /** `.none`: the flagged tactic and everything it opened are ELIDED INTO THE
+  TRUNK, exactly as the hover bar's ◌ does — one dashed ghost between the goal
+  above and the goal below, clickable to restore. It is a starting view, like
+  `.fold`, not a lock: what separates the two is how much they put away (a
+  fold hides one subtree and leaves its box; this takes the tactic with it and
+  closes the trunk up) rather than whether you can get it back.
+
+  It used to drop the targets from the layout outright with no way back, and a
+  separate inert marker chip stood where the tactic had been. Two chips for
+  one idea, one of them dead: the ghost is the same picture with a working
+  restore, so the directive now seeds a `step` ElideCut and nothing else. */
   elide?: boolean;
   /** The child goals the flag acts on: a tactic's SPAWNED goals when it has
-  any, else the goals it produced.
+  any, else the goals it produced. (`.none` no longer reads this — it acts on
+  the tactic itself — but `.fold` does, and the field is what keeps a `.none`
+  on a childless tactic a no-op, as it always was.)
    *
    * The spawned-first rule is what keeps a flag on a `have … := by` from
    * swallowing the rest of the proof. Such a step has two children — the side
@@ -296,6 +346,13 @@ export interface PlacedLink {
   source: PlacedNode;
   target: PlacedNode;
   col?: boolean;
+  // Spine mode (the ⊦ layout): an aside tactic's outgoing links ride the
+  // TRUNK lane at this absolute x — the lane of the goal the tactic consumed
+  // — because the tactic's own box stands in the right-hand track and a lane
+  // derived from ITS left edge would cross the goal boxes stacked to its
+  // left. Set by trunkLayout; read by the renderer and linkSpans (the pair
+  // that must agree).
+  lane?: number;
 }
 
 // One wrapped line of a node label. `cont` marks a line produced by width-

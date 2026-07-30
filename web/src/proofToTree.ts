@@ -185,7 +185,9 @@ export function hypLine(h: Hypothesis): string {
 // `used` is what the subtree BELOW mentions — and immediate-consumer usage
 // (the ▸ gutter flag, still per-step) is a subset of `used`, which is a subset
 // of `full`. `delta` contains `new` plus the immediate-consumer part of `used`
-// but not its deeper reaches. Context order is preserved in every mode.
+// but not its deeper reaches. In every mode the shown lines are reordered
+// data-first (see the partition at the end of contextFor); within each group
+// the context's own order is preserved.
 export type HypMode = "used" | "new" | "delta" | "full";
 
 function contextFor(
@@ -246,7 +248,23 @@ function contextFor(
   // true — the mode branches above rebuild from `goal.hyps` each time.
   if (flags?.onlyHyps?.length)
     shown = shown.filter((h) => flags.onlyHyps!.includes(h.username));
-  return shown.map((h) => ({ text: hypLine(h), used: used.has(h.id) }));
+  // DATA before PROPOSITIONS, stable within each group — the signature reading
+  // (`(a b : ℕ)` then `(h : b ≤ a)`), where Lean's own lctx interleaves them
+  // in binder order. The classification is Paperproof's `isProof`, computed
+  // from the elaborated type ("proof" vs "data"/"universe" — a `Sort`-typed
+  // hyp like `α : Type` sits with data; it is no proposition). Runs LAST so
+  // every mode and flag composes with it, and stamps `sep` on the first prop
+  // line only when both groups are present — a one-group block needs no
+  // divider and must stay byte-identical to before this existed.
+  const data = shown.filter((h) => h.isProof !== "proof");
+  const props = shown.filter((h) => h.isProof === "proof");
+  return [...data, ...props].map((h, i) => ({
+    text: hypLine(h),
+    used: used.has(h.id),
+    sep: data.length > 0 && props.length > 0 && i === data.length
+      ? true
+      : undefined,
+  }));
 }
 
 // All goals referenced by a proof, indexed by mvarId. `allGoals` is
@@ -445,9 +463,15 @@ function cleanMarkdown(text: string): string {
 }
 
 // Display form of a raw comment: delimiters stripped, block-comment lines
-// trimmed (they carry the source indentation), blank edge lines dropped, and
-// markdown noise cleaned (see cleanMarkdown).
-function stripComment(raw: string): string {
+// trimmed (they carry the source indentation), blank edge lines dropped.
+//
+// `cleanMarkdown` is deliberately NOT applied here — it runs on the PROSE that
+// survives flag parsing instead (see `add` below), because it turns
+// `` `.fold` `` into `.fold`: a comment that MENTIONS a flag in code ticks at
+// its start would otherwise become a directive, prose about the feature
+// silently invoking it. That is not hypothetical — it is what happened writing
+// this repo's own `proofs/flags.lean` fixture. Flags first, markdown after.
+function stripCommentText(raw: string): string {
   let t = raw.trim();
   if (t.startsWith("--")) t = t.slice(2);
   else if (t.startsWith("/-")) {
@@ -475,7 +499,7 @@ function stripComment(raw: string): string {
   if (para.length) paras.push(para.join(" "));
   // Paragraphs stay separated by a blank line (the author's own structure —
   // e.g. a docstring's title above its body).
-  return cleanMarkdown(paras.join("\n\n"));
+  return paras.join("\n\n");
 }
 
 // ---- Alectryon-style display flags ------------------------------------------
@@ -612,7 +636,11 @@ function attributeComments(
   const first = byStart[0];
   let cur: SourceComment;
   const add = (nodeId: string, raw: string) => {
-    const f = parseFlags(raw);
+    // Flags off the UN-cleaned text (see stripComment), markdown cleaned only
+    // on the prose that is left — so a `` `.fold` `` written about the feature
+    // stays prose.
+    const parsed = parseFlags(raw);
+    const f: ParsedFlags = { ...parsed, prose: cleanMarkdown(parsed.prose) };
     if (f.any) {
       const prev = flags.get(nodeId);
       // Several directive comments on one node merge; the note is whichever
@@ -641,7 +669,7 @@ function attributeComments(
   const sorted = [...comments].sort((a, b) => cmpPos(a.start, b.start));
   for (const c of sorted) {
     cur = c;
-    const text = stripComment(c.text);
+    const text = stripCommentText(c.text);
     if (text === "") continue;
     const container = byStart
       .filter(
@@ -805,6 +833,50 @@ export function proofToTree(
     ]),
   );
   const isChain = (step: ProofStep) => /^calc\b/.test(step.tacticString);
+  /** A step that is nothing but `sorry` — the justification every generated
+  calc link carries (see calcEdit's STUB), and the node the second half of the
+  gesture types over. */
+  const isStub = (step: ProofStep) => step.tacticString.trim() === "sorry";
+  /** Line of the FIRST link of the chain this calc step proves, read off the
+  lines of the steps proving its links. The wire's link order is not source
+  order (`stepGoalsAfter` puts `goalsAfter` before `spawnedGoals`), so the
+  minimum is taken rather than the first entry; `undefined` when no link is
+  proved by a step at all. Used only to refuse growing ABOVE the first link,
+  whose LHS is the chain's head. */
+  function firstStubLine(prod: ProofStep): number | undefined {
+    let min: number | undefined;
+    for (const g of stepGoalsAfter(prod)) {
+      const s = stepByGoal.get(g.id);
+      if (!s) continue;
+      const l = s.position.start.line;
+      if (min === undefined || l < min) min = l;
+    }
+    return min;
+  }
+
+  // Tactics whose several `goalsAfter` are NOT peers: the first is the
+  // mathematics continuing and the rest are proof OBLIGATIONS the tactic
+  // generated (a conditional rewrite's side condition). Read off the label for
+  // the `isChain` reason — it has to work on both wires, and the CLI ships no
+  // syntax.
+  //
+  // The list is exactly what was MEASURED to branch this way, not a guess.
+  // Probed through ppharness: `rw [Nat.sub_add_cancel]` yields
+  // `[a = a + 0, b ≤ a]` — main first, and both children arrive `[anonymous]`,
+  // so nothing but this family test can tell them apart. `simp only`,
+  // `norm_num` and `field_simp` were probed too and DO NOT branch (they
+  // discharge the side condition from context or leave a single goal), so
+  // listing them would be dead weight. `apply` is deliberately absent: its
+  // goals are one per lemma argument and are genuine peers, with no main
+  // thread among them — it stays on the plain source-order rule.
+  //
+  // A multi-rule `rw [a, b]` is SPLIT by Paperproof into one step per rule and
+  // the side condition hangs off the split step, whose label is still
+  // `rw [...]` — which is why matching the label rather than the whole tactic
+  // is what reaches it.
+  const MAIN_FIRST_RE = /^(rw|rewrite|erw)\b/;
+  const mainFirst = (step: ProofStep) =>
+    MAIN_FIRST_RE.test(step.tacticString) && step.goalsAfter.length >= 2;
 
   // Which relations a chain on each goal could be built out of, enumerated
   // server-side from the real `Trans` instances (see ProofTreeComments.lean's
@@ -985,7 +1057,51 @@ export function proofToTree(
    * A third sense shares the append EDIT exactly and is handled by
    * `repairSpec` above, since it applies to a goal that need not be pending:
    * a block that never PARSED also wants one link after its first. */
-  function addLinkFor(goalId: string, prod: ProofStep): AddSpec | undefined {
+  function addLinkFor(
+    goalId: string,
+    prod: ProofStep,
+    // The step that PROVES this link, when there is one and it is a bare
+    // `sorry` — see the stub branch below.
+    stub?: ProofStep,
+  ): AddSpec | undefined {
+    // A link the tree's own gestures wrote: its justification is a `sorry`
+    // (see calcEdit's STUB), so the goal is CONSUMED and none of the pending
+    // machinery reaches it — yet it is exactly as unfinished as a hole, and
+    // growing the chain above it is exactly as valid. Everything the insert
+    // needs is already here: the `sorry`'s line is the link's line, and the
+    // chain knows the column its links are written at (which the sorry's own
+    // column is not). So the same `calc-link` edit runs against a synthesized
+    // anchor, and the two states differ only in what the author typed.
+    if (stub) {
+      const chain = chainByTactic.get(
+        `${prod.position.start.line}:${prod.position.start.character}`,
+      );
+      // Never above the chain's FIRST link, whose LHS is the chain's head
+      // rather than a `_` that would absorb a new predecessor's RHS — the
+      // rule `CalcHole.first` states. Which link is first is read off the
+      // consuming steps' own positions, since the wire's link order is not
+      // source order.
+      const first = firstStubLine(prod);
+      if (!chain || first === undefined || stub.position.start.line <= first)
+        return undefined;
+      const own = spineRelation(goals.get(goalId)?.type ?? "")?.rel;
+      const rels = relOptions(goalId, own, relsByGoal.get(goalId)?.rel ?? own);
+      return {
+        kind: "calc-link",
+        hole: {
+          goalId,
+          start: stub.position.start,
+          stop: stub.position.stop,
+          linkStart: { line: stub.position.start.line, character: chain.indent },
+          first: false,
+        },
+        rel: rels?.[0].rel ?? own,
+        rels,
+        indent: chain.indent,
+        producer: prod.position,
+        after: prod.position,
+      };
+    }
     const hole = holeByGoal.get(goalId);
     if (hole) {
       if (hole.first) return undefined;
@@ -1160,6 +1276,14 @@ export function proofToTree(
     // (see chainLhsElisions). Decided by the producing tactic, which is the
     // only place the sibling links are all in view.
     lhsElide?: string,
+    // I am a generated proof obligation rather than the main line (see
+    // TreeNode.side). Decided by the producing tactic, the only place the
+    // goalsAfter/spawnedGoals boundary and the sibling ORDER are still visible.
+    side?: boolean,
+    // I came from the producer's `spawnedGoals` — a block it opened, not the
+    // main line (see TreeNode.spawned). Same reasoning as `side`: the
+    // goalsAfter/spawnedGoals boundary exists only here.
+    spawned?: boolean,
   ): void {
     if (emittedGoals.has(goalId)) return; // a proof tree is acyclic, but be safe
     emittedGoals.add(goalId);
@@ -1191,8 +1315,18 @@ export function proofToTree(
     // step's own node, and where none does it is the node synthesized below.
     // The goal must therefore not carry it too, or the same repair is offered
     // twice, one lane drawing over the node between them.
+    // A link the tree wrote is proved by a `sorry` rather than left pending,
+    // so growing the chain there has to be offered off the CONSUMING step
+    // instead. Everything else is unchanged: a broken block owns the lane,
+    // and a goal that is neither pending nor a stubbed link gets nothing.
+    const stub =
+      !brokenChain && !pending && step && producedBy && isChain(producedBy) && isStub(step)
+        ? step
+        : undefined;
     const addLink =
-      brokenChain || !pending ? undefined : addLinkFor(goalId, producedBy!);
+      brokenChain || (!pending && !stub)
+        ? undefined
+        : addLinkFor(goalId, producedBy!, stub);
     const goalText = goal?.type ?? goalId;
     const elided =
       lhsElide && goalText.startsWith(lhsElide)
@@ -1208,6 +1342,13 @@ export function proofToTree(
       goalElision: elided ? { hidden: lhsElide! } : undefined,
       type: "goal",
       parents,
+      // An obligation the producing tactic generated, not the main line (see
+      // TreeNode.side) — `undefined` rather than `false` so a plain goal's
+      // node is byte-identical to what it was before this existed.
+      side: side || undefined,
+      // A block the producing tactic opened rather than the main line (see
+      // TreeNode.spawned) — `undefined` not `false`, same reason as `side`.
+      spawned: spawned || undefined,
       // The producing tactic's source span, for the widget's node↔source link
       // (see types.ts `TreeNode.position`).
       position: producedBy?.position,
@@ -1355,6 +1496,12 @@ export function proofToTree(
       brief && chain
         ? chainLhsElisions(children, step.goalBefore.type)
         : undefined;
+    // Everything a main-first tactic produced EXCEPT `goalsAfter[0]` is an
+    // obligation it generated. Keyed on the goal id rather than the loop index
+    // because `children` is `goalsAfter ++ spawnedGoals` and only the first of
+    // the goalsAfter half is the main line.
+    const mainGoalId = mainFirst(step) ? step.goalsAfter[0].id : undefined;
+    const spawnedIds = new Set(step.spawnedGoals.map((g) => g.id));
     for (const child of children) {
       visitGoal(
         child.id,
@@ -1362,6 +1509,8 @@ export function proofToTree(
         step,
         thisCase,
         linkElisions?.get(child.id),
+        mainGoalId !== undefined && child.id !== mainGoalId,
+        spawnedIds.has(child.id),
       );
     }
   }

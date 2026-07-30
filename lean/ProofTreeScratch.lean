@@ -21,37 +21,20 @@ takes hours).
 show_panel_widgets [ProofTreeWidget]
 
 theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
-  -- Step 1: every n ≥ 2 is divisible by some prime (strong induction on n).
-  have exists_prime_dvd : ∀ n : ℕ, 2 ≤ n → ∃ p, Nat.Prime p ∧ p ∣ n := by
-    intro (n : ℕ)
-    induction n using Nat.strong_induction_on with
-    | _ n ih =>
-      intro hn
-      by_cases hp : Nat.Prime n
-      · -- n itself is prime.
-        exact ⟨n, hp, dvd_refl n⟩
-      · -- n is composite: peel off a proper divisor m, recurse on it.
-        obtain ⟨m, hmdvd, hm2, hmlt⟩ := Nat.exists_dvd_of_not_prime2 hn hp
-        obtain ⟨p, hpp, hpm⟩ := ih m hmlt hm2
-        exact ⟨p, hpp, hpm.trans hmdvd⟩
+  -- Step 1: N! + 1 is divisible by some prime
+  rcases Nat.exists_prime_and_dvd (n := (Nat.factorial N + 1)) <| by
+    grind [Nat.factorial_pos]
+    with ⟨p, hp, hpdvd⟩
   -- Step 2: apply it to N! + 1, which is ≥ 2.
-  have hM : 2 ≤ Nat.factorial N + 1 := by
-    have hpos := Nat.factorial_pos N
-    omega
-  obtain ⟨p, hp, hpdvd⟩ := exists_prime_dvd (Nat.factorial N + 1) hM
   refine ⟨p, hp, ?_⟩
   -- Step 3: show N < p by contradiction.
   by_contra hle
-  push_neg at hle
   -- If p ≤ N then p divides N!, and it already divides N! + 1.
-  have hpfac : p ∣ Nat.factorial N := Nat.dvd_factorial hp.pos hle
+  have hpfac : p ∣ Nat.factorial N := Nat.dvd_factorial (hp.pos) (by order)
   -- p ∣ N! and p ∣ N! + 1, so p ∣ 1.
-  have hp1 : p ∣ 1 := (Nat.dvd_add_right hpfac).mp hpdvd
-  -- But a prime is ≥ 2 and cannot divide 1.
-  have hle1 : p ≤ 1 := Nat.le_of_dvd one_pos hp1
-  have h2 : 2 ≤ p := hp.two_le
-  grind
-
+  rw [Nat.dvd_add_right hpfac] at hpdvd
+  -- But a prime cannot divide 1.
+  grind [Nat.not_prime_one, Nat.dvd_one]
 
 theorem my_zero_add (n : ℕ) : 0 + n = n := by
   induction n with
@@ -125,12 +108,10 @@ theorem sum_range_odd (n : ℕ) :
   have residue : n % 2 = 0 ∨ n % 2 = 1 := by
     by_cases hn : Even n
     · -- Even: write n = k + k and compute the residue directly.
-      left
       obtain ⟨k, hk⟩ := hn
       rw [hk]
       omega
     · -- Odd: the same, one step further along.
-      right
       rw [Nat.not_even_iff_odd] at hn
       obtain ⟨k, hk⟩ := hn
       rw [hk]

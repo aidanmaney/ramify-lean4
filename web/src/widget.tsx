@@ -10,7 +10,7 @@ import {
 import type { Proof, ProofStepPosition, TacticSlot } from "./paperproof";
 import type { AddSpec, DeleteSpec } from "./types";
 import { DEFAULT_ABBREV, type AbbrevConfig } from "./abbreviation";
-import { calcEdit } from "./calcEdit";
+import { calcEdit, fillRange } from "./calcEdit";
 import { deleteEdit } from "./deleteEdit";
 import {
   filterDiagnostics,
@@ -654,8 +654,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     // produces).
     const calc = calcEdit(spec, text);
     if (calc) {
-      void ec.api.applyEdit({ changes: { [pos.uri]: [calc] } });
-      return;
+      void ec.api.applyEdit({
+        changes: { [pos.uri]: [{ range: calc.range, newText: calc.newText }] },
+      });
+      // Where the `sorry` this just wrote landed, so the view can open the
+      // second half of the gesture on it (see calcEdit's STUB).
+      return calc.fillNth
+        ? fillRange(calc.range.start, calc.newText, calc.fillNth)
+        : null;
     }
     const e = at2(spec.after.start);
     const stop = e?.stop ?? spec.after.stop;
@@ -688,11 +694,18 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       .split("\n")
       .map((l, i) => (i === 0 ? indent + prefix + l : inner + l))
       .join("\n");
+    const newText = "\n" + body;
     void ec.api.applyEdit({
-      changes: {
-        [pos.uri]: [{ range: { start: at, end: at }, newText: "\n" + body }],
-      },
+      changes: { [pos.uri]: [{ range: { start: at, end: at }, newText }] },
     });
+    // The `calc` skeleton is the one line-inserted text that carries stubs
+    // (the view assembles it — see calcSkeleton), and its FIRST is the link
+    // whose right-hand side the author just typed. Anything else has no
+    // `sorry` in it, which fillRange reports as null — except the `sorry`
+    // CHIP, whose whole point is to stop there, so it opts out explicitly.
+    return text === "sorry"
+      ? null
+      : fillRange({ line: at.line, character: 0 }, newText, 1);
   };
 
   // Committing a delete. The extent maths lives in `deleteEdit` (pure, so a
