@@ -8,7 +8,10 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# The widget bundle is a Lean build input and ships tracked — see the root
+# .gitignore and dist/lakefile.toml.
+dist/*
+!dist/proofTreeWidget.js
 dist-app
 dist-ssr
 *.local

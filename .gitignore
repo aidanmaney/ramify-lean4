@@ -1,6 +1,11 @@
 # Node / web
 **/node_modules/
-web/dist/
+# The widget bundle is a BUILD INPUT to the Lean package (ProofTreeWidget.lean
+# `include_str`s it), so the one that ships is tracked: a fresh clone runs no
+# npm step, and without the artifact in the tree `dist/` could not build at all
+# (see dist/lakefile.toml). Everything else esbuild/vite emits stays ignored.
+web/dist/*
+!web/dist/proofTreeWidget.js
 web/dist-app/
 
 # Lean / Lake build artifacts (Mathlib cache lives here — multi-GB)
@@ -9,6 +14,11 @@ web/dist-app/
 *.olean
 *.ilean
 *.trace
+
+# The .vsix is BUILT into ext/ and COPIED to dist/ by package.sh; the copy in
+# dist/ is the one that ships (it sits with the rest of the install surface),
+# so only the build-side one is ignored.
+ext/proof-tree-companion/*.vsix
 
 # OS / editor
 .DS_Store

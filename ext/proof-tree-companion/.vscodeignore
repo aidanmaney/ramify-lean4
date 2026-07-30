@@ -1,0 +1,6 @@
+# Everything the extension needs at runtime is `extension.js` + `package.json`
+# (it is deliberately build-step-free CommonJS — see README.md), so the only
+# thing to exclude is the packaged output itself and editor/OS noise.
+*.vsix
+.vscode/**
+.DS_Store
