@@ -49,6 +49,28 @@ export interface DeleteSpec {
   comments: ProofStepPosition[];
 }
 
+/** A span of characters inside a piece of text an edit is about to insert,
+used to point at the parts of it the author still has to fill in. */
+export interface TextSlot {
+  at: number;
+  len: number;
+}
+
+/** What an insertion reports back, so the view can carry on where the edit
+left off.
+ *
+ * `fill` is the `sorry` the edit wrote, which the in-place editor opens on —
+ * the second half of every generated-link gesture. `stages` is present only
+ * when the edit wrote a link with BOTH ends left open (`calc _ <rel> _ := by
+ * sorry`): they are the two `_`s, and the view walks the author through them
+ * left-side-then-right-side before handing over to `fill`. Each is already an
+ * absolute document range, since only the widget knows the indent and bullet
+ * prefix the text actually landed behind. */
+export interface AddResult {
+  fill: ProofStepPosition | null;
+  stages?: { lhs: ProofStepPosition; rhs: ProofStepPosition };
+}
+
 /** How to insert a new tactic for a pending goal (see TreeNode.addSpec).
 `after` is the step whose (tight) end the insertion follows — the LAST step in
 source among the producing tactic's already-written branches, so a new bullet
@@ -91,19 +113,13 @@ export interface AddSpec {
    * ordinary editable tactic node, which is where the second half of the
    * gesture types.
    *
-   * `calc-first` shares the field and writes the chain's FIRST two links under
-   * a `calc` keyword that has none yet — the state you are in the instant you
-   * type `calc`, where there is nothing to append AFTER. It always needs an
-   * intermediate expression (both links' free ends are `_`, so nothing would
-   * pin the middle), which is why it is not just an append with a flag. */
+   * `calc-first` shares the field and writes the chain's FIRST link under a
+   * `calc` keyword that has none yet — the state you are in the instant you
+   * type `calc`. ONE link, both ends `_`, like every other gesture here (the
+   * standing rule: no gesture ever inserts more than one line); the staged
+   * LHS/RHS fill then replaces the underscores in place. */
   chain?: CalcChain;
   rel?: string;
-  /** The relation the SECOND link carries, set only when it differs from
-   * `rel` — i.e. when the author picked a first relation that is not the
-   * goal's own. Two links are then written instead of one, and the midpoint
-   * between them becomes the thing the overlay asks for. When absent the
-   * gesture is exactly what it was before relations could be picked. */
-  rel2?: string;
   /** Every relation this gesture could use, from the server's `Trans`
    * enumeration. One option means no choice to make, and the chip goes
    * straight through to its single behaviour rather than opening a picker. */
@@ -404,4 +420,9 @@ export interface LayoutNode extends TreeNode {
   // there — so it extends only the node's occupied extent, pushing what comes
   // after it down. 0 unless the engine was built with `chips`.
   chipH: number;
+  // Overview mode: this node laid out as a one-line mini chip (label
+  // truncated, hyps/comment/chip lane dropped). The render gates the chip
+  // lane, action bar and hover peek on this same bit — set only by the
+  // engine's sizing, so geometry and render cannot disagree.
+  mini?: boolean;
 }

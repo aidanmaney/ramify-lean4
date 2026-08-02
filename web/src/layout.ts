@@ -1000,6 +1000,18 @@ function sizeOf(
   };
 }
 
+// The full-size measurement, exported for the overview peek: hovering a mini
+// chip renders the node at full size WITHOUT a relayout, so the view needs
+// the same lines/geometry the engine would have computed had the node been in
+// the keep set. Always at the "off" budget — a peek is read in place, and
+// wrapping it to a reflow column would make it as cramped as what it expands.
+export function measureNode(
+  label: string,
+  hyps: TreeNode["hyps"],
+): Pick<LayoutNode, "lines" | "w" | "h" | "hypH" | "hyps"> {
+  return sizeOf(label, hyps, "off");
+}
+
 // A layout engine bound to one tree. Folding state and re-layout are pure
 // functions of `data`, so swapping the proof is just building a new engine —
 // nothing about the renderer assumes where `data` came from. The return type is
@@ -1015,11 +1027,45 @@ export interface LayoutEngineOptions {
    * supplies `onAddTactic` and therefore only the widget DRAWS chips — the
    * standalone app must not get a band of empty space per pending goal. */
   chips?: boolean;
+  /** Overview mode: every node NOT in `keep` lays out as a one-line mini
+   * chip — first label line clipped to a small width, no context block, no
+   * comment strip, no chip lane — so the tree reads as its SHAPE, with only
+   * the cursor's local region (the `keep` set, computed by the view) at full
+   * size. Geometry, not paint: the compression is what the mode is for, and a
+   * scale transform would shrink ink while keeping the space. Hover-expand is
+   * the VIEW's business (a paint-only peek overlay) precisely so pointing at
+   * a chip never relayouts — the no-relayout-on-hover rule. */
+  overview?: { keep: ReadonlySet<string> };
+}
+
+// Overview chip geometry. Text stays at NODE_FONT_PX — a smaller font would
+// need every downstream text-render site to learn a second size, and the
+// compression comes from dropping hyps/comments and the label's tail, not
+// from smaller glyphs.
+const MINI_TEXT_W = 130; // px of label kept in a chip
+function miniSize(
+  text: string,
+): Pick<LayoutNode, "lines" | "w" | "h" | "hypH" | "hyps"> {
+  const first = text.split("\n")[0];
+  let t = first;
+  let clipped = false;
+  while (t.length > 1 && measureText(t + (clipped ? "…" : ""), NODE_FONT_PX) > MINI_TEXT_W) {
+    t = t.slice(0, -1);
+    clipped = true;
+  }
+  const label = clipped ? t.trimEnd() + "…" : t;
+  return {
+    lines: [{ text: label, indent: 0, cont: false, seg: 0 }],
+    hyps: [],
+    w: Math.max(MIN_W, measureText(label, NODE_FONT_PX) + 2 * NODE_PAD),
+    h: LINE_H + 2 * NODE_PAD_Y,
+    hypH: 0,
+  };
 }
 
 export function createLayoutEngine(
   data: TreeNode[],
-  { reflow = "off", chips = false }: LayoutEngineOptions = {},
+  { reflow = "off", chips = false, overview }: LayoutEngineOptions = {},
 ) {
   // Stable left-to-right order key for the wide layout, assigned below once
   // `SRC` exists so that siblings there read in SOURCE order too — the wide
@@ -1096,19 +1142,40 @@ export function createLayoutEngine(
         ReturnType<typeof sizeOf> &
           ReturnType<typeof commentSize> &
           ReturnType<typeof caseSize> &
-          Pick<LayoutNode, "chipH">,
-      ] => [
-        n.id,
-        {
-          ...sizeOf(n.label, n.hyps, reflow),
-          ...commentSize(n.comment, reflow),
-          ...caseSize(n.caseLabel),
-          chipH:
-            chips && (n.addSpec || n.addLink)
-              ? CHIP_TOP_GAP + CHIP_LANE_H
-              : 0,
-        },
-      ],
+          Pick<LayoutNode, "chipH" | "mini">,
+      ] => {
+        // Overview: a node outside the keep set is a mini chip. Its comment
+        // strip and chip lane go with the context block — the mode shows
+        // SHAPE, and the case badge stays because a branch's name IS shape.
+        // The mini flag rides the size record so the render can gate the
+        // chip lane, the action bar and the hover peek off the same bit the
+        // sizing used (a second derivation could drift).
+        if (overview && !overview.keep.has(n.id))
+          return [
+            n.id,
+            {
+              ...miniSize(n.label),
+              commentLines: [],
+              commentBlockH: 0,
+              commentW: 0,
+              ...caseSize(n.caseLabel),
+              chipH: 0,
+              mini: true,
+            },
+          ];
+        return [
+          n.id,
+          {
+            ...sizeOf(n.label, n.hyps, reflow),
+            ...commentSize(n.comment, reflow),
+            ...caseSize(n.caseLabel),
+            chipH:
+              chips && (n.addSpec || n.addLink)
+                ? CHIP_TOP_GAP + CHIP_LANE_H
+                : 0,
+          },
+        ];
+      },
     ),
   );
 

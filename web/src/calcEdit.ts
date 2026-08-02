@@ -18,6 +18,15 @@ export interface DocEdit {
   gesture types over the one belonging to the link whose right-hand side the
   author just supplied. Absent when the edit generates none. */
   fillNth?: number;
+  /** Offsets INTO `newText` of the two `_` endpoints this edit left open, when
+  it wrote a link with both ends free. The caller turns them into absolute
+  ranges (`offsetToPosition`) and walks the author through them — left side,
+  then right side — before handing over to the `sorry`. Absent when the edit
+  fixed both ends itself. */
+  stages?: {
+    lhs: { at: number; len: number };
+    rhs: { at: number; len: number };
+  };
 }
 
 /** How every GENERATED calc link is justified.
@@ -55,17 +64,28 @@ export function fillRange(
     idx = newText.indexOf(STUB_TACTIC, idx + 1);
     if (idx < 0) return null;
   }
-  const before = newText.slice(0, idx);
+  return offsetToPosition(start, newText, idx, STUB_TACTIC.length);
+}
+
+/** Absolute range of `[at, at+len)` characters of `newText`, given where that
+text was inserted. The arithmetic `fillRange` has always done, factored out so
+the staged `_` endpoints use the very same rule: a target on a LATER line than
+the anchor needs only the line count and its own column, and one sharing the
+anchor's line offsets from the anchor's column. */
+export function offsetToPosition(
+  start: { line: number; character: number },
+  newText: string,
+  at: number,
+  len: number,
+): ProofStepPosition {
+  const before = newText.slice(0, at);
   const breaks = before.split("\n").length - 1;
   const nl = before.lastIndexOf("\n");
-  const at = {
+  const pos = {
     line: start.line + breaks,
-    character: breaks === 0 ? start.character + idx : idx - nl - 1,
+    character: breaks === 0 ? start.character + at : at - nl - 1,
   };
-  return {
-    start: at,
-    stop: { line: at.line, character: at.character + STUB_TACTIC.length },
-  };
+  return { start: pos, stop: { line: pos.line, character: pos.character + len } };
 }
 
 /** The edit a `hole` / `calc-link` spec commits, or null for the other kinds
@@ -82,25 +102,74 @@ Both act on the hole's own range, which is what makes them exact:
   text is the new link's RIGHT-HAND SIDE only — the rest of the link, `STUB`
   included, is assembled here. The link below keeps `_` as its LHS, so it
   picks up the new RHS and the chain still ends where the goal needs it to. */
-/** The two-link skeleton that OPENS a chain on a goal that is a relation:
+/** The ONE link that opens a chain on a goal that is a relation:
  *
- *     calc _ = <mid> := by sorry
- *     _ = _ := by sorry    (the caller's insertion path indents this)
+ *     calc _ <rel> _ := by sorry
  *
- * Both endpoints are `_`, which is the whole point: Lean solves them by
- * unifying the chain against the goal, so the skeleton needs no
- * pretty-printed terms — nothing here can fail to round-trip back into source.
- * Measured: `_` works as the first link's LHS and as the last link's RHS, for
- * `=` and `≤` alike, and the resulting goals print concretely (`a + 0 = a`,
- * `a = c`) rather than showing metavariables.
+ * One line, like every gesture here — no gesture ever inserts more than one.
+ * Both ends are `_`: Lean solves them by unifying the chain against the goal,
+ * so the text contains no pretty-printed term and nothing in it can fail to
+ * round-trip back into source. The staged fill then replaces each underscore
+ * in place (LHS, then RHS), and Enter on either keeps the `_`.
  *
- * The midpoint is the one thing that CANNOT be inferred — only the author
- * knows where the chain should go through — so it is what the overlay asks
- * for. Two links rather than one because a lone link is a `calcFirstStep`,
- * which nothing can be inserted above: the second link is what the `step`
- * chip then grows against, so the chain builds forward from the LHS. */
-export function calcSkeleton(rel: string, mid: string, next = rel): string {
-  return `calc _ ${rel} ${mid} := ${STUB}\n_ ${next} _ := ${STUB}`;
+ * This used to write a TWO-link skeleton with the author's expression as the
+ * midpoint, on the belief that a one-link `calc` never parses. Read out of the
+ * v4.27 grammar (Init/NotationExtra.lean, Lean/Parser/Basic.lean), the real
+ * rule is narrower: `calcSteps` anchors its subsequent-step `withPosition`
+ * ONCE, at the first token after the last written link, so with one link
+ * `colGe` compares that token's column against itself and always passes — the
+ * parser then tries to read the follower as a term, and `manyAux` fails hard
+ * if that consumes anything. So a one-link block parses cleanly exactly when
+ * the follower cannot begin a term (end of block, `|`, a command keyword, a
+ * closer) and breaks before a sibling `·` or an ordinary tactic (tactic heads
+ * lex as identifiers). That transient break is the same state hand-writing a
+ * chain top-down passes through, and the tree already draws it — the broken
+ * block gets a synthesized node and a repair chip that appends the next link.
+ * Do not "fix" it by writing a second link: putting a relation in the source
+ * the author did not choose is the worse failure. */
+export function calcOpenText(rel: string): string {
+  return CALC_KW + calcLinkText(rel);
+}
+
+/** The `_` that stands for an endpoint the staged fill replaces. */
+export const PLACEHOLDER = "_";
+const CALC_KW = "calc ";
+
+/** One link with both ends open: `_ <rel> _ := by sorry`. Shared by the OPEN
+gesture (which prefixes `calc `) and by the bare-keyword repair (which puts it
+on its own line under the `calc`), so the two cannot drift in shape — and so
+one slot calculation serves both. */
+export function calcLinkText(rel: string): string {
+  return `${PLACEHOLDER} ${rel} ${PLACEHOLDER} := ${STUB}`;
+}
+
+/** Where the fillable pieces of `calcLinkText(rel)` sit, as character offsets
+from the start of the link (add `CALC_KW.length` for the open form — that is
+what `lead` is for). Computed STRUCTURALLY from the same pieces that build the
+text rather than by searching it for `_`: a relation symbol may itself contain
+an underscore, and a search would then land on the wrong one. */
+export function calcLinkSlots(
+  rel: string,
+  lead = 0,
+): {
+  lhs: { at: number; len: number };
+  rhs: { at: number; len: number };
+  stub: { at: number; len: number };
+} {
+  const lhs = lead;
+  const rhs = lhs + PLACEHOLDER.length + 1 + rel.length + 1;
+  const stub =
+    rhs + PLACEHOLDER.length + " := ".length + (STUB.length - STUB_TACTIC.length);
+  return {
+    lhs: { at: lhs, len: PLACEHOLDER.length },
+    rhs: { at: rhs, len: PLACEHOLDER.length },
+    stub: { at: stub, len: STUB_TACTIC.length },
+  };
+}
+
+/** The open form's slots — the link's, shifted past the `calc ` keyword. */
+export function calcOpenSlots(rel: string) {
+  return calcLinkSlots(rel, CALC_KW.length);
 }
 
 export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
@@ -108,18 +177,23 @@ export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
   // anchor is the END of the final link's line, so a trailing comment stays
   // glued to the link it annotates; the huge character value is clamped by the
   // editor, which is how every insertion here reaches an unknown line length.
-  // A `calc` keyword with no link at all: write the first two, under it. Two
-  // because the middle is what the author supplies and the outer ends are `_`
-  // for Lean to unify — the same reason `calcSkeleton` opens with two.
+  // A `calc` keyword with no link at all: write its first link under it. ONE
+  // link, both ends `_`, like every other gesture — the staged fill then
+  // replaces the underscores in place. It used to write two, to hand the
+  // parser back a `colGe` anchor; the block may therefore stay unparsed until
+  // a second gesture grows it, which is exactly the state it was already in
+  // and which the repair chip keeps offering to move on from.
   if (spec.kind === "calc-first" && spec.chain) {
     const at = { line: spec.chain.lastLink.line, character: 1e5 };
     const pad = " ".repeat(spec.chain.indent);
+    const rel = spec.rel ?? "=";
+    const lead = 1 + pad.length; // the leading newline, then the indent
+    const slots = calcLinkSlots(rel, lead);
     return {
       range: { start: at, end: at },
-      newText: `\n${pad}_ ${spec.rel} ${text} := ${STUB}\n${pad}_ ${spec.rel2 ?? spec.rel} _ := ${STUB}`,
-      // The author supplied the FIRST link's right-hand side, so that is the
-      // link they are thinking about and the one to fill next.
+      newText: `\n${pad}${calcLinkText(rel)}`,
       fillNth: 1,
+      stages: { lhs: slots.lhs, rhs: slots.rhs },
     };
   }
   if (spec.kind === "calc-append" && spec.chain) {
@@ -137,19 +211,24 @@ export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
       : { line: spec.chain.lastLink.line, character: 1e5 };
     const head = bare ? ` := ${STUB}` : "";
     const pad = " ".repeat(spec.chain.indent);
-    // A relation OTHER than the one the chain still owes cannot close it on
-    // its own, so it appends TWO links: one to the intermediate expression
-    // (`text`, the only thing that can't be inferred) and one from there to
-    // the goal's own RHS, whose `_` endpoints Lean unifies as always.
-    // `text` is the new link's right-hand side; `_` (the prefilled answer)
-    // closes the chain against the goal, which is what this gesture meant
-    // before it asked at all.
+    // ONE link, in the relation that was picked and no other. It used to
+    // append a second, closing link whenever the pick was not the relation the
+    // chain still owes — `= then ≤` wrote `_ = b := by sorry` AND
+    // `_ ≤ _ := by sorry` — on the reasoning that a chain left short is
+    // broken. Measured, that reasoning is wrong: a chain that stopped short is
+    // ALREADY `unsolved goals` (that residue is the very goal this chip hangs
+    // off), so appending one link moves it from `⊢ b ≤ d` to `⊢ c ≤ d` and
+    // introduces no error that was not already there. What the closing link
+    // actually did was finish the chain on the author's behalf, in a relation
+    // they did not choose and could not see coming.
+    //
+    // The two picks now mean two clearly different things, which is what makes
+    // the relation worth picking at all: the relation the chain OWES closes it
+    // (one link, both ends `_`, so Enter alone is still the whole gesture),
+    // and any other relation adds a step and leaves the chain open for the
+    // next one. `text` is the new link's right-hand side either way.
     const rhs = text.trim() === "" ? "_" : text.trim();
-    const newText =
-      head +
-      (spec.rel2 && spec.rel2 !== spec.rel
-        ? `\n${pad}_ ${spec.rel} ${rhs} := ${STUB}\n${pad}_ ${spec.rel2} _ := ${STUB}`
-        : `\n${pad}_ ${spec.rel} ${rhs} := ${STUB}`);
+    const newText = head + `\n${pad}_ ${spec.rel} ${rhs} := ${STUB}`;
     return {
       range: { start: at, end: at },
       newText,

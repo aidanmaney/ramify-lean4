@@ -30,6 +30,7 @@ import {
   getCodeFontFamily,
   refreshCodeFontFamily,
   measureText,
+  measureNode,
   REFLOW_CHARS,
   REFLOW_MIN_CHARS,
   REFLOW_MAX_CHARS,
@@ -49,7 +50,7 @@ import type {
   TacticSlot,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import { calcSkeleton } from "./calcEdit";
+import { PLACEHOLDER, calcOpenSlots, calcOpenText } from "./calcEdit";
 import {
   completionsAt,
   type CompletionItem,
@@ -57,11 +58,13 @@ import {
 } from "./completion";
 import { layoutKeys } from "./layoutKey";
 import type {
+  AddResult,
   AddSpec,
   CombinedPart,
   DeleteSpec,
   HypLine,
   PlacedNode,
+  TextSlot,
   TreeNode,
   WrappedLine,
 } from "./types";
@@ -714,11 +717,17 @@ export interface ProofTreeViewProps {
    * `spec` says where and in what form (bullet/case/plain line); `text` is
    * what the user typed. widget.tsx turns it into a document insertion via
    * the editor's own edit pipeline.
+   *
+   * `slots` names spans of `text` the author has still to fill in — the two
+   * `_` ends of a freshly opened `calc` link. Only the widget knows the indent
+   * and bullet prefix the text lands behind, so it is what turns them into the
+   * absolute ranges it reports back (see AddResult).
    */
   onAddTactic?: (
     spec: AddSpec,
     text: string,
-  ) => ProofStepPosition | null | void;
+    slots?: { lhs: TextSlot; rhs: TextSlot },
+  ) => AddResult | null | void;
   /**
    * Widget-only: the tactic-sequence slots the delete gesture resolves its
    * extent against (`TacticSlot`, keyed by containment — see deleteEdit.ts).
@@ -850,6 +859,11 @@ export default function ProofTreeView({
   // showing the tactics stacked, dropping the pass-through goals between them
   // (syntactic, not semantic — see elide.ts combineRuns). Engine-tier geometry.
   const [combine, setCombine] = useState(false);
+  // Overview: everything outside the cursor's local region lays out as a
+  // one-line mini chip, so the tree reads as its shape; hover a chip to peek
+  // at its full content (paint-only — see the peek overlay). Engine-tier
+  // geometry, like brief/combine.
+  const [overview, setOverview] = useState(false);
   // Side-by-side branches (compact mode): a branching tactic's subtrees lay
   // out as columns sharing one vertical span instead of stacking down the
   // page. A computeLayout parameter, not an engine rebuild: geometry per
@@ -910,13 +924,37 @@ export default function ProofTreeView({
     // INSERTS via onAddTactic instead of replacing, empty commits just close,
     // and the goal's own box stays visible under the overlay.
     add?: AddSpec;
-    // Present when what is being typed is the chain's MIDPOINT rather than a
-    // tactic — the `calc` chip, and any chain gesture whose picked relation
-    // is not the goal's own (which then needs two links, so an intermediate
-    // expression between them). `calcRel`/`calcNext` are the two relations.
-    midpoint?: boolean;
-    calcRel?: string;
-    calcNext?: string;
+    // Present when what is being typed is one END of a `calc` link rather than
+    // a tactic. The link is already IN the file — written the instant the
+    // relation was picked, as `calc _ <rel> _ := by sorry` — and these stages
+    // replace its two `_`s in place, left side then right side, before the
+    // gesture hands over to the `sorry`.
+    //
+    // Inserting first and filling afterwards is what makes every intermediate
+    // state a valid file: Escape at any stage simply leaves the `_` standing,
+    // and `_` is a legitimate answer (Lean unifies it against the goal), so
+    // plain Enter through both stages is the whole gesture.
+    calcStage?: {
+      stage: "lhs" | "rhs";
+      lhs: ProofStepPosition;
+      rhs: ProofStepPosition;
+      // The `sorry` to open on once both ends are settled.
+      stub: ProofStepPosition | null;
+      // Where the link's own line starts, so the overlay can find its node
+      // again after a re-elaboration renumbers every id around the edit (the
+      // standing rule: re-match on SOURCE positions, never on an mvarId).
+      anchor: { line: number; character: number };
+      // Whether the picked relation is the one the goal is in, i.e. whether
+      // this link can be the chain's last. It decides whether `_` is a real
+      // answer for the RIGHT-hand side: on a closing link Lean unifies it with
+      // the goal's own right side, but on a stepping link (`≤` picked on a `<`
+      // goal) nothing pins it and the placeholder cannot be synthesized —
+      // measured, `calc _ ≤ _` under `⊢ a < d` reports "don't know how to
+      // synthesize placeholder". So the prefill stays `_` either way (typing
+      // replaces it, and an unfinished link is a state the tree already draws)
+      // but the hint says outright when Enter is not going to be enough.
+      closes: boolean;
+    };
     // The SECOND half of a calc gesture: typing over the `sorry` the first
     // half wrote (see calcEdit's STUB). It is an ordinary in-place tactic
     // edit — the node is real and the range is its own — with one rule of its
@@ -973,21 +1011,40 @@ export default function ProofTreeView({
   // so a node that unmounts under the pointer renders nothing rather than a
   // stale popup.
   const [hoverDiag, setHoverDiag] = useState<string | null>(null);
-  // Esc closes the picker, disarms a delete and folds the ¶ slider away. None
-  // of them owns a focused element worth listening on (two are SVG chips, and
-  // the slider's own focus is the range input), so unlike the overlay's own Esc
-  // this has to listen on the document.
+  // Esc closes the picker, disarms a delete, folds the ¶ slider away, closes
+  // an UNFOCUSED staged calc fill, and — when none of those is up — leaves a
+  // focused subtree. None of them owns a focused element worth listening on
+  // (two are SVG chips, and the slider's own focus is the range input), so
+  // unlike the overlay's own Esc this has to listen on the document. A
+  // FOCUSED stage never reaches here: the textarea's keydown handles its own
+  // Esc and stops propagation — this layer exists because the stage's blur is
+  // deliberately a no-op, so a stray focus loss can leave the overlay open
+  // with nothing focused, and Esc must still work there.
+  //
+  // LAYERED on purpose: Esc dismisses the transient thing first and only
+  // unfocuses once there is nothing transient left. Unfocusing in the same
+  // keypress that closes a picker would throw away the scope the user is
+  // working inside as a side effect of cancelling something else — and focus,
+  // unlike the others, costs a gesture to rebuild.
   useEffect(() => {
-    if (!picking && !arming && !reflowOpen) return;
+    const transient = picking || arming || reflowOpen;
+    const stage = !!editing?.calcStage;
+    if (!transient && !stage && focusId === null) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      setPicking(null);
-      setArming(null);
-      setReflowOpen(false);
+      if (transient) {
+        setPicking(null);
+        setArming(null);
+        setReflowOpen(false);
+      } else if (stage) {
+        setEditing((cur) => (cur?.calcStage ? null : cur));
+      } else {
+        setFocusId(null);
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [picking, arming, reflowOpen]);
+  }, [picking, arming, reflowOpen, focusId, editing]);
   // Undo/redo from the tree. The widget's own edits leave focus in the
   // webview, where ⌘Z reaches nothing at all, so the tree has to offer it.
   // Skipped while a textarea has focus: the in-place editor's own undo is the
@@ -1094,7 +1151,18 @@ export default function ProofTreeView({
     abbrevSess.session.sync(value, caret);
     putSpans(abbrevSess.session.pending());
   };
-  const editingId = editing?.id ?? null;
+  /** Which EDITOR a piece of per-editor state belongs to — the abbreviation
+  session and the completion list.
+   *
+   * The node id alone is not it, and that was a real bug: the two halves of a
+   * staged `calc` fill open on the SAME node, so the session survived the
+   * transition with its shadow copy of the left-hand side still in it, and
+   * committing the right-hand side flushed that stale draft over the top —
+   * typing `a` for the left side then Entering through the right wrote `a`
+   * into both. The stage is therefore part of the key. */
+  const editKey = (e: typeof editing) =>
+    e === null ? null : `${e.id} ${e.calcStage?.stage ?? ""}`;
+  const editingId = editKey(editing);
   const [prevEditingId, setPrevEditingId] = useState(editingId);
   if (editingId !== prevEditingId) {
     setPrevEditingId(editingId);
@@ -1105,7 +1173,7 @@ export default function ProofTreeView({
     setAbbrevSpans([]);
     setAbbrevSess(
       editing && abbrev.enabled
-        ? { id: editing.id, session: newAbbrevSession(editing.value) }
+        ? { id: editingId!, session: newAbbrevSession(editing.value) }
         : null,
     );
   }
@@ -1137,7 +1205,7 @@ export default function ProofTreeView({
     // synchronous precisely so it can be used from here, where there is nothing
     // to await into.
     const flushed =
-      abbrevSess?.id === cur0.id ? abbrevSess.session.flush() : undefined;
+      abbrevSess?.id === editKey(cur0) ? abbrevSess.session.flush() : undefined;
     const cur =
       flushed !== undefined && flushed !== cur0.value
         ? { ...cur0, value: flushed }
@@ -1148,29 +1216,149 @@ export default function ProofTreeView({
     // in DFS order — so with this node held fixed, everything above it is
     // literally unmoved and only the part the edit could have changed shifts.
     anchorOn(cur.id);
+    if (cur.calcStage) {
+      commitStage(cur.id, cur.calcStage, cur.value);
+      return;
+    }
     if (cur.add) {
       // An add commits on any non-empty text: an empty one is how every form
       // here backs out, and for the calc forms it must never write a link
       // with no right-hand side.
       if (cur.value.trim() !== "") {
-        const at = onAddTactic?.(
-          cur.add,
-          // Opening a chain builds the whole two-link skeleton here; the other
-          // midpoint forms are assembled by calcEdit from the spec's two
-          // relations, so they pass the typed expression through untouched.
-          cur.calcRel && !cur.add.chain && !cur.add.hole
-            ? calcSkeleton(cur.calcRel, cur.value.trim(), cur.calcNext)
-            : cur.midpoint
-              ? cur.value.trim()
-              : cur.value,
-        );
+        const at = onAddTactic?.(cur.add, cur.value);
         // Part two: the gesture wrote a `sorry`, so queue the editor to open
         // on it as soon as the redraw brings it in (see pendingFill).
-        if (at) setPendingFill(at);
+        if (at?.fill) setPendingFill(at.fill);
       }
     } else if (cur.fill ? cur.value.trim() !== "" : cur.value !== cur.original) {
       onEditTactic?.(cur.pos, cur.value);
     }
+    setEditing(null);
+  };
+  /** Write a `calc` link with both ends open, then walk the author through
+  filling them in.
+   *
+   * The line goes in FIRST and the prompts follow, which is what keeps every
+   * intermediate state a valid file — Escape at any point simply leaves an `_`,
+   * and `_` is a legitimate answer. It also means the tree is never holding
+   * text the document does not have.
+   *
+   * Two shapes reach here and `calcEdit` tells them apart by kind: OPENING a
+   * chain inserts a whole `calc _ <rel> _ := by sorry` line through the
+   * ordinary insertion path (so indent, `· ` bullets and `| case => ` markers
+   * are handled already), while REPAIRING a bare `calc` keyword adds the link
+   * under it. Either way one line, never two. */
+  /** Select the `_` a freshly opened stage is prefilled with, so Enter takes
+  it and typing REPLACES it rather than appending to it (`_a`).
+   *
+   * On a `setTimeout`, not from `onFocus` and not from a rAF. React's
+   * `autoFocus` calls `.focus()` during commit, before the delegated listener
+   * is live — measured in the preview, an `onFocus` handler here never ran and
+   * the caret sat at offset 0 with nothing selected. `setTimeout` is the same
+   * answer the clipboard fallback and completion acceptance already use, and
+   * for the harder reason: a hidden webview fires no animation frames at all.
+   * The textarea is found by DOM walk for the `react-hooks/refs` reason — a
+   * ref read from a function called out of JSX counts as render-phase and
+   * taints every other ref-touching call in the same handler. */
+  const selectPlaceholder = () => {
+    window.setTimeout(() => {
+      const ta = document.querySelector("[data-ptw-edit] textarea");
+      if (ta instanceof HTMLTextAreaElement && ta.value === PLACEHOLDER)
+        ta.select();
+    }, 0);
+  };
+  const startChain = (
+    id: string,
+    spec: AddSpec,
+    rel: string,
+    closes: boolean,
+  ) => {
+    anchorOn(id); // hold this goal put across the redraw the insertion causes
+    const repair = spec.kind === "calc-first";
+    const at = onAddTactic?.(
+      { ...spec, rel },
+      // The repair form is assembled by calcEdit from the spec, so it takes no
+      // text; the open form is a line insertion, so its text is built here and
+      // its fillable slots come along to be turned into absolute ranges.
+      repair ? "" : calcOpenText(rel),
+      repair ? undefined : calcOpenSlots(rel),
+    );
+    if (!at?.stages) {
+      // No stages reported means the host is not the widget (the standalone
+      // app draws no chips) or the edit wrote no open ends. Nothing to walk.
+      if (at?.fill) setPendingFill(at.fill);
+      return;
+    }
+    setEditing({
+      id,
+      pos: at.stages.lhs,
+      original: PLACEHOLDER,
+      value: PLACEHOLDER,
+      calcStage: {
+        stage: "lhs",
+        lhs: at.stages.lhs,
+        rhs: at.stages.rhs,
+        stub: at.fill,
+        anchor: at.stages.lhs.start,
+        closes,
+      },
+    });
+    selectPlaceholder();
+  };
+  /** One stage of the staged `calc` fill: replace this end of the link with
+  what was typed, then move to the next end — or, once both are settled, hand
+  over to the `sorry`.
+   *
+   * `_` is a real answer, not an empty one, so a value of `_` (which is what
+   * plain Enter through the prefill gives) writes NOTHING and simply advances.
+   * That is what makes the fast path free: opening a chain whose ends Lean can
+   * unify costs one pick and two Enters, and issues exactly one document edit
+   * — the insertion itself.
+   *
+   * A stage that DOES write shifts everything to its right on the same line,
+   * so the later ranges are moved by the length difference before they are
+   * used. They are all on one line by construction (the link is one line), and
+   * the edit is applied through the editor, which processes it before the next
+   * one is issued — so the shifted ranges are correct against the document the
+   * next stage will act on. */
+  const commitStage = (
+    id: string,
+    st: NonNullable<typeof editing>["calcStage"] & object,
+    raw: string,
+  ) => {
+    // The endpoint of a chain link is an expression, and the overlay is a
+    // textarea: fold any newline into a space rather than writing a term
+    // across lines, where the indentation would have to be guessed.
+    const text = raw.replace(/\n+/g, " ").trim();
+    const value = text === "" ? PLACEHOLDER : text;
+    const here = st.stage === "lhs" ? st.lhs : st.rhs;
+    const grew = value.length - (here.stop.character - here.start.character);
+    const shift = (p: ProofStepPosition): ProofStepPosition =>
+      p.start.line === here.start.line && p.start.character >= here.stop.character
+        ? {
+            start: { ...p.start, character: p.start.character + grew },
+            stop: { ...p.stop, character: p.stop.character + grew },
+          }
+        : p;
+    // `grew` is 0 when the `_` was kept, so the shift is an identity there and
+    // needs no special case.
+    if (value !== PLACEHOLDER) onEditTactic?.(here, value);
+    const next = { ...st, rhs: shift(st.rhs), stub: st.stub && shift(st.stub) };
+    if (st.stage === "lhs") {
+      setEditing({
+        id,
+        pos: next.rhs,
+        original: PLACEHOLDER,
+        value: PLACEHOLDER,
+        calcStage: { ...next, stage: "rhs" },
+      });
+      selectPlaceholder();
+      return;
+    }
+    // Both ends settled. Hand over to the stub the insertion wrote — the
+    // ordinary in-place tactic editor, opened by `pendingFill` the moment the
+    // redraw brings the `sorry` node in.
+    if (next.stub) setPendingFill(next.stub);
     setEditing(null);
   };
   // Select-all and clipboard in the in-place editor. The VS Code webview is an
@@ -1189,7 +1377,9 @@ export default function ProofTreeView({
   const clipboardFallback = async (
     key: "c" | "x" | "v",
     ta: HTMLTextAreaElement,
-    cur: { id: string; value: string },
+    // The whole editing record, not just `{id, value}`: the abbreviation
+    // session is keyed by `editKey`, which reads the calc stage too.
+    cur: NonNullable<typeof editing>,
   ) => {
     const from = ta.selectionStart;
     const to = ta.selectionEnd;
@@ -1203,7 +1393,7 @@ export default function ProofTreeView({
       // The abbreviation session tracks the draft, so a write that bypasses
       // onChange has to be reported or its shadow copy goes stale — and a
       // pasted `\alpha` should be tracked exactly as a typed one is.
-      syncAbbrev(cur.id, value, caret);
+      syncAbbrev(editKey(cur)!, value, caret);
       window.setTimeout(() => ta.setSelectionRange(caret, caret), 0);
     };
     try {
@@ -1339,33 +1529,82 @@ export default function ProofTreeView({
   // pass per base tree: the test walks a subtree, so asking it per drawn node
   // per render would be cubic.
   const elidableIds = useMemo(() => stepElidable(baseNodes), [baseNodes]);
+  // The post-elision tree the engine is built from, as its own memo: the
+  // overview keep set (below) has to resolve the CURSOR against exactly these
+  // nodes, and doing that off `engine.allNodes()` would make the engine
+  // depend on itself — the engine's sizing needs the keep set, and the keep
+  // set needs the node list. Splitting the list out breaks the cycle with
+  // pure functions on both sides.
+  const treeNodes = useMemo(() => {
+    // Combine (auto linear-run collapse) is applied alongside the manual
+    // elide cuts, computed over the nodes the manual cuts DON'T claim so the
+    // two stay disjoint.
+    let cuts = elideCuts;
+    if (combine) {
+      const byId = new Map(baseNodes.map((n) => [n.id, n]));
+      const manual = new Set<string>();
+      for (const c of elideCuts)
+        for (const id of resolveCut(c, byId)) manual.add(id);
+      cuts = [...elideCuts, ...combineRuns(baseNodes, manual)];
+    }
+    return applyElisions(baseNodes, cuts);
+  }, [baseNodes, elideCuts, combine]);
+  // Overview: which node the cursor is on, resolved over `treeNodes` with the
+  // same pure pair the accent uses (so the two resolutions cannot disagree),
+  // reduced to a STRING before the set is built — the id changes only when
+  // the cursor crosses into a different tactic, so walking a cursor within
+  // one tactic rebuilds nothing.
+  const overviewCursorId = useMemo(
+    () =>
+      overview && highlightPos
+        ? tacticNodeAt(tacticTargets(treeNodes), highlightPos)
+        : null,
+    [overview, treeNodes, highlightPos],
+  );
+  // The local region kept at full size: the cursor's node, its goals, and one
+  // more step each way — ancestors ×2 (the goal this tactic consumes, and the
+  // tactic that produced it) and descendants ×2 (the goals it leaves, and the
+  // tactics answering them). DIRECTED on purpose: an undirected radius would
+  // pull in sibling branches through the shared parent goal, which is exactly
+  // the material an overview exists to shrink. Standalone app / cursor
+  // outside the proof → empty set → everything is a chip, hover to peek.
+  const overviewKeep = useMemo(() => {
+    const keep = new Set<string>();
+    if (!overview || !overviewCursorId) return keep;
+    const children = new Map<string, string[]>();
+    for (const n of treeNodes)
+      for (const p of n.parents)
+        (children.get(p.id) ?? children.set(p.id, []).get(p.id)!).push(n.id);
+    const byId = new Map(treeNodes.map((n) => [n.id, n]));
+    keep.add(overviewCursorId);
+    let up = [overviewCursorId];
+    for (let d = 0; d < 2; d++) {
+      up = up.flatMap((id) => (byId.get(id)?.parents ?? []).map((p) => p.id));
+      up.forEach((id) => keep.add(id));
+    }
+    let down = [overviewCursorId];
+    for (let d = 0; d < 2; d++) {
+      down = down.flatMap((id) => children.get(id) ?? []);
+      down.forEach((id) => keep.add(id));
+    }
+    return keep;
+  }, [overview, overviewCursorId, treeNodes]);
   const engine = useMemo(
     // `codeFont` isn't read here, but the engine measures every label in it
     // via layout.ts module state — the dep is what forces a re-measure when
     // the editor font changes (hence the lint suppression: the dependency is
     // real, just invisible to the linter).
-    () => {
-      // Combine (auto linear-run collapse) is applied alongside the manual
-      // elide cuts, computed over the nodes the manual cuts DON'T claim so the
-      // two stay disjoint.
-      let cuts = elideCuts;
-      if (combine) {
-        const byId = new Map(baseNodes.map((n) => [n.id, n]));
-        const manual = new Set<string>();
-        for (const c of elideCuts)
-          for (const id of resolveCut(c, byId)) manual.add(id);
-        cuts = [...elideCuts, ...combineRuns(baseNodes, manual)];
-      }
-      return createLayoutEngine(applyElisions(baseNodes, cuts), {
+    () =>
+      createLayoutEngine(treeNodes, {
         // See forcedReflow: aligned tracks wraps even when ¶ is off.
         reflow: forcedReflow ?? reflow,
         // Only the widget draws chips, so only the widget reserves room for
         // them (see LayoutEngineOptions.chips).
         chips: !!onAddTactic,
-      });
-    },
+        overview: overview ? { keep: overviewKeep } : undefined,
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseNodes, elideCuts, combine, codeFont, reflow, forcedReflow],
+    [treeNodes, codeFont, reflow, forcedReflow, overview, overviewKeep],
   );
 
   // Two different events, and conflating them is what made editing painful.
@@ -1451,7 +1690,15 @@ export default function ProofTreeView({
     // coming back), so its ranges are stale either way. The relation picker
     // holds ranges too, and the edit that just landed is exactly what
     // invalidates them.
-    setEditing(null);
+    //
+    // A staged `calc` fill is the ONE exception, for the same reason
+    // `pendingFill` is: the redraw it is riding out is the one its OWN
+    // insertion caused, and closing the overlay would abandon the author
+    // mid-gesture with a half-filled link. Its ranges are still good — they
+    // describe the line that insertion just wrote, which this re-elaboration
+    // reports rather than moves. Only the node id it hangs off can have gone
+    // (mvarIds renumber around any edit), and that is re-resolved below.
+    setEditing((cur) => (cur?.calcStage ? cur : null));
     setPicking(null);
     // An armed delete holds ranges too, and a shape change means the document
     // moved under them — exactly what must not be committed blind.
@@ -1568,6 +1815,48 @@ export default function ProofTreeView({
       ),
     [engine, collapsed, only, focusSet, compact, sideBySide, hide, aside],
   );
+  // Nodes with a VISIBLE child, i.e. an outgoing connector. The chip lane
+  // centres its chips on the incoming trunk lane, which is also where a
+  // child's connector drops — fine on a pending LEAF (most chip bearers),
+  // but a `step` chip on a stub-consumed link (and the repair chip on a
+  // half-parsed calc) sits on a goal that HAS children, and a chip drawn on
+  // the goal→child edge reads as "insert between these two" when the
+  // insertion actually lands ABOVE the box. Those lanes shift right of the
+  // connector instead (see the lane transform).
+  const drawnParentIds = useMemo(
+    () => new Set(links.map((l) => l.source.data.id)),
+    [links],
+  );
+
+  // A staged `calc` fill outlives the redraw its own insertion caused (see the
+  // shape-change branch), but the node it hangs off may not: an insertion
+  // renumbers the mvarIds around it, so the overlay's `id` can name a node that
+  // no longer exists — and the overlay is positioned by looking that id up, so
+  // it would silently vanish mid-gesture.
+  //
+  // Re-resolved by SOURCE POSITION, the standing rule. The link's own line is
+  // the anchor: the calc that owns it either starts on that line (a chain the
+  // gesture opened) or contains it (a link written under an existing `calc`
+  // keyword, including the synthesized node of a block that does not parse).
+  // Nothing matching means the insertion is gone — an undo, most likely — so
+  // the gesture is over.
+  if (editing?.calcStage && !nodes.some((n) => n.data.id === editing.id)) {
+    const line = editing.calcStage.anchor.line;
+    const owner =
+      nodes.find(
+        (n) =>
+          (n.data.type === "tactic" || n.data.synthetic) &&
+          n.data.position?.start.line === line,
+      ) ??
+      nodes.find(
+        (n) =>
+          (n.data.type === "tactic" || n.data.synthetic) &&
+          n.data.position &&
+          n.data.position.start.line <= line &&
+          n.data.position.stop.line >= line,
+      );
+    setEditing(owner ? { ...editing, id: owner.data.id } : null);
+  }
 
   // Part two of a calc gesture, claimed the moment the stub it wrote is drawn
   // (see pendingFill): open the in-place editor on that `sorry`, empty, so the
@@ -1786,7 +2075,15 @@ export default function ProofTreeView({
   const candidatesFor = (nodeId: string): CompletionPools => {
     const node = nodes.find((n) => n.data.id === nodeId);
     // A tactic's context is the goal it consumes — its parent in the tree.
-    const goalId = node?.data.parents[0]?.id;
+    // An overlay hanging off a GOAL is asking about that goal itself, though:
+    // the (+) chip, and the staged fill of a `calc` link, both open on the
+    // pending goal, and taking its parent there reached the tactic ABOVE it,
+    // which has no context of its own — so those overlays were offering
+    // nothing but tactic names. The link case is the one this matters most
+    // for: a chain restates part of its goal at every step, which is exactly
+    // what the subterm tier is for.
+    const goalId =
+      node?.data.type === "goal" ? node.data.id : node?.data.parents[0]?.id;
     const goal = goalId
       ? nodes.find((n) => n.data.id === goalId)?.data
       : undefined;
@@ -1830,7 +2127,7 @@ export default function ProofTreeView({
       cur.value.slice(0, item.from) + item.label + cur.value.slice(item.to);
     const caret = item.from + item.label.length;
     setEditing((e) => e && { ...e, value });
-    syncAbbrev(cur.id, value, caret); // bypasses onChange — see `put` above
+    syncAbbrev(editKey(cur)!, value, caret); // bypasses onChange — see `put` above
     setCompletion(null);
     // The textarea is controlled, so the caret has to be restored after the
     // render that applies `value` — setTimeout, not rAF: a hidden webview never
@@ -2202,6 +2499,11 @@ export default function ProofTreeView({
     // mode re-centres (the whole tree's proportions change), but a slider step
     // must leave the scroll alone — see onReflowChange.
     (reflow !== "off" ? "reflow:" : "") +
+    // Only WHETHER overview is on, never its keep set: toggling the mode
+    // changes the tree's proportions wholesale and re-centres, but a cursor
+    // move (which swaps the keep set and rebuilds the engine) must hold the
+    // view — the `[nodes]` anchor and the cursor-follow do that.
+    (overview ? "ov:" : "") +
     // `brief` is out of viewKey for the same reason as `combine` below: it only
     // shortens label text, so every node keeps its id and its place in the
     // trunk — re-centring on the root would scroll you away from whatever you
@@ -2233,6 +2535,29 @@ export default function ProofTreeView({
       return next;
     });
   };
+  const exitFocus = () => setFocusId(null);
+  // The focus root, for the breadcrumb pill's label. Read from `allNodes()`
+  // rather than the drawn `nodes` because folding the root itself must not
+  // make the way OUT of focus disappear — the whole point of the pill.
+  const focusNode = useMemo(
+    () =>
+      focusId ? (engine.allNodes().find((n) => n.id === focusId) ?? null) : null,
+    [engine, focusId],
+  );
+
+  // The top-left floaters stack in a fixed order, each row FLOATER_H apart:
+  // the caller's slot (standalone only), the focus breadcrumb, whichever hint
+  // is up (those four ARE mutually exclusive — three picking modes and the
+  // staged calc fill), then the diagnostic pill. Derived ONCE: the rows used
+  // to carry four copies of the same `headerExtra ? …` expression plus a
+  // fifth in the pill's props, so a new row could not be added without
+  // editing all five, and focus (unlike the hints) coexists with every one of
+  // them — you can pick, elide or fill a calc while focused.
+  const hintUp =
+    seq.mode !== "off" || !!elidePick || !!bandPick || !!editing?.calcStage;
+  const floaterRows = [!!headerExtra, focusId !== null, hintUp];
+  const floaterTop = (row: number) =>
+    8 + FLOATER_H * floaterRows.slice(0, row).filter(Boolean).length;
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -2624,11 +2949,56 @@ export default function ProofTreeView({
           {headerExtra}
         </div>
       )}
+      {/* Focus breadcrumb: what you are scoped to, and the way out. It lives
+          here rather than on the rail because leaving a focus is not a view
+          SETTING you reach for — it is a mode you need out of, and a glyph on
+          the far right of a wide tree is both invisible and a long way from
+          where the eye rests. Being the label of the goal you focused, it
+          doubles as a "you are here"; Esc and ◎/⌥-click on the root do the
+          same thing (three ways out, since focus is easy to enter by accident
+          — ⌥-click is one modifier away from ⌘-click's reveal). */}
+      {focusId && (
+        <button
+          type="button"
+          title="Back to the whole proof (Esc, or ◎ / ⌥-click on the focused goal)"
+          onClick={exitFocus}
+          style={{
+            position: "absolute",
+            top: floaterTop(1),
+            left: 8,
+            zIndex: 10,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            maxWidth: "min(60%, 420px)",
+            fontFamily: "monospace",
+            fontSize: 12,
+            color: ACCENT_TEXT,
+            background: NODE_STYLES.goal.stroke,
+            border: "none",
+            padding: "3px 10px",
+            borderRadius: 999,
+            cursor: "pointer",
+          }}
+        >
+          <span>◎</span>
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {focusNode?.label ?? "focused"}
+          </span>
+          <span style={{ opacity: 0.8 }}>✕</span>
+        </button>
+      )}
       {seq.mode !== "off" && (
         <div
           style={{
             position: "absolute",
-            top: headerExtra ? 8 + FLOATER_H : 8,
+            top: floaterTop(2),
             left: 8,
             zIndex: 10,
             fontFamily: "monospace",
@@ -2650,7 +3020,7 @@ export default function ProofTreeView({
         <div
           style={{
             position: "absolute",
-            top: headerExtra ? 8 + FLOATER_H : 8,
+            top: floaterTop(2),
             left: 8,
             zIndex: 10,
             fontFamily: "monospace",
@@ -2670,7 +3040,7 @@ export default function ProofTreeView({
         <div
           style={{
             position: "absolute",
-            top: headerExtra ? 8 + FLOATER_H : 8,
+            top: floaterTop(2),
             left: 8,
             zIndex: 10,
             fontFamily: "monospace",
@@ -2684,6 +3054,31 @@ export default function ProofTreeView({
           {bandPick.from !== null
             ? "cut · click the bottom node"
             : "cut · click the top node"}
+        </div>
+      )}
+      {/* The staged `calc` fill says which end it is asking for. The link is
+          already in the file, so this also has to say what Enter does — taking
+          the `_` is a real answer here, not a way of skipping the question. */}
+      {editing?.calcStage && (
+        <div
+          style={{
+            position: "absolute",
+            top: floaterTop(2),
+            left: 8,
+            zIndex: 10,
+            fontFamily: "monospace",
+            fontSize: 12,
+            color: ACCENT_TEXT,
+            background: SEQ_STROKE,
+            padding: "3px 10px",
+            borderRadius: 999,
+          }}
+        >
+          {editing.calcStage.stage === "lhs"
+            ? "calc · left-hand side · Enter keeps _"
+            : editing.calcStage.closes
+              ? "calc · right-hand side · Enter keeps _"
+              : "calc · right-hand side · this link steps, so name where it goes"}
         </div>
       )}
       <ControlRail
@@ -2731,6 +3126,12 @@ export default function ProofTreeView({
           // viewport centre instead — same treatment as ⇉ combine.
           setBrief(v);
         }}
+        overview={overview}
+        onOverviewChange={(v) => {
+          // Toggling re-centres via viewKey ("ov:"), so no anchorRoot() —
+          // the proportions change wholesale, like crossing in/out of reflow.
+          setOverview(v);
+        }}
         combine={combine}
         onCombineChange={(v) => {
           // Deliberately NO anchorRoot() here: the run you are looking at is
@@ -2747,8 +3148,6 @@ export default function ProofTreeView({
           anchorRoot();
           setHypMode(v);
         }}
-        focused={focusId !== null}
-        onExitFocus={() => setFocusId(null)}
         seqActive={seq.mode !== "off"}
         onToggleSequence={() => {
           // The three picking modes are mutually exclusive.
@@ -2801,15 +3200,11 @@ export default function ProofTreeView({
           // the tree, or (widget) the source position to reveal — the latter
           // is what makes the click work even for a node-less diagnostic.
           clickable={!!diagCur.nodeId || !!onReveal}
-          // The top-left floaters stack: the caller's slot (standalone only),
-          // then whichever picking hint is up (the three are mutually
-          // exclusive), then this. Each row is FLOATER_H apart — they are all
-          // one line of 12px text in the same pill chrome, so one constant
-          // covers them rather than a per-row measurement.
-          top={
-            (headerExtra ? 8 + FLOATER_H : 8) +
-            (seq.mode !== "off" || elidePick || bandPick ? FLOATER_H : 0)
-          }
+          // Last row of the top-left stack (see floaterTop). Each row is
+          // FLOATER_H apart — they are all one line of 12px text in the same
+          // pill chrome, so one constant covers them rather than a per-row
+          // measurement.
+          top={floaterTop(3)}
           onStep={stepDiag}
           // "Take me to it" means BOTH surfaces: the tree (unfold, page,
           // scroll — gotoDiagNode) and the SOURCE (the editor's cursor onto
@@ -2875,6 +3270,13 @@ export default function ProofTreeView({
           // "done with it" — the rail sits outside this container, so its own
           // clicks (the ¶ button included) never land here.
           setReflowOpen(false);
+          // A staged calc fill closes on a background click — its blur is
+          // deliberately a no-op (see the textarea's onBlur), so this is one
+          // of its two ways out (Escape is the other). Closing writes
+          // nothing: the `_`s stand and the file is valid. Other editing
+          // states are untouched — their own blur has already committed by
+          // the time this click lands.
+          setEditing((cur) => (cur?.calcStage ? null : cur));
         }}
       >
         <svg
@@ -3056,9 +3458,12 @@ export default function ProofTreeView({
                 !!onPopoutEdit;
               const isEditing = editing?.id === id;
               // A replace-edit's overlay stands in for the box, so the box
-              // hides; an ADD's overlay hangs below it and the goal must stay
-              // readable while you answer it.
-              const hideForEdit = isEditing && !editing?.add;
+              // hides; an ADD's hangs below it and the goal must stay readable
+              // while you answer it. A staged `calc` fill is the same case:
+              // what it is asking about is the link it just wrote, so the goal
+              // that link is proving belongs on screen beside the question.
+              const hideForEdit =
+                isEditing && !editing?.add && !editing?.calcStage;
               // A step the supplemental parser synthesized: `failed` carries
               // an error, `skipped` never ran, `term` came from a term-mode
               // proof's structure. Failed/skipped draw DASHED — the tactic is
@@ -3083,9 +3488,12 @@ export default function ProofTreeView({
                     : null;
               // A goal with descendants can become the root of a focused view
               // (⌥-click, or the hover bar's ◎); pointless for the current
-              // focus root.
+              // focus root — which instead carries the way BACK on the same
+              // two gestures, so the node you focused is also the node that
+              // un-focuses and ◎ reads as a toggle rather than two glyphs.
               const focusable =
                 type === "goal" && foldable && !seqActive && id !== focusId;
+              const isFocusRoot = id === focusId && !seqActive;
               // Deleting. Offered wherever the extent is well defined and the
               // node stands for exactly one region of source: never on a
               // COMBINED or elided marker (which map to several tactics — the
@@ -3133,8 +3541,13 @@ export default function ProofTreeView({
               // modifier gestures: goals get reveal/focus, tactics the lens.
               // The bar STAYS while armed even without a hover, since the
               // confirm row replaces it and must survive the pointer leaving.
+              // A mini chip gets NO bar — its hover is the peek, and a pill of
+              // full-size buttons straddling a one-line chip would cover its
+              // neighbours; click-gestures (fold, reveal, ⌥-focus) still work.
+              const isMini = !!node.data.mini;
               const hasBar =
                 !isEditing &&
+                !isMini &&
                 (goalRevealable ||
                   focusable ||
                   popoutable ||
@@ -3164,6 +3577,7 @@ export default function ProofTreeView({
                     : null,
                 editable ? "double-click to edit" : null,
                 focusable ? "⌥-click to focus this subtree" : null,
+                isFocusRoot ? "⌥-click (or Esc) to leave this focus" : null,
                 hyps?.some((l) => l.used)
                   ? `${HYP_MARK} = used by the tactic below`
                   : null,
@@ -3252,6 +3666,11 @@ export default function ProofTreeView({
                   focusOn(id);
                   return;
                 }
+                // ⌥-click on the focus ROOT is the same gesture back out.
+                if (isFocusRoot && e.altKey) {
+                  exitFocus();
+                  return;
+                }
                 onNodeClick(id, foldable);
               };
 
@@ -3285,20 +3704,23 @@ export default function ProofTreeView({
                         }
                       : undefined
                   }
-                  // Hover drives two things: the action bar, and (tactics
-                  // only) the editor-side range highlight.
+                  // Hover drives three things: the action bar, (tactics only)
+                  // the editor-side range highlight, and (overview) the mini
+                  // chip's full-size peek — the same hoverId serves the bar
+                  // and the peek, since a node never has both.
                   onMouseEnter={
-                    hasBar || hoverHighlights
+                    hasBar || hoverHighlights || isMini
                       ? () => {
-                          if (hasBar) setHoverId(id);
+                          if (hasBar || isMini) setHoverId(id);
                           if (hoverHighlights) onHoverTactic!(position!);
                         }
                       : undefined
                   }
                   onMouseLeave={
-                    hasBar || hoverHighlights
+                    hasBar || hoverHighlights || isMini
                       ? () => {
-                          if (hasBar) setHoverId((cur) => (cur === id ? null : cur));
+                          if (hasBar || isMini)
+                            setHoverId((cur) => (cur === id ? null : cur));
                           if (hoverHighlights) onHoverTactic!(null);
                         }
                       : undefined
@@ -3623,11 +4045,24 @@ export default function ProofTreeView({
                     (node.data.addSpec || node.data.addLink) &&
                     onAddTactic &&
                     seq.mode === "off" &&
+                    // A mini chip reserved no lane (chipH 0), so drawing the
+                    // chips would paint them over the next node's band.
+                    !isMini &&
                     !isEditing && (
                       <g
-                        transform={`translate(${-w / 2 + TRUNK_INSET}, ${
-                          boxTop + h + CHIP_TOP_GAP
-                        })`}
+                        // Centred on the incoming lane — except when this node
+                        // has a visible child, whose connector drops at that
+                        // very x: a chip sitting ON the goal→child edge reads
+                        // as "insert between these two", and the one gesture
+                        // offered there (`step` on a stub-consumed link, the
+                        // repair chip on a half-parsed calc) inserts ABOVE the
+                        // box instead. Shifted clear of the lane, the edge
+                        // runs unbroken and the chip hangs beside it.
+                        transform={`translate(${
+                          -w / 2 +
+                          TRUNK_INSET +
+                          (drawnParentIds.has(id) ? CHIP_W_ADD / 2 + 6 : 0)
+                        }, ${boxTop + h + CHIP_TOP_GAP})`}
                       >
                         {/* Choosing which relation the new link chains REPLACES
                             the lane, expanding rightward from the chip that was
@@ -3638,29 +4073,26 @@ export default function ProofTreeView({
                             onCancel={() => setPicking(null)}
                             onPick={(o) => {
                               const kind = picking.kind;
-                              const spec: AddSpec = {
-                                ...picking.spec,
-                                rel: o.rel,
-                                rel2: o.same ? undefined : o.next,
-                              };
+                              const spec: AddSpec = { ...picking.spec, rel: o.rel };
                               setPicking(null);
-                              // Every form asks for the new link's right-hand
-                              // side. Appending with the relation the chain
-                              // already owes can be closed by `_`, so that is
-                              // prefilled and one Enter is still the whole
-                              // gesture; a relation that has to reach the goal
-                              // through a second link needs a real expression.
-                              const pre =
-                                kind === "append" && o.same ? CLOSE_RHS : "";
+                              // Opening a chain, and repairing a bare `calc`,
+                              // both write a link with BOTH ends open and then
+                              // walk the author through them. The other two
+                              // forms write a link whose LHS is the previous
+                              // link's RHS — always `_`, exactly as the source
+                              // writes it — so only the right-hand side is
+                              // asked for, prefilled `_` since closing the
+                              // chain there is the common answer.
+                              if (kind === "open" || kind === "first") {
+                                startChain(id, spec, o.rel, o.same);
+                                return;
+                              }
                               setEditing({
                                 id,
                                 pos: spec.after,
                                 original: "",
-                                value: pre,
+                                value: CLOSE_RHS,
                                 add: spec,
-                                midpoint: kind !== "link",
-                                calcRel: o.rel,
-                                calcNext: o.next,
                               });
                             }}
                           />
@@ -3717,12 +4149,13 @@ export default function ProofTreeView({
                         {node.data.calcRels && (
                           <FrontierChip
                             glyph="calc"
+                            // Says exactly what it writes, which is ONE line.
                             title={
                               node.data.calcRels.length > 1
-                                ? `start a calc chain — pick the first link's relation (${node.data.calcRels
+                                ? `start a calc chain — pick its relation (${node.data.calcRels
                                     .map((o) => o.rel)
-                                    .join(" ")})`
-                                : `start a calc chain (${node.data.calcRels[0].rel}) — type the first link's right-hand side, then its proof`
+                                    .join(" ")}); writes one line, \`calc _ … _ := by sorry\`, then asks for each side`
+                                : `start a calc chain — writes \`calc _ ${node.data.calcRels[0].rel} _ := by sorry\`, then asks for each side (Enter keeps \`_\`)`
                             }
                             x={
                               -CHIP_W_ADD / 2 +
@@ -3744,16 +4177,7 @@ export default function ProofTreeView({
                                 setPicking({ id, kind: "open", spec, options });
                                 return;
                               }
-                              setEditing({
-                                id,
-                                pos: spec.after,
-                                original: "",
-                                value: "",
-                                add: spec,
-                                midpoint: true,
-                                calcRel: options[0].rel,
-                                calcNext: options[0].next,
-                              });
+                              startChain(id, spec, options[0].rel, options[0].same);
                             }}
                           />
                         )}
@@ -3768,11 +4192,15 @@ export default function ProofTreeView({
                             title={
                               node.data.addLink.chain?.broken
                                 ? node.data.addLink.kind === "calc-first"
-                                  ? `write this \`calc\` block's first links — type the intermediate expression. Until it has one it does not parse, which is why the rest of this proof is missing`
+                                  ? `write this \`calc\` block's first link, then fill in each side. Until it has one it does not parse, which is why the rest of this proof is missing`
                                   : `finish the \`calc\` block: add its next ${node.data.addLink.rel} link. Until then it does not parse, which is why the rest of this proof is missing`
                                 : node.data.addLink.kind === "calc-append"
-                                  ? `append a link (${node.data.addLink.rel}) to this calc chain — type its right-hand side, or \`_\` to close the chain here`
-                                  : "insert a calc step above this one — type its right-hand side"
+                                  ? (node.data.addLink.rels?.length ?? 0) > 1
+                                    ? `add the next link to this chain — pick its relation (${node.data.addLink.rels!
+                                        .map((o) => o.rel)
+                                        .join(" ")}); \`${node.data.addLink.rel}\` closes the chain, anything else adds a step and leaves it open`
+                                    : `close this chain with a \`${node.data.addLink.rel}\` link — type its right-hand side, or take the \`_\` to end it here`
+                                  : "add a calc step above this link — the new link appears above this box, and this one closes the remainder; type its right-hand side"
                             }
                             // Alone on the lane when the block is broken: the
                             // other two chips are suppressed there, since they
@@ -3802,19 +4230,28 @@ export default function ProofTreeView({
                                 setPicking({ id, kind, spec, options });
                                 return;
                               }
-                              // Every form asks for the new link's right-hand
-                              // side. Appending closes the chain when it is
-                              // `_`, so that is prefilled and Enter alone is
-                              // still the whole gesture; the other two write a
-                              // link the chain must pass THROUGH, which only
-                              // the author can name.
+                              // Repairing a bare `calc` writes a link with both
+                              // ends open and walks the author through them;
+                              // the other two write a link whose LHS is the
+                              // previous RHS (`_`, as the source writes it), so
+                              // only the right-hand side is asked for —
+                              // prefilled `_`, which closes the chain, so Enter
+                              // alone is still the whole gesture.
+                              if (kind === "first") {
+                                startChain(
+                                  id,
+                                  spec,
+                                  spec.rel ?? "=",
+                                  spec.rels?.[0]?.same ?? true,
+                                );
+                                return;
+                              }
                               setEditing({
                                 id,
                                 pos: spec.after,
                                 original: "",
-                                value: kind === "append" ? CLOSE_RHS : "",
+                                value: CLOSE_RHS,
                                 add: spec,
-                                midpoint: kind === "first",
                               });
                             }}
                           />
@@ -3913,6 +4350,16 @@ export default function ProofTreeView({
                                 glyph: "◎",
                                 title: "Focus this subtree (⌥-click)",
                                 onClick: () => focusOn(id),
+                              },
+                            ]
+                          : []),
+                        ...(isFocusRoot
+                          ? [
+                              {
+                                glyph: "◎",
+                                title:
+                                  "Back to the whole proof (⌥-click, or Esc)",
+                                onClick: exitFocus,
                               },
                             ]
                           : []),
@@ -4039,6 +4486,107 @@ export default function ProofTreeView({
                 the node's own <g> every later sibling would paint over it.
                 pointer-events: none throughout, so it can never trap the hover
                 that keeps it up or eat a click meant for what is under it. */}
+            {/* Overview peek: hovering a mini chip draws the node at FULL size
+                on top of everything — paint only, so pointing at chips never
+                relayouts (the no-relayout-on-hover rule; the geometry version
+                of this hover would make the tree squirm under the pointer).
+                After the nodes loop so it paints over neighbours, and
+                pointer-events: none so it can never trap the hover that keeps
+                it up. Content is measured fresh from the PRE-ENGINE node
+                (`treeNodes`) — the engine replaced the node's label/hyps with
+                the chip's, so the full text has to come from upstream. Plain
+                text, no tagged/token rendering: a peek is for reading, and an
+                interactive surface that cannot take the pointer would be a
+                lie. */}
+            {overview &&
+              hoverId &&
+              (() => {
+                const pn = nodes.find((n) => n.data.id === hoverId);
+                if (!pn || !pn.data.mini) return null;
+                const base = treeNodes.find((n) => n.id === hoverId);
+                if (!base) return null;
+                const full = measureNode(base.label, base.hyps);
+                const fullHyps = full.hyps ?? [];
+                const style = NODE_STYLES[base.type] ?? NODE_STYLES.default;
+                // Anchor the peek's top-left on the chip's top-left, so the
+                // expansion grows right/down from what was pointed at.
+                const left = -pn.data.w / 2;
+                const topH = pn.data.caseH + pn.data.commentBlockH;
+                const boxTop = (topH - pn.data.h) / 2;
+                const gutter =
+                  fullHyps.some((l) => l.used) &&
+                  !fullHyps.every((l) => l.used)
+                    ? HYP_MARK_W
+                    : 0;
+                const contentTop = boxTop + NODE_PAD_Y;
+                const sepOff = (j: number) =>
+                  fullHyps.slice(0, j + 1).some((h) => h.sep) ? HYP_SEP_H : 0;
+                return (
+                  <g
+                    transform={`translate(${pn.x},${pn.y})`}
+                    pointerEvents="none"
+                  >
+                    <rect
+                      x={left}
+                      y={boxTop}
+                      width={full.w}
+                      height={full.h}
+                      rx={base.type === "tactic" ? 4 : 6}
+                      fill={style.fill}
+                      stroke={style.stroke}
+                      strokeWidth={1.5}
+                      // A soft shadow is what reads as "floating over", and
+                      // the overlap with neighbouring chips needs it.
+                      filter="drop-shadow(0 2px 6px rgba(0,0,0,0.35))"
+                    />
+                    {fullHyps.length > 0 && (
+                      <text
+                        textAnchor="start"
+                        fontSize={HYP_FONT_PX}
+                        fontFamily={getCodeFontFamily()}
+                        fill={NODE_TEXT}
+                        style={{ letterSpacing: 0 }}
+                      >
+                        {fullHyps.map((l, j) => (
+                          <tspan
+                            key={j}
+                            x={left + NODE_PAD + gutter + (l.indent ?? 0)}
+                            y={
+                              contentTop +
+                              (j + 0.5) * HYP_LINE_H +
+                              sepOff(j)
+                            }
+                            dy="0.32em"
+                            opacity={l.used ? 1 : 0.62}
+                          >
+                            {l.text}
+                          </tspan>
+                        ))}
+                      </text>
+                    )}
+                    <text
+                      textAnchor="start"
+                      fontSize={NODE_FONT_PX}
+                      fontFamily={getCodeFontFamily()}
+                      fill={NODE_TEXT}
+                      style={{ letterSpacing: 0 }}
+                    >
+                      {full.lines.map((line, j) => (
+                        <tspan
+                          key={j}
+                          x={left + NODE_PAD + line.indent}
+                          y={
+                            contentTop + full.hypH + (j + 0.5) * LINE_H
+                          }
+                          dy="0.32em"
+                        >
+                          {line.text}
+                        </tspan>
+                      ))}
+                    </text>
+                  </g>
+                );
+              })()}
             {hoverDiag &&
               (() => {
                 const dn = nodes.find((n) => n.data.id === hoverDiag);
@@ -4118,9 +4666,11 @@ export default function ProofTreeView({
                 const topH = en.data.caseH + en.data.commentBlockH;
                 const boxTop = (topH - h) / 2;
                 // An ADD's textarea hangs below the goal box (where its chip
-                // sat), leaving the goal readable while you answer it; a
-                // replace-edit covers the hidden box as before.
-                const overlayY = editing.add ? boxTop + h + 4 : boxTop;
+                // sat), leaving the goal readable while you answer it — as does
+                // a staged `calc` fill, which is asking about the link it just
+                // wrote under that goal. A replace-edit covers the hidden box.
+                const overlayY =
+                  editing.add || editing.calcStage ? boxTop + h + 4 : boxTop;
                 const valueLines = editing.value.split("\n");
                 const fw = Math.max(
                   w,
@@ -4138,9 +4688,10 @@ export default function ProofTreeView({
                 // line, since the goal box it hangs under can be many and an
                 // empty textarea that tall is all void. Type past the bottom
                 // and the textarea scrolls (overflowY below).
-                const openLines = editing.add
-                  ? 1
-                  : editing.original.split("\n").length;
+                const openLines =
+                  editing.add || editing.calcStage
+                    ? 1
+                    : editing.original.split("\n").length;
                 const fh = openLines * LINE_H + 2 * NODE_PAD_Y;
                 // Syntax colouring WHILE editing: a mirror element behind a
                 // see-through textarea, which is the only way to paint rich
@@ -4153,11 +4704,13 @@ export default function ProofTreeView({
                 // the end both align exactly; a mid-string edit keeps colour up
                 // to the edit point and loses it after.
                 //
-                // Skipped for ADD and MIDPOINT overlays: those hang off a GOAL
+                // Skipped for ADD and STAGE overlays: an add hangs off a GOAL
                 // node, whose `position` is its PRODUCER's range, so the tokens
-                // would be a different tactic's entirely.
+                // would be a different tactic's entirely; a stage is typing one
+                // END of a link rather than a tactic, so the tokens would be
+                // the whole link's.
                 const editHighlight =
-                  !editing.add && !editing.midpoint && en.data.position
+                  !editing.add && !editing.calcStage && en.data.position
                     ? (renderTaggedTactic?.(
                         en.data.position,
                         editing.value,
@@ -4179,6 +4732,12 @@ export default function ProofTreeView({
                           and the overlay paints after every node. */}
                       <div
                         data-ptw-edit=""
+                        // Clicks inside the editor are not background clicks:
+                        // the scroll container's handler now closes a staged
+                        // fill (its blur deliberately doesn't), and without
+                        // this a click INTO the stage's own textarea would
+                        // bubble there and self-close it.
+                        onClick={(e) => e.stopPropagation()}
                         style={{
                           position: "relative",
                           width: "100%",
@@ -4214,6 +4773,15 @@ export default function ProofTreeView({
                         </div>
                       )}
                       <textarea
+                        // Keyed by STAGE, not by node: moving from the left
+                        // side to the right side must remount, or `autoFocus`
+                        // never fires again (React keeps the same element for
+                        // the same position in the tree) and the caret stays
+                        // wherever the previous stage left it. Deliberately NOT
+                        // keyed on `editing.id`, which the mid-gesture
+                        // re-anchor rewrites — remounting there would throw
+                        // away what had been typed.
+                        key={editing.calcStage?.stage ?? "edit"}
                         autoFocus
                         value={editing.value}
                         spellCheck={false}
@@ -4236,7 +4804,7 @@ export default function ProofTreeView({
                           const { value, selectionStart } = e.target;
                           setEditing((cur) => cur && { ...cur, value });
                           refreshCompletion(editing.id, value, selectionStart);
-                          syncAbbrev(editing.id, value, selectionStart);
+                          syncAbbrev(editKey(editing)!, value, selectionStart);
                         }}
                         // A caret move with no edit changes what is being
                         // completed too (clicking into the middle of a word).
@@ -4252,7 +4820,7 @@ export default function ProofTreeView({
                           // it — the buffer's own rule. `sync` is idempotent, so
                           // it does not matter that this also fires after every
                           // keystroke's onChange.
-                          syncAbbrev(editing.id, ta.value, ta.selectionStart);
+                          syncAbbrev(editKey(editing)!, ta.value, ta.selectionStart);
                         }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -4264,14 +4832,14 @@ export default function ProofTreeView({
                           // caret move drive this as well — `sync` is
                           // idempotent, so the overlap costs nothing.
                           syncAbbrev(
-                            editing.id,
+                            editKey(editing)!,
                             e.currentTarget.value,
                             e.currentTarget.selectionStart,
                           );
                         }}
                         onKeyUp={(e) =>
                           syncAbbrev(
-                            editing.id,
+                            editKey(editing)!,
                             e.currentTarget.value,
                             e.currentTarget.selectionStart,
                           )
@@ -4364,7 +4932,22 @@ export default function ProofTreeView({
                             commitEdit();
                           }
                         }}
-                        onBlur={commitEdit}
+                        // Blur commits a replace/add — click away means "done".
+                        // A STAGED calc fill is the exception, and it is the
+                        // fix for a reported bug: the real infoview reflows
+                        // (and moves focus) the moment the insertion's own
+                        // re-elaboration lands, and blur-as-commit then walked
+                        // BOTH stages to `_` before the author ever saw them —
+                        // "there is no option to enter the LHS". A stage is a
+                        // walk, not a click-away editor: blur leaves it open
+                        // and untouched; Escape and a background click are the
+                        // deliberate ways out. (The preview harness fires no
+                        // native focus transitions — the recorded gap — which
+                        // is exactly why this survived verification.)
+                        onBlur={() => {
+                          if (editingRef.current?.calcStage) return;
+                          commitEdit();
+                        }}
                         style={{
                           width: "100%",
                           height: "100%",
@@ -4926,12 +5509,12 @@ function ControlRail({
   onReflowOpenChange,
   brief,
   onBriefChange,
+  overview,
+  onOverviewChange,
   combine,
   onCombineChange,
   hypMode,
   onHypModeChange,
-  focused,
-  onExitFocus,
   seqActive,
   onToggleSequence,
   elidePicking,
@@ -4961,12 +5544,12 @@ function ControlRail({
   onReflowOpenChange: (v: boolean) => void;
   brief: boolean;
   onBriefChange: (v: boolean) => void;
+  overview: boolean;
+  onOverviewChange: (v: boolean) => void;
   combine: boolean;
   onCombineChange: (v: boolean) => void;
   hypMode: HypMode;
   onHypModeChange: (v: HypMode) => void;
-  focused: boolean;
-  onExitFocus: () => void;
   seqActive: boolean;
   onToggleSequence: () => void;
   elidePicking: boolean;
@@ -5052,6 +5635,12 @@ function ControlRail({
         onClick={() => onBriefChange(!brief)}
       />
       <RailButton
+        glyph="▦"
+        title="Overview: shrink every node to a one-line chip except where the cursor is — hover a chip to peek at its full content"
+        pressed={overview}
+        onClick={() => onOverviewChange(!overview)}
+      />
+      <RailButton
         glyph="⇉"
         title="Combine: merge each straight run of tactics into one node (stacked), dropping the pass-through goals between them"
         pressed={combine}
@@ -5098,15 +5687,10 @@ function ControlRail({
         disabled={!bandEnabled}
         onClick={onToggleBand}
       />
-      {focused && (
-        <RailButton
-          glyph="◎"
-          title="Back to the whole proof (◎ on a goal node focuses its subtree)"
-          pressed
-          pressedColor={NODE_STYLES.goal.stroke}
-          onClick={onExitFocus}
-        />
-      )}
+      {/* No exit-focus button here: leaving a focus is not a view setting, and
+          a glyph at the far right of a wide tree is a long way from where the
+          eye rests. It lives on the top-left breadcrumb pill instead, with Esc
+          and ◎/⌥-click on the focused goal as the other two ways out. */}
       <div style={{ height: 6 }} />
       <RailButton
         glyph="+"
@@ -5134,6 +5718,13 @@ across widths; a centre-based x is what let the two chips overlap by 2px. */
 // width would clip or straggle. `measureText` measures in the editor's code
 // font, so the chips must PAINT in it too — hence the explicit `fontFamily`,
 // which the rest of the chip vocabulary (UI chrome) does not take.
+/** The relation row a `calc` / `step` chip expands into.
+ *
+ * A chip's GLYPH is what will be written, not a name for it — and since every
+ * gesture here writes exactly ONE link, the glyph is exactly one relation.
+ * (It briefly showed a PAIR, `≤ <`, back when opening a chain emitted a second
+ * closing link the author had not chosen; the fix was to stop writing it, not
+ * to keep labelling it.) */
 function PickerRow({
   options,
   onPick,
@@ -5173,16 +5764,17 @@ function PickerRow({
     cursor += width + CHIP_GAP;
   };
   push("cancel", "×", "cancel", "var(--ptw-comment)", onCancel);
-  for (const o of options)
+  for (const o of options) {
     push(
       o.rel,
       o.rel,
       o.same
-        ? `chain with ${o.rel}, the goal's own relation`
-        : `start with ${o.rel}, then ${o.next} — via a Trans instance`,
+        ? `one \`${o.rel}\` link — the relation this goal is in, so the chain can end on it`
+        : `one \`${o.rel}\` link — a step on the way; the chain stays open and \`step\` continues it`,
       NODE_STYLES.tactic.stroke,
       () => onPick(o),
     );
+  }
   return <>{chips}</>;
 }
 

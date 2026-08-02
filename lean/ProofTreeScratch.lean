@@ -81,6 +81,7 @@ theorem sum_range_odd (n : ℕ) :
   -- Step 3: parity survives squaring in both directions. This is the one part
   -- that really splits: forward is a construction, backward a case analysis on
   -- the parity of m.
+  -- .none
   have parity : ∀ m : ℕ, Even m ↔ Even (m ^ 2) := by
     intro m
     constructor
@@ -167,13 +168,12 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
     | zero => simp
     | succ k ih =>
       calc (∑ i ∈ Finset.range (k + 1 + 1), (2 * i + 1))
-          = (∑ i ∈ Finset.range (k + 1), (2 * i + 1)) + (2 * (k + 1) + 1) :=
-            Finset.sum_range_succ (fun i => 2 * i + 1) (k + 1)
+          = (∑ i ∈ Finset.range (k + 1), (2 * i + 1)) + (2 * (k + 1) + 1) := Finset.sum_range_succ (fun i => 2 * i + 1) (k + 1)
         _ = (k + 1) ^ 2 + (2 * (k + 1) + 1) := by rw [ih]
         _ = (k + 1 + 1) ^ 2 := by ring
-  · -- Chain 3: two links, `<` then `≤`, so the composite relation is `<`.
-    calc (0 : ℝ) < 1 := by norm_num
-      _ ≤ (a - b) ^ 2 + 1 := by linarith [sq_nonneg (a - b)]
+  · calc (0 : ℝ) < 1 := by norm_num
+      -- _ ≤ (a - b) ^ 2 + 1 := by linarith [sq_nonneg (a - b)]
+
 
 /-- **√2 is irrational, over ℤ.** No coprime integers `m, n` satisfy
 `m * m = 2 * n * n`. This is the Nuprl `root_2_irrat_over_int` translated step

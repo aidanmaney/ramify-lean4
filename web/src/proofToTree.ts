@@ -990,10 +990,11 @@ export function proofToTree(
     prod: ProofStep | undefined,
   ): AddSpec | undefined {
     // No well-formed link to append AFTER. When the block is a bare `calc`
-    // keyword, that is the state to help with most: write its first two links
-    // (`calc-first`). When it got as far as `calc a = b :=`, the author is
-    // mid-keystroke on the justification and there is no honest edit to
-    // suggest, so the chain is drawn but carries no chip.
+    // keyword, that is the state to help with most: write its first link
+    // (`calc-first`), both ends `_`, which the staged fill then walks. When it
+    // got as far as `calc a = b :=`, the author is mid-keystroke on the
+    // justification and there is no honest edit to suggest, so the chain is
+    // drawn but carries no chip.
     const first = chain.links < 1;
     if (first && !chain.firstBare) return undefined;
     // The block has no goal of its own, so the relation comes from the goal it

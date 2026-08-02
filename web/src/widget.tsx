@@ -8,9 +8,9 @@ import {
   type PanelWidgetProps,
 } from "@leanprover/infoview";
 import type { Proof, ProofStepPosition, TacticSlot } from "./paperproof";
-import type { AddSpec, DeleteSpec } from "./types";
+import type { AddResult, AddSpec, DeleteSpec, TextSlot } from "./types";
 import { DEFAULT_ABBREV, type AbbrevConfig } from "./abbreviation";
-import { calcEdit, fillRange } from "./calcEdit";
+import { calcEdit, fillRange, offsetToPosition } from "./calcEdit";
 import { deleteEdit } from "./deleteEdit";
 import {
   filterDiagnostics,
@@ -646,22 +646,36 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // The huge character value is deliberate: positions beyond a line's end are
   // clamped by the editor when the edit applies, and the true line length
   // isn't known here (the widget never holds the document text).
-  const addTactic = (spec: AddSpec, text: string) => {
+  const addTactic = (
+    spec: AddSpec,
+    text: string,
+    slots?: { lhs: TextSlot; rhs: TextSlot },
+  ): AddResult => {
     const at2 = (p: { line: number; character: number }) =>
       editByStart.get(`${p.line}:${p.character}`);
-    // The two `calc` forms act on the hole's own range, not on a line anchor
-    // (see calcEdit — kept pure and separate so a probe can elaborate what it
-    // produces).
+    // The `calc` forms act on a range of their own rather than on a line
+    // anchor: `hole`/`calc-link` on the hole's, `calc-append`/`calc-first` on
+    // the chain's last link (see calcEdit — kept pure and separate so a probe
+    // can elaborate what it produces). Opening a chain is NOT one of them; it
+    // is an ordinary line insertion, so it falls through below.
     const calc = calcEdit(spec, text);
     if (calc) {
       void ec.api.applyEdit({
         changes: { [pos.uri]: [{ range: calc.range, newText: calc.newText }] },
       });
       // Where the `sorry` this just wrote landed, so the view can open the
-      // second half of the gesture on it (see calcEdit's STUB).
-      return calc.fillNth
-        ? fillRange(calc.range.start, calc.newText, calc.fillNth)
-        : null;
+      // second half of the gesture on it (see calcEdit's STUB) — and, when the
+      // edit left both ends of a link open, where those `_`s landed.
+      const to = (s: TextSlot) =>
+        offsetToPosition(calc.range.start, calc.newText, s.at, s.len);
+      return {
+        fill: calc.fillNth
+          ? fillRange(calc.range.start, calc.newText, calc.fillNth)
+          : null,
+        stages: calc.stages
+          ? { lhs: to(calc.stages.lhs), rhs: to(calc.stages.rhs) }
+          : undefined,
+      };
     }
     const e = at2(spec.after.start);
     const stop = e?.stop ?? spec.after.stop;
@@ -687,8 +701,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     // indenting by the bare indent put a continuation at the very column its
     // own tactic starts at, so Lean read it as a sibling tactic:
     // `  · have h : p := by` / `    exact hp` fails with "expected '{' or
-    // indented tactic sequence" (elaborated, not reasoned about). It also
-    // matters for the `calc` skeleton, whose second line is a chain link.
+    // indented tactic sequence" (elaborated, not reasoned about).
     const inner = " ".repeat(indent.length + prefix.length + 2);
     const body = text
       .split("\n")
@@ -698,14 +711,21 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     void ec.api.applyEdit({
       changes: { [pos.uri]: [{ range: { start: at, end: at }, newText }] },
     });
-    // The `calc` skeleton is the one line-inserted text that carries stubs
-    // (the view assembles it — see calcSkeleton), and its FIRST is the link
-    // whose right-hand side the author just typed. Anything else has no
-    // `sorry` in it, which fillRange reports as null — except the `sorry`
-    // CHIP, whose whole point is to stop there, so it opts out explicitly.
-    return text === "sorry"
-      ? null
-      : fillRange({ line: at.line, character: 0 }, newText, 1);
+    // The `calc` opener is the one line-inserted text that carries a stub (the
+    // view assembles it — see calcOpenText). Anything else has no `sorry` in
+    // it, which fillRange reports as null — except the `sorry` CHIP, whose
+    // whole point is to stop there, so it opts out explicitly.
+    const start = { line: at.line, character: 0 };
+    // Slots are offsets into `text`, which landed on the first line behind the
+    // leading newline, the indent and any `· `/`| case => ` prefix — so shift
+    // by exactly that much to index into `newText`.
+    const lead = 1 + indent.length + prefix.length;
+    const to = (s: TextSlot) =>
+      offsetToPosition(start, newText, s.at + lead, s.len);
+    return {
+      fill: text === "sorry" ? null : fillRange(start, newText, 1),
+      stages: slots ? { lhs: to(slots.lhs), rhs: to(slots.rhs) } : undefined,
+    };
   };
 
   // Committing a delete. The extent maths lives in `deleteEdit` (pure, so a
