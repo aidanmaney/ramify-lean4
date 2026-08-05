@@ -32,14 +32,14 @@ namespace Ppharness
 /-- `Result` itself has no `ToJson` instance (only `ProofStep`, `GoalInfo`, and
     `Hypothesis` derive one), so we encode its two fields by hand.
     `allGoals` is a `Std.HashSet`, which has no canonical JSON form → dump as a list.
-    `comments`, `calcHoles` and `calcChains` are ours (not the parser's): the
+    `comments`, `holes` and `calcChains` are ours (not the parser's): the
     command's source comments, for the renderer's comment strips, and the two
     `calc` editing seams — the unproved links a chain already has, and where a
     chain that stops short of its goal continues (both from
     ProofTreeComments.lean) — plus `calcRelations`, the relations a chain on
     each pending goal could be built out of. -/
 def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
-    (calcHoles : Array ProofTree.CalcHole)
+    (holes : Array ProofTree.Hole)
     (calcChains : Array ProofTree.CalcChain)
     (calcRelations : Array ProofTree.CalcRelations)
     (deleteSlots : Array ProofTree.TacticSlot)
@@ -49,7 +49,7 @@ def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
     ("steps",    toJson r.steps),          -- List ProofStep  (ToJson derived upstream)
     ("allGoals", toJson r.allGoals.toList), -- flatten the goal set into an array
     ("comments", toJson comments),
-    ("calcHoles", toJson calcHoles),
+    ("holes", toJson holes),
     ("calcChains", toJson calcChains),
     ("calcRelations", toJson calcRelations),
     -- Plain data, like the calc seams above, so it rides this wire too even
@@ -150,10 +150,10 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
             | none => #[]
           let declRange := cmdRange.map fun r =>
             ⟨fileMap.utf8PosToLspPos r.start, fileMap.utf8PosToLspPos r.stop⟩
-          -- Unproved calc links, for the renderer's per-link (+) chips. Unlike
-          -- the widget's tagged goals these are plain data, so they ride the
-          -- CLI wire too (which is what lets a probe check them offline).
-          let calcHoles := ProofTree.collectCalcHoles fileMap tree
+          -- Holes the author wrote, for the renderer's fill-in-place chips.
+          -- Unlike the widget's tagged goals these are plain data, so they ride
+          -- the CLI wire too (which is what lets a probe check them offline).
+          let holes := ProofTree.collectHoles fileMap tree slots
           -- Same enumeration the widget runs, over the same pending rule; it
           -- needs only a MetaM context, which the info tree carries.
           let calcRelations ← ProofTree.collectCalcRelations tree <|
@@ -166,7 +166,7 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
               calcChains
           out := out.push (Json.mkObj
             [("index", toJson idx),
-             ("proof", resultToJson r comments calcHoles calcChains calcRelations
+             ("proof", resultToJson r comments holes calcChains calcRelations
                           slots declRange recov.recovered)])
     | none => pure ()
     idx := idx + 1

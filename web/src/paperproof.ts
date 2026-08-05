@@ -50,23 +50,38 @@ export interface SourceComment {
   stop: { line: number; character: number };
 }
 
-/** An unproved link of a `calc` chain — a `?_` sitting where its justification
-goes (see ProofTreeComments.lean's `CalcHole`). Both data paths emit these: it
-is plain data, unlike the widget's ref-carrying tagged goals.
+/** A hole the AUTHOR wrote — `?_` or a named `?foo` (see ProofTreeComments'
+`Hole`). Both data paths emit these: it is plain data, unlike the widget's
+ref-carrying tagged goals.
 
 `goalId` is the hole's metavariable, which IS the pending `GoalInfo.id`, so the
-join to the tree needs no assumption about link order. */
-export interface CalcHole {
+join to the tree needs no assumption about reporting order. */
+export interface Hole {
   goalId: string;
-  /** The `?_` token itself: replacing exactly this fills the link in place. */
+  /** The hole token itself: replacing exactly this fills it in place. */
   start: { line: number; character: number };
   stop: { line: number; character: number };
-  /** Start of the enclosing calc step — the line a new link is inserted on,
-  and the column to indent it to. */
-  linkStart: { line: number; character: number };
-  /** The chain's FIRST link, which nothing can be inserted above (its LHS is
-  the chain's head, not a `_` that would absorb a new predecessor's RHS). */
+  /** Start of what encloses the hole — the calc step when `inCalc`, else the
+  enclosing tactic as written. The line a new calc link is inserted on, and the
+  column to indent to. */
+  ownerStart: { line: number; character: number };
+  /** `inCalc` only: the chain's FIRST link, which nothing can be inserted above
+  (its LHS is the chain's head, not a `_` that would absorb a new predecessor's
+  RHS). */
   first: boolean;
+  /** Inside a `calc` link — the only place growing a link ABOVE the hole means
+  anything (the hole's goal restates from the new RHS). */
+  inCalc: boolean;
+  /** Inside a tactic BLOCK, so the goal could equally be proved by a sibling
+  tactic written after the enclosing one — and where one can be, it is the
+  better edit (`refine ⟨?_, ?_⟩` + `· exact h`, not `refine ⟨by exact h, ?_⟩`).
+  So this, not "is a hole", decides whether the tree offers to fill in place:
+  the cases that qualify are a `calc` link and a term-mode proof, neither of
+  which has anywhere to append. */
+  inBlock: boolean;
+  /** A repeat of a named hole written earlier (`?foo` twice is ONE goal at two
+  spans). Keyed by goal, a client would otherwise keep whichever came last. */
+  dup?: boolean;
 }
 
 /** One synthesized step's marker — mirrors ProofTreeRecover's RecoveredStep
@@ -117,7 +132,7 @@ export interface TacticSlot {
 /** A `calc` block, and where it CONTINUES (see ProofTreeComments.lean's
 `CalcChain`).
 
-The dual of `CalcHole`: a chain whose links stop short of the goal's RHS still
+The dual of `Hole`: a chain whose links stop short of the goal's RHS still
 elaborates, leaving the remainder as a `calc.step` goal that reaches the wire as
 an ordinary pending goal. Appending a link is how one continues such a chain by
 hand, and neither fact it needs is derivable client-side — a step's range covers
@@ -181,7 +196,7 @@ export interface Proof {
   steps: ProofStep[];
   allGoals: GoalInfo[];
   comments?: SourceComment[];
-  calcHoles?: CalcHole[];
+  holes?: Hole[];
   calcChains?: CalcChain[];
   calcRelations?: CalcRelations[];
   /** Every tactic-sequence child, for the delete gesture (see `TacticSlot`).

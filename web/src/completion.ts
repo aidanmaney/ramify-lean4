@@ -14,7 +14,7 @@ export interface CompletionItem {
   /** Replace `[from, to)` of the draft with `label`. */
   from: number;
   to: number;
-  kind: "hyp" | "term" | "tactic";
+  kind: "hyp" | "term" | "tactic" | "global";
   /** The label is exactly what is already typed. Kept and ranked FIRST rather
    * than filtered out: `ring` is a tactic in its own right, and dropping it
    * because it matched exactly left `ring1` selected, so Enter inserted THAT.
@@ -27,7 +27,21 @@ export interface CompletionPools {
   hyps: string[];
   terms: string[];
   tactics: string[];
+  /** The ENVIRONMENT tier — global names from the `completionNames` RPC,
+   * fetched by the view (debounced, prefix-gated, cached per query) and passed
+   * in already SORTED shortest-first by the server. The one pool that is not
+   * "already in the payload"; absent in the standalone app, and absent while a
+   * fetch is in flight — the local tiers never wait on it. */
+  globals?: string[];
 }
+
+/** The server's gates, mirrored so client and server agree on when a query is
+ * even worth the round trip and on when a cached answer is COMPLETE (fewer
+ * than the cap means nothing was truncated, so the client may keep narrowing
+ * it locally instead of refetching). Keep in sync with `minCompletionQuery` /
+ * `maxCompletionNames` in ProofTreeWidget.lean. */
+export const MIN_GLOBAL_PREFIX = 3;
+export const GLOBAL_MAX = 50;
 
 /** At most this many items — the list is a hint, not a browser. */
 const MAX_ITEMS = 12;
@@ -100,6 +114,13 @@ function termSpan(
   return { from, to, hadBoundary };
 }
 
+/** The identifier prefix being typed at `caret` — what the view keys the
+ * global-name fetch on. The same span the name tiers match against. */
+export function identPrefixAt(value: string, caret: number): string {
+  const [iFrom] = identSpan(value, caret);
+  return value.slice(iFrom, caret);
+}
+
 /** Case-insensitive prefix match, which is what a completion list wants. */
 const matches = (cand: string, prefix: string) =>
   prefix === "" || cand.toLowerCase().startsWith(prefix.toLowerCase());
@@ -131,9 +152,13 @@ export function completionsAt(
     out.push({ label, from, to, kind, exact: label === value.slice(from, caret) });
   };
 
-  // Tier 1: hypotheses of the goal this tactic consumes.
+  // Tier 1: hypotheses of the goal this tactic consumes. The `✝` filter is
+  // the terms tier's rule applied here too — it was asymmetric for no recorded
+  // reason, and after a bare `induction n` the inaccessible `n✝` was offered
+  // and, accepted, wrote an identifier into the buffer that cannot round-trip.
   if (ident !== "")
-    for (const h of pools.hyps) if (matches(h, ident)) push(h, iFrom, iTo, "hyp");
+    for (const h of pools.hyps)
+      if (!h.includes("✝") && matches(h, ident)) push(h, iFrom, iTo, "hyp");
 
   // Tier 1.5: the goal's own subterms. A term that IS just the identifier being
   // typed adds nothing over the tier-1 entry, so single tokens are dropped —
@@ -157,6 +182,14 @@ export function completionsAt(
       .filter((t) => matches(t, ident))
       .sort((a, b) => a.length - b.length || (a < b ? -1 : 1)))
       push(t, iFrom, iTo, "tactic");
+
+  // The environment tier last: the least local pool, already server-sorted
+  // shortest-first (and shortest IS the exact match under a prefix rule), so
+  // no re-sort here. The dedupe map above lets the local tiers claim a label
+  // first — a hypothesis shadowing a global name is the hypothesis.
+  if (ident !== "" && pools.globals)
+    for (const g of pools.globals)
+      if (matches(g, ident)) push(g, iFrom, iTo, "global");
 
   // An exact match leads, whichever pool it came from: it is the completion the
   // author has already finished typing, so it must be what Enter takes. Dropping

@@ -103,7 +103,16 @@ structure TacticTokenInfo where
   -- `TacticEdit.tokens` by start position (a token's extent is already on the
   -- edit entry), so a stop here would be dead weight on the wire.
   start : Lsp.Position
-  code  : Widget.CodeWithInfos
+  -- Exactly one of `code`/`doc` is set. `code` is the interactive path: a
+  -- `.tag` carrying the info node the editor's hover would resolve. `doc` is
+  -- the PARSER-DOCSTRING path — the half of `handleHover` the tag cannot
+  -- express, because the docstring lives on a syntax KIND (`by` →
+  -- `Lean.Parser.Term.byTactic`), not on any info node the hover index could
+  -- point at. Shipping it as a plain string is not a shortcut: there is no
+  -- `InfoWithCtx` to reference, so a ref-shaped carrier would have to
+  -- fabricate one. See the decision rule at the emit site.
+  code  : Option Widget.CodeWithInfos := none
+  doc   : Option String := none
   deriving Server.RpcEncodable
 
 /-- The DECLARATION NAME under the cursor (`example` and friends fall back to
@@ -152,9 +161,10 @@ structure ProofTreeData where
   -- edit affordances, and the client joins these by CONTAINMENT rather than by
   -- a step key, so the whole set ships rather than one entry per step.
   deleteSlots : Array TacticSlot := #[]
-  -- Unproved `calc` links (`_ = c := ?_`), so the tree's (+) chips can fill a
-  -- link exactly where it sits. Plain data, so it rides the CLI wire too.
-  calcHoles   : Array CalcHole := #[]
+  -- Holes the author wrote (`?_`, `?foo`), so the tree's chips can fill one
+  -- exactly where it sits instead of appending a line after the term it is
+  -- missing from. Plain data, so it rides the CLI wire too.
+  holes       : Array Hole := #[]
   -- Where a chain that stops SHORT of its goal continues, so the residue goal's
   -- chip can append a link instead of abandoning the chain. Plain data too.
   calcChains  : Array CalcChain := #[]
@@ -227,25 +237,50 @@ computes the very same tagged pretty-print (`ppExprWithInfos`) and then discards
 the tags with `.fmt.pretty`. Rather than forking the parser, we re-walk the tree
 here and keep them: for each `TacticInfo` print its goals with `mctxAfter` —
 matching `BetterParser`'s `printCtx`, so the tagged text and the plain `GoalInfo`
-strings agree — first-wins per goal. A goal that fails to print (e.g. not in
-this `mctx`) is simply skipped; the client falls back to plain text. -/
-def collectTaggedGoals (infoTree : InfoTree) : IO (Array TaggedGoalEntry) := do
+strings agree. A goal that fails to print (e.g. not in this `mctx`) is simply
+skipped; the client falls back to plain text.
+
+Several tactics mention the same goal, so it is printed several times, and
+which print we keep is NOT arbitrary: `mctxAfter` means a metavariable assigned
+later is still open in the earlier print, so the producing tactic's print of
+`a ≤ ?m` and the consuming tactic's print of `a ≤ 5` are both here. It used to
+be first-wins, which took the `?m` one.
+
+`wanted` is the plain string the CLIENT will draw for each goal — it applies
+the same fewest-`mvarOccurrences` rule to the strings on the wire — and an
+exact match against it is what we keep. Preferring the most resolved print
+HERE, independently, would very nearly agree and is the fallback, but only
+nearly: this walk sees every `TacticInfo` while the wire carries only
+Paperproof's steps, so the minimum can be a print the client never had. A
+disagreement is not an error, it is silence — the text-equality guard drops the
+goal to plain SVG, losing its type tooltips exactly where a metavariable makes
+them worth most. -/
+def collectTaggedGoals (infoTree : InfoTree)
+    (wanted : Std.HashMap String String := {}) : IO (Array TaggedGoalEntry) := do
   let tacticNodes := infoTree.foldInfo (init := #[]) fun ctx info acc =>
     if let .ofTacticInfo ti := info then acc.push (ctx, ti) else acc
-  let mut seen : Std.HashSet String := {}
-  let mut out : Array TaggedGoalEntry := #[]
+  -- Lower is better: an exact match with what the client draws beats every
+  -- near miss, and among near misses the most resolved wins.
+  let mut best : Std.HashMap String (Nat × TaggedGoalEntry) := {}
   for (ctx, ti) in tacticNodes do
     let printCtx := { ctx with mctx := ti.mctxAfter }
     for mvarId in ti.goalsBefore ++ ti.goalsAfter do
       let key := mvarId.name.toString
-      unless seen.contains key do
-        seen := seen.insert key
-        let goal? ← try
-            some <$> printCtx.runMetaM {} (Widget.goalToInteractive mvarId)
-          catch _ => pure none
-        if let some goal := goal? then
-          out := out.push { goalId := key, goal }
-  return out
+      -- Nothing beats an exact match, so stop looking for this goal.
+      if let some (0, _) := best[key]? then continue
+      let goal? ← try
+          some <$> printCtx.runMetaM {} (Widget.goalToInteractive mvarId)
+        catch _ => pure none
+      if let some goal := goal? then
+        let text := goal.type.stripTags
+        let score :=
+          if wanted[key]? == some text then 0
+          else 1 + ProofTree.mvarOccurrences text
+        match best[key]? with
+        | some (s, _) =>
+          if score < s then best := best.insert key (score, { goalId := key, goal })
+        | none => best := best.insert key (score, { goalId := key, goal })
+  return best.toArray.map fun (_, (_, e)) => e
 
 /-- Semantic tokens for NUMERIC LITERALS.
 
@@ -396,6 +431,48 @@ def isSyntheticSorryInfo (info : Elab.Info) : Bool :=
   | .ofTermInfo ti => ti.expr.isSyntheticSorry
   | _              => false
 
+/-- The PARSER-DOCSTRING half of the editor's hover — the half `tokenInfos`'
+info-node tags cannot express, verbatim from `handleHover`
+(`Lean/Server/FileWorker/RequestHandling.lean`): walk the syntax stack over the
+position innermost-first and take the first NODE whose syntax kind has a
+docstring.
+
+This is what puts text on `by` in the buffer: the innermost info node over a
+`by` is a 2-byte `TacticInfo` whose stx is the bare ATOM `by` — `getKind` on an
+atom is the meaningless name `by`, and `findDocString?` on it is `none` — while
+the docstring sits on the KIND of the node one level up,
+`Lean.Parser.Term.byTactic`. No width-minimising search over info nodes can
+find that; only the syntax walk can. Not `private`: the offline probe replays
+`handleHover`'s decision against this. -/
+def parserDocAt (env : Environment) (root : Syntax) (pos : String.Pos.Raw) :
+    IO (Option (String × Lean.Syntax.Range)) := do
+  let some stack := root.findStack? (·.getRange?.any (·.contains pos))
+    | return none
+  stack.findSomeM? fun (stx, _) => do
+    let .node _ kind _ := stx | pure none
+    let some doc ← findDocString? env kind | pure none
+    return some (doc, stx.getRange?.get!)
+
+/-- Would `makePopup` render anything for this info node? The cheap mirror of
+`Info.fmtHover?`'s emptiness, costing two environment lookups and NO
+pretty-printing: term-like nodes always render a type, so only an
+elaboration-info node with no docstring on its kind or its elaborator comes up
+empty — exactly `Info.docString?`'s own fallback chain. (The divergence left
+open: a `TermInfo` whose type fails to format AND has no doc would count
+nonempty here while the buffer falls through to the parser docstring. That
+needs the formatter to throw, which nothing in the corpus does, and the cost of
+being exact is a pretty-print per token per request.) -/
+def popupNonempty (env : Environment) (info : Elab.Info) : IO Bool := do
+  match info with
+  | .ofTermInfo _ | .ofFieldInfo _ | .ofOptionInfo _ | .ofErrorNameInfo _ =>
+    pure true
+  | _ =>
+    match info.toElabInfo? with
+    | some ei =>
+      pure ((← findDocString? env ei.stx.getKind).isSome
+        || (← findDocString? env ei.elaborator).isSome)
+    | none => pure false
+
 /-- Hoverable info nodes indexed for innermost-range lookup: `items` sorted by
 start offset, and `prefixMaxStop[i]` = the largest stop among `items[0..i]`.
 
@@ -404,31 +481,55 @@ calling `InfoTree.hoverableInfoAt?` per token would re-walk the whole tree each
 time, and this runs on every cursor move. The prefix-max array keeps the lookup
 itself off O(targets): scanning backwards from the last candidate, the moment
 the running maximum stop falls at or before the query offset, no earlier item
-can contain it either, so the scan stops. -/
+can contain it either, so the scan stops.
+
+Each item carries its tree DEPTH because width alone does not decide the
+buffer's pick: `hoverableInfoAt?` lets a DESCENDANT's result win over every
+ancestor outright, and ranges legitimately tie — `by simp` puts `tacticSeq`,
+`tacticSeq1Indented` and `simp` on the same four bytes (measured), and taking
+the wrong one of those hands `simp`'s hover to a wrapper node whose popup is
+empty. Depth is the flat-index encoding of "prefer innermost results". -/
 structure HoverIndex where
-  items         : Array (Nat × Nat × Elab.InfoWithCtx)
+  items         : Array (Nat × Nat × Nat × Elab.InfoWithCtx)
   prefixMaxStop : Array Nat
 
+/-- The depth-carrying clone of `InfoTree.foldInfo`'s traversal (same context
+merging: `mergeIntoOuter?` at `.context`, `updateContext?` descending a node) —
+`foldInfo` itself does not expose depth, and depth is the tie-break `innermost`
+needs. -/
+partial def collectHoverItems (ctx? : Option Elab.ContextInfo) (depth : Nat)
+    (t : InfoTree) (acc : Array (Nat × Nat × Nat × Elab.InfoWithCtx)) :
+    Array (Nat × Nat × Nat × Elab.InfoWithCtx) :=
+  match t with
+  | .context c t' => collectHoverItems (c.mergeIntoOuter? ctx?) depth t' acc
+  | .node i cs =>
+    let acc := match ctx? with
+      | some ctx =>
+        if !hoverEligible i || isSyntheticSorryInfo i then acc
+        else match i.stx.getRange? (canonicalOnly := true) with
+          | some r =>
+            acc.push (r.start.byteIdx, r.stop.byteIdx, depth,
+                      { ctx, info := i, children := .empty })
+          | none => acc
+      | none => acc
+    cs.foldl (init := acc) fun a c =>
+      collectHoverItems (i.updateContext? ctx?) (depth + 1) c a
+  | .hole _ => acc
+
 def mkHoverIndex (infoTree : InfoTree) : HoverIndex := Id.run do
-  let raw : Array (Nat × Nat × Elab.InfoWithCtx) :=
-    infoTree.foldInfo (init := #[]) fun ctx info acc =>
-      if !hoverEligible info || isSyntheticSorryInfo info then acc
-      else match info.stx.getRange? (canonicalOnly := true) with
-        | some r =>
-          acc.push (r.start.byteIdx, r.stop.byteIdx,
-                    { ctx, info, children := .empty })
-        | none => acc
+  let raw := collectHoverItems none 0 infoTree #[]
   let items := raw.qsort fun a b => a.1 < b.1
   let mut pm : Array Nat := Array.mkEmpty items.size
   let mut best := 0
-  for (_, stop, _) in items do
+  for (_, stop, _, _) in items do
     best := max best stop
     pm := pm.push best
   return { items, prefixMaxStop := pm }
 
-/-- The smallest eligible range containing byte offset `p`, as
-`(start, stop, info)`. The range comes back with the info so callers can use it
-as an identity key for the node (see the ref cache in `getProofTree`). -/
+/-- The smallest eligible range containing byte offset `p` — DEEPEST first
+among equal ranges (see `HoverIndex`) — as `(start, stop, info)`. The range
+comes back with the info so callers can use it as an identity key for the node
+(see the ref cache in `getProofTree`). -/
 def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
     : Option (Nat × Nat × Elab.InfoWithCtx) := Id.run do
   -- Binary search for the first index whose start exceeds `p`.
@@ -437,21 +538,24 @@ def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
   while lo < hi do
     let mid := (lo + hi) / 2
     match idx.items[mid]? with
-    | some (start, _, _) => if start ≤ p then lo := mid + 1 else hi := mid
-    | none               => hi := mid
+    | some (start, _, _, _) => if start ≤ p then lo := mid + 1 else hi := mid
+    | none                  => hi := mid
   let mut i := lo
-  let mut best : Option (Nat × Nat × Nat × Elab.InfoWithCtx) := none
+  let mut best : Option (Nat × Nat × Nat × Nat × Elab.InfoWithCtx) := none
   while i > 0 do
     i := i - 1
     match idx.prefixMaxStop[i]? with
     | some m => if m ≤ p then break
     | none   => break
-    if let some (start, stop, ictx) := idx.items[i]? then
+    if let some (start, stop, depth, ictx) := idx.items[i]? then
       if start ≤ p && p < stop then
         let width := stop - start
-        if best.all fun (bw, _, _, _) => width < bw then
-          best := some (width, start, stop, ictx)
-  return best.map fun (_, start, stop, ictx) => (start, stop, ictx)
+        let wins := match best with
+          | none => true
+          | some (bw, _, _, bd, _) => width < bw || (width == bw && depth > bd)
+        if wins then
+          best := some (width, start, stop, depth, ictx)
+  return best.map fun (_, start, stop, _, ictx) => (start, stop, ictx)
 
 /-- One-entry cache for `getProofTree`'s payload, keyed on
 `(uri, document version, command start)`. Nothing in the payload depends on the
@@ -583,7 +687,26 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let parsedTree := recov.apply remapped
     if parsedTree.steps.isEmpty then
       return ← finish { steps := [], allGoals := [] }
-    let taggedGoals ← collectTaggedGoals snap.infoTree
+    -- Which print of each goal the client will draw, by its own rule (see
+    -- `goalIndex` in proofToTree.ts): fewest metavariables, ties keeping the
+    -- first offered, and `allGoals` is offered first. Mirrored here so the
+    -- tagged rendering can match it exactly rather than nearly.
+    let wanted : Std.HashMap String String := Id.run do
+      let mut out : Std.HashMap String String := {}
+      let offer (out : Std.HashMap String String) (g : Paperproof.Services.GoalInfo) :=
+        let key := g.id.name.toString
+        match out[key]? with
+        | some cur =>
+          if ProofTree.mvarOccurrences g.type < ProofTree.mvarOccurrences cur then
+            out.insert key g.type
+          else out
+        | none => out.insert key g.type
+      for g in parsedTree.allGoals do out := offer out g
+      for st in parsedTree.steps do
+        out := offer out st.goalBefore
+        for g in st.goalsAfter ++ st.spawnedGoals do out := offer out g
+      return out
+    let taggedGoals ← collectTaggedGoals snap.infoTree wanted
     -- Comments live in the raw source, not the InfoTree; `snap.stx` is the
     -- whole command, so its range bounds the lex (same result as the CLI's
     -- `commandRange` walk).
@@ -727,13 +850,20 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
           tokens
           tacticIndent := tacticIndentAt fileMap c.tacticStart.line
         }
-    -- Per token, the innermost info node covering it — the same node the
-    -- editor's hover would land on — tagged onto the token's own source text
-    -- (see TacticTokenInfo). EVERY token is offered, not just the
-    -- identifier-ish ones: a tactic keyword resolves to its `TacticInfo`, whose
-    -- docstring is exactly the reference text you'd otherwise leave the widget
-    -- to read. Tokens with no info node (punctuation, most syntactic keywords)
-    -- simply find nothing and cost nothing.
+    -- Per token, what the EDITOR's hover would show there, decided the way
+    -- `handleHover` decides it. Two sources, mirrored exactly:
+    --
+    -- * the INFO path — the innermost eligible info node, tagged onto the
+    --   token's own source text (see TacticTokenInfo). A tactic keyword
+    --   resolves to its `TacticInfo`, whose docstring is the reference text.
+    -- * the PARSER-DOCSTRING path (`parserDocAt`) — what the buffer shows on
+    --   `by`, where the innermost info node is a bare atom carrying nothing.
+    --
+    -- The doc string wins in exactly `handleHover`'s two cases: the info
+    -- node's popup would be EMPTY (`popupNonempty`), or the docstring node's
+    -- range does not `includes` the info node's range — the second is why the
+    -- buffer shows `by`'s doc inside `have … := by`, whose innermost eligible
+    -- info node is the whole `have`. Everywhere else the ref ships as before.
     --
     -- ONE pass over every edit built above, rather than a copy inside each of
     -- the two loops that build them: an unparsed `calc` block wants exactly the
@@ -747,24 +877,45 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         if seenTok.contains (tb.byteIdx, tend.byteIdx) then
           continue
         seenTok := seenTok.insert (tb.byteIdx, tend.byteIdx)
-        if let some (rs, re, ictx) := hoverIdx.innermost tb.byteIdx then
-          -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates the
-          -- session-scoped id the client hands back to `infoToInteractive` when
-          -- the popup opens. Keyed by the info node's range, so a tactic's
-          -- keyword and its punctuation — which resolve to the same
-          -- `TacticInfo` — share one store entry.
-          let ref ← match refCache[(rs, re)]? with
-            | some r => pure r
-            | none   => do
-              let r ← Server.WithRpcRef.mk ictx
-              refCache := refCache.insert (rs, re) r
-              pure r
-          tokenInfos := tokenInfos.push {
-            start := t.start
-            code  := .tag
-              { info := ref, subexprPos := SubExpr.Pos.root }
-              (.text (String.Pos.Raw.extract src tb tend))
-          }
+        -- The buffer post-processes docstrings once, at hover time
+        -- (`rewriteExamples` turns ```` ```lean ```` example blocks into plain
+        -- ones); apply the same rewrite so the shipped text is byte-identical
+        -- to what the editor renders.
+        let stxDoc? ← (parserDocAt snap.env snap.stx tb).map
+          (·.map fun (d, r) => (FileWorker.Hover.rewriteExamples d, r))
+        match hoverIdx.innermost tb.byteIdx with
+        | some (rs, re, ictx) =>
+          let docWins ← match stxDoc? with
+            | none => pure false
+            | some (_, stxRange) =>
+              if !stxRange.includes ⟨⟨rs⟩, ⟨re⟩⟩ then pure true
+              else do pure !(← popupNonempty snap.env ictx.info)
+          if docWins then
+            tokenInfos := tokenInfos.push
+              { start := t.start, doc := stxDoc?.map (·.1) }
+          else
+            -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates
+            -- the session-scoped id the client hands back to
+            -- `infoToInteractive` when the popup opens. Keyed by the info
+            -- node's range, so a tactic's keyword and its punctuation — which
+            -- resolve to the same `TacticInfo` — share one store entry.
+            let ref ← match refCache[(rs, re)]? with
+              | some r => pure r
+              | none   => do
+                let r ← Server.WithRpcRef.mk ictx
+                refCache := refCache.insert (rs, re) r
+                pure r
+            tokenInfos := tokenInfos.push {
+              start := t.start
+              code  := some <| .tag
+                { info := ref, subexprPos := SubExpr.Pos.root }
+                (.text (String.Pos.Raw.extract src tb tend))
+            }
+        | none =>
+          -- No info node at all (an unparsed calc block's tokens, mostly).
+          -- The buffer would still show the parser docstring; so do we.
+          if let some (doc, _) := stxDoc? then
+            tokenInfos := tokenInfos.push { start := t.start, doc := some doc }
     let calcRelations ← collectCalcRelations snap.infoTree <|
       calcRelationGoals
         (parsedTree.steps.toArray.map fun s =>
@@ -797,10 +948,131 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       tokenInfos,
       deleteSlots := slots
       recovered   := recov.recovered
-      calcHoles   := collectCalcHoles fileMap snap.infoTree (extra := some snap.stx)
+      holes       := collectHoles fileMap snap.infoTree slots (extra := some snap.stx)
       calcChains
       calcRelations
     }
+
+/-- Case-insensitive prefix test, allocation-free — the client's own matcher
+(`matches` in completion.ts) lowercases both sides, so the server must agree or
+the client's re-filter silently drops what the server sent. Char-by-char rather
+than `toLower.isPrefixOf`: the scan below runs this against every eligible
+declaration in the environment, and two string allocations per candidate is
+the difference between a scan and a stall. -/
+partial def ciPrefix (pref s : String) : Bool :=
+  go ⟨0⟩ ⟨0⟩
+where
+  go (pi si : String.Pos.Raw) : Bool :=
+    if String.Pos.Raw.atEnd pref pi then true
+    else if String.Pos.Raw.atEnd s si then false
+    else if (String.Pos.Raw.get pref pi).toLower ==
+        (String.Pos.Raw.get s si).toLower then
+      go (String.Pos.Raw.next pref pi) (String.Pos.Raw.next s si)
+    else false
+
+/-- Last `.` in `s`, hand-rolled: `String.revPosOf` is deprecated and its
+replacement traffics in slice-pattern iterators for what is one loop here. -/
+def lastDotPos? (s : String) : Option String.Pos.Raw := Id.run do
+  let mut p : String.Pos.Raw := ⟨0⟩
+  let mut found : Option String.Pos.Raw := none
+  while !String.Pos.Raw.atEnd s p do
+    if String.Pos.Raw.get s p == '.' then found := some p
+    p := String.Pos.Raw.next s p
+  return found
+
+/-- Below this the answer set is noise (a 1-char prefix of Mathlib matched
+240,284 names when the full completion RPC was priced); the client holds the
+same gate so a short prefix never even makes the round trip. -/
+def minCompletionQuery : Nat := 3
+/-- Shortest-first, so the cap keeps the names a prefix most plausibly means —
+and for a prefix match the shortest candidate IS the exact one, the same rule
+the client's tactic tier already applies. -/
+def maxCompletionNames : Nat := 50
+
+/-- The scan itself, factored so the offline timing probe drives the REAL
+function (the `mkHoverIndex` precedent). See `completionNames` for the design;
+this is the part whose cost had to be measured.
+
+The query splits at its LAST dot: the fragment after it matches the
+declaration's last component, the part before must equal the parent namespace.
+This keeps the hot test on the last component for dotted and undotted queries
+alike — the first version tested a dotted query against `declName.toString`,
+and materialising 240k names tripled the scan (110ms → 345ms, measured). The
+loss versus a whole-string prefix is a query straddling a namespace boundary
+(`Nat.Pri` finds `Nat.Prime` but not `Nat.Prime.one_lt`); the buffer's
+subsequence match would find both, and typing the next dot recovers it.
+
+`isPrivateName`/`isInternalDetail` are skipped explicitly: core's eligibility
+filter deliberately admits private declarations (they complete inside their own
+module), but the label this scan returns is the FULL name, and
+`_private.Mathlib.….0.foo` is not text anyone can type into a tactic —
+measured, one leaked into the very first probe run. -/
+def scanNames (query : String) : MetaM (Array String) := do
+  let (nsQuery?, frag) :=
+    match lastDotPos? query with
+    | some p =>
+      (some (String.Pos.Raw.extract query ⟨0⟩ p),
+       String.Pos.Raw.extract query (String.Pos.Raw.next query p) query.rawEndPos)
+    | none => (none, query)
+  let acc ← IO.mkRef (#[] : Array String)
+  Server.Completion.forEligibleDeclsM fun declName _ => do
+    -- The prefix test comes FIRST: nearly every candidate fails on its first
+    -- character, and putting the name-hygiene checks ahead of it made every
+    -- scan pay them 240k times (measured, roughly 2× on the whole scan).
+    let .str parent s := declName | return ()
+    unless ciPrefix frag s do return ()
+    if isPrivateName declName || declName.isInternalDetail then return ()
+    if let some ns := nsQuery? then
+      let ps := parent.toString
+      -- Case-insensitive EQUALITY: same byte length plus a CI prefix. (toLower
+      -- preserves byte width over the ASCII that names are made of.)
+      unless ps.utf8ByteSize == ns.utf8ByteSize && ciPrefix ns ps do return ()
+    acc.modify (·.push declName.toString)
+  let names ← acc.get
+  let names := names.qsort fun a b =>
+    a.length < b.length || (a.length == b.length && a < b)
+  return names.take maxCompletionNames
+
+/-- `query`, not `prefix` — `prefix` is a Lean keyword, and the field name is
+the wire contract the client writes into the call. -/
+structure CompletionNamesParams where
+  pos   : Lsp.Position
+  query : String
+  deriving FromJson, ToJson
+
+/-- Global names matching a typed prefix — the ENVIRONMENT tier of the
+in-place editor's completion, the one pool the payload cannot carry.
+
+This deliberately does not reopen `idCompletion`, which was measured (3.8s
+cold / ~525ms warm / up to 240k items) and rejected. Every term of that
+rejection is answered structurally rather than hopefully: the scan touches
+NOTHING per-candidate but name strings — `forEligibleDeclsM`'s `kind`/`tags`
+are lazy `MetaM` thunks whose forcing (a `whnf` per declaration) is the bulk
+of `idCompletion`'s cost, and they are never forced here — the result is
+truncated server-side, and the client gates the call on prefix length and
+debounces it. The first call per file worker warms core's own
+`getEligibleHeaderDecls` mutex cache (the eligibility pass over the import
+header); after that a call is one linear pass of prefix tests.
+
+Matching: the declaration's LAST COMPONENT always (`le_tr` → `Nat.le_trans`,
+and for a root-namespace lemma like `sq_nonneg` the last component IS the full
+name), plus the full dotted string when the query itself is dotted
+(`Nat.le_tr`). The label returned is always the FULL name — the one string
+guaranteed to elaborate wherever the tactic is typed, no `open`s assumed.
+Case-insensitive prefix, not the buffer's subsequence match: it mirrors the
+client's own matcher, which re-filters as typing continues.
+
+The `ContextInfo` comes from any goal of the snapshot (the `tacticNames`
+precedent — the environment is per-file, not per-goal); a cursor outside a
+proof gets an empty answer, matching a widget that isn't showing a tree. -/
+@[server_rpc_method]
+def completionNames (params : CompletionNamesParams) :
+    RequestM (RequestTask (Array String)) := do
+  withWaitFindSnapAtPos params.pos fun snap => do
+    if params.query.length < minCompletionQuery then return #[]
+    let some (_, (ctx, _)) := (goalContexts snap.infoTree).toList.head?
+      | return #[]
+    ctx.runMetaM {} (scanNames params.query)
 
 /-- One line's worth of goal state, for the lens's inline annotations.
 

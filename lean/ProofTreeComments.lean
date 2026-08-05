@@ -257,6 +257,35 @@ has been bitten by that boundary before (the cursor accent's 0-of-86 result
 depends on it), so it is worth exactly one definition. -/
 def posLE (a b : Lsp.Position) : Bool := (compare a b).isLE
 
+/-- How many METAVARIABLES a printed goal type mentions.
+
+`?` opens a metavariable's printed form (`?m`, `?b`, `?m.1234`) and nothing
+else — but an identifier may END with one (`Option.get?`, `List.find?`), so the
+test is a `?` that both STARTS a token and is followed by an identifier
+character. Neither half alone is enough.
+
+Used to choose between several prints of the SAME goal. Paperproof prints a
+goal with its producing tactic's `mctxAfter`, so a metavariable assigned by a
+later tactic is still open in that print and shows as `?m` even in a finished
+proof; the step that CONSUMES the goal prints it again, later, resolved. Fewer
+occurrences means strictly more instantiated, so this is the whole rule.
+
+Counts the TYPE only, deliberately: hypotheses can carry metavariables too, but
+both sides of the wire must pick the same print or the tagged text stops
+matching the measured label, and the narrower rule is the easier one to keep in
+agreement. Mirrored by `mvarOccurrences` in proofToTree.ts — change one, change
+both. -/
+def mvarOccurrences (s : String) : Nat := Id.run do
+  let isIdent (c : Char) : Bool := c.isAlphanum || c == '_' || c == '\''
+  let mut n := 0
+  let mut prev : Char := ' '
+  let mut pending := false
+  for c in s.toList do
+    if pending && isIdent c then n := n + 1
+    pending := c == '?' && !isIdent prev
+    prev := c
+  return n
+
 /-- The syntax roots the three descents below share: every `TacticInfo`'s own
 `stx`, seeded with `extra`.
 
@@ -491,32 +520,62 @@ where
           out := out.push r
     return out
 
-/-- An unproved link of a `calc` chain: a `?_` standing where its justification
-goes, plus enough of the enclosing link to write a new one above it.
+/-- A hole the AUTHOR wrote — a `?_` or a named `?foo` — with the goal it
+stands for and enough of what encloses it to edit it in place.
 
-A calc chain is the one construct here whose work-in-progress state is a HOLE
-rather than a missing tactic — the chain must always end at the goal's RHS, so
-it cannot simply be left short. Written `_ = c := ?_`, the link's goal is
-genuinely pending (it arrives in `goalsAfter`, not `spawnedGoals`), and this is
-what lets the tree fill it exactly where it belongs instead of appending a line
-after the block.
+A hole is the work-in-progress state of an expression rather than of a tactic
+block: the surrounding term is already written and something is missing from
+the middle of it, so the honest edit REPLACES the hole where it sits instead of
+appending a line somewhere after. That is true of `refine ⟨?_, ?_⟩` exactly as
+it is of a `calc` link, which is why this is not calc-specific — though `calc`
+is the case that forced it, being the one construct that cannot simply be left
+short (the chain must reach the goal's RHS).
 
-The pairing is EXACT, not positional: a `?_` elaborates to a metavariable whose
-id is the very `GoalInfo.id` the wire carries, so `goalId` joins the two with no
-assumption about the order links are reported in. -/
-structure CalcHole where
-  /-- The `?_`'s metavariable = `GoalInfo.id` on the wire. -/
+The pairing is EXACT, not positional: a hole elaborates to a metavariable whose
+id is the very `GoalInfo.id` the wire carries, so `goalId` joins the two with
+no assumption about the order holes or links are reported in.
+
+Note the tree's OWN gestures never write a hole — a hole is an unsolved goal,
+i.e. an error, where the generated `by sorry` is a warning and a complete term
+(see `calcEdit`'s STUB). This structure is entirely about holes it finds. -/
+structure Hole where
+  /-- The hole's metavariable = `GoalInfo.id` on the wire. -/
   goalId : String
-  /-- The `?_` token itself: replacing exactly this fills the link in place. -/
+  /-- The hole token itself (`?_`, `?foo`): replacing exactly this fills it in
+  place. Filling one hole shifts a later one on the SAME line, which cannot
+  bite — every commit re-elaborates and the tree redraws from a fresh wire
+  before a second fill is possible. -/
   start : Lsp.Position
   stop  : Lsp.Position
-  /-- Start of the enclosing calc step (`_ = c := ?_`) — its line is where a
-  new link is inserted and its character is the column to indent it to. -/
-  linkStart : Lsp.Position
-  /-- Whether the enclosing step is the chain's FIRST link (`calcFirstStep`).
-  Nothing can be inserted above one: its LHS is the chain's real head rather
-  than a `_` that would absorb a new predecessor's RHS. -/
+  /-- Start of what encloses the hole: the calc step (`_ = c := ?_`) when
+  `inCalc`, else the enclosing `TacticSlot`. Its line is where a new calc link
+  is inserted and its character is the column to indent to. -/
+  ownerStart : Lsp.Position
+  /-- `inCalc` only: the enclosing step is the chain's FIRST link
+  (`calcFirstStep`). Nothing can be inserted above one — its LHS is the chain's
+  real head rather than a `_` that would absorb a new predecessor's RHS. -/
   first : Bool
+  /-- The hole sits inside a `calc` link. Only then is growing a link ABOVE it
+  meaningful — the hole's goal restates from the new RHS. -/
+  inCalc : Bool
+  /-- The hole sits inside a tactic BLOCK, so its goal could equally be proved
+  by a sibling tactic written after the enclosing one.
+
+  This is what decides whether filling in place is the right offer. Where a
+  sibling CAN be written it is the better edit and the tree should keep making
+  it: `refine ⟨?_, ?_⟩` followed by `· exact h` is what one writes by hand,
+  where filling in place gives `refine ⟨by exact h, ?_⟩` — legal, and worse
+  style. Where no sibling can be written the question does not arise, and those
+  are exactly the two cases in-place editing exists for: a `calc` link, which
+  must reach the goal's RHS and so cannot be appended to, and a hole in a
+  TERM-mode proof, which has no tactic block to append to at all. -/
+  inBlock : Bool
+  /-- A NAMED hole may be written more than once — `?foo` reuses the mvar it
+  already introduced, so every occurrence shares one `goalId` and one goal.
+  All but the source-earliest are marked here, because a client keying holes by
+  goal would otherwise silently keep whichever came last, and the fill belongs
+  at the first. -/
+  dup : Bool := false
   deriving ToJson, FromJson
 
 /-- Where a chain that stops SHORT of its goal continues.
@@ -707,23 +766,27 @@ def collectCalcChains (fileMap : FileMap) (tree : Elab.InfoTree)
       }
     return out
 
-/-- Every `?_` inside a `calc` link, paired with the goal it stands for.
+/-- Every hole the author wrote, paired with the goal it stands for.
 
 Two independent walks, because neither half knows the other's coordinates. The
 info tree gives goal → hole SPAN (a `Term.syntheticHole` whose elaborated `expr`
 is the metavariable); the SYNTAX gives the link structure, which no info node
 records. Note the calc `_` placeholder is a `Term.hole`, not a syntheticHole,
-so filtering on the kind excludes it — it is not a goal either.
+so filtering on the kind excludes it — it is not a goal either. `?_` and a
+named `?foo` ARE the same kind, so both are collected by the one test.
 
-A `?_` that is not inside a calc link is deliberately DROPPED: `refine ⟨?_, ?_⟩`
-holes are better served by the existing `· ` bullet insertion, which is what
-one would write there by hand. -/
-def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree)
-    (extra : Option Syntax := none) : Array CalcHole := Id.run do
+Every hole is reported, whether or not a `calc` link contains it — it used to
+be only the calc ones, which left the client unable to say anything at all
+about a `refine` hole. What the client does with each is decided by `inCalc`
+and `inBlock` rather than by what is reported: a hole with a tactic block
+around it keeps the bullet insertion that was always right for it, and only
+the ones that cannot take a sibling are filled in place. -/
+def collectHoles (fileMap : FileMap) (tree : Elab.InfoTree)
+    (slots : Array TacticSlot) (extra : Option Syntax := none) :
+    Array Hole := Id.run do
     let links := (calcBlocks fileMap tree extra).flatMap (·.links)
-    if links.isEmpty then return #[]
 
-    let mut out : Array CalcHole := #[]
+    let mut out : Array Hole := #[]
     let holes := tree.foldInfo (init := #[]) fun _ info acc =>
       match info with
       | .ofTermInfo ti =>
@@ -735,6 +798,8 @@ def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree)
         | _, _ => acc
       | _ => acc
     for (goalId, r) in holes do
+      let start := fileMap.utf8PosToLspPos r.start
+      let stop := fileMap.utf8PosToLspPos r.stop
       -- The SMALLEST containing link, so a nested calc's links can't claim a
       -- hole belonging to an inner one.
       let mut best : Option (Lean.Syntax.Range × Bool) := none
@@ -745,15 +810,50 @@ def collectCalcHoles (fileMap : FileMap) (tree : Elab.InfoTree)
             if lr.stop.byteIdx - lr.start.byteIdx < br.stop.byteIdx - br.start.byteIdx then
               best := some l
           | none => best := some l
-      if let some (lr, isFirst) := best then
+      match best with
+      | some (lr, isFirst) =>
         out := out.push {
-          goalId := goalId
-          start := fileMap.utf8PosToLspPos r.start
-          stop := fileMap.utf8PosToLspPos r.stop
-          linkStart := fileMap.utf8PosToLspPos lr.start
+          goalId, start, stop
+          ownerStart := fileMap.utf8PosToLspPos lr.start
           first := isFirst
+          inCalc := true
+          -- A calc link is inside the calc TACTIC, but a link is not a slot
+          -- and nothing may be appended between links; it is exactly the case
+          -- in-place filling was built for.
+          inBlock := false
         }
-    return out
+      | none =>
+        -- Outside any chain the owner is the enclosing tactic AS WRITTEN, so
+        -- the column reported is the tactic's own — the same fact `TacticSlot`
+        -- exists to carry, rather than a second walk that would answer it
+        -- differently. Innermost wins, for the same reason as links. A hole in
+        -- a TERM-mode proof is inside no slot at all; it owns itself, which
+        -- costs nothing because filling a hole replaces a range and inserts no
+        -- line.
+        let mut owner : Option TacticSlot := none
+        for sl in slots do
+          if posLE sl.start start && posLE stop sl.stop then
+            if owner.all (fun b => posLE b.start sl.start) then owner := some sl
+        out := out.push {
+          goalId, start, stop
+          ownerStart := (owner.map (·.start)).getD start
+          first := false
+          inCalc := false
+          inBlock := owner.isSome
+        }
+    -- One goal, several source spans: a named `?foo` written twice. Keep the
+    -- source-earliest unmarked and flag the rest, so a goal-keyed client can
+    -- take the first without knowing the reporting order.
+    let mut seen : Std.HashSet String := {}
+    let sorted := out.qsort fun a b => !posLE b.start a.start
+    let mut marked : Array Hole := #[]
+    for h in sorted do
+      if seen.contains h.goalId then
+        marked := marked.push { h with dup := true }
+      else
+        seen := seen.insert h.goalId
+        marked := marked.push h
+    return marked
 
 /-! ## Which relations a `calc` chain on a goal could be built out of -/
 

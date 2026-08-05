@@ -1,6 +1,6 @@
 import type {
   CalcChain,
-  CalcHole,
+  Hole,
   CalcRelOption,
   ProofStepPosition,
 } from "./paperproof";
@@ -77,8 +77,9 @@ source among the producing tactic's already-written branches, so a new bullet
 lands below its finished siblings rather than between the split and them. */
 export interface AddSpec {
   // seq: plain next line; bullet: `· `; case: `| name => ` (with-block);
-  // hole/calc-link/calc-append/calc-first: the `calc` forms, which do NOT
-  // insert a line at `after` — they act on `hole` or `chain` instead (below).
+  // hole/calc-link/calc-append/calc-first do NOT insert a line at `after` —
+  // they act on `hole` or `chain` instead (below). Of those, only `hole` is
+  // general; the other three are `calc` forms.
   kind:
     | "seq"
     | "bullet"
@@ -87,19 +88,23 @@ export interface AddSpec {
     | "calc-link"
     | "calc-append"
     | "calc-first";
-  /** `calc` only. `hole` REPLACES the `?_` with `by <tactic>`, filling the
-  link exactly where it sits; `calc-link` INSERTS a whole new link on the
-  hole's line, pushing it down.
+  /** `hole` REPLACES the hole token with `by <tactic>`, filling it exactly
+  where it sits; `calc-link` INSERTS a whole new link on the hole's line,
+  pushing it down.
    *
-   * Both act on a `?_` the AUTHOR wrote: the tree's own gestures no longer
-   * write holes (see calcEdit's STUB — a hole is an unsolved goal, i.e. an
-   * error that breaks the file while the chain is unfinished, where a stub is
-   * a warning and a complete term). A hand-written hole is still a perfectly
-   * good work-in-progress state, and these two are what the tree offers on
-   * one: fill it, or grow the chain above it. Inserting a link above is
-   * always valid — the new link takes the previous RHS as its `_`, and the
-   * hole's goal simply restates from the new RHS. */
-  hole?: CalcHole;
+   * Both act on a hole the AUTHOR wrote: the tree's own gestures never write
+   * one (see calcEdit's STUB — a hole is an unsolved goal, i.e. an error that
+   * breaks the file while the proof is unfinished, where a stub is a warning
+   * and a complete term). A hand-written hole is still a perfectly good
+   * work-in-progress state, and filling it in place is the honest edit
+   * wherever it appears: the term around it is written and what is missing is
+   * in the middle of it.
+   *
+   * `calc-link` is the narrower one, offered only when `hole.inCalc`. Growing
+   * a chain upward is always valid — the new link takes the previous RHS as
+   * its `_` and the hole's goal restates from the new RHS — but that argument
+   * is about chains, and nothing analogous holds above a `refine` hole. */
+  hole?: Hole;
   /** `calc-append` only: the chain to grow, and the relation the new last link
    * chains (read off the residue goal, which is what the chain still owes).
    *

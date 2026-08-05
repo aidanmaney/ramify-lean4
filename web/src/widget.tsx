@@ -399,7 +399,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       // Plain data (positions + mvarIds), so it belongs in the stable half and
       // rides the signature: a hole filled or a link inserted moves the ranges,
       // and the chips must not keep pointing at where the `?_` used to be.
-      calcHoles: resolved.calcHoles,
+      holes: resolved.holes,
       calcChains: resolved.calcChains,
       // The supplemental parser's sidecar — plain data keyed on positions, and
       // it must ride the signature: whether a step is recovered changes how
@@ -532,6 +532,22 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // character. Doing every goal eagerly costs more per response than the lazy
   // form did for one goal, and a response is once per EDIT (debounced, and
   // server-cached), which is the cheaper side to pay on.
+  // The environment tier of the in-place editor's completion (see the view's
+  // `fetchGlobalNames` prop and ProofTree.completionNames). The `pos` here
+  // only picks the file-worker snapshot whose environment answers — any
+  // position in the file serves, so the cursor's is fine — and the view owns
+  // every gate (prefix length, debounce, cache, stale guard). Memoised on the
+  // session and position identity like the getProofTree call above.
+  const fetchGlobalNames = useMemo(
+    () => (query: string) =>
+      rs.call<{ pos: typeof pos; query: string }, string[]>(
+        "ProofTree.completionNames",
+        { pos, query },
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rs, pos.uri, pos.line, pos.character],
+  );
+
   const getGoalTerms = useMemo(() => {
     const byId = new Map<string, string[]>();
     for (const { goalId, goal } of interactive?.taggedGoals ?? []) {
@@ -606,12 +622,10 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const infoAt = useMemo(
     () =>
       new Map(
-        (interactive?.tokenInfos ?? []).map(
-          (i): [string, TacticTokenInfo["code"]] => [
-            `${i.start.line}:${i.start.character}`,
-            i.code,
-          ],
-        ),
+        (interactive?.tokenInfos ?? []).map((i): [string, TacticTokenInfo] => [
+          `${i.start.line}:${i.start.character}`,
+          i,
+        ]),
       ),
     [interactive],
   );
@@ -931,6 +945,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         getTacticEdit={getTacticEdit}
         onEditTactic={editTactic}
         getGoalTerms={getGoalTerms}
+        fetchGlobalNames={fetchGlobalNames}
         tokenColors={tokenColors}
         outline={outlineOnly}
         abbrev={abbrev}

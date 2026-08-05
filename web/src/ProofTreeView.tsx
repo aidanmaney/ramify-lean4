@@ -52,11 +52,14 @@ import type {
 import { stepGoalsAfter } from "./paperproof";
 import { PLACEHOLDER, calcOpenSlots, calcOpenText } from "./calcEdit";
 import {
+  GLOBAL_MAX,
+  MIN_GLOBAL_PREFIX,
   completionsAt,
+  identPrefixAt,
   type CompletionItem,
   type CompletionPools,
 } from "./completion";
-import { layoutKeys } from "./layoutKey";
+import { layoutKeys, remapIds } from "./layoutKey";
 import type {
   AddResult,
   AddSpec,
@@ -73,6 +76,7 @@ import { attachDiagnostics, type TreeDiagnostic } from "./diagnostics";
 import {
   positionContains,
   proofToTree,
+  tacticId,
   rootIds,
   tacticNodeAt,
   tacticTargets,
@@ -86,6 +90,7 @@ import {
   cutId,
   pathIds,
   pruneCuts,
+  remapCut,
   resolveCut,
   stepElidable,
 } from "./elide";
@@ -246,6 +251,22 @@ const CHIP_H = CHIP_LANE_H;
 const CHIP_GAP = 6;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
+// The fill-in-place chip names the hole rather than reading `+`. "Add a tactic
+// for this goal" and "fill the hole in this term" are different gestures, and
+// the lane is the only place that difference shows without hovering. Its width
+// is MEASURED like the picker's chips — `?_` does not fit the `+` chip's 20px —
+// and only the FIRST chip's width varies, so the row's own origin is unchanged
+// and the chips after it shift right by whatever this returns.
+const HOLE_GLYPH = "?_";
+const addChipGlyph = (spec: AddSpec | undefined) =>
+  spec?.kind === "hole" ? HOLE_GLYPH : "+";
+const addChipWidth = (spec: AddSpec | undefined) =>
+  spec?.kind === "hole"
+    ? Math.max(
+        CHIP_W_ADD,
+        measureText(HOLE_GLYPH, CHIP_FONT_PX) + 2 * CHIP_PAD_X,
+      )
+    : CHIP_W_ADD;
 const CHIP_W_STEP = 30;
 // What a chain gesture's overlay asks for: the new link's RIGHT-HAND SIDE,
 // and nothing else — the relation is already picked and the justification is
@@ -286,6 +307,37 @@ const clampScroll = (v: number, max: number) => Math.max(0, Math.min(max, v));
 // finished. Short enough to keep up with held-down cursor keys, long enough to
 // still read as movement rather than as a cut.
 const FOLLOW_MS = 130;
+// Trailing debounce on the global-name completion fetch: long enough that
+// mid-word typing coalesces, short enough that the tier arrives while the
+// list is still being read.
+const GLOBAL_DEBOUNCE_MS = 160;
+// The environment tier's client-side stores. Module scope, not refs (see the
+// overlay-scoped clear in the component for why), and per-overlay in
+// lifetime: `globalNameCache` maps a fetched query to its names,
+// `lastCompletionRefresh` is what a resolving fetch REPLAYS — the completion
+// list is event-driven state, so an async arrival re-runs the last refresh
+// rather than poking the list directly.
+// The environment tier's query cache: fetched query → names. MODULE scope —
+// one overlay is ever open, and the overlay-scoped clear in the component is
+// the whole invalidation story. Only `.set`/`.clear` ever touch it (the React
+// compiler accepts interior mutation where it rejects reassignment).
+const globalNameCache = new Map<string, string[]>();
+
+/** The cached answer usable for `ident`, if any: the LONGEST fetched query
+ * that prefixes it — but a truncated answer (the server cap was hit) only
+ * serves its exact query, since narrowing it locally could have lost names
+ * the longer prefix would match. */
+function cachedGlobals(ident: string): string[] | null {
+  let best: string | null = null;
+  for (const [q, names] of globalNameCache)
+    if (
+      ident.startsWith(q) &&
+      (names.length < GLOBAL_MAX || q === ident) &&
+      (best === null || q.length > best.length)
+    )
+      best = q;
+  return best !== null ? globalNameCache.get(best)! : null;
+}
 
 /** Base style for a text layer painted in register with the in-place editor's
 textarea — the syntax-colouring mirror behind it and the pending-abbreviation
@@ -625,6 +677,15 @@ export interface ProofTreeViewProps {
    */
   getGoalTerms?: (goalId: string) => string[];
   /**
+   * Widget-only: global names matching a typed prefix, over the
+   * `completionNames` RPC — the environment tier of the completion list, the
+   * one pool the payload cannot carry (240k eligible names). The view owns the
+   * discipline that makes an RPC tier acceptable where full `idCompletion` was
+   * rejected: prefix-gated (`MIN_GLOBAL_PREFIX`), debounced, cached per query,
+   * and applied only while its query still prefixes what is being typed.
+   */
+  fetchGlobalNames?: (query: string) => Promise<string[]>;
+  /**
    * Widget-only: the EDITOR theme's syntax colours, keyed by LSP semantic token
    * type (`{keyword: "#C586C0", …}`). Overrides the built-in Light+/Dark+
    * palette so the tree's tactic colouring matches the buffer. A webview cannot
@@ -791,6 +852,7 @@ export default function ProofTreeView({
   getTacticEdit,
   onEditTactic,
   getGoalTerms,
+  fetchGlobalNames,
   tokenColors,
   outline = false,
   onPopoutEdit,
@@ -1641,9 +1703,14 @@ export default function ProofTreeView({
   );
   const [prevProof, setPrevProof] = useState(proofKey);
   const [prevShape, setPrevShape] = useState(shapeKey);
+  // The tree the current view state was keyed against. Held as STATE, not a
+  // ref, because the branches below run during render (the derived-state
+  // pattern) and a ref must not be read there.
+  const [prevBase, setPrevBase] = useState(baseNodes);
   if (proofKey !== prevProof) {
     setPrevProof(proofKey);
     setPrevShape(shapeKey);
+    setPrevBase(baseNodes);
     setCollapsed(new Set());
     setZoom(1);
     setSeq({ mode: "off" });
@@ -1663,29 +1730,59 @@ export default function ProofTreeView({
     setPick({});
   } else if (shapeKey !== prevShape) {
     setPrevShape(shapeKey);
-    // Same proof, edited. Keep everything that still refers to a live node and
-    // drop only what doesn't: a collapsed id that vanished would linger
-    // forever, and a focus root or sequence endpoint that vanished would scope
-    // the view to nothing.
+    setPrevBase(baseNodes);
+    // Same proof, edited. Every id held in view state was minted by the PREVIOUS
+    // elaboration, and re-elaboration renumbers metavariables — so before asking
+    // what is still live, translate ids from the old tree to the new one by
+    // TREE POSITION (`remapIds`). Without this the feature below is a demolition
+    // crew: editing a theorem EARLIER in the file renumbers every mvarId in this
+    // one, not one stored id resolves, and the fold set, the focus, the sequence
+    // and every elide cut are silently emptied although nothing here moved.
+    //
+    // `shapeKey` stays keyed on mvarIds deliberately. It is a change DETECTOR,
+    // not an identity: it needs to fire whenever the payload's ids move, which
+    // is exactly when this remap has work to do. The identity is `remapIds`.
+    const remap = remapIds(prevBase, baseNodes);
+    const to = (id: string) => remap.get(id) ?? id;
+    // Then drop what genuinely vanished: a collapsed id with nothing behind it
+    // would linger forever, and a focus root or sequence endpoint that went
+    // would scope the view to nothing.
     const live = new Set<string>();
     for (const st of proof.steps) {
       live.add(st.goalBefore.id);
-      live.add(`tactic:${st.goalBefore.id}`);
+      live.add(tacticId(st.goalBefore.id));
       for (const g of stepGoalsAfter(st)) live.add(g.id);
     }
     setCollapsed((prev) => {
-      const next = new Set([...prev].filter((id) => live.has(id)));
-      return next.size === prev.size ? prev : next;
+      const next = new Set([...prev].map(to).filter((id) => live.has(id)));
+      return next.size === prev.size && [...prev].every((id) => next.has(id))
+        ? prev
+        : next;
     });
-    if (focusId && !live.has(focusId)) setFocusId(null);
-    if (
-      (seq.mode === "pick" && seq.from && !live.has(seq.from)) ||
-      (seq.mode === "view" && (!live.has(seq.from) || !live.has(seq.to)))
-    )
-      setSeq({ mode: "off" });
-    // Drop any elide-run whose endpoints vanished (or no longer form a path)
-    // under the edit — keyed on the base tree, same identity check as above.
-    setElideCuts((cs) => pruneCuts(baseNodes, cs));
+    if (focusId) {
+      const moved = to(focusId);
+      if (!live.has(moved)) setFocusId(null);
+      else if (moved !== focusId) setFocusId(moved);
+    }
+    if (seq.mode === "pick" && seq.from) {
+      const moved = to(seq.from);
+      if (!live.has(moved)) setSeq({ mode: "off" });
+      else if (moved !== seq.from) setSeq({ ...seq, from: moved });
+    } else if (seq.mode === "view") {
+      const from = to(seq.from);
+      const dest = to(seq.to);
+      if (!live.has(from) || !live.has(dest)) setSeq({ mode: "off" });
+      else if (from !== seq.from || dest !== seq.to)
+        setSeq({ ...seq, from, to: dest });
+    }
+    // Cuts key on ORIGINAL node ids, so they need the same translation before
+    // the prune can tell "this node is gone" from "this node was renumbered".
+    setElideCuts((cs) =>
+      pruneCuts(
+        baseNodes,
+        cs.map((c) => remapCut(c, to)),
+      ),
+    );
     // The source moved under the edit box (usually OUR own committed edit
     // coming back), so its ranges are stale either way. The relation picker
     // holds ranges too, and the edit that just landed is exactly what
@@ -2106,12 +2203,82 @@ export default function ProofTreeView({
     };
   };
 
+  // One overlay, one cache: a different node (or the overlay closing) starts
+  // clean, which is also the invalidation story — the environment cannot
+  // change under a draft without the overlay closing first. The stores are
+  // MODULE-scope (below the component), not refs: `react-hooks/refs` treats a
+  // ref read inside a JSX-called function as render-phase and the taint
+  // spreads through every caller — the recorded abbreviation lesson, re-hit
+  // here on `refreshCompletion`'s call sites.
+  const editedNodeId = editing?.id ?? null;
+  useEffect(() => {
+    globalNameCache.clear();
+  }, [editedNodeId]);
+  // The environment tier's fetch pipeline runs through STATE, not refs — the
+  // recorded abbreviation lesson, re-hit here: a ref read inside a JSX-called
+  // function is render-phase to the React compiler and the taint spreads to
+  // every caller. `globalWant` is the query the handlers ask for; its effect
+  // owns the debounce timer (cleanup IS the debounce) and the fetch; a
+  // resolution lands in `globalArrival`, whose effect replays the refresh.
+  const [globalWant, setGlobalWant] = useState<string | null>(null);
+  const [globalArrival, setGlobalArrival] = useState<{
+    query: string;
+    names: string[];
+  } | null>(null);
+  useEffect(() => {
+    if (!globalWant || !fetchGlobalNames) return;
+    const t = window.setTimeout(() => {
+      fetchGlobalNames(globalWant)
+        .then((names) => {
+          globalNameCache.set(globalWant, names);
+          setGlobalArrival({ query: globalWant, names });
+        })
+        .catch(() => {
+          // A dropped session or cancelled request: the local tiers are
+          // already on screen, so there is nothing to repair.
+        });
+    }, GLOBAL_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [globalWant, fetchGlobalNames]);
+
   /** Recompute the list from the textarea's current value and caret. */
   const refreshCompletion = (nodeId: string, value: string, caret: number) => {
-    const pools = candidatesFor(nodeId);
+    const ident = identPrefixAt(value, caret);
+    let globals: string[] | undefined;
+    if (fetchGlobalNames && ident.length >= MIN_GLOBAL_PREFIX) {
+      const hit = cachedGlobals(ident);
+      if (hit) globals = hit;
+      // The scan is ~100-200ms on a Mathlib environment — real but affordable
+      // once per settled prefix (the want-effect's debounce), not per
+      // keystroke. On a hit, no fetch: the cached answer narrows locally.
+      setGlobalWant(hit ? null : ident);
+    } else {
+      setGlobalWant(null);
+    }
+    const pools = { ...candidatesFor(nodeId), globals };
     const items = completionsAt(value, caret, pools);
     setCompletion(items.length > 0 ? { items, index: 0 } : null);
   };
+
+  // The replay: a resolved fetch re-runs the refresh against the textarea's
+  // LIVE value and caret — the DOM walk is the established route to the
+  // overlay's textarea (see the abbreviation emit) — with the stale guard: a
+  // response whose query no longer prefixes what is typed changes nothing.
+  useEffect(() => {
+    if (!globalArrival) return;
+    const cur = editingRef.current;
+    if (!cur) return;
+    const ta = document.querySelector<HTMLTextAreaElement>(
+      "[data-ptw-edit] textarea",
+    );
+    if (!ta) return;
+    const caret = ta.selectionStart;
+    if (!identPrefixAt(ta.value, caret).startsWith(globalArrival.query)) return;
+    refreshCompletion(cur.id, ta.value, caret);
+    // refreshCompletion is a fresh closure every render; keying on it would
+    // re-run this per render. The arrival object is the one real trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [globalArrival]);
 
   /** Splice the chosen item in, replacing the span it was matched against.
    * Reads `editing` rather than `editingRef`: this only ever runs from the
@@ -4101,17 +4268,17 @@ export default function ProofTreeView({
                         {node.data.addSpec && (
                           <>
                             <FrontierChip
-                              glyph="+"
+                              glyph={addChipGlyph(node.data.addSpec)}
                               title={
                                 node.data.addSpec.kind === "hole"
-                                  ? "fill this calc step in place"
+                                  ? "fill this hole in place — what you type replaces the `?_` where it sits"
                                   : "add a tactic for this goal"
                               }
                               // Centred on the incoming lane; the row runs right
                               // from there, each chip starting past the previous
                               // one's width plus CHIP_GAP.
                               x={-CHIP_W_ADD / 2}
-                              width={CHIP_W_ADD}
+                              width={addChipWidth(node.data.addSpec)}
                               color={NODE_STYLES.tactic.stroke}
                               onPick={() => {
                                 const spec = node.data.addSpec!;
@@ -4127,7 +4294,11 @@ export default function ProofTreeView({
                             <FrontierChip
                               glyph="sorry"
                               title="stub this goal with `sorry`"
-                              x={-CHIP_W_ADD / 2 + CHIP_W_ADD + CHIP_GAP}
+                              x={
+                                -CHIP_W_ADD / 2 +
+                                addChipWidth(node.data.addSpec) +
+                                CHIP_GAP
+                              }
                               width={CHIP_W_SORRY}
                               fontSize={9}
                               color={SORRY_FILL}
@@ -4159,7 +4330,7 @@ export default function ProofTreeView({
                             }
                             x={
                               -CHIP_W_ADD / 2 +
-                              CHIP_W_ADD +
+                              addChipWidth(node.data.addSpec) +
                               CHIP_GAP +
                               CHIP_W_SORRY +
                               CHIP_GAP
@@ -4208,7 +4379,7 @@ export default function ProofTreeView({
                             x={
                               node.data.addSpec
                                 ? -CHIP_W_ADD / 2 +
-                                  CHIP_W_ADD +
+                                  addChipWidth(node.data.addSpec) +
                                   CHIP_GAP +
                                   CHIP_W_SORRY +
                                   CHIP_GAP

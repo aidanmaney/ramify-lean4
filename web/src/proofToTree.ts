@@ -1,6 +1,6 @@
 import type {
   CalcChain,
-  CalcHole,
+  Hole,
   CalcRelOption,
   CalcRelations,
   GoalInfo,
@@ -127,7 +127,8 @@ function chainLhsElisions(
       out.set(p.id, p.lhs);
   return out;
 }
-const tacticId = (goalId: string): string => `${TACTIC_PREFIX}${goalId}`;
+export const tacticId = (goalId: string): string =>
+  `${TACTIC_PREFIX}${goalId}`;
 
 /** Prefix on every goal-node label (the infoview's own goal convention).
 The tagged renderer strips it before matching interactive prints. */
@@ -267,16 +268,59 @@ function contextFor(
   }));
 }
 
+const IDENT_CH = /[A-Za-z0-9_']/;
+
+/** How many METAVARIABLES a printed goal type mentions.
+ *
+ * `?` opens a metavariable's printed form (`?m`, `?b`, `?m.1234`) and nothing
+ * else — but an identifier may END with one (`Option.get?`, `List.find?`), so
+ * the test is a `?` that both STARTS a token and is followed by an identifier
+ * character. Neither half alone is enough.
+ *
+ * Mirrors `mvarOccurrences` in ProofTreeComments.lean, which picks between
+ * TAGGED prints of the same goal exactly as this picks between plain ones —
+ * change one, change both. If they disagree the tagged text stops matching the
+ * measured label and the goal silently drops to plain SVG, losing its type
+ * tooltips in precisely the place they explain the most. */
+export function mvarOccurrences(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "?") continue;
+    if (i > 0 && IDENT_CH.test(s[i - 1])) continue;
+    if (i + 1 < s.length && IDENT_CH.test(s[i + 1])) n++;
+  }
+  return n;
+}
+
 // All goals referenced by a proof, indexed by mvarId. `allGoals` is
 // authoritative, but we also fold in goals embedded in steps so a tree can
 // never reference an id we don't have.
+//
+// A goal is printed MORE THAN ONCE and the prints can disagree: Paperproof
+// prints each with the producing tactic's `mctxAfter`, so a metavariable that
+// a later tactic assigns is still open there and shows as `?m` even in a
+// finished proof — `apply Nat.le_trans` puts `⊢ a ≤ ?m` in `allGoals` while
+// the `exact h1` that consumes it prints `⊢ a ≤ 5`. Fewer metavariables means
+// strictly more instantiated, so the most-resolved print wins.
+//
+// Ties keep the FIRST offered, which is `allGoals` — so this changes nothing
+// except where a metavariable is actually eliminated. Measured over the corpus
+// plus proofs/mvars.lean: of 179 goals printed both ways only 2 differ at all,
+// and both differences are exactly a resolved metavariable.
 function goalIndex(proof: Proof): Map<string, GoalInfo> {
   const goals = new Map<string, GoalInfo>();
-  for (const g of proof.allGoals) goals.set(g.id, g);
-  for (const step of proof.steps) {
-    for (const g of [step.goalBefore, ...stepGoalsAfter(step)]) {
-      if (!goals.has(g.id)) goals.set(g.id, g);
+  const score = new Map<string, number>();
+  const offer = (g: GoalInfo) => {
+    const s = mvarOccurrences(g.type);
+    const cur = score.get(g.id);
+    if (cur === undefined || s < cur) {
+      goals.set(g.id, g);
+      score.set(g.id, s);
     }
+  };
+  for (const g of proof.allGoals) offer(g);
+  for (const step of proof.steps) {
+    for (const g of [step.goalBefore, ...stepGoalsAfter(step)]) offer(g);
   }
   return goals;
 }
@@ -817,12 +861,21 @@ export function proofToTree(
   // SEVERAL pending siblings, each (+) inserts at the same anchor, so adding
   // them out of source order attaches text to the wrong goal — Lean's bullets
   // bind by position, and only `case`-named insertion could do better.
-  // Unproved `calc` links, keyed by the goal each `?_` stands for. The Lean
-  // side pairs them by metavariable, so this join is exact rather than
-  // positional (see paperproof.ts `CalcHole`).
-  const holeByGoal = new Map<string, CalcHole>(
-    (proof.calcHoles ?? []).map((h) => [h.goalId, h]),
+  // Holes the author wrote, keyed by the goal each stands for. The Lean side
+  // pairs them by metavariable, so this join is exact rather than positional
+  // (see paperproof.ts `Hole`). `dup` entries are dropped rather than
+  // overwriting: a named `?foo` written twice is ONE goal at two spans, and the
+  // fill belongs at the first — which a plain Map would silently lose.
+  const holeByGoal = new Map<string, Hole>(
+    (proof.holes ?? []).filter((h) => !h.dup).map((h) => [h.goalId, h]),
   );
+  // Holes the tree fills IN PLACE — the ones with nowhere to append a sibling
+  // (see `addSpecFor`). Only these displace the ordinary chips; a hole inside a
+  // tactic block keeps the `+`/`sorry`/`calc` row it always had.
+  const fillableHole = (goalId: string) => {
+    const h = holeByGoal.get(goalId);
+    return !!h && !h.inBlock;
+  };
   // The `calc` blocks themselves, keyed the way a step reaches us: a calc
   // step's `position.start` IS its tactic's start (both come from the same
   // syntax node), so the residue goal's producer looks its chain up directly.
@@ -1079,7 +1132,7 @@ export function proofToTree(
       );
       // Never above the chain's FIRST link, whose LHS is the chain's head
       // rather than a `_` that would absorb a new predecessor's RHS — the
-      // rule `CalcHole.first` states. Which link is first is read off the
+      // rule `Hole.first` states. Which link is first is read off the
       // consuming steps' own positions, since the wire's link order is not
       // source order.
       const first = firstStubLine(prod);
@@ -1093,8 +1146,13 @@ export function proofToTree(
           goalId,
           start: stub.position.start,
           stop: stub.position.stop,
-          linkStart: { line: stub.position.start.line, character: chain.indent },
+          ownerStart: {
+            line: stub.position.start.line,
+            character: chain.indent,
+          },
           first: false,
+          inCalc: true,
+          inBlock: false,
         },
         rel: rels?.[0].rel ?? own,
         rels,
@@ -1104,7 +1162,11 @@ export function proofToTree(
       };
     }
     const hole = holeByGoal.get(goalId);
-    if (hole) {
+    // Growing a link ABOVE a hole only means anything inside a chain: it works
+    // because the hole's goal restates from the new link's RHS. A `refine`
+    // hole has no such structure above it, so it gets the fill-in-place chip
+    // (`addSpecFor`) and nothing here.
+    if (hole?.inCalc) {
       if (hole.first) return undefined;
       // The link BELOW keeps its own relation, so a new one above it must
       // compose with THAT back to it — hence `want`.
@@ -1115,7 +1177,7 @@ export function proofToTree(
         hole,
         rel: rels?.[0].rel ?? own,
         rels,
-        indent: hole.linkStart.character,
+        indent: hole.ownerStart.character,
         producer: prod.position,
         after: prod.position,
       };
@@ -1181,15 +1243,21 @@ export function proofToTree(
   }
 
   function addSpecFor(goalId: string, prod: ProofStep): AddSpec {
-    // A pending goal that is a calc HOLE is filled where it sits: the generic
-    // line insertion below would anchor on the last step written INSIDE the
-    // chain and drop a tactic into the middle of the block, breaking it.
+    // A pending goal that is a HOLE no sibling can serve is filled where it
+    // sits. `inBlock` is the whole test, and it is narrower than "is a hole"
+    // on purpose: where a sibling tactic CAN be written it is the better edit,
+    // because `refine ⟨?_, ?_⟩` + `· exact h` is what one writes by hand and
+    // filling in place would give `refine ⟨by exact h, ?_⟩` — legal, worse.
+    // The two cases left are the ones with nowhere to append: a `calc` link
+    // (whose generic anchor is the last step INSIDE the chain, so the new
+    // tactic lands mid-block and breaks it) and a hole in a term-mode proof
+    // (no tactic block at all).
     const hole = holeByGoal.get(goalId);
-    if (hole)
+    if (hole && !hole.inBlock)
       return {
         kind: "hole",
         hole,
-        indent: hole.linkStart.character,
+        indent: hole.ownerStart.character,
         producer: prod.position,
         after: prod.position,
       };
@@ -1399,7 +1467,11 @@ export function proofToTree(
       // inside a chain the chain gesture is `addLink`, outside it is this — so
       // a goal never shows more than three chips.
       calcRels:
-        pending && goal && !holeByGoal.has(goalId) && !addLink && !brokenChain
+        pending &&
+        goal &&
+        !fillableHole(goalId) &&
+        !addLink &&
+        !brokenChain
           ? calcRelations(goalId, goal.type)
           : undefined,
       // Clearing a goal removes its whole proof. A ROOT goal is excluded from

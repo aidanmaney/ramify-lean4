@@ -271,6 +271,23 @@ function ghostLabel(tactics: string[], note?: string): string {
 
 /** Drop cuts that no longer resolve to anything (after an edit). Returns the
 same array reference when nothing changed. */
+/** Translate a cut's member ids through a re-parse (see `remapIds`).
+ *
+ * Cuts key on ORIGINAL node ids, which are mvarIds and therefore renumber on
+ * every re-elaboration — so without this a cut made before an edit anywhere in
+ * the file resolves to nothing and `pruneCuts` throws it away. Ids with no
+ * counterpart are left alone, so the prune still drops what genuinely went. */
+export function remapCut(cut: ElideCut, to: (id: string) => string): ElideCut {
+  switch (cut.kind) {
+    case "path":
+      return { ...cut, from: to(cut.from), to: to(cut.to) };
+    case "step":
+      return { ...cut, id: to(cut.id) };
+    default:
+      return { ...cut, ids: cut.ids.map(to) };
+  }
+}
+
 export function pruneCuts(nodes: TreeNode[], cuts: ElideCut[]): ElideCut[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const live = cuts.filter((c) => resolveCut(c, byId).length > 0);

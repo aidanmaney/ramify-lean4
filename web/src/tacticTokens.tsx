@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { InteractiveCode, type CodeWithInfos } from "@leanprover/infoview";
+import { DocTokenSpan } from "./docTip";
 import { ensureTaggedStyle } from "./taggedRender";
 import { flattenTaggedText, lineOffsets } from "./taggedText";
 import { TOKEN_COLOR } from "./theme";
@@ -13,6 +14,7 @@ interface RenderSpan {
   end: number;
   type?: string;
   info?: CodeWithInfos;
+  doc?: string;
   ellipsis?: string;
 }
 
@@ -62,11 +64,16 @@ export interface TacticToken {
 
 /** A token's hover popup (ProofTreeWidget.lean `TacticTokenInfo`): the token's
 START (its extent already rides `TacticToken` on the edit entry — the join is
-by start alone) plus tagged text carrying the info node the editor's own hover
-would use. Rendering it with `InteractiveCode` gives the native type popup. */
+by start alone) plus EXACTLY ONE of two payloads, decided server-side the way
+`handleHover` decides it. `code` is tagged text carrying the info node the
+editor's hover would use — `InteractiveCode` renders the native type popup.
+`doc` is a PARSER DOCSTRING, plain markdown: what the buffer shows on `by`,
+where the docstring lives on a syntax KIND rather than on any info node, so
+there is no ref to tag. */
 export interface TacticTokenInfo {
   start: LspPos;
-  code: CodeWithInfos;
+  code?: CodeWithInfos;
+  doc?: string;
 }
 
 /**
@@ -79,13 +86,14 @@ interface TokenSpan {
   end: number;
   type: string;
   info?: CodeWithInfos;
+  doc?: string;
 }
 
 function tokenSpans(
   text: string,
   origin: LspPos,
   tokens: TacticToken[],
-  infoAt: Map<string, CodeWithInfos>,
+  infoAt: Map<string, TacticTokenInfo>,
 ): TokenSpan[] | null {
   // Start offset of each line of `text`; line i of `text` is document line
   // origin.line + i, and only line 0 is shifted by origin.character.
@@ -105,11 +113,15 @@ function tokenSpans(
     const start = offsetOf(t.start);
     const end = offsetOf(t.stop);
     if (start === null || end === null || end <= start) return null;
+    const hover = infoAt.get(`${t.start.line}:${t.start.character}`);
     out.push({
       start,
       end,
       type: t.type,
-      info: infoAt.get(`${t.start.line}:${t.start.character}`),
+      // ?? undefined: a Lean-side Option can arrive as JSON null, and the
+      // render branch keys on undefined.
+      info: hover?.code ?? undefined,
+      doc: hover?.doc ?? undefined,
     });
   }
   return out;
@@ -267,7 +279,7 @@ export interface TacticTokenSource {
  */
 export function makeTacticRenderer(
   editAt: (p: { start: LspPos }) => TacticTokenSource | undefined,
-  infoAt: Map<string, CodeWithInfos>,
+  infoAt: Map<string, TacticTokenInfo>,
   // Mirrors `editor.bracketPairColorization.enabled`; the widget learns it from
   // the companion, since it is a SETTING rather than a colour and so is not in
   // the `--vscode-*` set.
@@ -323,7 +335,7 @@ export function renderTacticTokens(
   // Built once by the caller: tactic ranges nest, so there is no correct way to
   // pre-split this per tactic (see widget.tsx), and rebuilding it per node per
   // render would be pure waste.
-  infoAt: Map<string, CodeWithInfos> = new Map(),
+  infoAt: Map<string, TacticTokenInfo> = new Map(),
   // Present in brief mode: `label`/`lines` are the COLLAPSED text, and this
   // carries the ORIGINAL label + the KEEP map. Tokens are aligned against the
   // original (their positions index into it), then shifted onto the collapsed
@@ -363,7 +375,7 @@ export function renderTacticTokens(
       start = m.start;
       end = m.end;
     }
-    return [{ start, end, type: s.type, info: s.info }];
+    return [{ start, end, type: s.type, info: s.info, doc: s.doc }];
   });
   // Each `…` in the collapsed label is a titled pseudo-span, so the emit loop
   // draws it muted with the elided source as a hover tooltip.
@@ -424,6 +436,19 @@ export function renderTacticTokens(
           >
             {slice}
           </span>,
+        );
+        cur = b;
+        continue;
+      }
+      // A parser-docstring token renders as a PLAIN coloured span with the
+      // custom popup — never `InteractiveCode`, whose tag popup is exactly
+      // the empty or wrong one the doc replaced. Clipped-by-wrap pieces keep
+      // the popup (unlike the equality-guarded interactive form below, a
+      // plain string cannot disagree with what was measured).
+      if (s.doc !== undefined) {
+        const color = s.type ? TOKEN_COLOR[s.type] : undefined;
+        parts.push(
+          <DocTokenSpan key={`${a}`} text={slice} color={color} doc={s.doc} />,
         );
         cur = b;
         continue;

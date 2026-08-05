@@ -241,17 +241,17 @@ export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
   if (!h) return null;
   // Continuation lines of a multi-line entry sit one level inside the link —
   // the only indent derivable here (the widget never holds the document text).
-  const inner = " ".repeat(h.linkStart.character + 2);
+  const inner = " ".repeat(h.ownerStart.character + 2);
   const body = text
     .split("\n")
     .map((l, i) => (i === 0 ? l : inner + l))
     .join("\n");
   if (spec.kind === "hole")
     return { range: { start: h.start, end: h.stop }, newText: `by ${body}` };
-  const at = { line: h.linkStart.line, character: 0 };
+  const at = { line: h.ownerStart.line, character: 0 };
   return {
     range: { start: at, end: at },
-    newText: `${" ".repeat(h.linkStart.character)}_ ${spec.rel ?? "="} ${
+    newText: `${" ".repeat(h.ownerStart.character)}_ ${spec.rel ?? "="} ${
       body.trim() === "" ? "_" : body.trim()
     } := ${STUB}\n`,
     fillNth: 1,
