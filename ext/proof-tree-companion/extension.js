@@ -289,6 +289,13 @@ function publishThemeColors() {
     const outline =
       vscode.workspace.getConfiguration("proofTree").get("outlineOnly") ===
       true;
+    // How close to the bottom edge the tree's frame runs. A CHECKBOX rather
+    // than a number: the two answers worth having are "leave a strip to scroll
+    // the column from" and "give the tree that room back", and the fractions
+    // either one means belong with the renderer, which is what knows the frame
+    // is measured from its own offset rather than from the top of the page.
+    const tallFrame =
+      vscode.workspace.getConfiguration("proofTree").get("tallFrame") === true;
     // The tree's in-place tactic editor has the buffer's own unicode input
     // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
     // The TABLE is bundled with the renderer, so this is only about the user's
@@ -317,6 +324,7 @@ function publishThemeColors() {
           theme: name,
           brackets,
           outline,
+          tallFrame,
           input,
           colors: Object.keys(colors).map((type) => ({
             type,
@@ -332,7 +340,8 @@ function publishThemeColors() {
     // diagnosed by reading these against the theme.
     say(
       `theme "${name}" (brackets ${brackets ? "on" : "off"}, ` +
-        `outline ${outline ? "on" : "off"}): ` +
+        `outline ${outline ? "on" : "off"}, ` +
+        `tall frame ${tallFrame ? "on" : "off"}): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),
@@ -1001,6 +1010,7 @@ function activate(context) {
         e.affectsConfiguration("editor.semanticTokenColorCustomizations") ||
         e.affectsConfiguration("editor.bracketPairColorization.enabled") ||
         e.affectsConfiguration("proofTree.outlineOnly") ||
+        e.affectsConfiguration("proofTree.tallFrame") ||
         e.affectsConfiguration("lean4.input")
       )
         publishThemeColors();

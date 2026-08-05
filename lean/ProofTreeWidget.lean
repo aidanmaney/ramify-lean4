@@ -1211,6 +1211,12 @@ structure ThemeColors where
   webview cannot read a VS Code SETTING, so anything of the kind has to come
   back through the companion. -/
   outline : Bool := false
+  /-- `proofTree.tallFrame` — run the tree's frame closer to the bottom edge,
+  giving back most of the strip the default leaves clear below it. A setting,
+  so it comes the same long way round as `outline`; which fractions the two
+  states mean is the RENDERER's business (`FRAME_FRACTION*` in widget.tsx),
+  since the frame is measured from the widget's own offset down. -/
+  tallFrame : Bool := false
   /-- `lean4.input.*` — unicode abbreviations for the in-place tactic editor.
   Settings again, so again the long way round. -/
   input : InputConfig := {}
@@ -1232,6 +1238,7 @@ instance : FromJson ThemeColors where
     .ok { theme := jsonField j "theme" "",
           brackets := jsonField j "brackets" false,
           outline := jsonField j "outline" false,
+          tallFrame := jsonField j "tallFrame" false,
           input := jsonField j "input" {},
           colors := jsonField j "colors" #[] }
 

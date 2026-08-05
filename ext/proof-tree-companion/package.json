@@ -27,6 +27,11 @@
           "default": false,
           "markdownDescription": "Draw the tree's node boxes as borders with no fill, letting the outline alone carry goal-vs-tactic. Purely how the boxes look — nothing moves and nothing is hidden. A setting rather than a button on the tree's rail because it is a standing preference, not something you reach for while reading a proof."
         },
+        "proofTree.tallFrame": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Let the proof tree run closer to the bottom edge of the infoview. By default it stops a little short, leaving the next section's heading showing — both a reminder that the column continues below and somewhere to put the pointer, since the tree's own scroll container swallows the wheel. Tick this to give most of that strip back to the tree; what remains below it (the restart-file button included) still takes a scroll."
+        },
         "proofTree.lensGoals": {
           "type": "boolean",
           "default": true,

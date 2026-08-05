@@ -91,14 +91,24 @@ function useSectionOrderCss() {
 // short tree, never to no tree.
 const MIN_FRAME_PX = 240;
 
-// How much of the room below the tree's top the frame actually takes. Filling
-// it exactly (the first version, 1.0) is worse than it sounds: the tree then
-// ends precisely at the fold, so the sections it was ordered above are all
-// off-screen, and since the tree's own scroll container swallows the wheel,
-// the only way to scroll the infoview page is to find the strip of document
-// beside the tree. Stopping short leaves the next section's heading showing —
-// both a place to put the pointer and a reminder that the column continues.
+// How much of the room below the tree's top the frame actually takes.
+//
+// Filling it exactly (the first version, 1.0) is worse than it sounds: the tree
+// then ends precisely at the fold, so the sections it was ordered above are all
+// off-screen, and since the tree's own scroll container swallows the wheel, the
+// only way to scroll the infoview page is to find the strip of document beside
+// it. Stopping short leaves the next heading showing — both a place to put the
+// pointer and a reminder that the column continues.
+//
+// Which of the two is right is a real preference rather than a fact about the
+// layout: the room below the fold is not dead (the restart-file button takes a
+// scroll perfectly well), and a tree that reaches the edge is worth more to
+// some readers than a strip they never aim at. So the default keeps the strip
+// and `proofTree.tallFrame` gives most of it back — deliberately NOT all of it,
+// since a frame that ends flush with the fold leaves the page with no
+// wheel-target of its own inside the widget's own span.
 const FRAME_FRACTION = 0.9;
+const FRAME_FRACTION_TALL = 0.95;
 
 /** The tree's frame height: the viewport MINUS the root's own offset from the
 document top, measured live.
@@ -256,11 +266,13 @@ function useThemeTokenColors(
   colors?: Record<string, string>;
   brackets: boolean;
   outline: boolean;
+  tallFrame: boolean;
   abbrev: AbbrevConfig;
 } {
   const [colors, setColors] = useState<Record<string, string>>();
   const [brackets, setBrackets] = useState(false);
   const [outline, setOutline] = useState(false);
+  const [tallFrame, setTallFrame] = useState(false);
   // vscode-lean4's own defaults until told otherwise, so the editor's unicode
   // input works with no companion installed — only a customised leader or a
   // custom translation needs this trip.
@@ -281,6 +293,7 @@ function useThemeTokenColors(
           // there a missing value and "no companion" mean the same thing.
           setBrackets(!!r.brackets);
           setOutline(!!r.outline);
+          setTallFrame(!!r.tallFrame);
           if (r.input) {
             const next: AbbrevConfig = {
               enabled: r.input.enabled !== false,
@@ -318,7 +331,7 @@ function useThemeTokenColors(
       window.removeEventListener("focus", fetchOnce);
     };
   }, [rs, tick]);
-  return { colors, brackets, outline, abbrev };
+  return { colors, brackets, outline, tallFrame, abbrev };
 }
 
 /** `ProofTree.themeColors`'s reply (ProofTreeWidget.lean `ThemeColors`). */
@@ -329,6 +342,9 @@ interface ThemeColorsResponse {
   brackets: boolean;
   /** `proofTree.outlineOnly` — a setting, so it comes the same long way round. */
   outline: boolean;
+  /** `proofTree.tallFrame` — ditto. Optional: an older companion's file has no
+  such key, and a missing one means the default (leave the strip clear). */
+  tallFrame?: boolean;
   /** `lean4.input.*` — settings again (ProofTreeWidget.lean `InputConfig`).
   Optional: an older companion's file simply has no such key. */
   input?: {
@@ -403,6 +419,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     colors: tokenColors,
     brackets: colorBrackets,
     outline: outlineOnly,
+    tallFrame,
     abbrev,
   } = useThemeTokenColors(rs, docRev);
 
@@ -992,7 +1009,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         // resize handler, and a px height computed at the last measurement
         // would stay wrong until something else moved — the units re-resolve
         // on their own.
-        height={`max(${MIN_FRAME_PX}px, calc((100vh - ${offset}px) * ${FRAME_FRACTION}))`}
+        height={`max(${MIN_FRAME_PX}px, calc((100vh - ${offset}px) * ${
+          tallFrame ? FRAME_FRACTION_TALL : FRAME_FRACTION
+        }))`}
         renderTaggedGoal={renderers?.renderTaggedGoal}
         renderTaggedHyps={renderers?.renderTaggedHyps}
         renderTaggedTactic={renderTaggedTactic}
