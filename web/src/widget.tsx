@@ -91,6 +91,15 @@ function useSectionOrderCss() {
 // short tree, never to no tree.
 const MIN_FRAME_PX = 240;
 
+// How much of the room below the tree's top the frame actually takes. Filling
+// it exactly (the first version, 1.0) is worse than it sounds: the tree then
+// ends precisely at the fold, so the sections it was ordered above are all
+// off-screen, and since the tree's own scroll container swallows the wheel,
+// the only way to scroll the infoview page is to find the strip of document
+// beside the tree. Stopping short leaves the next section's heading showing —
+// both a place to put the pointer and a reminder that the column continues.
+const FRAME_FRACTION = 0.9;
+
 /** The tree's frame height: the viewport MINUS the root's own offset from the
 document top, measured live.
 
@@ -119,7 +128,8 @@ on the first rendered frame when the webview becomes visible — which is
 exactly when the answer matters. The explicit `measure()` on mount covers the
 visible-from-birth case without waiting a frame.
 
-Returns the offset in px; the caller renders `calc(100vh - <offset>px)`. The
+Returns the offset in px; the caller renders
+`calc((100vh - <offset>px) * FRAME_FRACTION)`. The
 ref must be ATTACHED to the element whose top is being measured (the tree's
 root div). Reads happen only in the effect — the `react-hooks/refs` line this
 codebase already walks. */
@@ -974,9 +984,15 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         abbrev={abbrev}
         onPopoutEdit={popoutEdit}
         highlightPos={{ line: pos.line, character: pos.character }}
-        // The frame ends AT the visible fold, not 100vh past our own offset
-        // (see useFrameOffset). `max(…)` is the transient-measurement floor.
-        height={`max(${MIN_FRAME_PX}px, calc(100vh - ${offset}px))`}
+        // The room below our own top (see useFrameOffset — NOT a flat 100vh,
+        // which overhangs by exactly that offset), less the deliberate strip
+        // kept clear at the bottom. `max(…)` is the transient-measurement
+        // floor. Left as CSS rather than resolved here on purpose: a webview
+        // that is hidden when the panel is resized fires neither observer nor
+        // resize handler, and a px height computed at the last measurement
+        // would stay wrong until something else moved — the units re-resolve
+        // on their own.
+        height={`max(${MIN_FRAME_PX}px, calc((100vh - ${offset}px) * ${FRAME_FRACTION}))`}
         renderTaggedGoal={renderers?.renderTaggedGoal}
         renderTaggedHyps={renderers?.renderTaggedHyps}
         renderTaggedTactic={renderTaggedTactic}
