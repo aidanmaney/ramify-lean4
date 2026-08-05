@@ -27,12 +27,12 @@ rev = "c85fb0b45ce9ebaaa4715c7d043aadda80306c46"
 # --- ProofWidgets ------------------------------------------------------------
 # `@[widget_module] Component PanelWidgetProps` comes from here. The
 # development package gets it transitively through Mathlib; this one must ask
-# for it directly. v0.0.85 is what Mathlib v4.27.0 itself pins, so a project
+# for it directly. v0.0.105 is what Mathlib v4.32.2 itself pins, so a project
 # that already has Mathlib resolves to the same package rather than a conflict.
 [[require]]
 name = "proofwidgets"
 scope = "leanprover-community"
-rev = "v0.0.85"
+rev = "v0.0.105"
 
 [[lean_lib]]
 name = "ProofTreeComments"

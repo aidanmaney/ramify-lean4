@@ -4,27 +4,31 @@ name = "ppharness"
 defaultTargets = ["ppharness"]
 
 # --- Paperproof's Lean library (contains `Services.BetterParser`) -------------
-# Track the latest parser via `main`; `lake update` records the resolved commit
-# in lake-manifest.json (commit it to freeze). The library is core-only — it
+# Pinned to an exact commit, NOT `main`: upstream's 2026-07 "switch to module
+# system" rewrite means a floating rev would silently pull sources our
+# pre-module imports can't share a build with. This rev's BetterParser structs
+# are field-for-field identical to upstream main (verified 2026-08), so the
+# web/src/paperproof.ts mirror is unaffected. The library is core-only — it
 # parses InfoTrees and needs no Mathlib to *build*.
 [[require]]
 name = "Paperproof"
 git = "https://github.com/Paper-Proof/paperproof.git"
 subDir = "lean"
-rev = "main"
+rev = "c85fb0b45ce9ebaaa4715c7d043aadda80306c46"
 
 # --- Mathlib --------------------------------------------------------------
 # Required only so Mathlib's oleans land on LEAN_PATH (via `lake env`): that is
 # what lets `processHeader` elaborate real `import Mathlib` proofs. Pinned to
-# v4.27.0 to match the toolchain. The toolchain is v4.27.0 (not newer) because
-# Paperproof's harness path here — `IO.processCommands` then reading
-# `infoState.trees` — relies on pre-v4.29 synchronous tactic elaboration; on
-# v4.29 tactic subtrees elaborate asynchronously and aren't attached, so the
-# parser yields empty proofs. Keep parser + Mathlib on the same v4.27.0.
+# the tag matching the toolchain. (The old v4.27.0 pin cited a v4.29 async
+# blocker — "tactic subtrees elaborate asynchronously and aren't attached" —
+# falsified by probes on v4.32.2: `Elab.async` defaults to FALSE for embedded
+# drivers, the info-tree collection in `IO.processCommands` is unchanged
+# v4.27→v4.33, and both the CLI harvest and the live-server widget path were
+# measured to produce identical, complete step lists on v4.32.2.)
 [[require]]
 name = "mathlib"
 scope = "leanprover-community"
-rev = "v4.27.0"
+rev = "v4.32.2"
 
 # --- Source-comment extraction shared by the CLI and the widget -------------
 # (file: ProofTreeComments.lean) Comments are parser trivia, absent from the

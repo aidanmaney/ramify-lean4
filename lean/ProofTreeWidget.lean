@@ -604,17 +604,19 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let doc ← readDoc
     let fileMap : FileMap := doc.meta.text
     let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
-    -- The FILE's diagnostics, as reported so far. `doc.diagnosticsRef` — the
-    -- very ref `publishDiagnostics` and `getInteractiveDiagnostics` serve —
-    -- and NOT `snap.msgLog`, which looks right and is empty: v4.27's file
-    -- worker rebuilds these compat snapshots from the new incremental
-    -- architecture (FileWorker/Utils.lean `mkCmdSnaps`), and the `cmdState` it
-    -- hands them has its `messages` already drained into the reporting stream.
-    -- The CLI path is different on purpose — `IO.processCommands` populates
-    -- `cmdState.messages`, which is why every offline probe of the msgLog path
-    -- passed while the live widget saw an empty log (measured, by driving the
-    -- real server over LSP and reading the payload).
-    let interactiveDiags ← doc.diagnosticsRef.get
+    -- The FILE's diagnostics, as reported so far — the very state the publish
+    -- path serves (on v4.32 `EditableDocumentCore.collectCurrentDiagnostics`,
+    -- sticky ++ per-version, mutex-guarded; it replaced v4.27's bare
+    -- `doc.diagnosticsRef`) — and NOT `snap.msgLog`, which looks right and is
+    -- empty: the file worker rebuilds these compat snapshots from the
+    -- incremental architecture (FileWorker/Utils.lean `mkCmdSnaps`), and the
+    -- `cmdState` it hands them has its `messages` already drained into the
+    -- reporting stream. The CLI path is different on purpose —
+    -- `IO.processCommands` populates `cmdState.messages`, which is why every
+    -- offline probe of the msgLog path passed while the live widget saw an
+    -- empty log (measured, by driving the real server over LSP and reading
+    -- the payload).
+    let interactiveDiags := (← doc.collectCurrentDiagnostics).toArray
     let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, interactiveDiags.size)
     if let some (key, payload) ← proofTreeCache.get then
       if key == cacheKey then

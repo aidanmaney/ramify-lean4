@@ -1,14 +1,14 @@
-{"version": "1.1.0",
+{"version": "1.2.0",
  "packagesDir": ".lake/packages",
  "packages":
  [{"url": "https://github.com/leanprover-community/ProofWidgets4",
    "type": "git",
    "subDir": null,
    "scope": "leanprover-community",
-   "rev": "c04225ee7c0585effbd933662b3151f01b600e40",
+   "rev": "6e311e2a844da9b2cc3971187df2fe0066947b93",
    "name": "proofwidgets",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "v0.0.85",
+   "inputRev": "v0.0.105",
    "inherited": false,
    "configFile": "lakefile.lean"},
   {"url": "https://github.com/Paper-Proof/paperproof.git",
@@ -22,4 +22,5 @@
    "inherited": false,
    "configFile": "lakefile.lean"}],
  "name": "proofTree",
- "lakeDir": ".lake"}
+ "lakeDir": ".lake",
+ "fixedToolchain": false}

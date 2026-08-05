@@ -958,9 +958,9 @@ def calcRelationsFor (ctx : Elab.ContextInfo) (goalId : String) (mvarId : MVarId
       -- Prop-valued and homogeneous in the midpoint: the overwhelming case,
       -- and a wrong guess costs a MISSING option, never a wrong one.
       let r ← Lean.Meta.mkFreshExprMVar
-        (← Lean.mkArrow α (← Lean.mkArrow α (mkSort levelZero)))
+        (← Lean.mkArrow α (← Lean.mkArrow α (mkSort Level.zero)))
       let s ← Lean.Meta.mkFreshExprMVar
-        (← Lean.mkArrow α (← Lean.mkArrow γ (mkSort levelZero)))
+        (← Lean.mkArrow α (← Lean.mkArrow γ (mkSort Level.zero)))
       let query ← Lean.Meta.mkAppM ``Trans #[r, s, t]
       let insts ← try Lean.Meta.SynthInstance.getInstances query
                   catch _ => pure #[]

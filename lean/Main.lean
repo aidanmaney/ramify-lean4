@@ -31,7 +31,13 @@ def emitForSource (src : String) (fileName : String) : IO Unit := do
 -- interpreter, which is only permitted once initializer execution is enabled.
 -- Without this, loading any Mathlib-importing source aborts with
 -- "cannot evaluate `[init]` declaration … in the same module". Must run before
--- the first import (i.e. before `processHeader`), so it goes first in `main`.
+-- EVERY import, not just the first: since v4.32 `withImporting`'s `finally`
+-- clears the flag after each `importModules` (ImportingFlag.lean), so a batch
+-- run that armed it once had every file after the first come back with an
+-- EMPTY environment — no Init, no `+` notation, every command a parse error,
+-- zero steps, and nothing on stderr (measured; on v4.27 the flag stayed set).
+-- Hence the per-file re-arm in the loop. Re-importing is still safe: `[init]`
+-- declarations are deduped per module by `interpretedModInits`.
 unsafe def main (args : List String) : IO Unit := do
   enableInitializersExecution
   match args with
@@ -44,6 +50,7 @@ unsafe def main (args : List String) : IO Unit := do
       -- and does not abort the batch -- important when scaling over many files.
       for path in paths do
         try
+          enableInitializersExecution
           let src ← IO.FS.readFile path
           emitForSource src path
         catch e =>
