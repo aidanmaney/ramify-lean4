@@ -51,9 +51,16 @@ const ORIGIN = { line: 0, character: 0 };
 // the same document, so a `:has()`-scoped stylesheet turns the hosting body
 // into a flex column and orders the tree first — everything else flows
 // BELOW it, so the tree's position is stable and the volatile blocks take
-// space from the bottom, not the top. The widget's own <details> wrapper
-// summary (the infoview names panel widgets) is dropped as chaff. Scoped
-// entirely on [data-ptw-root] so no other infoview surface is touched.
+// space from the bottom, not the top. Scoped entirely on [data-ptw-root] so
+// no other infoview surface is touched.
+//
+// The last rule drops the summary of an INFOVIEW-supplied <details> wrapper,
+// which would name the panel a second time. That wrapper does not currently
+// exist for us — core sets `PanelWidgetInstance.name?` only for the deprecated
+// `UserWidgetDefinition` form — so the rule is defensive. It must not be
+// widened to `details > summary`: the panel's own fold, built at the end of
+// this file, is a <details> INSIDE [data-ptw-root], and hiding its summary
+// would take the fold away.
 const SECTION_ORDER_CSS = `
   div:has(> [data-ptw-root]),
   div:has(> details > [data-ptw-root]) {
@@ -126,6 +133,25 @@ function useFrameOffset(): {
     const el = rootRef.current;
     if (!el) return;
     const measure = () => {
+      // A COLLAPSED panel yields no honest answer, and the two ways a browser
+      // can say so were BOTH measured, because Chromium changed which one it
+      // uses and a VS Code webview can be either vintage:
+      //   · older — closed <details> puts `display: none` on its non-summary
+      //     children, so there are no client rects and every rect reads 0;
+      //   · current — the content is skipped via `::details-content`'s
+      //     `content-visibility: hidden`, which keeps STALE boxes: rects
+      //     survive and still report the geometry from when it was last open
+      //     (measured: rects 1, top 47, height 400 while closed and
+      //     contributing nothing to layout). Only `checkVisibility()` tells
+      //     the truth here.
+      // A zero is not an offset of zero, it is the absence of an answer, and
+      // writing it would size the frame to a full viewport and flash the tree
+      // at that height on the next expand. Both tests, so neither vintage
+      // slips through; nothing is lost when they fire, since the offset starts
+      // at 0 anyway and skipping can only ever preserve a better earlier
+      // reading.
+      if (el.getClientRects().length === 0) return;
+      if (el.checkVisibility && !el.checkVisibility()) return;
       // Distance from the DOCUMENT's top, not the viewport's: the infoview
       // page itself scrolls (the tree is its first section, so content below
       // always overflows), and rect.top alone would shrink the tree by however
@@ -310,6 +336,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const pos = props.pos; // DocumentPosition: { uri, line, character }
   useSectionOrderCss();
   const { rootRef, offset } = useFrameOffset();
+  // The panel's own fold (see the <details> at the end of this component).
+  // Plain component state: the panel widget's React key is `widget::<id>::
+  // <range>` — the `show_panel_widgets` command's span, not the cursor's — so
+  // this component is NOT remounted as the cursor moves, and the fold survives
+  // exactly as long as the infoview keeps showing this file's panel, which is
+  // the same lifetime the infoview's own sections give their disclosure state.
+  const [panelOpen, setPanelOpen] = useState(true);
   // The cursor is not the only thing that invalidates the tree: the DOCUMENT
   // changes too, and a change that leaves the cursor where it is (every edit
   // the widget itself makes via applyEdit — an in-place tactic commit, a (+)
@@ -894,29 +927,19 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // Until a proof has rendered, surface the three transient states: a genuine
   // RPC failure, the empty "not in a proof" result, or still loading. Once a
   // tree is up, all three quietly keep the last proof on screen instead.
-  if (!stable) {
-    const msg =
-      st.state === "rejected"
+  const body = !stable ? (
+    <div style={{ fontFamily: "monospace", fontSize: 12, color: "#888", padding: 4 }}>
+      {st.state === "rejected"
         ? `Proof tree error: ${mapRpcError(st.error).message}`
         : st.state === "resolved"
           ? "No proof tree here — place the cursor inside a tactic proof."
-          : "Loading proof tree…";
-    // data-ptw-root even on the placeholder: the section order (tree slot
-    // first) must not flip when the proof appears.
-    return (
-      <div
-        data-ptw-root
-        style={{ fontFamily: "monospace", fontSize: 12, color: "#888", padding: 4 }}
-      >
-        {msg}
-      </div>
-    );
-  }
-
-  // No <details>/summary wrapper: the tree is the panel's content, and every
-  // chrome line above it costs vertical room the tree could use.
-  return (
-    <div ref={rootRef} data-ptw-root style={{ marginTop: "0.25rem" }}>
+          : "Loading proof tree…"}
+    </div>
+  ) : (
+    // `rootRef` measures the TREE's top, so it goes below the summary — a ref
+    // on the outer element would report the section's top and the frame would
+    // overhang the fold by exactly the height of the disclosure line.
+    <div ref={rootRef}>
       {/* A failed companion request is otherwise invisible — the gesture just
           does nothing. Surfaced inline (dismissible) rather than as a console
           line nobody opens. */}
@@ -965,6 +988,40 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onUndo={undo}
         diagnostics={diagnostics}
       />
+    </div>
+  );
+
+  // The panel folds like the infoview's own sections, and the disclosure has to
+  // be OURS: the infoview wraps a widget in <details> only when the instance
+  // carries `name?`, and core fills that field for the DEPRECATED
+  // `UserWidgetDefinition` form alone (Lean/Widget/UserWidget.lean's
+  // `getWidgets` — the `.filter (·.type.isConstOf ``UserWidgetDefinition)`),
+  // never for a ProofWidgets `Component`. So the wrapper this widget gets is no
+  // wrapper at all; SECTION_ORDER_CSS's summary rule covers only the case where
+  // one appears. Same markup and utility classes as "Tactic state" above it, so
+  // it reads as a sibling section rather than as the tree growing its own bar.
+  //
+  // Folding must not UNMOUNT the tree: fold, zoom, scroll, focus and elide
+  // state all live in ProofTreeView, and a disclosure that reset the view every
+  // time it was closed would cost far more than the line of chrome it buys.
+  // `<details>` hides its content without removing it, so the subtree keeps
+  // its state — and `data-ptw-root` keeps its slot in the section order, which
+  // is why the attribute sits on the wrapper rather than on the content: when
+  // collapsed the content is invisible to layout, and a `:has()` rule anchored
+  // on it would stop matching and drop the collapsed section back among the
+  // volatile blocks it was ordered above.
+  return (
+    <div data-ptw-root style={{ marginTop: "0.25rem" }}>
+      <details
+        open={panelOpen}
+        // `onToggle`, not a click handler on the summary: the browser owns this
+        // state, and this way the keyboard (Enter/Space on a focused summary)
+        // goes through the same path as the pointer.
+        onToggle={(e) => setPanelOpen(e.currentTarget.open)}
+      >
+        <summary className="mv2 pointer">Proof tree</summary>
+        {body}
+      </details>
     </div>
   );
 }
