@@ -63,7 +63,7 @@ never-arrived from arrived-and-skipped from arrived-and-threw.
 No build step (plain CommonJS). Symlink into the extensions dir and reload:
 
 ```bash
-ln -s "$(pwd)/ext/proof-tree-companion" ~/.vscode/extensions/aidan.proof-tree-companion-0.0.1
+ln -s "$(pwd)/ext/proof-tree-companion" ~/.vscode/extensions/aidan.proof-tree-companion-0.0.2
 ```
 
 Uninstall by removing the symlink. After changing `package.json` (e.g.
