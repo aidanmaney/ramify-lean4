@@ -269,8 +269,6 @@ function ghostLabel(tactics: string[], note?: string): string {
   return `⋯ ${text}${more > 0 ? `  +${more}` : ""}`;
 }
 
-/** Drop cuts that no longer resolve to anything (after an edit). Returns the
-same array reference when nothing changed. */
 /** Translate a cut's member ids through a re-parse (see `remapIds`).
  *
  * Cuts key on ORIGINAL node ids, which are mvarIds and therefore renumber on
@@ -288,6 +286,8 @@ export function remapCut(cut: ElideCut, to: (id: string) => string): ElideCut {
   }
 }
 
+/** Drop cuts that no longer resolve to anything (after an edit). Returns the
+same array reference when nothing changed. */
 export function pruneCuts(nodes: TreeNode[], cuts: ElideCut[]): ElideCut[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const live = cuts.filter((c) => resolveCut(c, byId).length > 0);

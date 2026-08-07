@@ -112,6 +112,7 @@ import {
   SORRY_FILL,
   DANGER_FILL,
   WARN_FILL,
+  POPUP_CHROME,
   TOKEN_VARS,
   ensurePaletteStyle,
   observeThemeChange,
@@ -261,12 +262,17 @@ const HOLE_GLYPH = "?_";
 const addChipGlyph = (spec: AddSpec | undefined) =>
   spec?.kind === "hole" ? HOLE_GLYPH : "+";
 const addChipWidth = (spec: AddSpec | undefined) =>
-  spec?.kind === "hole"
-    ? Math.max(
-        CHIP_W_ADD,
-        measureText(HOLE_GLYPH, CHIP_FONT_PX) + 2 * CHIP_PAD_X,
-      )
-    : CHIP_W_ADD;
+  spec?.kind === "hole" ? chipWidth(HOLE_GLYPH, CHIP_FONT_PX) : CHIP_W_ADD;
+/** The chip lane's running x offsets: `[add, sorry, calc/step]`. The row is
+ * centred on the incoming lane at the ADD chip's fixed width (so a wider first
+ * chip never moves the row's origin) and each chip starts past the previous
+ * one's width plus `CHIP_GAP`. One place for the cumulative sums — four chips
+ * render from separate JSX sites, and the offsets are only checked by eye. */
+const chipLaneXs = (spec: AddSpec | undefined): [number, number, number] => {
+  const x0 = -CHIP_W_ADD / 2;
+  const x1 = x0 + addChipWidth(spec) + CHIP_GAP;
+  return [x0, x1, x1 + CHIP_W_SORRY + CHIP_GAP];
+};
 const CHIP_W_STEP = 30;
 // What a chain gesture's overlay asks for: the new link's RIGHT-HAND SIDE,
 // and nothing else — the relation is already picked and the justification is
@@ -280,6 +286,12 @@ const CHIP_FONT_PX = 10;
 // word chips, since a single glyph carries the whole meaning.
 const PICK_FONT_PX = 12;
 const CHIP_PAD_X = 6;
+/** A measured chip's width: the glyph plus padding, floored at the `+` chip's
+ * fixed width so a narrow glyph still reads as a chip. THE chip-width formula —
+ * the hole chip, the delete-confirm chip and the picker row all size from
+ * here, so the padding/floor rule has exactly one home. */
+const chipWidth = (glyph: string, fontPx: number) =>
+  Math.max(CHIP_W_ADD, measureText(glyph, fontPx) + 2 * CHIP_PAD_X);
 
 // Gallery pager geometry (see GalleryPager). It hangs in the gap a branching
 // tactic leaves above its children — TRUNK_GAP_BRANCH (24px) in compact mode,
@@ -311,16 +323,15 @@ const FOLLOW_MS = 130;
 // mid-word typing coalesces, short enough that the tier arrives while the
 // list is still being read.
 const GLOBAL_DEBOUNCE_MS = 160;
-// The environment tier's client-side stores. Module scope, not refs (see the
-// overlay-scoped clear in the component for why), and per-overlay in
-// lifetime: `globalNameCache` maps a fetched query to its names,
-// `lastCompletionRefresh` is what a resolving fetch REPLAYS — the completion
-// list is event-driven state, so an async arrival re-runs the last refresh
-// rather than poking the list directly.
 // The environment tier's query cache: fetched query → names. MODULE scope —
 // one overlay is ever open, and the overlay-scoped clear in the component is
 // the whole invalidation story. Only `.set`/`.clear` ever touch it (the React
-// compiler accepts interior mutation where it rejects reassignment).
+// compiler accepts interior mutation where it rejects reassignment). Not a
+// ref, and the fetch pipeline that fills it runs through STATE, not refs:
+// `react-hooks/refs` treats a ref read inside a JSX-called function as
+// render-phase and the taint spreads through every caller — the recorded
+// abbreviation lesson, re-hit on `refreshCompletion`'s call sites. The two
+// effects in the component that reference this rationale point here.
 const globalNameCache = new Map<string, string[]>();
 
 /** The cached answer usable for `ident`, if any: the LONGEST fetched query
@@ -328,15 +339,15 @@ const globalNameCache = new Map<string, string[]>();
  * serves its exact query, since narrowing it locally could have lost names
  * the longer prefix would match. */
 function cachedGlobals(ident: string): string[] | null {
-  let best: string | null = null;
+  let best: { q: string; names: string[] } | null = null;
   for (const [q, names] of globalNameCache)
     if (
       ident.startsWith(q) &&
       (names.length < GLOBAL_MAX || q === ident) &&
-      (best === null || q.length > best.length)
+      (best === null || q.length > best.q.length)
     )
-      best = q;
-  return best !== null ? globalNameCache.get(best)! : null;
+      best = { q, names };
+  return best?.names ?? null;
 }
 
 /** Base style for a text layer painted in register with the in-place editor's
@@ -1725,8 +1736,9 @@ export default function ProofTreeView({
     setElidePick(null);
     setBandPick(null);
     // A different proof's splits are different nodes entirely. (A same-proof
-    // EDIT needs no pruning: `pick` is read modulo the live child count, and
-    // keys naming a vanished split are simply never looked up.)
+    // EDIT remaps the keys instead — see the shape branch; no pruning either
+    // way: `pick` is read modulo the live child count, and keys naming a
+    // vanished split are simply never looked up.)
     setPick({});
   } else if (shapeKey !== prevShape) {
     setPrevShape(shapeKey);
@@ -1783,6 +1795,36 @@ export default function ProofTreeView({
         cs.map((c) => remapCut(c, to)),
       ),
     );
+    // The gallery's picks key on the SPLITTING node's id (see `splits`), so
+    // without the translation any edit snapped every hand-paged branch back
+    // to child 0. No liveness filter needed: `pick` is read modulo the live
+    // child count, and a key naming a vanished split is never looked up.
+    setPick((prev) => {
+      const entries = Object.entries(prev);
+      if (entries.length === 0) return prev;
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [id, v] of entries) {
+        const moved = to(id);
+        if (moved !== id) changed = true;
+        next[moved] = v;
+      }
+      return changed ? next : prev;
+    });
+    // A half-made path/band pick holds a first endpoint by id too. Translate
+    // it like the sequence endpoint above; if it genuinely vanished, drop the
+    // endpoint but stay in picking mode — the mode is what the user opted
+    // into, the endpoint is just the click to redo.
+    if (elidePick?.from) {
+      const moved = to(elidePick.from);
+      if (!live.has(moved)) setElidePick({ from: null });
+      else if (moved !== elidePick.from) setElidePick({ from: moved });
+    }
+    if (bandPick?.from) {
+      const moved = to(bandPick.from);
+      if (!live.has(moved)) setBandPick({ from: null });
+      else if (moved !== bandPick.from) setBandPick({ from: moved });
+    }
     // The source moved under the edit box (usually OUR own committed edit
     // coming back), so its ranges are stale either way. The relation picker
     // holds ranges too, and the edit that just landed is exactly what
@@ -2205,21 +2247,16 @@ export default function ProofTreeView({
 
   // One overlay, one cache: a different node (or the overlay closing) starts
   // clean, which is also the invalidation story — the environment cannot
-  // change under a draft without the overlay closing first. The stores are
-  // MODULE-scope (below the component), not refs: `react-hooks/refs` treats a
-  // ref read inside a JSX-called function as render-phase and the taint
-  // spreads through every caller — the recorded abbreviation lesson, re-hit
-  // here on `refreshCompletion`'s call sites.
+  // change under a draft without the overlay closing first. (Module scope,
+  // not a ref — see `globalNameCache`'s comment for the taint rationale.)
   const editedNodeId = editing?.id ?? null;
   useEffect(() => {
     globalNameCache.clear();
   }, [editedNodeId]);
-  // The environment tier's fetch pipeline runs through STATE, not refs — the
-  // recorded abbreviation lesson, re-hit here: a ref read inside a JSX-called
-  // function is render-phase to the React compiler and the taint spreads to
-  // every caller. `globalWant` is the query the handlers ask for; its effect
-  // owns the debounce timer (cleanup IS the debounce) and the fetch; a
-  // resolution lands in `globalArrival`, whose effect replays the refresh.
+  // The fetch pipeline runs through STATE, not refs (see `globalNameCache`'s
+  // comment): `globalWant` is the query the handlers ask for; its effect owns
+  // the debounce timer (cleanup IS the debounce) and the fetch; a resolution
+  // lands in `globalArrival`, whose effect replays the refresh.
   const [globalWant, setGlobalWant] = useState<string | null>(null);
   const [globalArrival, setGlobalArrival] = useState<{
     query: string;
@@ -4275,9 +4312,8 @@ export default function ProofTreeView({
                                   : "add a tactic for this goal"
                               }
                               // Centred on the incoming lane; the row runs right
-                              // from there, each chip starting past the previous
-                              // one's width plus CHIP_GAP.
-                              x={-CHIP_W_ADD / 2}
+                              // from there (see chipLaneXs).
+                              x={chipLaneXs(node.data.addSpec)[0]}
                               width={addChipWidth(node.data.addSpec)}
                               color={NODE_STYLES.tactic.stroke}
                               onPick={() => {
@@ -4294,11 +4330,7 @@ export default function ProofTreeView({
                             <FrontierChip
                               glyph="sorry"
                               title="stub this goal with `sorry`"
-                              x={
-                                -CHIP_W_ADD / 2 +
-                                addChipWidth(node.data.addSpec) +
-                                CHIP_GAP
-                              }
+                              x={chipLaneXs(node.data.addSpec)[1]}
                               width={CHIP_W_SORRY}
                               fontSize={9}
                               color={SORRY_FILL}
@@ -4328,13 +4360,7 @@ export default function ProofTreeView({
                                     .join(" ")}); writes one line, \`calc _ … _ := by sorry\`, then asks for each side`
                                 : `start a calc chain — writes \`calc _ ${node.data.calcRels[0].rel} _ := by sorry\`, then asks for each side (Enter keeps \`_\`)`
                             }
-                            x={
-                              -CHIP_W_ADD / 2 +
-                              addChipWidth(node.data.addSpec) +
-                              CHIP_GAP +
-                              CHIP_W_SORRY +
-                              CHIP_GAP
-                            }
+                            x={chipLaneXs(node.data.addSpec)[2]}
                             width={CHIP_W_STEP}
                             fontSize={9}
                             color={NODE_STYLES.tactic.stroke}
@@ -4377,13 +4403,9 @@ export default function ProofTreeView({
                             // other two chips are suppressed there, since they
                             // would insert above a block that stays unparsed.
                             x={
-                              node.data.addSpec
-                                ? -CHIP_W_ADD / 2 +
-                                  addChipWidth(node.data.addSpec) +
-                                  CHIP_GAP +
-                                  CHIP_W_SORRY +
-                                  CHIP_GAP
-                                : -CHIP_W_ADD / 2
+                              chipLaneXs(node.data.addSpec)[
+                                node.data.addSpec ? 2 : 0
+                              ]
                             }
                             width={CHIP_W_STEP}
                             fontSize={9}
@@ -4614,7 +4636,7 @@ export default function ProofTreeView({
                 const label = ext.empties
                   ? `replace ${ext.lines} with sorry`
                   : `delete ${ext.lines} line${ext.lines === 1 ? "" : "s"}`;
-                const wide = measureText(label, CHIP_FONT_PX) + 2 * CHIP_PAD_X;
+                const wide = chipWidth(label, CHIP_FONT_PX);
                 return (
                   <g
                     transform={`translate(${an.x - w / 2 + TRUNK_INSET}, ${
@@ -4775,20 +4797,16 @@ export default function ProofTreeView({
                   >
                     <div
                       style={{
+                        ...POPUP_CHROME,
                         width: "max-content",
                         maxWidth: 460,
                         display: "flex",
                         flexDirection: "column",
                         gap: 6,
-                        padding: "6px 9px",
-                        borderRadius: 3,
-                        background:
-                          "var(--vscode-editorWidget-background, rgba(255,255,255,0.97))",
                         borderWidth: 1,
                         borderStyle: "solid",
                         borderColor:
                           list[0].severity === 1 ? DANGER_FILL : WARN_FILL,
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
                       }}
                     >
                       {list.map((d) => (
@@ -5915,10 +5933,7 @@ function PickerRow({
     color: string,
     onClick: () => void,
   ) => {
-    const width = Math.max(
-      CHIP_W_ADD,
-      measureText(glyph, PICK_FONT_PX) + 2 * CHIP_PAD_X,
-    );
+    const width = chipWidth(glyph, PICK_FONT_PX);
     chips.push(
       <FrontierChip
         key={key}

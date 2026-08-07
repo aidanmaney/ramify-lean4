@@ -4,21 +4,17 @@
 
 import { useState } from "react";
 import { createPortal } from "react-dom";
+import { cleanMarkdown } from "./proofToTree";
+import { POPUP_CHROME } from "./theme";
 
-/** Readable form of a docstring for the popup: bold/underscore emphasis and
-heading markers stripped, code ticks removed with their content kept (spaces
-left ALONE — unlike the comment pipeline's `cleanMarkdown`, whose non-breaking
-spaces exist for the label wrapper; a popup wraps freely and NBSP would fight
-it). Deliberately not a markdown renderer — the reference text reads fine as
-prose, and a renderer is a dependency this popup does not earn. */
-function cleanDoc(doc: string): string {
-  return doc
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/__(.+?)__/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/`([^`]+)`/g, "$1")
-    .trim();
-}
+/** Readable form of a docstring for the popup: the comment pipeline's
+`cleanMarkdown` with `breakableCode` — code ticks removed with their content's
+spaces left ALONE (the NBSP joining exists for the label wrapper; a popup
+wraps freely and NBSP would fight it). Deliberately not a markdown renderer —
+the reference text reads fine as prose, and a renderer is a dependency this
+popup does not earn. */
+const cleanDoc = (doc: string): string =>
+  cleanMarkdown(doc, { breakableCode: true }).trim();
 
 /** A token whose hover is a PLAIN docstring (`TacticTokenInfo.doc`) — the
 parser-docstring half of the buffer's hover, which no `InteractiveCode` tag can
@@ -56,6 +52,7 @@ export function DocTokenSpan({
         createPortal(
           <div
             style={{
+              ...POPUP_CHROME,
               position: "fixed",
               left: tip.x,
               top: tip.y,
@@ -63,12 +60,7 @@ export function DocTokenSpan({
               maxWidth: 440,
               maxHeight: 280,
               overflow: "hidden",
-              padding: "6px 9px",
-              borderRadius: 3,
-              background:
-                "var(--vscode-editorWidget-background, rgba(255,255,255,0.97))",
               border: "1px solid var(--vscode-editorWidget-border, #c4c8cf)",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
               pointerEvents: "none",
               fontFamily: "var(--vscode-font-family, sans-serif)",
               fontSize: 11,

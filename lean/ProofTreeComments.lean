@@ -899,6 +899,27 @@ def goalContexts (tree : Elab.InfoTree) :
       unless out.contains key do out := out.insert key (printCtx, mvarId)
   return out
 
+/-- `goalContexts` for the callers that only need SOME goal's context (the
+environment is per-file, not per-goal — `tacticNames`, `completionNames`).
+Both used to build the full map and read one arbitrary entry; this early-exits
+at the first `TacticInfo` mentioning a goal, with the same `mctxAfter` context
+the map would have carried for it. -/
+partial def anyGoalContext (tree : Elab.InfoTree)
+    (ctx? : Option Elab.ContextInfo := none) :
+    Option (Elab.ContextInfo × MVarId) :=
+  match tree with
+  | .context c t => anyGoalContext t (c.mergeIntoOuter? ctx?)
+  | .node i cs => Id.run do
+    if let some ctx := ctx? then
+      if let .ofTacticInfo ti := i then
+        if let some mvarId := (ti.goalsBefore ++ ti.goalsAfter).head? then
+          return some ({ ctx with mctx := ti.mctxAfter }, mvarId)
+    for c in cs do
+      if let some r := anyGoalContext c (i.updateContext? ctx?) then
+        return some r
+    return none
+  | .hole _ => none
+
 /-- A relation's infix symbol, by printing it applied to two variables and
 taking the middle token.
 

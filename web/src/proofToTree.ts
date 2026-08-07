@@ -498,12 +498,21 @@ const NBSP = " ";
 //
 // Single-`*` italics are deliberately left alone: `2 * k` is multiplication,
 // not emphasis, and telling them apart reliably isn't worth it here.
-function cleanMarkdown(text: string): string {
+//
+// Exported for the token doc popup (docTip.tsx), the one caller that wants
+// `breakableCode`: a popup wraps freely, so a code span's inner spaces stay
+// ORDINARY there — NBSP exists for the label wrapper alone.
+export function cleanMarkdown(
+  text: string,
+  opts?: { breakableCode?: boolean },
+): string {
   return text
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/__(.+?)__/g, "$1")
     .replace(/^#{1,6}\s+/gm, "")
-    .replace(/`([^`]+)`/g, (_, code: string) => code.replace(/ /g, NBSP));
+    .replace(/`([^`]+)`/g, (_, code: string) =>
+      opts?.breakableCode ? code : code.replace(/ /g, NBSP),
+    );
 }
 
 // Display form of a raw comment: delimiters stripped, block-comment lines
@@ -870,11 +879,13 @@ export function proofToTree(
     (proof.holes ?? []).filter((h) => !h.dup).map((h) => [h.goalId, h]),
   );
   // Holes the tree fills IN PLACE — the ones with nowhere to append a sibling
-  // (see `addSpecFor`). Only these displace the ordinary chips; a hole inside a
-  // tactic block keeps the `+`/`sorry`/`calc` row it always had.
-  const fillableHole = (goalId: string) => {
+  // (see `addSpecFor`, which reads the returned hole; other callers just test
+  // it). Only these displace the ordinary chips; a hole inside a tactic block
+  // keeps the `+`/`sorry`/`calc` row it always had. One home for the offer
+  // rule, so the chip gate and the spec builder cannot drift.
+  const fillableHole = (goalId: string): Hole | undefined => {
     const h = holeByGoal.get(goalId);
-    return !!h && !h.inBlock;
+    return h && !h.inBlock ? h : undefined;
   };
   // The `calc` blocks themselves, keyed the way a step reaches us: a calc
   // step's `position.start` IS its tactic's start (both come from the same
@@ -1252,8 +1263,8 @@ export function proofToTree(
     // (whose generic anchor is the last step INSIDE the chain, so the new
     // tactic lands mid-block and breaks it) and a hole in a term-mode proof
     // (no tactic block at all).
-    const hole = holeByGoal.get(goalId);
-    if (hole && !hole.inBlock)
+    const hole = fillableHole(goalId);
+    if (hole)
       return {
         kind: "hole",
         hole,

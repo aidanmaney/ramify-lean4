@@ -597,7 +597,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // only picks the file-worker snapshot whose environment answers — any
   // position in the file serves, so the cursor's is fine — and the view owns
   // every gate (prefix length, debounce, cache, stale guard). Memoised on the
-  // session and position identity like the getProofTree call above.
+  // session and DOCUMENT only, deliberately not the cursor coordinates: any
+  // in-file position serves (above), and this function's identity is a dep of
+  // the view's debounce effect, so a per-cursor-move identity would cancel
+  // and restart a pending fetch timer for nothing. The captured `pos` going
+  // stale within the file is exactly the harmless case.
   const fetchGlobalNames = useMemo(
     () => (query: string) =>
       rs.call<{ pos: typeof pos; query: string }, string[]>(
@@ -605,7 +609,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         { pos, query },
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rs, pos.uri, pos.line, pos.character],
+    [rs, pos.uri],
   );
 
   const getGoalTerms = useMemo(() => {

@@ -294,6 +294,20 @@ export const EDIT_BG = "var(--ptw-edit-bg)";
 export const EDIT_TEXT = "var(--ptw-edit-text)";
 export const RAIL_PRESSED = "var(--ptw-rail-pressed)";
 
+/** Chrome for the custom floating popups (the diagnostic ribbon's message,
+ * the token doc tip): editorWidget background over a light fallback, one
+ * shadow, one padding. One constant because the background half of the
+ * recorded light-on-light trap lives here — a popup pairing its background
+ * and ink from two different places is exactly how that bug happens. Borders
+ * are per-surface (severity ink vs. editorWidget-border), so they stay at the
+ * call sites. */
+export const POPUP_CHROME = {
+  padding: "6px 9px",
+  borderRadius: 3,
+  background: "var(--vscode-editorWidget-background, rgba(255,255,255,0.97))",
+  boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+} as const;
+
 /**
  * Semantic-token type → colour. Keyed by the LSP token-type names the server
  * sends (`SemanticTokenType.names`); an unmapped type inherits the label's own

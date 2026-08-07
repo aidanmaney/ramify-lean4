@@ -64,29 +64,20 @@ root (`"0.2.1"`).
  * would make retyping a tactic look like a different tree and drop the folds
  * below it — the opposite of what this is for. */
 export function pathKeys(nodes: readonly PathNode[]): Map<string, string> {
-  const parentOf = new Map<string, string | null>();
-  const ordinal = new Map<string, number>();
+  // One forward pass: preorder means a node's parent already has its key when
+  // the node is reached, so the key is just the parent's plus this node's
+  // ordinal among its siblings. A parent that is not itself in `nodes` (or a
+  // true root) makes the node a root of its own, keyed by ordinal alone.
   const seen = new Map<string, number>();
+  const out = new Map<string, string>();
   for (const n of nodes) {
     const p = n.parents[0]?.id ?? null;
-    parentOf.set(n.id, p);
     const bucket = p ?? "";
     const i = seen.get(bucket) ?? 0;
-    ordinal.set(n.id, i);
     seen.set(bucket, i + 1);
+    const pk = p !== null ? out.get(p) : undefined;
+    out.set(n.id, pk !== undefined ? `${pk}.${i}` : String(i));
   }
-  const memo = new Map<string, string>();
-  const keyOf = (id: string): string => {
-    const hit = memo.get(id);
-    if (hit !== undefined) return hit;
-    const p = parentOf.get(id) ?? null;
-    const own = String(ordinal.get(id) ?? 0);
-    const key = p !== null && parentOf.has(p) ? `${keyOf(p)}.${own}` : own;
-    memo.set(id, key);
-    return key;
-  };
-  const out = new Map<string, string>();
-  for (const n of nodes) out.set(n.id, keyOf(n.id));
   return out;
 }
 

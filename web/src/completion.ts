@@ -125,6 +125,13 @@ export function identPrefixAt(value: string, caret: number): string {
 const matches = (cand: string, prefix: string) =>
   prefix === "" || cand.toLowerCase().startsWith(prefix.toLowerCase());
 
+/** `✝` is how inaccessible names print, and an accepted candidate gets TYPED
+ * INTO THE BUFFER — so anything carrying one cannot round-trip back into
+ * source and must not be offered. One name for the rule so every tier applies
+ * it (it was once inline per tier, and the hyps tier missed it — a bare
+ * `induction n`'s `n✝` was offered and, accepted, broke the draft). */
+const roundTrips = (s: string) => !s.includes("✝");
+
 /**
  * The ranked list for a caret in a draft.
  *
@@ -152,22 +159,17 @@ export function completionsAt(
     out.push({ label, from, to, kind, exact: label === value.slice(from, caret) });
   };
 
-  // Tier 1: hypotheses of the goal this tactic consumes. The `✝` filter is
-  // the terms tier's rule applied here too — it was asymmetric for no recorded
-  // reason, and after a bare `induction n` the inaccessible `n✝` was offered
-  // and, accepted, wrote an identifier into the buffer that cannot round-trip.
+  // Tier 1: hypotheses of the goal this tactic consumes.
   if (ident !== "")
     for (const h of pools.hyps)
-      if (!h.includes("✝") && matches(h, ident)) push(h, iFrom, iTo, "hyp");
+      if (roundTrips(h) && matches(h, ident)) push(h, iFrom, iTo, "hyp");
 
   // Tier 1.5: the goal's own subterms. A term that IS just the identifier being
-  // typed adds nothing over the tier-1 entry, so single tokens are dropped —
-  // and so is anything carrying `✝`, which is how inaccessible names print and
-  // will not round-trip back into source. These strings get typed into the
-  // buffer, so that filter is load-bearing rather than cosmetic.
+  // typed adds nothing over the tier-1 entry, so single tokens are dropped
+  // (and non-round-tripping terms with them — see `roundTrips`).
   if (term !== "" || hadBoundary)
     for (const t of pools.terms) {
-      if (t.includes("✝") || !t.includes(" ")) continue;
+      if (!roundTrips(t) || !t.includes(" ")) continue;
       if (matches(t, term)) push(t, tFrom, tTo, "term");
     }
 

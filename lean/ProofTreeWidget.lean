@@ -266,8 +266,9 @@ def collectTaggedGoals (infoTree : InfoTree)
     let printCtx := { ctx with mctx := ti.mctxAfter }
     for mvarId in ti.goalsBefore ++ ti.goalsAfter do
       let key := mvarId.name.toString
+      let cur := best[key]?
       -- Nothing beats an exact match, so stop looking for this goal.
-      if let some (0, _) := best[key]? then continue
+      if let some (0, _) := cur then continue
       let goal? ← try
           some <$> printCtx.runMetaM {} (Widget.goalToInteractive mvarId)
         catch _ => pure none
@@ -276,10 +277,8 @@ def collectTaggedGoals (infoTree : InfoTree)
         let score :=
           if wanted[key]? == some text then 0
           else 1 + ProofTree.mvarOccurrences text
-        match best[key]? with
-        | some (s, _) =>
-          if score < s then best := best.insert key (score, { goalId := key, goal })
-        | none => best := best.insert key (score, { goalId := key, goal })
+        if cur.all (fun (s, _) => score < s) then
+          best := best.insert key (score, { goalId := key, goal })
   return best.toArray.map fun (_, (_, e)) => e
 
 /-- Semantic tokens for NUMERIC LITERALS.
@@ -489,8 +488,14 @@ ancestor outright, and ranges legitimately tie — `by simp` puts `tacticSeq`,
 `tacticSeq1Indented` and `simp` on the same four bytes (measured), and taking
 the wrong one of those hands `simp`'s hover to a wrapper node whose popup is
 empty. Depth is the flat-index encoding of "prefer innermost results". -/
+structure HoverItem where
+  start : Nat
+  stop  : Nat
+  depth : Nat
+  info  : Elab.InfoWithCtx
+
 structure HoverIndex where
-  items         : Array (Nat × Nat × Nat × Elab.InfoWithCtx)
+  items         : Array HoverItem
   prefixMaxStop : Array Nat
 
 /-- The depth-carrying clone of `InfoTree.foldInfo`'s traversal (same context
@@ -498,8 +503,7 @@ merging: `mergeIntoOuter?` at `.context`, `updateContext?` descending a node) �
 `foldInfo` itself does not expose depth, and depth is the tie-break `innermost`
 needs. -/
 partial def collectHoverItems (ctx? : Option Elab.ContextInfo) (depth : Nat)
-    (t : InfoTree) (acc : Array (Nat × Nat × Nat × Elab.InfoWithCtx)) :
-    Array (Nat × Nat × Nat × Elab.InfoWithCtx) :=
+    (t : InfoTree) (acc : Array HoverItem) : Array HoverItem :=
   match t with
   | .context c t' => collectHoverItems (c.mergeIntoOuter? ctx?) depth t' acc
   | .node i cs =>
@@ -508,8 +512,8 @@ partial def collectHoverItems (ctx? : Option Elab.ContextInfo) (depth : Nat)
         if !hoverEligible i || isSyntheticSorryInfo i then acc
         else match i.stx.getRange? (canonicalOnly := true) with
           | some r =>
-            acc.push (r.start.byteIdx, r.stop.byteIdx, depth,
-                      { ctx, info := i, children := .empty })
+            acc.push { start := r.start.byteIdx, stop := r.stop.byteIdx, depth,
+                       info := { ctx, info := i, children := .empty } }
           | none => acc
       | none => acc
     cs.foldl (init := acc) fun a c =>
@@ -518,11 +522,11 @@ partial def collectHoverItems (ctx? : Option Elab.ContextInfo) (depth : Nat)
 
 def mkHoverIndex (infoTree : InfoTree) : HoverIndex := Id.run do
   let raw := collectHoverItems none 0 infoTree #[]
-  let items := raw.qsort fun a b => a.1 < b.1
+  let items := raw.qsort fun a b => a.start < b.start
   let mut pm : Array Nat := Array.mkEmpty items.size
   let mut best := 0
-  for (_, stop, _, _) in items do
-    best := max best stop
+  for it in items do
+    best := max best it.stop
     pm := pm.push best
   return { items, prefixMaxStop := pm }
 
@@ -538,24 +542,26 @@ def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
   while lo < hi do
     let mid := (lo + hi) / 2
     match idx.items[mid]? with
-    | some (start, _, _, _) => if start ≤ p then lo := mid + 1 else hi := mid
-    | none                  => hi := mid
+    | some it => if it.start ≤ p then lo := mid + 1 else hi := mid
+    | none    => hi := mid
   let mut i := lo
-  let mut best : Option (Nat × Nat × Nat × Nat × Elab.InfoWithCtx) := none
+  let mut best : Option HoverItem := none
   while i > 0 do
     i := i - 1
     match idx.prefixMaxStop[i]? with
     | some m => if m ≤ p then break
     | none   => break
-    if let some (start, stop, depth, ictx) := idx.items[i]? then
-      if start ≤ p && p < stop then
-        let width := stop - start
+    if let some it := idx.items[i]? then
+      if it.start ≤ p && p < it.stop then
+        let width := it.stop - it.start
         let wins := match best with
           | none => true
-          | some (bw, _, _, bd, _) => width < bw || (width == bw && depth > bd)
+          | some b =>
+            width < b.stop - b.start ||
+              (width == b.stop - b.start && it.depth > b.depth)
         if wins then
-          best := some (width, start, stop, depth, ictx)
-  return best.map fun (_, start, stop, _, ictx) => (start, stop, ictx)
+          best := some it
+  return best.map fun it => (it.start, it.stop, it.info)
 
 /-- One-entry cache for `getProofTree`'s payload, keyed on
 `(uri, document version, command start)`. Nothing in the payload depends on the
@@ -881,10 +887,12 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         seenTok := seenTok.insert (tb.byteIdx, tend.byteIdx)
         -- The buffer post-processes docstrings once, at hover time
         -- (`rewriteExamples` turns ```` ```lean ```` example blocks into plain
-        -- ones); apply the same rewrite so the shipped text is byte-identical
-        -- to what the editor renders.
-        let stxDoc? ← (parserDocAt snap.env snap.stx tb).map
-          (·.map fun (d, r) => (FileWorker.Hover.rewriteExamples d, r))
+        -- ones); the same rewrite runs at the two emit sites below so the
+        -- shipped text is byte-identical to what the editor renders — NOT
+        -- here: most tokens' info popup wins and the doc is discarded, and
+        -- rewriting a multi-KB docstring per token to throw it away was the
+        -- loop's one avoidable cost.
+        let stxDoc? ← parserDocAt snap.env snap.stx tb
         match hoverIdx.innermost tb.byteIdx with
         | some (rs, re, ictx) =>
           let docWins ← match stxDoc? with
@@ -894,7 +902,8 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
               else do pure !(← popupNonempty snap.env ictx.info)
           if docWins then
             tokenInfos := tokenInfos.push
-              { start := t.start, doc := stxDoc?.map (·.1) }
+              { start := t.start
+                doc := stxDoc?.map (FileWorker.Hover.rewriteExamples ·.1) }
           else
             -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates
             -- the session-scoped id the client hands back to
@@ -917,7 +926,9 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
           -- No info node at all (an unparsed calc block's tokens, mostly).
           -- The buffer would still show the parser docstring; so do we.
           if let some (doc, _) := stxDoc? then
-            tokenInfos := tokenInfos.push { start := t.start, doc := some doc }
+            tokenInfos := tokenInfos.push
+              { start := t.start
+                doc := some (FileWorker.Hover.rewriteExamples doc) }
     let calcRelations ← collectCalcRelations snap.infoTree <|
       calcRelationGoals
         (parsedTree.steps.toArray.map fun s =>
@@ -933,8 +944,8 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     -- the goal — so take the first one rather than plumbing a context down.
     -- Empty when the proof somehow has no goal at all, which the client reads
     -- as "this wire ships no tactic names" and simply offers none.
-    let tacticNames ← match (goalContexts snap.infoTree).toList.head? with
-      | some (_, (ctx, _)) => tacticNames ctx
+    let tacticNames ← match anyGoalContext snap.infoTree with
+      | some (ctx, _) => tacticNames ctx
       | none => pure #[]
     finish {
       proofId,
@@ -1072,7 +1083,7 @@ def completionNames (params : CompletionNamesParams) :
     RequestM (RequestTask (Array String)) := do
   withWaitFindSnapAtPos params.pos fun snap => do
     if params.query.length < minCompletionQuery then return #[]
-    let some (_, (ctx, _)) := (goalContexts snap.infoTree).toList.head?
+    let some (ctx, _) := anyGoalContext snap.infoTree
       | return #[]
     ctx.runMetaM {} (scanNames params.query)
 
