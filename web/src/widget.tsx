@@ -267,12 +267,16 @@ function useThemeTokenColors(
   brackets: boolean;
   outline: boolean;
   tallFrame: boolean;
+  linkEmoji: boolean;
+  linkTint: boolean;
   abbrev: AbbrevConfig;
 } {
   const [colors, setColors] = useState<Record<string, string>>();
   const [brackets, setBrackets] = useState(false);
   const [outline, setOutline] = useState(false);
   const [tallFrame, setTallFrame] = useState(false);
+  const [linkEmoji, setLinkEmoji] = useState(false);
+  const [linkTint, setLinkTint] = useState(false);
   // vscode-lean4's own defaults until told otherwise, so the editor's unicode
   // input works with no companion installed — only a customised leader or a
   // custom translation needs this trip.
@@ -294,6 +298,8 @@ function useThemeTokenColors(
           setBrackets(!!r.brackets);
           setOutline(!!r.outline);
           setTallFrame(!!r.tallFrame);
+          setLinkEmoji(!!r.linkEmoji);
+          setLinkTint(!!r.linkTint);
           if (r.input) {
             const next: AbbrevConfig = {
               enabled: r.input.enabled !== false,
@@ -331,7 +337,7 @@ function useThemeTokenColors(
       window.removeEventListener("focus", fetchOnce);
     };
   }, [rs, tick]);
-  return { colors, brackets, outline, tallFrame, abbrev };
+  return { colors, brackets, outline, tallFrame, linkEmoji, linkTint, abbrev };
 }
 
 /** `ProofTree.themeColors`'s reply (ProofTreeWidget.lean `ThemeColors`). */
@@ -345,6 +351,11 @@ interface ThemeColorsResponse {
   /** `proofTree.tallFrame` — ditto. Optional: an older companion's file has no
   such key, and a missing one means the default (leave the strip clear). */
   tallFrame?: boolean;
+  /** `proofTree.linkEmoji` / `proofTree.linkTint` — the connector target-type
+  marks' loud variants (emoji marks; edge ink tinted toward the target's hue).
+  Optional for the same older-companion reason; missing means off. */
+  linkEmoji?: boolean;
+  linkTint?: boolean;
   /** `lean4.input.*` — settings again (ProofTreeWidget.lean `InputConfig`).
   Optional: an older companion's file simply has no such key. */
   input?: {
@@ -420,6 +431,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     brackets: colorBrackets,
     outline: outlineOnly,
     tallFrame,
+    linkEmoji,
+    linkTint,
     abbrev,
   } = useThemeTokenColors(rs, docRev);
 
@@ -1008,6 +1021,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         fetchGlobalNames={fetchGlobalNames}
         tokenColors={tokenColors}
         outline={outlineOnly}
+        linkEmoji={linkEmoji}
+        linkTint={linkTint}
         abbrev={abbrev}
         onPopoutEdit={popoutEdit}
         highlightPos={{ line: pos.line, character: pos.character }}

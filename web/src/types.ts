@@ -413,6 +413,14 @@ export interface LayoutNode extends TreeNode {
   commentLines: WrappedLine[];
   commentBlockH: number;
   commentW: number;
+  // Aside modes: this tactic's strip FLOATS — drawn ABOVE the band (rising
+  // beside the consumed goal) instead of inside it, so commentBlockH does not
+  // count toward the band anywhere. STAMPED by trunkLayout's place() (false on
+  // the side-by-side column path, where the node stays at trunk x and a
+  // floated strip would rise into its goal's box), and read — never
+  // re-derived — by nodeSpan, linkSpans and the renderer, so the two sides
+  // cannot disagree. Absent outside the trunk layout (wide mode: banded).
+  commentFloats?: boolean;
   // Case-name badge (TreeNode.caseLabel), drawn ABOVE the comment strip —
   // the case marker (`| succ m ih =>`, `·`) precedes any comment inside it in
   // the source, so the band reads in source order top-down. Height it adds to

@@ -19,6 +19,7 @@ import {
   NODE_PAD,
   NODE_PAD_Y,
   ARROW_GAP,
+  LINK_MARK_OFF,
   TRUNK_INSET,
   CHIP_LANE_H,
   CHIP_TOP_GAP,
@@ -104,6 +105,8 @@ import {
   HYP_UNUSED_FILL,
   HYP_USED_FILL,
   LINK_STROKE,
+  LINK_STROKE_GOAL,
+  LINK_STROKE_TACTIC,
   MUTED_FILL,
   NODE_STYLES,
   NODE_TEXT,
@@ -195,9 +198,28 @@ const HYP_MODES: Record<
 // offers the departures in order of distance from it: the spine is compact
 // with the tactics stood aside, wide is a different layout entirely.
 type LayoutMode = "stacked" | "spine" | "tracks" | "wide";
+// Per-glyph size overrides for the rail. The target is equal INK height, NOT
+// equal font size: measured across the rail, the glyphs land in a 7–10px ink
+// band at the shared 14px (☰ 6.9, ◫ 8.3, ❮❯ 10.2, ¶ 11.6), and a glyph that
+// misses that band reads wrong however "correct" its px is. So the number
+// depends on how much of the em the glyph actually inks, and can go EITHER way
+// from the 14px default:
+//   - half-height math glyphs (⊦ ⋔ ink ~0.5em) need 17.5 to reach ~10px;
+//   - a full-height glyph (ASCII `|` inks the whole em) needs 10 to reach the
+//     same ~10px — at 17.5 it drew 17.5px of ink, near twice its neighbours.
+const RAIL_GLYPH_BIG = 17.5;
+const RAIL_GLYPH_FULL = 10;
+
+// The default is right for ☰, whose three bars fill the em box; ⊦ ⋔ are thin
+// and sparse and || is full-height, so all three carry an explicit `px`.
+// Tracks is ASCII `||`, not the math ∥ (U+2225), which is drawn tight — its
+// bars sat ~1px apart at any size, and a math glyph's spacing is at the mercy
+// of whatever the webview resolves `monospace` to. The pipes' separation is a
+// monospace CELL, so it does not scale with the size either: at 10px the bars
+// still sit ~4.8px apart, five times ∥'s gap.
 const LAYOUT_MODES: Record<
   LayoutMode,
-  { glyph: string; title: string; next: LayoutMode }
+  { glyph: string; title: string; next: LayoutMode; px?: number }
 > = {
   stacked: {
     glyph: "☰",
@@ -207,18 +229,21 @@ const LAYOUT_MODES: Record<
   },
   spine: {
     glyph: "⊦",
+    px: RAIL_GLYPH_BIG,
     title:
       "Layout: goal spine — two tracks, goals stacked tight on the left and each tactic beside its step in a right-hand track (click for aligned tracks: goals wrapped to a modest width, every tactic at one x)",
     next: "tracks",
   },
   tracks: {
-    glyph: "∥",
+    glyph: "||",
+    px: RAIL_GLYPH_FULL,
     title:
       "Layout: aligned tracks — the spine with goals wrapped to a modest width, so every tactic starts at the SAME x and the two tracks read as columns (click for the wide layered tree)",
     next: "wide",
   },
   wide: {
     glyph: "⋔",
+    px: RAIL_GLYPH_BIG,
     title:
       "Layout: wide layered tree — Sugiyama, same-depth nodes across one horizontal band (click for the compact outline)",
     next: "stacked",
@@ -418,6 +443,10 @@ function inViewScroll(
   const cx = (MARGIN.left + padX + node.x) * zoom;
   const cy = (MARGIN.top + padY + node.y) * zoom;
   const halfW = (node.data.w / 2) * zoom;
+  // Approximate on purpose: for an aside tactic with a FLOATED strip (see
+  // floatsComment) the visual extent is the same total height but centered
+  // commentBlockH/2 higher than node.y suggests. The comfort band's `pad`
+  // slack absorbs the shift; threading the layout mode in here isn't worth it.
   const halfH = ((node.data.h + node.data.commentBlockH) / 2) * zoom;
   const pad = 32;
   const maxX = el.scrollWidth - el.clientWidth;
@@ -718,6 +747,16 @@ export interface ProofTreeViewProps {
    */
   outline?: boolean;
   /**
+   * Widget-only settings on the same channel as `outline`, both default off.
+   * The link marks themselves (gap-with-dot = goal-bound, gap-with-dash =
+   * tactic-bound) are always drawn — they are the accessible baseline, not a
+   * setting. `linkEmoji` swaps them for unmistakable emoji (🎯 goal / ⚙️
+   * tactic); `linkTint` additionally pulls each edge's ink toward its target's
+   * hue. Both purely paint.
+   */
+  linkEmoji?: boolean;
+  linkTint?: boolean;
+  /**
    * Widget-only, the rich-editing escape hatch behind a tactic's hover-bar
    * `⧉` button: opens the proof in the LENS — a slim editor group under the
    * infoview — with the tactic's range selected (real buffer, so vim/LSP/
@@ -866,6 +905,8 @@ export default function ProofTreeView({
   fetchGlobalNames,
   tokenColors,
   outline = false,
+  linkEmoji = false,
+  linkTint = false,
   onPopoutEdit,
   highlightPos,
   headerExtra,
@@ -891,6 +932,14 @@ export default function ProofTreeView({
   // above bound, `delta` what the goal gained (plus anything its own tactic
   // uses), `full` the whole context.
   const [hypMode, setHypMode] = useState<HypMode>("used");
+  // Whether those lines are reordered data-then-props (see `hypGroup` in
+  // proofToTree). A SECOND axis on the same rail button — ⌥-click — rather
+  // than a fifth step in the cycle or a button of its own: it is the same
+  // question ("how is the context shown"), it composes with all four breadths,
+  // and a five-stop cycle you have to walk past three modes to reach is worse
+  // than a modifier. Grouped is home; ungrouped restores Lean's binder order,
+  // which is the order the hypotheses DEPEND on each other in.
+  const [hypGroup, setHypGroup] = useState(true);
   // Layout mode, a three-way cycle on one rail button (see LAYOUT_MODES):
   // the compact trunk outline (default — every node gets its own vertical
   // slot, branches indent off a left trunk, read by scrolling), the SPINE
@@ -1594,9 +1643,9 @@ export default function ProofTreeView({
   // The full tree (pre any on-demand elision) — the space new elide-runs are
   // picked and validated in, so a run always keys on original node ids.
   const baseNodes = useMemo(
-    () => proofToTree(proof, { hypMode, brief }),
+    () => proofToTree(proof, { hypMode, hypGroup, brief }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, hypMode, brief, codeFont],
+    [proof, hypMode, hypGroup, brief, codeFont],
   );
   // Every tactic the step cut (hover-bar ⋯) is offered on. Computed in one
   // pass per base tree: the test walks a subtree, so asking it per drawn node
@@ -2210,6 +2259,23 @@ export default function ProofTreeView({
       };
   };
 
+  // Anchor a relayout on a node that REPLACES another: capture the current
+  // node's position but key the anchor to the id the successor will carry —
+  // an elide marker's cutId when a cut is committed, or the topmost member a
+  // removed cut restores. Without this, elide/un-elide fell to the
+  // viewport-centre fallback, which can never pair tactic↔marker (the marker
+  // has no position, so their keys differ) and so scrolled arbitrarily —
+  // measured at +1226px on restoring a first-tactic cut, the restored node a
+  // full viewport off screen. Keyed by idKey: the successor is not in the
+  // current layout, so it has no posKey to read, and elide/un-elide is a pure
+  // client transform over the same baseNodes, so ids are stable across it (a
+  // concurrent re-parse just falls through to the fallback, same as before).
+  const anchorAs = (currentId: string, nextId: string) => {
+    const cur = nodes.find((n) => n.data.id === currentId);
+    if (cur)
+      anchorRef.current = { id: nextId, key: `I${nextId}`, x: cur.x, y: cur.y };
+  };
+
   /** Candidates for the tactic node being edited, in offer order. */
   const candidatesFor = (nodeId: string): CompletionPools => {
     const node = nodes.find((n) => n.data.id === nodeId);
@@ -2383,6 +2449,9 @@ export default function ProofTreeView({
     const cut: ElideCut = fwd
       ? { kind: "path", from: a, to: b }
       : { kind: "path", from: b, to: a };
+    // The marker takes `from`'s slot (the path's ancestor is its topmost
+    // member), so hold it at `from`'s y — see anchorAs.
+    anchorAs(cut.from, cutId(cut));
     setElideCuts((cs) => [...cs, cut]);
     return true;
   };
@@ -2415,11 +2484,22 @@ export default function ProofTreeView({
       }
     }
     if (ids.size === 0) return false;
-    setElideCuts((cs) => [
-      ...cs.filter((c) => !absorbed.has(cutId(c))),
-      { kind: "band", ids: [...ids] },
-    ]);
+    const cut: ElideCut = { kind: "band", ids: [...ids] };
+    // Hold the marker at the band's topmost visible element — the min-y pick.
+    // Band mode exists only in compact stacked, where y-order ≡ preorder, so
+    // that pick's slot is where the marker is emitted (see anchorAs).
+    anchorAs(pa.y <= pb.y ? a : b, cutId(cut));
+    setElideCuts((cs) => [...cs.filter((c) => !absorbed.has(cutId(c))), cut]);
     return true;
+  };
+
+  // Commit one step cut with its anchor: hold the incoming ghost at the
+  // tactic's y (the marker takes the tactic's own DFS slot, so the pair is
+  // exact — and the pointer stays on the ghost, where the restore click is).
+  // Shared by the hover bar's ◌ and the ⌥-click fast path.
+  const elideStep = (id: string) => {
+    anchorAs(id, cutId({ kind: "step", id }));
+    setElideCuts((cs) => [...cs, { kind: "step", id }]);
   };
 
   // A node click means different things per mode: fold/unfold in the tree, pick
@@ -2435,6 +2515,23 @@ export default function ProofTreeView({
     // toggle rather than a stored cut, so it just folds like any other node.)
     const clicked = nodes.find((n) => n.data.id === id)?.data;
     if (clicked?.elidedCut && !clicked.elidedCut.combined) {
+      // Hold the restored subtree's head at the marker's y: the marker sat in
+      // its topmost member's DFS slot (applyElisions' slotOf), so anchor that
+      // member — for a step cut, the tactic itself. Paired with the commit's
+      // anchorAs, collapse→expand is scroll-identity: the two shifts are
+      // exact negatives.
+      const cut = elideCuts.find((c) => cutId(c) === id);
+      if (cut) {
+        const byId = new Map(baseNodes.map((n) => [n.id, n]));
+        const ids = resolveCut(cut, byId);
+        const index = new Map(baseNodes.map((n, i) => [n.id, i]));
+        if (ids.length > 0) {
+          const top = ids.reduce((a, b) =>
+            index.get(a)! <= index.get(b)! ? a : b,
+          );
+          anchorAs(id, top);
+        }
+      }
       setElideCuts((cs) => cs.filter((c) => cutId(c) !== id));
       return;
     }
@@ -3289,6 +3386,21 @@ export default function ProofTreeView({
         onExpandAll={() => {
           anchorRoot();
           setCollapsed(new Set());
+          // Elisions go too. "Expand all" means nothing is hidden, and a
+          // ghost hides strictly more than a fold does — the fold leaves its
+          // node standing and only shuts what hangs below, while a cut lifts
+          // the tactic and its subtree out of the tree entirely. Leaving the
+          // dashed chips behind made ⊞ a half-measure you then had to hunt
+          // down and click one by one, which is exactly what it exists to
+          // save. It costs the same as it always has for folds: the cuts are
+          // gone, not remembered — ⊞ has always been the button that throws
+          // your view away.
+          //
+          // Only MANUAL cuts (◌ step, ⇥ path, ⇳ band) live in this state;
+          // ⇉ combine's runs are recomputed in the engine memo from the
+          // toggle, so a merged run stays merged — it is a display mode, not
+          // something hidden.
+          setElideCuts([]);
         }}
         onCollapseAll={() => {
           anchorRoot();
@@ -3351,6 +3463,15 @@ export default function ProofTreeView({
           // (same treatment as expand/collapse-all).
           anchorRoot();
           setHypMode(v);
+        }}
+        hypGroup={hypGroup}
+        onHypGroupChange={(v) => {
+          // Regrouping reorders lines within each box without changing how
+          // many there are, so most boxes keep their size — but the divider's
+          // HYP_SEP_H appears and disappears with it, so heights do move.
+          // Anchor exactly as the breadth cycle does.
+          anchorRoot();
+          setHypGroup(v);
         }}
         seqActive={seq.mode !== "off"}
         onToggleSequence={() => {
@@ -3490,7 +3611,9 @@ export default function ProofTreeView({
         >
           {/* Connectors are bare lines — no arrowheads: flow reads
               consistently down/right, so triangles were noise (and their
-              tips poked into boxes and comment strips). */}
+              tips poked into boxes and comment strips). What they DO carry is
+              a target-type mark near each end (LinkMark): gap-with-dot = this
+              line terminates at a GOAL, gap-with-dash = at a TACTIC. */}
           {/* Coords originate at top-left */}
           <g transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}>
             {links.map((link, i) => {
@@ -3498,29 +3621,86 @@ export default function ProofTreeView({
               // (box), box at the bottom: edges leave a box's bottom edge and
               // land above the target's whole band — reading order goal →
               // badge → comment → box. The band heights must include caseH or
-              // lanes stop short on badged nodes.
+              // lanes stop short on badged nodes. EXCEPT a floated strip
+              // (aside modes — engine-stamped `commentFloats`), which lives
+              // above the band and so contributes nothing here; MIRRORED in
+              // layout.ts linkSpans.
+              const srcCB = link.source.data.commentFloats
+                ? 0
+                : link.source.data.commentBlockH;
+              const tgtCB = link.target.data.commentFloats
+                ? 0
+                : link.target.data.commentBlockH;
               const startY =
                 link.source.y +
-                (link.source.data.h +
-                  link.source.data.commentBlockH +
-                  link.source.data.caseH) /
-                  2;
+                (link.source.data.h + srcCB + link.source.data.caseH) / 2;
               const bandTop =
                 link.target.y -
-                (link.target.data.h +
-                  link.target.data.commentBlockH +
-                  link.target.data.caseH) /
-                  2;
+                (link.target.data.h + tgtCB + link.target.data.caseH) / 2;
               // The badge and comment strip are narrative, not dataflow:
               // landing points sit below them.
-              const contentTop =
-                bandTop +
-                link.target.data.caseH +
-                link.target.data.commentBlockH;
+              const contentTop = bandTop + link.target.data.caseH + tgtCB;
               const endY = bandTop - ARROW_GAP; // line ends just above the band
 
               const sLeft = link.source.x - link.source.data.w / 2;
               const tLeft = link.target.x - link.target.data.w / 2;
+              // Target-type marks (see LinkMark), one near each end, each on a
+              // straight run of the path. Fit rules: a mark needs its run to
+              // hold LINK_MARK_OFF plus half its ≈9px footprint (MARK_FIT);
+              // when start and end share ONE run, both need MARK_FIT2 or the
+              // START mark wins alone — the departure is the cue that solves
+              // the follow-the-wrong-line problem; the arrival only confirms.
+              const MARK_FIT = LINK_MARK_OFF + 5;
+              const MARK_FIT2 = 2 * LINK_MARK_OFF + 9;
+              // The shortest run worth marking at all: the ≈9px mark footprint
+              // plus a sliver of stroke either side. The stacked trunk's
+              // goal→tactic gap is 11px — the MOST common link — so this must
+              // stay under it or the default layout loses its tactic marks
+              // (measured: 12/29 links bare at a 13px floor).
+              const MARK_MIN = 10;
+              type Mark = { x: number; y: number; horiz?: boolean };
+              let startMark: Mark | null = null;
+              let endMark: Mark | null = null;
+              // Offset of a mark along a single run of length `run`, from the
+              // run's own start: LINK_MARK_OFF from the chosen end when the
+              // run holds it, else CENTERED — a link that short is seen whole,
+              // so one mid-run mark says everything the end pair would.
+              const markAt = (run: number, fromStart: boolean) =>
+                run >= MARK_FIT
+                  ? fromStart
+                    ? LINK_MARK_OFF
+                    : run - LINK_MARK_OFF
+                  : run >= MARK_MIN
+                    ? run / 2
+                    : null;
+              // Marks on a SHARED straight run from y0 to y1 at lane x: both
+              // ends when it fits, else the one centered/start mark.
+              const sharedMarks = (x: number, y0: number, y1: number) => {
+                const run = y1 - y0;
+                if (run >= MARK_FIT2) {
+                  startMark = { x, y: y0 + LINK_MARK_OFF };
+                  endMark = { x, y: y1 - LINK_MARK_OFF };
+                } else {
+                  const o = markAt(run, true);
+                  if (o !== null) startMark = { x, y: y0 + o };
+                }
+              };
+              // Marks on a branch's HORIZONTAL leg from x0 to x1 at y — the
+              // leg unique to this link. An elbow's VERTICAL run is the trunk
+              // (or a drop shared by every sibling branch), so it stays CLEAN
+              // and both marks ride the horizontal: one right after the split
+              // (the departure cue), one before the box (the arrival) — per
+              // the user's two-track sketch: solid trunk, `- - —— - -` off it.
+              const branchMarks = (x0: number, x1: number, y: number) => {
+                const run = x1 - x0;
+                if (run >= MARK_FIT2) {
+                  startMark = { x: x0 + LINK_MARK_OFF, y, horiz: true };
+                  endMark = { x: x1 - LINK_MARK_OFF, y, horiz: true };
+                } else {
+                  const o = markAt(run, true);
+                  if (o !== null) startMark = { x: x0 + o, y, horiz: true };
+                }
+              };
               let d: string;
               if (compact && link.col) {
                 // Side-by-side column: the target sits in its own column to
@@ -3532,6 +3712,15 @@ export default function ProofTreeView({
                 const childLane = tLeft + TRUNK_INSET;
                 const hy = bandTop - ARROW_GAP * 2;
                 d = `M${col},${startY} L${col},${hy} L${childLane},${hy} L${childLane},${contentTop - ARROW_GAP}`;
+                // The drop below the source is SHARED by every column's link,
+                // so it stays clean; the departure mark sits on the cross leg
+                // right after its corner, the arrival on the child's own
+                // descent just above the box.
+                const o1 = markAt(childLane - col, true);
+                if (o1 !== null)
+                  startMark = { x: col + o1, y: hy, horiz: true };
+                const o2 = markAt(contentTop - ARROW_GAP - hy, false);
+                if (o2 !== null) endMark = { x: childLane, y: hy + o2 };
               } else if (compact && link.lane !== undefined) {
                 // Spine mode: an aside tactic's outgoing link rides the TRUNK
                 // lane the layout stamped on it, from the tactic's box middle
@@ -3544,14 +3733,26 @@ export default function ProofTreeView({
                 // linkSpans.
                 const lane = link.lane;
                 const srcBoxMid =
-                  link.source.y +
-                  (link.source.data.caseH + link.source.data.commentBlockH) /
-                    2;
+                  link.source.y + (link.source.data.caseH + srcCB) / 2;
                 if (Math.abs(tLeft - (lane - TRUNK_INSET)) < 0.5) {
                   d = `M${lane},${srcBoxMid} L${lane},${contentTop - ARROW_GAP}`;
+                  // This run IS the trunk (stamped so it reads as one
+                  // continuous line) — no departure mark to break it; the one
+                  // dot sits just above the goal it lands on.
+                  const o = markAt(contentTop - ARROW_GAP - srcBoxMid, false);
+                  if (o !== null) endMark = { x: lane, y: srcBoxMid + o };
                 } else {
                   const landY = contentTop + link.target.data.h / 2;
                   d = `M${lane},${srcBoxMid} L${lane},${landY} L${tLeft - ARROW_GAP},${landY}`;
+                  if (tLeft - ARROW_GAP > lane)
+                    branchMarks(lane, tLeft - ARROW_GAP, landY);
+                  else {
+                    // Leftward (trunk-resuming) elbow: the horizontal runs
+                    // back under the target box, so the mark rides the
+                    // vertical drop instead.
+                    const o = markAt(landY - srcBoxMid, true);
+                    if (o !== null) startMark = { x: lane, y: srcBoxMid + o };
+                  }
                 }
               } else if (compact) {
                 // Orthogonal connector dropped from a column just inside the
@@ -3564,9 +3765,22 @@ export default function ProofTreeView({
                   // strip (which hangs indented to the lane's right — see the
                   // strip render) down to the node's box.
                   d = `M${col},${startY} L${col},${contentTop - ARROW_GAP}`;
+                  sharedMarks(col, startY, contentTop - ARROW_GAP);
                 } else {
                   const landY = contentTop + link.target.data.h / 2;
                   d = `M${col},${startY} L${col},${landY} L${tLeft - ARROW_GAP},${landY}`;
+                  // The vertical drop is shared by every sibling branch off
+                  // this source (their elbows overlay it), so the marks live
+                  // on the horizontal leg unique to this link — except on a
+                  // LEFTWARD (trunk-resuming) elbow, whose horizontal runs
+                  // back under the target box: there the vertical is this
+                  // link's alone and takes the mark.
+                  if (tLeft - ARROW_GAP > col)
+                    branchMarks(col, tLeft - ARROW_GAP, landY);
+                  else {
+                    const o = markAt(landY - startY, true);
+                    if (o !== null) startMark = { x: col, y: startY + o };
+                  }
                 }
               } else {
                 const startX = link.source.x;
@@ -3576,16 +3790,39 @@ export default function ProofTreeView({
                     C${startX},${(startY + endY) / 2}
                      ${endX},${endY - k}
                      ${endX},${endY}`;
+                // NO marks in wide mode (user directive): the curves splay,
+                // so a straight cut-and-dot reads as debris on a line that is
+                // not straight — and the layered tree makes the target's kind
+                // obvious from shape alone (goals and tactics alternate by
+                // depth band).
               }
 
+              const goalBound = link.target.data.type === "goal";
+              const stroke = linkTint
+                ? goalBound
+                  ? LINK_STROKE_GOAL
+                  : LINK_STROKE_TACTIC
+                : LINK_STROKE;
               return (
-                <path
-                  key={i}
-                  fill="none"
-                  stroke={LINK_STROKE}
-                  strokeWidth={1.5}
-                  d={d}
-                />
+                <g key={i}>
+                  <path fill="none" stroke={stroke} strokeWidth={1.5} d={d} />
+                  {startMark && (
+                    <LinkMark
+                      {...startMark}
+                      goal={goalBound}
+                      emoji={linkEmoji}
+                      stroke={stroke}
+                    />
+                  )}
+                  {endMark && (
+                    <LinkMark
+                      {...endMark}
+                      goal={goalBound}
+                      emoji={linkEmoji}
+                      stroke={stroke}
+                    />
+                  )}
+                </g>
               );
             })}
             {/* `ni` keys the diagnostic ribbon's clipPath id. The node's own
@@ -3601,8 +3838,14 @@ export default function ProofTreeView({
               // pinned at the bottom — case badge, then comment strip, then
               // the box, mirroring source order. All box geometry hangs off
               // boxTop; inside it the text stack is the context block (hypH
-              // tall, empty for tactics) then the label lines.
-              const topH = node.data.caseH + node.data.commentBlockH;
+              // tall, empty for tactics) then the label lines. A FLOATED
+              // strip (aside modes — `commentFloats`, stamped by the engine's
+              // place() so this can never disagree with the band it computed)
+              // leaves the band: topH drops it, and the strip is drawn above
+              // the band instead, rising beside the goal.
+              const floatComment = !!node.data.commentFloats;
+              const topH =
+                node.data.caseH + (floatComment ? 0 : node.data.commentBlockH);
               const boxTop = (topH - h) / 2;
               const contentTop = boxTop + NODE_PAD_Y;
               const labelTop = contentTop + hypH;
@@ -3780,6 +4023,7 @@ export default function ProofTreeView({
                     ? `${CMD}-click to reveal in source`
                     : null,
                 editable ? "double-click to edit" : null,
+                elidable ? "⌥-click to elide into the trunk" : null,
                 focusable ? "⌥-click to focus this subtree" : null,
                 isFocusRoot ? "⌥-click (or Esc) to leave this focus" : null,
                 hyps?.some((l) => l.used)
@@ -3847,6 +4091,14 @@ export default function ProofTreeView({
                 // click is a pick / un-elide — never a reveal or focus.
                 if (elidePick || bandPick || isMarker) {
                   onNodeClick(id, foldable);
+                  return;
+                }
+                // Tactic fast path — ⌥-click elides it into the trunk (the
+                // hover bar's ◌ without the hover-and-aim; the goals' ⌥-focus
+                // precedent). Checked BEFORE reveal, which otherwise consumes
+                // every tactic click in the widget, modified or not.
+                if (elidable && e.altKey) {
+                  elideStep(id);
                   return;
                 }
                 // In the widget, clicking a positioned tactic reveals its source
@@ -3997,10 +4249,17 @@ export default function ProofTreeView({
                               : -node.data.commentW / 2) +
                             line.indent
                           }
+                          // Floated (aside tactics): bottom-anchored ABOVE
+                          // the band, so the lines rise beside the consumed
+                          // goal and commentBlockH's trailing COMMENT_GAP
+                          // lands between last line and box. Otherwise: at
+                          // the band top, below the badge.
                           y={
                             boxTop -
                             topH +
-                            node.data.caseH +
+                            (floatComment
+                              ? -node.data.commentBlockH
+                              : node.data.caseH) +
                             (j + 0.5) * COMMENT_LINE_H
                           }
                           dy="0.32em"
@@ -4519,12 +4778,8 @@ export default function ProofTreeView({
                                 // one leaves behind.
                                 glyph: "◌",
                                 title:
-                                  "Elide into the trunk — this tactic and anything it opened, leaving a ghost to click back open",
-                                onClick: () =>
-                                  setElideCuts((cs) => [
-                                    ...cs,
-                                    { kind: "step" as const, id },
-                                  ]),
+                                  "Elide into the trunk (⌥-click) — this tactic and anything it opened, leaving a ghost to click back open",
+                                onClick: () => elideStep(id),
                               },
                             ]
                           : []),
@@ -5525,8 +5780,94 @@ function DiagnosticPill({
   );
 }
 
+/** The target-type mark near each end of a connector: gap-with-DOT for a
+goal-bound link, gap-with-DASH for a tactic-bound one — round ↔ goals' rounder
+corners, straight ↔ tactics' squarer ones. The cue lives at the DEPARTURE end
+as well as the arrival because the problem it solves is starting to follow the
+wrong line off the trunk. Both marks are PAINTED over the stroke (bg-coloured
+cut segments), never a path edit — so layout.ts's linkSpans mirror is
+untouched. The dash is not a drawn glyph: TWO cuts leave a short piece of the
+original stroke floating between them, so it stays exactly on the line at any
+zoom. `emoji` (proofTree.linkEmoji) swaps the subtle marks for unmistakable
+ones. */
+function LinkMark({
+  x,
+  y,
+  horiz = false,
+  goal,
+  emoji,
+  stroke,
+}: {
+  x: number;
+  y: number;
+  /** The run this mark rides: vertical by default, horizontal on the final
+      leg of a │└ elbow (the marks orient along the line, not the page). */
+  horiz?: boolean;
+  goal: boolean;
+  emoji: boolean;
+  stroke: string;
+}) {
+  // A cut: a short background-coloured segment along the run, centered at
+  // offset `c` from the mark point, wide enough to swallow the 1.5px stroke.
+  const cut = (key: string, c: number, len: number) =>
+    horiz ? (
+      <line
+        key={key}
+        x1={x + c - len / 2}
+        y1={y}
+        x2={x + c + len / 2}
+        y2={y}
+        stroke="var(--ptw-bg)"
+        strokeWidth={4}
+      />
+    ) : (
+      <line
+        key={key}
+        x1={x}
+        y1={y + c - len / 2}
+        x2={x}
+        y2={y + c + len / 2}
+        stroke="var(--ptw-bg)"
+        strokeWidth={4}
+      />
+    );
+  if (emoji)
+    return (
+      <g pointerEvents="none">
+        {cut("c", 0, 13)}
+        <text
+          x={x}
+          y={y}
+          fontSize={9}
+          textAnchor="middle"
+          dominantBaseline="central"
+        >
+          {goal ? "🎯" : "⚙️"}
+        </text>
+      </g>
+    );
+  return (
+    <g pointerEvents="none">
+      {goal ? (
+        <>
+          {cut("c", 0, 7)}
+          <circle cx={x} cy={y} r={2} fill={stroke} />
+        </>
+      ) : (
+        // Two cuts either side of the mark point: the stroke left between
+        // them (≈4px) IS the dash.
+        <>
+          {cut("a", -3.25, 2.5)}
+          {cut("b", 3.25, 2.5)}
+        </>
+      )}
+    </g>
+  );
+}
+
 function RailButton({
   glyph,
+  glyphPx,
   title,
   onClick,
   pressed,
@@ -5534,13 +5875,21 @@ function RailButton({
   disabled,
 }: {
   glyph: string;
+  // Per-glyph override of the rail's shared font size, for the sparse glyphs
+  // that read small at it (see RAIL_GLYPH_BIG). The BOX never changes — the
+  // rail's grid of 26px squares is what makes it read as one control.
+  glyphPx?: number;
   title: string;
-  onClick: () => void;
+  // The event is passed through so a button can carry a second gesture on a
+  // modifier (⌥ on the context-breadth button); callers that don't care stay
+  // `() => …`, which is assignable.
+  onClick: (e: React.MouseEvent) => void;
   pressed?: boolean;
   pressedColor?: string;
   disabled?: boolean;
 }) {
   const color = pressedColor ?? RAIL_PRESSED;
+  const base = glyphPx ? { ...RAIL_BTN, fontSize: glyphPx } : RAIL_BTN;
   return (
     <button
       type="button"
@@ -5549,15 +5898,15 @@ function RailButton({
       disabled={disabled}
       style={
         disabled
-          ? { ...RAIL_BTN, opacity: 0.35, cursor: "default" }
+          ? { ...base, opacity: 0.35, cursor: "default" }
           : pressed
             ? {
-                ...RAIL_BTN,
+                ...base,
                 background: color,
                 borderColor: color,
                 color: ACCENT_TEXT,
               }
-            : RAIL_BTN
+            : base
       }
     >
       {glyph}
@@ -5606,7 +5955,7 @@ function ReflowControl({
         glyph="¶"
         title={
           forced
-            ? `Reflow at ${forced} columns, required by the ∥ aligned-tracks layout (a shared tactic column needs bounded goal boxes) — click for the width slider to change it`
+            ? `Reflow at ${forced} columns, required by the || aligned-tracks layout (a shared tactic column needs bounded goal boxes) — click for the width slider to change it`
             : reflow === "off"
               ? "Reflow: wrap labels at a narrower column so branches fit side by side — click for the width slider"
               : `Reflow at ${reflow} columns: labels (and context lines) wrapped there, breaking at commas, connectives, := and tactic keywords — click for the width slider`
@@ -5704,6 +6053,8 @@ function ControlRail({
   onCombineChange,
   hypMode,
   onHypModeChange,
+  hypGroup,
+  onHypGroupChange,
   seqActive,
   onToggleSequence,
   elidePicking,
@@ -5739,6 +6090,8 @@ function ControlRail({
   onCombineChange: (v: boolean) => void;
   hypMode: HypMode;
   onHypModeChange: (v: HypMode) => void;
+  hypGroup: boolean;
+  onHypGroupChange: (v: boolean) => void;
   seqActive: boolean;
   onToggleSequence: () => void;
   elidePicking: boolean;
@@ -5781,7 +6134,11 @@ function ControlRail({
           <div style={{ height: 6 }} />
         </>
       )}
-      <RailButton glyph="⊞" title="Expand all" onClick={onExpandAll} />
+      <RailButton
+        glyph="⊞"
+        title="Expand all — unfold every branch and restore every elided run"
+        onClick={onExpandAll}
+      />
       <RailButton glyph="⊟" title="Collapse all" onClick={onCollapseAll} />
       <div style={{ height: 6 }} />
       <RailButton
@@ -5794,6 +6151,7 @@ function ControlRail({
           CURRENT mode, pressed means "not the stacked home". */}
       <RailButton
         glyph={LAYOUT_MODES[layout].glyph}
+        glyphPx={LAYOUT_MODES[layout].px}
         title={LAYOUT_MODES[layout].title}
         pressed={layout !== "stacked"}
         onClick={() => onLayoutChange(LAYOUT_MODES[layout].next)}
@@ -5840,14 +6198,26 @@ function ControlRail({
           (`proofTree.outlineOnly`) and arrives as a prop. */}
       <RailButton
         glyph={HYP_MODES[hypMode].glyph}
-        title={HYP_MODES[hypMode].title}
+        title={`${HYP_MODES[hypMode].title}. ⌥-click: ${
+          hypGroup
+            ? "draw each context in Lean's own binder order instead of data-then-propositions"
+            : "regroup each context data-then-propositions (currently binder order)"
+        }`}
         // Pressed whenever the context is NOT the default breadth, so the rail
         // shows at a glance that something is being filtered or expanded. Home
         // is `used`; a rail button offers the DEPARTURE from home rather than
         // asking you to hold it pressed to stay there (the ⋔ layout button's
-        // reasoning — keep the two in step if either default moves).
-        pressed={hypMode !== "used"}
-        onClick={() => onHypModeChange(HYP_MODES[hypMode].next)}
+        // reasoning — keep the two in step if either default moves). Ungrouped
+        // is a departure from home on the SECOND axis, so it presses the same
+        // button; the two are told apart by the glyph (which tracks breadth
+        // only) plus the boxes themselves, where losing the divider and the
+        // data-first order is the visible answer.
+        pressed={hypMode !== "used" || !hypGroup}
+        onClick={(e) =>
+          e.altKey
+            ? onHypGroupChange(!hypGroup)
+            : onHypModeChange(HYP_MODES[hypMode].next)
+        }
       />
       <div style={{ height: 6 }} />
       <RailButton

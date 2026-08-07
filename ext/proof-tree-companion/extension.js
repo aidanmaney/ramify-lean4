@@ -296,6 +296,13 @@ function publishThemeColors() {
     // is measured from its own offset rather than from the top of the page.
     const tallFrame =
       vscode.workspace.getConfiguration("proofTree").get("tallFrame") === true;
+    // The connectors' target-type marks: emoji variant and hue tint. Both
+    // standing look preferences, so settings rather than rail buttons, riding
+    // the same channel for the same webview-can't-read-settings reason.
+    const linkEmoji =
+      vscode.workspace.getConfiguration("proofTree").get("linkEmoji") === true;
+    const linkTint =
+      vscode.workspace.getConfiguration("proofTree").get("linkTint") === true;
     // The tree's in-place tactic editor has the buffer's own unicode input
     // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
     // The TABLE is bundled with the renderer, so this is only about the user's
@@ -325,6 +332,8 @@ function publishThemeColors() {
           brackets,
           outline,
           tallFrame,
+          linkEmoji,
+          linkTint,
           input,
           colors: Object.keys(colors).map((type) => ({
             type,
@@ -341,7 +350,9 @@ function publishThemeColors() {
     say(
       `theme "${name}" (brackets ${brackets ? "on" : "off"}, ` +
         `outline ${outline ? "on" : "off"}, ` +
-        `tall frame ${tallFrame ? "on" : "off"}): ` +
+        `tall frame ${tallFrame ? "on" : "off"}, ` +
+        `link emoji ${linkEmoji ? "on" : "off"}, ` +
+        `link tint ${linkTint ? "on" : "off"}): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),
@@ -1011,6 +1022,8 @@ function activate(context) {
         e.affectsConfiguration("editor.bracketPairColorization.enabled") ||
         e.affectsConfiguration("proofTree.outlineOnly") ||
         e.affectsConfiguration("proofTree.tallFrame") ||
+        e.affectsConfiguration("proofTree.linkEmoji") ||
+        e.affectsConfiguration("proofTree.linkTint") ||
         e.affectsConfiguration("lean4.input")
       )
         publishThemeColors();

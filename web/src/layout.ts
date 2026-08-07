@@ -136,6 +136,11 @@ export const HYP_GAP = 6;
 // bare lines (no arrowheads), so this stays small — just enough that a line
 // doesn't touch a border.
 export const ARROW_GAP = 3;
+// How far along a connector (from each end) its target-type mark sits — the
+// gapped dot/dash that says whether the line terminates at a goal or a tactic
+// (see the link render in ProofTreeView). Paint-only: the marks are halos OVER
+// the stroke, never a path change, so linkSpans needs no mirror of this.
+export const LINK_MARK_OFF = 8;
 
 // Hypothesis (local-context) line geometry, for the block drawn inside a goal
 // box. Shared with the render so the room the layout reserves matches what's
@@ -174,6 +179,27 @@ export const ASIDE_X = TRUNK_INSET + 14; // floor: an aside tactic clears the la
 const ASIDE_DROP = 4; // goal bottom → its tactic's band top
 const ASIDE_CLEAR = 10; // stub y → the continuation's band top
 const ASIDE_TRACK_GAP = 24; // right edge of the goal track → the tactic track
+
+/** In the aside modes an annotated tactic's comment strip FLOATS: it is drawn
+above the box, outside the band, rising into the open space beside the goal
+the tactic consumes — so it stops costing the tree vertical room (the band,
+`stubY` and `trackFloor` all shrink by the strip's height). This predicate is
+only the STARTING guess: `place()` refines it (a side-by-side SPLIT keeps the
+node at trunk x, where a floated strip would rise into its goal's box — the
+column path returns before the aside slide ever runs) and STAMPS the final
+answer on `LayoutNode.commentFloats`, which is what `nodeSpan`, `linkSpans`
+and the renderer read. One writer, many readers — the measurer and renderer
+cannot drift, and drift here means the strip and the boxes disagree about who
+owns the vertical room, i.e. overlap. Stacked and wide (`aside === false`)
+never stamp it, so they are untouched by construction. */
+function floatsComment(
+  aside: boolean | "track",
+  d: { type: string; parents: readonly unknown[]; commentBlockH: number },
+): boolean {
+  return (
+    !!aside && d.type === "tactic" && d.parents.length > 0 && d.commentBlockH > 0
+  );
+}
 // The frontier-chip lane (`+`/`sorry`/`calc`/`step`, and the relation picker)
 // hangs BELOW a node's box, outside its band — so unlike the comment strip and
 // case badge it is not reserved by the band arithmetic, and whatever the trunk
@@ -250,6 +276,8 @@ function trunkLayout(
 
   // A node's effective width: the box, or a strip hanging past it.
   const effOf = (n: LayoutNode): number => {
+    // (unchanged by comment floating: a floated strip keeps the same x rule,
+    // so the width contribution is identical — only its y moves.)
     const indent = n.parents.length > 0 ? COMMENT_INDENT : 0;
     return Math.max(
       n.w,
@@ -273,9 +301,18 @@ function trunkLayout(
 
   const nodeSpan = (pn: PlacedNode): Span => {
     const d = pn.data;
-    const band = d.caseH + d.commentBlockH + d.h;
+    const floats = !!d.commentFloats;
+    const band = d.caseH + (floats ? 0 : d.commentBlockH) + d.h;
     const left = pn.x - d.w / 2;
-    return { y0: pn.y - band / 2, y1: pn.y + band / 2, lo: left, hi: left + effOf(d) };
+    // A floated strip hangs ABOVE the band (beside the consumed goal), so the
+    // span still covers its ink — without this, contour packing and the aside
+    // x-slide would run other boxes straight over the strip.
+    return {
+      y0: pn.y - band / 2 - (floats ? d.commentBlockH : 0),
+      y1: pn.y + band / 2,
+      lo: left,
+      hi: left + effOf(d),
+    };
   };
 
   // The ink of one compact link, as spans. MIRRORS the renderer's routing in
@@ -285,9 +322,13 @@ function trunkLayout(
   function linkSpans(l: PlacedLink): Span[] {
     const sd = l.source.data;
     const td = l.target.data;
-    const startY = l.source.y + (sd.h + sd.commentBlockH + sd.caseH) / 2;
-    const bandTop = l.target.y - (td.h + td.commentBlockH + td.caseH) / 2;
-    const contentTop = bandTop + td.caseH + td.commentBlockH;
+    // Floated strips are outside the band, so their height must not enter the
+    // band arithmetic here either (the renderer's link mirror does the same).
+    const sCB = sd.commentFloats ? 0 : sd.commentBlockH;
+    const tCB = td.commentFloats ? 0 : td.commentBlockH;
+    const startY = l.source.y + (sd.h + sCB + sd.caseH) / 2;
+    const bandTop = l.target.y - (td.h + tCB + td.caseH) / 2;
+    const contentTop = bandTop + td.caseH + tCB;
     const sLeft = l.source.x - sd.w / 2;
     const tLeft = l.target.x - td.w / 2;
     const col = sLeft + TRUNK_INSET;
@@ -307,7 +348,7 @@ function trunkLayout(
     // left edge (the ordinary rule below) would run it through the goal
     // boxes stacked left of the track.
     if (l.lane !== undefined) {
-      const srcBoxMid = l.source.y + (sd.caseH + sd.commentBlockH) / 2;
+      const srcBoxMid = l.source.y + (sd.caseH + sCB) / 2;
       if (Math.abs(tLeft - (l.lane - TRUNK_INSET)) < 0.5)
         return [
           { y0: srcBoxMid, y1: contentTop - ARROW_GAP, lo: l.lane, hi: l.lane },
@@ -343,7 +384,19 @@ function trunkLayout(
     if (already)
       // DAG guard: extra parents just link to it, contributing no extent.
       return { pn: already, bottom: y0, right: x0 };
-    const band = n.caseH + n.commentBlockH + n.h;
+    // A floated strip (see floatsComment) leaves the band: the box rises by
+    // the strip's height and the strip is drawn ABOVE it, beside the goal —
+    // its ink is covered by nodeSpan and the crossing test below, never by
+    // the band. NOT under a side-by-side SPLIT: that path returns before the
+    // aside slide, leaving the node at trunk x, where a floated strip would
+    // rise straight into its goal's box (found by the overlap sweep). The
+    // final answer is STAMPED for every downstream reader.
+    const floats =
+      floatsComment(aside, n) &&
+      !(sideBySide && (kids.get(n.id) ?? []).length > 1);
+    n.commentFloats = floats;
+    const cB = floats ? 0 : n.commentBlockH;
+    const band = n.caseH + cB + n.h;
     // The box is left-aligned at x0; the comment strip too, except parented
     // nodes' strips hang indented off the incoming lane (COMMENT_INDENT) —
     // either may be the widest (effOf).
@@ -356,8 +409,12 @@ function trunkLayout(
     // links hold PlacedNode references, so geometry follows the node.
     const isAside = !!aside && n.type === "tactic" && n.parents.length > 0;
     // The track is a shared column (exactly shared in "track" mode), so a
-    // tactic may not start above the previous track occupant's bottom.
-    if (isAside) y0 = Math.max(y0, trackFloor);
+    // tactic may not start above the previous track occupant's bottom. A
+    // floated strip must clear it too — it hangs ABOVE y0, outside the band,
+    // and the x-slide below never sees earlier nodes — so the floor applies
+    // to the STRIP's top, costing the compression back only where the track
+    // is actually that crowded.
+    if (isAside) y0 = Math.max(y0, trackFloor + (floats ? n.commentBlockH : 0));
     const pn: PlacedNode = { x: x0 + n.w / 2, y: y0 + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
@@ -470,7 +527,7 @@ function trunkLayout(
     // pass below makes safe. `bottom` still floors at the box's own bottom so
     // a LEAF tactic (nothing below it) can't be overlapped by a later
     // sibling, and so a tall box in the track pushes what follows down.
-    const stubY = y0 + n.caseH + n.commentBlockH + n.h / 2;
+    const stubY = y0 + n.caseH + cB + n.h / 2;
     const boxBottom = y0 + band + n.chipH;
     const mark = nodes.length;
     if (isAside) bottom = stubY + ASIDE_CLEAR;
@@ -505,15 +562,26 @@ function trunkLayout(
       // the box's vertical range — the trunk continuation it overlaps by
       // construction, and any branch box tall enough to reach it.
       const parentPn = placed.get(n.parents[0].id);
+      // With a floated strip the node's ink rises beside the goal, so the
+      // clearance must cover the goal's WHOLE ink (its own strip or badge may
+      // hang past its box — effOf); without a float the box never reaches the
+      // goal's strip row and the box width suffices, as before.
       let clearX = Math.max(
         x0 + ASIDE_X,
         parentPn
-          ? parentPn.x + parentPn.data.w / 2 + ASIDE_TRACK_GAP
+          ? parentPn.x -
+              parentPn.data.w / 2 +
+              (floats ? effOf(parentPn.data) : parentPn.data.w) +
+              ASIDE_TRACK_GAP
           : x0 + ASIDE_X,
       );
+      // The tactic's own ink range includes its floated strip (above y0), so
+      // the slide clears anything the strip could sit on — the previous aside
+      // tactic's box can share that range (trackFloor only floors the BOX).
+      const inkTop = floats ? y0 - n.commentBlockH : y0;
       for (const o of nodes.slice(mark)) {
         const b = nodeSpan(o);
-        if (b.y0 < boxBottom && y0 < b.y1)
+        if (b.y0 < boxBottom && inkTop < b.y1)
           clearX = Math.max(clearX, b.hi + ASIDE_TRACK_GAP);
       }
       pn.x = clearX + n.w / 2;

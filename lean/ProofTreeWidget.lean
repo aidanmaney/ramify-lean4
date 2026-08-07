@@ -1231,6 +1231,13 @@ structure ThemeColors where
   states mean is the RENDERER's business (`FRAME_FRACTION*` in widget.tsx),
   since the frame is measured from the widget's own offset down. -/
   tallFrame : Bool := false
+  /-- `proofTree.linkEmoji` — swap the connectors' subtle target-type marks
+  (gap-with-dot = goal-bound, gap-with-dash = tactic-bound) for unmistakable
+  emoji (🎯/⚙️). A setting, the same long way round. -/
+  linkEmoji : Bool := false
+  /-- `proofTree.linkTint` — additionally tint each connector toward its
+  target's hue. Ditto. -/
+  linkTint : Bool := false
   /-- `lean4.input.*` — unicode abbreviations for the in-place tactic editor.
   Settings again, so again the long way round. -/
   input : InputConfig := {}
@@ -1253,6 +1260,8 @@ instance : FromJson ThemeColors where
           brackets := jsonField j "brackets" false,
           outline := jsonField j "outline" false,
           tallFrame := jsonField j "tallFrame" false,
+          linkEmoji := jsonField j "linkEmoji" false,
+          linkTint := jsonField j "linkTint" false,
           input := jsonField j "input" {},
           colors := jsonField j "colors" #[] }
 

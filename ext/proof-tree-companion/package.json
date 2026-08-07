@@ -32,6 +32,16 @@
           "default": false,
           "markdownDescription": "Let the proof tree run closer to the bottom edge of the infoview. By default it stops a little short, leaving the next section's heading showing — both a reminder that the column continues below and somewhere to put the pointer, since the tree's own scroll container swallows the wheel. Tick this to give most of that strip back to the tree; what remains below it (the restart-file button included) still takes a scroll."
         },
+        "proofTree.linkEmoji": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Replace the connectors' subtle target-type marks with emoji: 🎯 where a line runs into a goal, ⚙️ where it runs into a tactic. By default each connector carries a small gapped mark near either end — a dot for goal-bound, a dash for tactic-bound — so you know which kind of node a line terminates at before you follow it; tick this to make the marks unmistakable at the cost of some visual noise."
+        },
+        "proofTree.linkTint": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Tint each connector toward the colour of the node it runs INTO (the goals' blue, the tactics' green), on top of the shape marks. Off by default because colour alone is easy to miss and not everyone tells the two hues apart — the shape marks are the baseline; this is reinforcement for those who want it."
+        },
         "proofTree.lensGoals": {
           "type": "boolean",
           "default": true,

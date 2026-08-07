@@ -188,7 +188,9 @@ export function hypLine(h: Hypothesis): string {
 // of `full`. `delta` contains `new` plus the immediate-consumer part of `used`
 // but not its deeper reaches. In every mode the shown lines are reordered
 // data-first (see the partition at the end of contextFor); within each group
-// the context's own order is preserved.
+// the context's own order is preserved. That reordering is the one part of
+// this a second control turns OFF — see `hypGroup`; the four breadths are
+// about WHICH lines, grouping only about their order.
 export type HypMode = "used" | "new" | "delta" | "full";
 
 function contextFor(
@@ -206,6 +208,9 @@ function contextFor(
   // dependency can arrive under an id this goal doesn't know while plainly
   // meaning its `h`.
   deepUsed?: Map<string, string>,
+  // Whether to reorder the shown lines data-then-props (see the partition at
+  // the end). Off restores the context's OWN order — see `hypGroup`.
+  group = true,
 ): HypLine[] {
   if (flags?.noHyps) return [];
   const used = new Set(consumedBy?.tacticDependsOn ?? []);
@@ -257,6 +262,12 @@ function contextFor(
   // every mode and flag composes with it, and stamps `sep` on the first prop
   // line only when both groups are present — a one-group block needs no
   // divider and must stay byte-identical to before this existed.
+  // Ungrouped (`hypGroup` off) is the same list in the context's OWN order,
+  // which is a dependency order: a later hyp may mention an earlier one, and
+  // reordering can put the reference above what it names. No `sep` there —
+  // the divider marks a boundary that no longer exists.
+  if (!group)
+    return shown.map((h) => ({ text: hypLine(h), used: used.has(h.id) }));
   const data = shown.filter((h) => h.isProof !== "proof");
   const props = shown.filter((h) => h.isProof === "proof");
   return [...data, ...props].map((h, i) => ({
@@ -794,6 +805,15 @@ export interface ProofToTreeOptions {
    */
   hypMode?: HypMode;
   /**
+   * Whether each context block is reordered DATA-then-PROPOSITIONS (the
+   * signature reading, with a hairline divider between the groups). On by
+   * default. Off draws the context in Lean's own binder order, which is what a
+   * dependent context is written in: a hypothesis may mention an earlier one,
+   * and the grouped view can float the mention above the binder it names.
+   * Orthogonal to `hypMode`, which chooses which lines are shown at all.
+   */
+  hypGroup?: boolean;
+  /**
    * Brief mode: collapse mechanical boilerplate inside each tactic label to
    * `…` (see briefLabel.ts). Off by default; a geometry-affecting toggle, so
    * the engine is rebuilt when it flips (same as reflow).
@@ -803,7 +823,7 @@ export interface ProofToTreeOptions {
 
 export function proofToTree(
   proof: Proof,
-  { hypMode = "used", brief = false }: ProofToTreeOptions = {},
+  { hypMode = "used", hypGroup = true, brief = false }: ProofToTreeOptions = {},
 ): TreeNode[] {
   const goals = goalIndex(proof);
 
@@ -1444,6 +1464,7 @@ export function proofToTree(
           hypMode,
           hypFlags.get(goalId),
           hypMode === "used" ? subtreeUsed(goalId) : undefined,
+          hypGroup,
         ),
       comment: commentByNode.text.get(goalId),
       commentRanges: commentByNode.ranges.get(goalId),
