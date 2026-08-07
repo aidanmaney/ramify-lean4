@@ -152,7 +152,8 @@ need a full VS Code restart (the manifest is rescanned at startup).
 - **Undo/redo from the tree** (`↶ ↷` on the rail). Edits made from the tree
   leave focus in the webview, where ⌘Z reaches nothing; the companion focuses
   the editor and runs the real command.
-- **Settings**: `proofTree.outlineOnly`, `proofTree.lensGoals`,
+- **Settings**: `proofTree.outlineOnly`, `proofTree.tallFrame`,
+  `proofTree.linkEmoji`, `proofTree.linkTint`, `proofTree.lensGoals`,
   `proofTree.lensFold`, `proofTree.lensWordWrap`, `proofTree.lensShrinkNudges`,
   plus your `lean4.input.*` unicode-abbreviation customisations. (The
   abbreviation *table* is bundled, so `\dvd` → `∣` works in the tree's editor
