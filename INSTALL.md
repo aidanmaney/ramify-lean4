@@ -18,12 +18,9 @@ you lose is listed under [What the companion adds](#what-the-companion-adds).
 
 ## Before you start
 
-**Your project must be on Lean `v4.27.0`.** This is not a soft preference. The
-harvest reads the elaborator's `InfoTree` synchronously; from Lean v4.29 tactic
-subtrees elaborate asynchronously and are not attached when it reads them, so
-the parser sees no tactics and every proof comes back empty. If your
-`lean-toolchain` says anything else, the tree will draw nothing and nothing
-will appear to be wrong. Mathlib `v4.27.0` is the matching release.
+**Your project must be on Lean `v4.32.2`.** The package pins its toolchain
+and its dependencies to that release; a project on a different toolchain will
+fail to resolve them cleanly. Mathlib `v4.32.2` is the matching release.
 
 You also need the [Lean 4 VS Code extension](https://marketplace.visualstudio.com/items?itemName=leanprover.lean4)
 (`leanprover.lean4`) — the tree is a panel inside its infoview.
@@ -58,7 +55,7 @@ lake update proofTree && lake build
 ```
 
 It pulls **Paperproof** (the vendored parser, core-only) and **ProofWidgets
-v0.0.85** — the same version Mathlib `v4.27.0` pins, so a Mathlib project
+v0.0.105** — the same version Mathlib `v4.32.2` pins, so a Mathlib project
 resolves to one copy rather than a conflict. It does **not** pull Mathlib.
 
 A from-scratch build takes a few minutes, nearly all of it ProofWidgets
@@ -101,12 +98,29 @@ so anything under `lean/` is served by the *development* package — which does
 require Mathlib, because it also builds the offline CLI. `dist/Demo.lean` is
 served by the minimal one and needs none of it.
 
-The richer walkthroughs do live under `lean/`, and do cost that Mathlib
-download: `ProofTreeTour.lean` (a guided tour, one feature cluster per theorem
-— its last two sections are deliberately unfinished, which is the point: the
-frontier chips and the error ribbon are what they demonstrate),
-`ProofTreeExercises.lean` (the workbook), `ProofTreeGoals.lean` (harder, no
-seeds) and `ProofTreeDiagnostics.lean` (eight ways to break a proof).
+The richer walkthroughs do live under `lean/`, and so — however core-only their
+own contents are — they are served by the development package and do cost that
+Mathlib download:
+
+- `ProofTreeTour.lean` — a guided tour, one feature cluster per theorem, with a
+  docstring per section saying what to try. Its last two sections are
+  deliberately unfinished, which is the point: the frontier chips and the error
+  ribbon are what they demonstrate.
+- `ProofTreeExercises.lean` — the tour's workbook. Five goals to prove *from the
+  tree*, each seeded with one honest opening move, solutions at the bottom.
+- `ProofTreeGoalsDemo.lean` — harder, no seeds. Six statements, each proof a
+  lone `sorry` you replace by double-clicking its node.
+- `ProofTreeDiagnostics.lean` — eight theorems, each broken a different way, for
+  the error ribbon and the diagnostic pager.
+
+Note the near-namesake `ProofTreeGoals.lean` is *not* the exercise sheet: it is a
+small solved companion to `ProofTreeGoalsDemo.lean`, and the quickest check that
+a term-mode proof draws a tree at all.
+
+None of these files is deliberately clean, and none is a Lake target: the
+unsolved goals of the workbook, the `sorry` warnings of the goals file and the
+errors of the diagnostics file are the whole point, and `lake build` does not
+touch any of them whatever state they are in. Open them, don't build them.
 
 ---
 
@@ -189,7 +203,8 @@ distinguishes never-arrived from arrived-and-skipped.
 ```
 dist/                       the installable Lake package
   lakefile.toml             requires Paperproof + ProofWidgets, no Mathlib
-  lean-toolchain            v4.27.0
+  lean-toolchain            v4.32.2
+  lake-manifest.json        pinned dependency set
   Demo.lean                 the try-it file (core-only)
   proof-tree-companion-*.vsix
 lean/                       the Lean sources (shared: dist/ points at them)
