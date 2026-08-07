@@ -54,7 +54,8 @@ def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
     ("calcRelations", toJson calcRelations),
     -- Plain data, like the calc seams above, so it rides this wire too even
     -- though the standalone app draws no delete affordance: it is what lets a
-    -- probe run the REAL client-side extent maths offline.
+    -- probe run the REAL client-side extent maths offline. (Mirrored on the
+    -- RPC wire by `ProofTreeData.deleteSlots`; keep the two in step.)
     ("deleteSlots", toJson deleteSlots),
     -- The whole DECLARATION's span, not the tactics'. The diagnostics surface
     -- needs it to tell this proof's errors from a neighbouring theorem's, and a

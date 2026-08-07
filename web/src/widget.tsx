@@ -484,6 +484,12 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       // exactly the warning it loses. It rides the signature for free: the
       // range moves whenever the declaration does.
       declRange: resolved.declRange,
+      // NOT here, deliberately: `deleteSlots`. Both wires ship it (see
+      // ProofTreeData and Ppharness's resultToJson) and `Proof` declares it
+      // optional, so adding it would typecheck — but the widget carries it as
+      // a SIBLING on `stable` below, and duplicating it here would give the
+      // delete gesture two sources of truth that drift apart the moment one
+      // is updated.
     };
     return { proof, sig: JSON.stringify(proof) };
   }, [resolved]);

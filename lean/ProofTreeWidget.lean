@@ -157,9 +157,12 @@ structure ProofTreeData where
   -- Like taggedGoals, these hold live RPC references, so they are widget-only.
   tokenInfos  : Array TacticTokenInfo := #[]
   -- Every tactic-sequence child, for the tree's delete gesture (see
-  -- TacticSlot). Plain data, but widget-only in practice: the CLI renders no
-  -- edit affordances, and the client joins these by CONTAINMENT rather than by
-  -- a step key, so the whole set ships rather than one entry per step.
+  -- TacticSlot). Plain data, so it rides the CLI wire too (`resultToJson` in
+  -- Ppharness.lean) even though the standalone app draws no delete affordance:
+  -- that is what lets a probe run the REAL client-side extent maths offline.
+  -- Keep the two emit sites in step. The client joins these by CONTAINMENT
+  -- rather than by a step key, so the whole set ships rather than one entry
+  -- per step.
   deleteSlots : Array TacticSlot := #[]
   -- Holes the author wrote (`?_`, `?foo`), so the tree's chips can fill one
   -- exactly where it sits instead of appending a line after the term it is
