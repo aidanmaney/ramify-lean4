@@ -34,6 +34,17 @@ export function cutId(cut: ElideCut): string {
   return `${cut.kind === "combine" ? "combine" : "elide-band"}:${[...cut.ids].sort().join("·")}`;
 }
 
+/** The member ids encoded in a COMBINE marker's id, or null for any other
+node. `cutId` writes them there (`combine:<id>·<id>·…`), and the automatic
+runs are recomputed per render rather than stored, so for a ⇉-made node the id
+is the only place the membership survives to — what lets a marquee that swept
+one up dissolve it back into the base ids its cut should claim. */
+export function combineMemberIds(markerId: string): string[] | null {
+  return markerId.startsWith("combine:")
+    ? markerId.slice("combine:".length).split("·")
+    : null;
+}
+
 /** parent id → its children, built once per sweep. The offer test runs over
 every tactic in the tree, so the naive "filter all nodes per lookup" is an
 O(n³) render. */
@@ -233,6 +244,56 @@ export function combineRuns(
     if (tacticCount >= 2) runs.push({ kind: "combine", ids });
   }
   return runs;
+}
+
+/** The selection pill's manual combine: do the SELECTED tactics form one
+linear run, and if so, which ids does its cut collapse?
+
+Returns the run's id list (tactics + the pass-through goals between them, the
+exact shape `combineRuns` builds) or null when the selection is not a run. The
+marquee sweeps goal boxes up with the tactics, so the GOALS in the selection
+are not required to match — the tactics alone decide, and the boundary goals
+are excluded from the cut as always. Null when: fewer than 2 selected tactics;
+any selected tactic is synthetic/recovered/a marker (the same members
+`combineRuns` blocks, for the same reasons); or the chain walk from the
+topmost selected tactic does not visit EXACTLY the selected tactics (a gap —
+an unselected tactic in the middle — or a branch both break it). */
+export function selectionRun(
+  nodes: TreeNode[],
+  selected: Set<string>,
+): string[] | null {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const idx = childIndex(byId);
+  const tactics = nodes.filter(
+    (n) => selected.has(n.id) && n.type === "tactic",
+  );
+  if (tactics.length < 2) return null;
+  if (tactics.some((t) => t.synthetic || t.recovered || t.elidedCut))
+    return null;
+  const want = new Set(tactics.map((t) => t.id));
+  // `nodes` is DFS preorder, so tactics[0] is the run's top if this is a run.
+  const ids: string[] = [];
+  let cur: string | null = tactics[0].id;
+  const seen = new Set<string>();
+  while (cur && want.has(cur)) {
+    ids.push(cur);
+    seen.add(cur);
+    if (seen.size === want.size) return ids;
+    const kids: TreeNode[] = idx.get(cur) ?? [];
+    if (kids.length !== 1 || kids[0].type !== "goal") return null;
+    const g: TreeNode = kids[0];
+    if (g.parents.length !== 1) return null;
+    const next: TreeNode[] = idx.get(g.id) ?? [];
+    if (
+      next.length !== 1 ||
+      next[0].type !== "tactic" ||
+      next[0].parents.length !== 1
+    )
+      return null;
+    ids.push(g.id); // the pass-through goal joins the run
+    cur = next[0].id;
+  }
+  return null;
 }
 
 /** How much of the elided tactic a ghost marker still shows. Long enough to

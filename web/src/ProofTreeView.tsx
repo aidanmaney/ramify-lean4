@@ -87,14 +87,23 @@ import type { HypMode } from "./proofToTree";
 import {
   type ElideCut,
   applyElisions,
+  combineMemberIds,
   combineRuns,
   cutId,
   pathIds,
   pruneCuts,
   remapCut,
   resolveCut,
+  selectionRun,
   stepElidable,
 } from "./elide";
+import {
+  type DocPatch,
+  flagLine,
+  headTactics,
+  removeFlagPatches,
+  usedHypNames,
+} from "./flagEdit";
 import {
   ACCENT_TEXT,
   CASE_FILL,
@@ -1019,6 +1028,37 @@ export default function ProofTreeView({
   const [bandPick, setBandPick] = useState<{ from: string | null } | null>(
     null,
   );
+  // Marquee selection: a drag on the BACKGROUND rubber-bands a rectangle
+  // (content coordinates, so it scrolls with the tree and zoom applies free);
+  // releasing it selects every node whose BOX intersects, and a floating pill
+  // of verbs appears at the selection's top edge. Background drag was
+  // unclaimed (background *click* dismisses the accent, wheel scrolls), so
+  // the gesture needs no modifier — which matters here, ⇧ having a record of
+  // silently breaking in webviews. A sub-4px drag stays a click.
+  const [marquee, setMarquee] = useState<{
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  } | null>(null);
+  // The selected node ids (placed-node ids: markers included — the verbs
+  // dissolve them back to base ids where needed). Null = no selection; the
+  // accent outline marks members; cleared by Esc, a background click, a verb,
+  // or a proof change; remapped like every other id set on a shape change.
+  const [selection, setSelection] = useState<Set<string> | null>(null);
+  // A drag that just completed fires a click on the container as it ends —
+  // which is the "background click clears the selection" gesture, so without
+  // this flag every marquee dissolved itself on mouseup.
+  const marqueeDidDrag = useRef(false);
+  // The prose prompt for the two free-text flag verbs: `.none <prose>`
+  // (replace the head's subtree with a sentence) and a plain annotation.
+  // Blur is a NO-OP like the staged calc fill (stray infoview blurs consumed
+  // those stages before the author ever saw them); Enter commits, Esc or a
+  // background click cancels.
+  const [flagPrompt, setFlagPrompt] = useState<{
+    headId: string;
+    kind: "none" | "note";
+  } | null>(null);
   // Focus mode: a goal id whose subtree becomes the whole tree (that goal is
   // the new layout root); null shows the full proof. Folding still works
   // within the focused subtree.
@@ -1149,7 +1189,8 @@ export default function ProofTreeView({
   // working inside as a side effect of cancelling something else — and focus,
   // unlike the others, costs a gesture to rebuild.
   useEffect(() => {
-    const transient = picking || arming || reflowOpen;
+    const transient =
+      picking || arming || reflowOpen || !!selection || !!flagPrompt;
     const stage = !!editing?.calcStage;
     if (!transient && !stage && focusId === null) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1158,6 +1199,12 @@ export default function ProofTreeView({
         setPicking(null);
         setArming(null);
         setReflowOpen(false);
+        // The marquee selection and its prose prompt are transient like the
+        // pickers (the prompt's own textarea handles its Esc when focused
+        // and stops propagation; this layer is the unfocused backstop, the
+        // calc-stage pattern).
+        setSelection(null);
+        setFlagPrompt(null);
       } else if (stage) {
         setEditing((cur) => (cur?.calcStage ? null : cur));
       } else {
@@ -1166,7 +1213,7 @@ export default function ProofTreeView({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [picking, arming, reflowOpen, focusId, editing]);
+  }, [picking, arming, reflowOpen, focusId, editing, selection, flagPrompt]);
   // Undo/redo from the tree. The widget's own edits leave focus in the
   // webview, where ⌘Z reaches nothing at all, so the tree has to offer it.
   // Skipped while a textarea has focus: the in-place editor's own undo is the
@@ -1546,7 +1593,38 @@ export default function ProofTreeView({
       revealTimer.current = null;
     }
   };
-  const deferReveal = (pos: ProofStepPosition) => {
+  // Accenting a clicked node is LOCAL VIEW STATE and must not wait on the
+  // editor. Derived purely from `highlightPos`, the accent could only appear
+  // once the cursor physically arrived — click → the 300ms double-click
+  // window → the popout RPC → the companion's fs.watch relay → VS Code sets
+  // the selection → a fresh `pos` back to the widget. That whole chain for a
+  // highlight reads as broken, and it was invisible only because the accent
+  // used not to appear at all in this case (the re-arm below).
+  //
+  // So the click names the node itself and the cursor round-trip CONFIRMS it:
+  // `clickAccent` wins over the derived value until the real cursor lands
+  // (any `hlKey` change clears it, see the re-arm), at which point the
+  // position is authoritative again. TACTICS only — goals never take the
+  // cursor accent, and seeding one here would be the one way to break that.
+  const [clickAccent, setClickAccent] = useState<string | null>(null);
+  // Re-arming also has to happen on the reveal itself: the dismissal clears
+  // on an `hlKey` CHANGE, and a reveal onto the position the cursor already
+  // holds changes nothing — so after any background dismiss, clicking the
+  // very node the cursor sat in left the tree with no accent at all, and the
+  // feature read as "highlights only land when you change lines".
+  const accentNow = (id?: string) => {
+    setHlDismissed(false);
+    if (id) setClickAccent(id);
+  };
+  const revealAt = (pos: ProofStepPosition, id?: string) => {
+    accentNow(id);
+    onReveal?.(pos);
+  };
+  // Only the REVEAL waits out the double-click window (it steals focus into
+  // the editor, which is what would cut an in-place edit's opening gesture
+  // short). The accent is ours and lands on the first click.
+  const deferReveal = (pos: ProofStepPosition, id?: string) => {
+    accentNow(id);
     cancelPendingReveal(); // a double-click's second click re-schedules
     revealTimer.current = window.setTimeout(() => {
       revealTimer.current = null;
@@ -1643,9 +1721,13 @@ export default function ProofTreeView({
   // The full tree (pre any on-demand elision) — the space new elide-runs are
   // picked and validated in, so a run always keys on original node ids.
   const baseNodes = useMemo(
-    () => proofToTree(proof, { hypMode, hypGroup, brief }),
+    // `slots` is passed explicitly rather than left to `proof.deleteSlots`:
+    // the widget keeps slots OFF its rebuilt `Proof` (one source of truth, as
+    // a sibling on `stable`), so the field is present on the CLI wire and
+    // absent on the widget's — and comment attribution needs them on both.
+    () => proofToTree(proof, { hypMode, hypGroup, brief, slots: deleteSlots }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, hypMode, hypGroup, brief, codeFont],
+    [proof, hypMode, hypGroup, brief, codeFont, deleteSlots],
   );
   // Every tactic the step cut (hover-bar ⋯) is offered on. Computed in one
   // pass per base tree: the test walks a subtree, so asking it per drawn node
@@ -1784,6 +1866,10 @@ export default function ProofTreeView({
     setPendingFill(null);
     setElidePick(null);
     setBandPick(null);
+    setMarquee(null);
+    setSelection(null);
+    setFlagPrompt(null);
+    setClickAccent(null);
     // A different proof's splits are different nodes entirely. (A same-proof
     // EDIT remaps the keys instead — see the shape branch; no pruning either
     // way: `pick` is read modulo the live child count, and keys naming a
@@ -1873,6 +1959,29 @@ export default function ProofTreeView({
       const moved = to(bandPick.from);
       if (!live.has(moved)) setBandPick({ from: null });
       else if (moved !== bandPick.from) setBandPick({ from: moved });
+    }
+    // The click's accent stand-in is an mvarId like the rest, so it gets the
+    // same translation — a re-parse renumbers ids, and an untranslated one
+    // would silently accent nothing (or, worse, whatever inherited the id).
+    if (clickAccent) {
+      const moved = to(clickAccent);
+      setClickAccent(live.has(moved) ? moved : null);
+    }
+    // The marquee selection is an id set like `collapsed`; same translation,
+    // and an emptied selection dissolves rather than lingering as a pill over
+    // nothing. (Marker ids in the selection have no base counterpart and are
+    // dropped — the marker itself was re-derived by the same edit.)
+    setSelection((prev) => {
+      if (!prev) return prev;
+      const next = new Set([...prev].map(to).filter((id) => live.has(id)));
+      return next.size > 0 ? next : null;
+    });
+    // The prose prompt anchors on a head tactic by id; follow it or drop it.
+    if (flagPrompt) {
+      const moved = to(flagPrompt.headId);
+      if (!live.has(moved)) setFlagPrompt(null);
+      else if (moved !== flagPrompt.headId)
+        setFlagPrompt({ ...flagPrompt, headId: moved });
     }
     // The source moved under the edit box (usually OUR own committed edit
     // coming back), so its ranges are stale either way. The relation picker
@@ -2122,6 +2231,10 @@ export default function ProofTreeView({
   if (hlKey !== prevHlKey) {
     setPrevHlKey(hlKey);
     setHlDismissed(false);
+    // The real cursor has arrived, so the click's stand-in has done its job
+    // and the position is authoritative again — including when the two
+    // disagree, which is the point of handing it back.
+    setClickAccent(null);
   }
 
   // source→tree: the ONE node the editor cursor accents. Every recorded range
@@ -2182,14 +2295,26 @@ export default function ProofTreeView({
     });
   }, [nodes, commentSpans]);
   const cursorNodeId = useMemo(() => {
-    if (hlKey === "" || hlDismissed || !highlightPos) return null;
+    if (hlDismissed) return null;
+    // The clicked node stands in until the cursor actually gets there (see
+    // clickAccent). It is a drawn TACTIC by construction — set only from the
+    // reveal paths, and cleared by the proof/shape resets like every other id.
+    if (clickAccent) return clickAccent;
+    if (hlKey === "" || !highlightPos) return null;
     const ci = commentSpans.findIndex((c) =>
       positionContains(c, highlightPos),
     );
     if (ci >= 0) return commentOwner[ci];
     return tacticNodeAt(cursorTargets, highlightPos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursorTargets, hlKey, hlDismissed, commentSpans, commentOwner]);
+  }, [
+    cursorTargets,
+    hlKey,
+    hlDismissed,
+    clickAccent,
+    commentSpans,
+    commentOwner,
+  ]);
 
   // Lean's diagnostics, mapped onto the nodes that will draw them.
   //
@@ -2500,6 +2625,111 @@ export default function ProofTreeView({
   const elideStep = (id: string) => {
     anchorAs(id, cutId({ kind: "step", id }));
     setElideCuts((cs) => [...cs, { kind: "step", id }]);
+  };
+
+  // ----- The marquee selection's verbs -------------------------------------
+
+  /** Apply a gesture's document patches through the ordinary edit hook,
+   * BOTTOM-UP: each patch's coordinates were computed against the original
+   * document, and an insertion shifts only the lines below itself, so
+   * applying from the lowest up keeps every remaining range valid. */
+  const applyPatches = (patches: DocPatch[]) => {
+    const ordered = [...patches].sort((a, b) =>
+      a.start.line !== b.start.line
+        ? b.start.line - a.start.line
+        : b.start.character - a.start.character,
+    );
+    for (const p of ordered)
+      onEditTactic!({ start: p.start, stop: p.stop }, p.text);
+  };
+
+  /** Elide the selection to one marker — the ⇳ band cut with the marquee as
+   * its picker, which is what frees it from the y-interval definition and
+   * lets it work in every layout. Markers caught in the selection are
+   * absorbed exactly as commitBand absorbs them; a swept-up COMBINED node
+   * dissolves to the member ids its own id encodes. */
+  const elideSelection = (sel: Set<string>): boolean => {
+    const byId = new Map(baseNodes.map((n) => [n.id, n]));
+    const ids = new Set<string>();
+    const absorbed = new Set<string>();
+    for (const pn of nodes) {
+      if (!sel.has(pn.data.id)) continue;
+      const members = combineMemberIds(pn.data.id);
+      if (pn.data.elidedCut && !pn.data.elidedCut.combined) {
+        absorbed.add(pn.data.id);
+        const cut = elideCuts.find((c) => cutId(c) === pn.data.id);
+        if (cut) for (const pid of resolveCut(cut, byId)) ids.add(pid);
+      } else if (members) {
+        // A ⇉-made combined node: the auto run dissolves into the cut. (A
+        // MANUAL combine cut shares the id format, so absorb its cut too.)
+        absorbed.add(pn.data.id);
+        for (const pid of members) if (byId.has(pid)) ids.add(pid);
+      } else if (byId.has(pn.data.id)) {
+        ids.add(pn.data.id);
+      }
+    }
+    if (ids.size === 0) return false;
+    const cut: ElideCut = { kind: "band", ids: [...ids] };
+    // Hold the marker at its slot: topmost member in base preorder, anchored
+    // from that node's own placed position when it is drawn, else from the
+    // topmost selected node (its current representative).
+    const index = new Map(baseNodes.map((n, i) => [n.id, i]));
+    const top = [...ids].reduce((a, b) =>
+      index.get(a)! <= index.get(b)! ? a : b,
+    );
+    const topPlaced =
+      nodes.find((p) => p.data.id === top) ??
+      nodes
+        .filter((p) => sel.has(p.data.id))
+        .reduce((a, b) => (a.y <= b.y ? a : b));
+    anchorAs(topPlaced.data.id, cutId(cut));
+    setElideCuts((cs) => [...cs.filter((c) => !absorbed.has(cutId(c))), cut]);
+    return true;
+  };
+
+  /** The goals a `.fold` on this tactic folds — mirroring what the WRITTEN
+   * flag will seed on the next load, which depends on where the comment
+   * attributes (measured in the offline probe): above the proof's FIRST
+   * tactic it lands on the ROOT narrative slot, whose targets are the tactic
+   * node itself; anywhere else it lands on the tactic, whose targets are its
+   * spawned goals when any, else produced. The local mirror must match, or
+   * the fold visibly changes shape on the next reload. */
+  const foldTargetsOf = (t: TreeNode): string[] => {
+    const parentGoal = t.parents[0]
+      ? baseNodes.find((n) => n.id === t.parents[0].id)
+      : undefined;
+    if (parentGoal && parentGoal.parents.length === 0) return [t.id];
+    const kids = baseNodes.filter(
+      (n) => n.type === "goal" && n.parents.some((p) => p.id === t.id),
+    );
+    const sp = kids.filter((k) => k.spawned);
+    return (sp.length > 0 ? sp : kids).map((k) => k.id);
+  };
+
+  /** Commit the prose prompt: write the flag comment above the head, and for
+   * `.none` also apply the step cut NOW with the prose as the ghost's note —
+   * the seed block only fires on a proof change, so the written flag alone
+   * would not act until the next load. An empty annotation is a cancel; an
+   * empty `.none` writes the bare directive (legal — the ghost keeps its
+   * tactic preview). */
+  const commitFlagPrompt = (value: string) => {
+    const p = flagPrompt;
+    setFlagPrompt(null);
+    if (!p) return;
+    const head = baseNodes.find((n) => n.id === p.headId);
+    const prose = value.replace(/\s*\n\s*/g, " ").trim();
+    if (!head || (p.kind === "note" && prose === "")) return;
+    const directive = p.kind === "none" ? `.none${prose ? ` ${prose}` : ""}` : prose;
+    const patch = flagLine(head, deleteSlots ?? [], directive);
+    if (!patch) return;
+    applyPatches([patch]);
+    if (p.kind === "none") {
+      anchorAs(head.id, cutId({ kind: "step", id: head.id }));
+      setElideCuts((cs) => [
+        ...cs,
+        { kind: "step", id: head.id, note: prose || undefined },
+      ]);
+    }
   };
 
   // A node click means different things per mode: fold/unfold in the tree, pick
@@ -3202,6 +3432,332 @@ export default function ProofTreeView({
   const svgW = extent.width + MARGIN.left + MARGIN.right + 2 * PAD_X;
   const svgH = extent.height + MARGIN.top + MARGIN.bottom + 2 * PAD_Y;
 
+  // One dispatcher for the selection pill's verbs, taking DATA rather than
+  // closures: react-hooks/refs treats a closure handed to an ordinary call
+  // (verbs.push) during render as a render-phase ref read once it reaches
+  // anchorAs/anchorOn, while the same closure in a JSX attribute is fine — so
+  // the verbs carry precomputed payloads (patches are plain data) and the
+  // chip's own onPick calls this by tag.
+  type SelVerb =
+    | { label: string; title: string; kind: "elide" }
+    | { label: string; title: string; kind: "combine"; ids: string[] }
+    | { label: string; title: string; kind: "fold"; ids: string[] }
+    | {
+        label: string;
+        title: string;
+        kind: "flagFold";
+        patches: DocPatch[];
+        anchor: string;
+        targets: string[];
+      }
+    | {
+        label: string;
+        title: string;
+        kind: "prompt";
+        headId: string;
+        prompt: "none" | "note";
+      }
+    | { label: string; title: string; kind: "patches"; patches: DocPatch[] }
+    | {
+        label: string;
+        title: string;
+        kind: "unflag";
+        patches: DocPatch[];
+        elided: string[];
+        folded: string[];
+      };
+  const runSelectionVerb = (v: SelVerb) => {
+    switch (v.kind) {
+      case "elide":
+        if (selection) elideSelection(selection);
+        break;
+      case "combine": {
+        const cut: ElideCut = { kind: "combine", ids: v.ids };
+        anchorAs(v.ids[0], cutId(cut));
+        setElideCuts((cs) => [...cs, cut]);
+        break;
+      }
+      case "fold":
+        anchorOn(v.ids[0]);
+        setCollapsed((prev) => new Set([...prev, ...v.ids]));
+        break;
+      case "flagFold":
+        // Write the flags AND fold now: the seed block only fires on a proof
+        // change, so the written flag alone would not act until next load.
+        applyPatches(v.patches);
+        anchorOn(v.anchor);
+        setCollapsed((prev) => new Set([...prev, ...v.targets]));
+        break;
+      case "prompt":
+        setFlagPrompt({ headId: v.headId, kind: v.prompt });
+        break;
+      case "patches":
+        applyPatches(v.patches);
+        break;
+      case "unflag":
+        applyPatches(v.patches);
+        // Mirror the removal in view state now, as the writers mirror their
+        // seed — the re-parse only confirms it.
+        if (v.elided.length > 0) {
+          const gone = new Set(v.elided);
+          setElideCuts((cs) =>
+            cs.filter((c) => !(c.kind === "step" && gone.has(c.id))),
+          );
+        }
+        if (v.folded.length > 0)
+          setCollapsed((prev) => {
+            const next = new Set(prev);
+            for (const id of v.folded) next.delete(id);
+            return next;
+          });
+        break;
+    }
+    setSelection(null);
+  };
+
+  // The selection pill: one row of verb chips above the selection's bounding
+  // box, offering only what THIS set supports. Verbs normalize the set
+  // themselves (heads for the flag writers, the run for combine); every
+  // commit clears the selection. Straight-line body code building plain
+  // data — see runSelectionVerb for why no closures.
+  let selectionPillEl: ReactNode = null;
+  if (selection && !marquee && !flagPrompt) {
+    const selPlaced = nodes.filter((p) => selection.has(p.data.id));
+    const byId = new Map(baseNodes.map((n) => [n.id, n]));
+    const selBase = new Set([...selection].filter((id) => byId.has(id)));
+    const canFlag = !!onEditTactic && !!deleteSlots;
+    const slots = deleteSlots ?? [];
+    const heads = canFlag ? headTactics(baseNodes, selBase, slots) : [];
+    const writable = heads.filter((h) => flagLine(h, slots, ".fold"));
+    const foldableIds = engine.foldableIds();
+    const foldSel = [...selBase].filter(
+      (id) => foldableIds.has(id) && !collapsed.has(id),
+    );
+    const runIds = selectionRun(baseNodes, selBase);
+    const consumerOf = (g: TreeNode) =>
+      baseNodes.find(
+        (n) => n.type === "tactic" && n.parents.some((p) => p.id === g.id),
+      );
+    const ctxGoals = canFlag
+      ? [...selBase]
+          .map((id) => byId.get(id)!)
+          .filter((n) => n.type === "goal" && !n.hypFlagged)
+          .map((g) => ({ g, c: consumerOf(g) }))
+          .filter(
+            (x): x is { g: TreeNode; c: TreeNode } =>
+              !!x.c && !!flagLine(x.c, slots, ".no-hyps"),
+          )
+      : [];
+    const pinGoals = ctxGoals.filter((x) => usedHypNames(x.g).length > 0);
+    const flagged = [...selBase]
+      .map((id) => byId.get(id)!)
+      .filter((n) => (n.flagRanges?.length ?? 0) > 0);
+    const foldHeads = writable.filter(
+      (h) => !h.flags?.fold && foldTargetsOf(h).length > 0,
+    );
+    const soleHead =
+      heads.length === 1 && writable.length === 1 ? writable[0] : null;
+    const verbs: SelVerb[] = [];
+    if (selPlaced.some((p) => byId.has(p.data.id) || p.data.elidedCut))
+      verbs.push({
+        kind: "elide",
+        label: "elide",
+        title: "Collapse the selection to one ⋯ marker (click it to restore)",
+      });
+    if (runIds)
+      verbs.push({
+        kind: "combine",
+        label: "combine",
+        title: "Merge this straight run of tactics into one stacked box",
+        ids: runIds,
+      });
+    if (foldSel.length > 0)
+      verbs.push({
+        kind: "fold",
+        label: "fold",
+        title: "Collapse every selected goal's subtree (⊞ reopens)",
+        ids: foldSel,
+      });
+    if (foldHeads.length > 0)
+      verbs.push({
+        kind: "flagFold",
+        label: ".fold",
+        title:
+          "Write a `-- .fold` flag above each head tactic — folded in the SOURCE, so it starts folded every time",
+        patches: foldHeads.map((h) => flagLine(h, slots, ".fold")!),
+        anchor: foldHeads[0].id,
+        targets: foldHeads.flatMap(foldTargetsOf),
+      });
+    if (soleHead && !soleHead.flags?.elide)
+      verbs.push({
+        kind: "prompt",
+        label: ".none…",
+        title:
+          "Replace this subtree with a sentence — writes `-- .none <your prose>` in the source; the ghost shows your words",
+        headId: soleHead.id,
+        prompt: "none",
+      });
+    if (soleHead)
+      verbs.push({
+        kind: "prompt",
+        label: "note…",
+        title:
+          "Write a plain comment above this tactic — it becomes the node's comment strip",
+        headId: soleHead.id,
+        prompt: "note",
+      });
+    if (ctxGoals.length > 0)
+      verbs.push({
+        kind: "patches",
+        label: ".no-hyps",
+        title:
+          "Write `-- .no-hyps` for each selected goal: hide its context block (the goal alone is the point)",
+        patches: ctxGoals.map((x) => flagLine(x.c, slots, ".no-hyps")!),
+      });
+    if (pinGoals.length > 0)
+      verbs.push({
+        kind: "patches",
+        label: ".h#used",
+        title:
+          "Pin each selected goal's context to its ▸-used hypotheses — writes one `.h#name` per used line",
+        patches: pinGoals.map(
+          (x) =>
+            flagLine(
+              x.c,
+              slots,
+              usedHypNames(x.g)
+                .map((n) => `.h#${n}`)
+                .join(" "),
+            )!,
+        ),
+      });
+    if (canFlag && flagged.length > 0)
+      verbs.push({
+        kind: "unflag",
+        label: "unflag",
+        title:
+          "Remove the selected nodes' flag comments from the source (prose after a flag stays, as an ordinary comment)",
+        patches: flagged.flatMap((n) =>
+          removeFlagPatches(n, proof.comments ?? [], slots),
+        ),
+        elided: flagged
+          .filter((n) => n.flags?.elide)
+          .flatMap((n) =>
+            n.type === "tactic" ? [n.id] : (n.flags?.targets ?? []),
+          ),
+        folded: flagged
+          .filter((n) => n.flags?.fold)
+          .flatMap((n) => n.flags?.targets ?? []),
+      });
+    if (selPlaced.length > 0 && verbs.length > 0) {
+      const minX = Math.min(...selPlaced.map((p) => p.x - p.data.w / 2));
+      const minY = Math.min(
+        ...selPlaced.map((p) => {
+          const topH =
+            p.data.caseH + (p.data.commentFloats ? 0 : p.data.commentBlockH);
+          return p.y + (topH - p.data.h) / 2;
+        }),
+      );
+      let cx = minX;
+      selectionPillEl = (
+        <g
+          // data-node: a mousedown on the pill must not start a new marquee
+          // under the very chips it is aiming at.
+          data-node=""
+          transform={`translate(0,${minY - CHIP_H - 10})`}
+        >
+          {verbs.map((v) => {
+            const w = Math.max(34, measureText(v.label, 11) + 14);
+            const at = cx;
+            cx += w + 6;
+            return (
+              <FrontierChip
+                key={v.label}
+                glyph={v.label}
+                title={v.title}
+                x={at}
+                width={w}
+                color={SEQ_STROKE}
+                fontSize={11}
+                onPick={() => runSelectionVerb(v)}
+              />
+            );
+          })}
+        </g>
+      );
+    }
+  }
+
+  // The flag prose prompt (`.none…` / `note…`): one line of free text below
+  // the head's box. Blur is a NO-OP (the staged-fill lesson: the infoview's
+  // reflows throw stray blurs); Enter commits, Esc cancels here, the document
+  // layer catches an unfocused Esc, and a background click closes it unspent.
+  // Body code, not a JSX IIFE, for the same ref-taint reason as the pill
+  // (commitFlagPrompt reaches anchorAs).
+  let flagPromptEl: ReactNode = null;
+  if (flagPrompt) {
+    const pn = nodes.find((n) => n.data.id === flagPrompt.headId);
+    if (pn) {
+      const topH =
+        pn.data.caseH +
+        (pn.data.commentFloats ? 0 : pn.data.commentBlockH);
+      const boxBottom = pn.y + (topH - pn.data.h) / 2 + pn.data.h;
+      flagPromptEl = (
+        <foreignObject
+          x={pn.x - pn.data.w / 2}
+          y={boxBottom + 6}
+          width={340}
+          height={34}
+        >
+          <div
+            data-ptw-edit=""
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <textarea
+              autoFocus
+              rows={1}
+              placeholder={
+                flagPrompt.kind === "none"
+                  ? "why this part is not worth reading (Enter writes .none)"
+                  : "a comment for this tactic"
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setFlagPrompt(null);
+                  return;
+                }
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitFlagPrompt((e.target as HTMLTextAreaElement).value);
+                }
+              }}
+              style={{
+                width: "100%",
+                height: 30,
+                resize: "none",
+                boxSizing: "border-box",
+                padding: "5px 8px",
+                fontFamily: "monospace",
+                fontSize: 12,
+                lineHeight: "18px",
+                background: EDIT_BG,
+                color: EDIT_TEXT,
+                border: `1.5px solid ${SEQ_STROKE}`,
+                borderRadius: 4,
+                outline: "none",
+                userSelect: "text",
+                overflow: "hidden",
+                whiteSpace: "nowrap",
+              }}
+            />
+          </div>
+        </foreignObject>
+      );
+    }
+  }
+
   return (
     // A positioned box the pinned toolbars/overlays anchor to (via `absolute`),
     // so the whole view is bounded by `height` — full viewport on the page, a
@@ -3545,7 +4101,7 @@ export default function ProofTreeView({
           // construction, both being derived from the same range.start.
           onGo={() => {
             gotoDiagNode(diagCur.nodeId);
-            onReveal?.(diagCur.diag.range);
+            revealAt(diagCur.diag.range);
           }}
         />
       )}
@@ -3583,12 +4139,85 @@ export default function ProofTreeView({
           // in below — everything else here is display, not text to copy.
           userSelect: "none",
         }}
+        // A drag starting on the BACKGROUND rubber-bands a marquee selection.
+        // Node <g>s are excluded by hit test rather than by stopPropagation
+        // (mousedown must still reach textareas and native focus paths);
+        // a sub-4px drag never engages, so plain clicks are untouched. The
+        // document-level move/up pair lives in the closure — the drag is a
+        // single gesture, not state the component tracks between renders.
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          const target = e.target as Element;
+          if (target.closest("g[data-node], [data-ptw-edit]")) return;
+          const svg = scrollRef.current?.querySelector("svg");
+          if (!svg) return;
+          const toContent = (cx: number, cy: number) => {
+            // The svg's rect moves with scroll, so measuring it per event
+            // keeps the marquee honest while the wheel scrolls mid-drag.
+            const r = svg.getBoundingClientRect();
+            return {
+              x: (cx - r.left) / zoom - MARGIN.left - PAD_X,
+              y: (cy - r.top) / zoom - MARGIN.top - PAD_Y,
+            };
+          };
+          const start = toContent(e.clientX, e.clientY);
+          const sx = e.clientX;
+          const sy = e.clientY;
+          let engaged = false;
+          const onMove = (ev: MouseEvent) => {
+            if (!engaged && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4)
+              return;
+            engaged = true;
+            const cur = toContent(ev.clientX, ev.clientY);
+            setMarquee({ x0: start.x, y0: start.y, x1: cur.x, y1: cur.y });
+          };
+          const onUp = (ev: MouseEvent) => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            if (!engaged) return;
+            marqueeDidDrag.current = true; // swallow the click this fires
+            setMarquee(null);
+            const cur = toContent(ev.clientX, ev.clientY);
+            const lo = { x: Math.min(start.x, cur.x), y: Math.min(start.y, cur.y) };
+            const hi = { x: Math.max(start.x, cur.x), y: Math.max(start.y, cur.y) };
+            // Select by BOX intersection (the desktop-icon reading): the box,
+            // not the whole band — sweeping a comment strip alone should not
+            // grab its node.
+            const picked = new Set<string>();
+            for (const pn of nodes) {
+              const d = pn.data;
+              const topH =
+                d.caseH + (d.commentFloats ? 0 : d.commentBlockH);
+              const boxTop = pn.y + (topH - d.h) / 2;
+              if (
+                pn.x - d.w / 2 <= hi.x &&
+                pn.x + d.w / 2 >= lo.x &&
+                boxTop <= hi.y &&
+                boxTop + d.h >= lo.y
+              )
+                picked.add(d.id);
+            }
+            setSelection(picked.size > 0 ? picked : null);
+          };
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        }}
         // A background click dismisses the editor-cursor accent (node and
         // label clicks stopPropagation, so they never land here): clicking
         // the widget focuses the infoview without moving the editor cursor,
         // and the lingering accent is just clutter at that point.
         onClick={() => {
+          // The click a completed marquee drag fires as it releases is not a
+          // background click — without this, mouseup selected and the click
+          // instantly dissolved it.
+          if (marqueeDidDrag.current) {
+            marqueeDidDrag.current = false;
+            return;
+          }
+          setSelection(null);
+          setFlagPrompt(null);
           setHlDismissed(true);
+          setClickAccent(null);
           setPicking(null);
           setArming(null);
           // The ¶ slider is a floater over the tree, so clicking the tree is
@@ -3863,7 +4492,10 @@ export default function ProofTreeView({
               // accent (source→tree half of the link; see cursorNodeId for
               // why it's exactly one node).
               const isCursor = id === cursorNodeId;
-              const accent = isEndpoint || isCursor;
+              // Marquee-selected nodes take the same accent: membership in
+              // the pending selection is "which nodes am I about to act on",
+              // the same question the endpoint/cursor accents answer.
+              const accent = isEndpoint || isCursor || !!selection?.has(id);
               // A positioned node can reveal its source (widget only, outside
               // sequence mode). For a tactic node the whole box reveals; goal
               // nodes are the primary fold targets, so their box stays a fold
@@ -4107,15 +4739,17 @@ export default function ProofTreeView({
                 // window (see deferReveal), so the in-place editor's opening
                 // gesture isn't cut short by a focus jump to the editor.
                 if (revealable) {
-                  if (editable) deferReveal(position!);
-                  else onReveal!(position!);
+                  // The id seeds the instant accent — this branch is
+                  // tactics only, which is exactly where the accent may land.
+                  if (editable) deferReveal(position!, id);
+                  else revealAt(position!, id);
                   return;
                 }
                 // Goal fast paths — the whole box is the target, no fiddly
                 // icons: ⌘/Ctrl-click reveals in source (the editor's own
                 // go-to-definition gesture), ⌥-click focuses the subtree.
                 if (goalRevealable && (e.metaKey || e.ctrlKey)) {
-                  onReveal!(position!);
+                  revealAt(position!);
                   return;
                 }
                 if (focusable && e.altKey) {
@@ -4133,6 +4767,10 @@ export default function ProofTreeView({
               return (
                 <g
                   key={id}
+                  // The marquee's background test: a mousedown inside any
+                  // node <g> is a node gesture (click, double-click-to-edit,
+                  // chip pick), never the start of a drag-select.
+                  data-node=""
                   transform={`translate(${node.x},${node.y})`}
                   // Everything an armed delete would take fades, so the tree
                   // shows the same answer the editor's highlight does. Paint
@@ -4788,7 +5426,7 @@ export default function ProofTreeView({
                               {
                                 glyph: "»",
                                 title: `Reveal in source (${CMD}-click)`,
-                                onClick: () => onReveal!(position!),
+                                onClick: () => revealAt(position!),
                               },
                             ]
                           : []),
@@ -4934,6 +5572,28 @@ export default function ProofTreeView({
                 the node's own <g> every later sibling would paint over it.
                 pointer-events: none throughout, so it can never trap the hover
                 that keeps it up or eat a click meant for what is under it. */}
+            {/* The marquee rectangle, while dragging: paint only, in content
+                coordinates so it rides scroll and zoom for free. */}
+            {marquee && (
+              <rect
+                x={Math.min(marquee.x0, marquee.x1)}
+                y={Math.min(marquee.y0, marquee.y1)}
+                width={Math.abs(marquee.x1 - marquee.x0)}
+                height={Math.abs(marquee.y1 - marquee.y0)}
+                fill={SEQ_STROKE}
+                fillOpacity={0.08}
+                stroke={SEQ_STROKE}
+                strokeWidth={1}
+                strokeDasharray="4 3"
+                pointerEvents="none"
+              />
+            )}
+            {/* The selection pill and the flag prose prompt — computed as
+                straight-line body code above (react-hooks/refs: their verbs
+                reach anchorAs, which writes a ref, so a render-called IIFE
+                here would be tainted). */}
+            {selectionPillEl}
+            {flagPromptEl}
             {/* Overview peek: hovering a mini chip draws the node at FULL size
                 on top of everything — paint only, so pointing at chips never
                 relayouts (the no-relayout-on-hover rule; the geometry version

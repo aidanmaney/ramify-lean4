@@ -227,6 +227,18 @@ export interface TreeNode {
   // (`-- .fold`), attributed to this node like any other comment. See
   // proofToTree's parseFlags.
   flags?: NodeFlags;
+  // The SOURCE RANGES of the directive comments themselves — what the
+  // selection pill's remove-flags verb deletes. Separate from commentRanges
+  // (that map means "the strip showing this", which a flags-only comment
+  // deliberately never claims) and broader than `flags` (hyp-narrowing
+  // directives are consumed in contextFor and never reach `flags`, but their
+  // comment is still real text the reverse gesture must find).
+  flagRanges?: ProofStepPosition[];
+  // GOAL nodes only: a `.no-hyps`/`.h#name` directive already narrows my
+  // context (the flag comment itself sits above my CONSUMING tactic, which is
+  // the node carrying its flagRanges). The pill reads this to flip the
+  // context-writing verbs to removal instead of writing a duplicate.
+  hypFlagged?: boolean;
   // Brief mode (tactic nodes only): when boilerplate inside the label was
   // collapsed to `…`, `label` is the COLLAPSED string (what layout measures)
   // and this carries the original label + the KEEP map back to it, so the

@@ -9,6 +9,7 @@ import type {
   ProofStep,
   ProofStepPosition,
   SourceComment,
+  TacticSlot,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import type {
@@ -596,7 +597,9 @@ interface ParsedFlags {
 
 // `.name` or `.name#argument`. The name must start with a letter, so a decimal
 // (`-- .5 of the cases`) is prose rather than a malformed flag.
-const FLAG_RE = /^\.([a-zA-Z][\w-]*)(?:#(\S+))?$/;
+// Exported for flagEdit.ts, whose REMOVAL edit strips exactly the words this
+// recognises — one regex, so the writer and the reader cannot drift.
+export const FLAG_RE = /^\.([a-zA-Z][\w-]*)(?:#(\S+))?$/;
 
 export function parseFlags(text: string): ParsedFlags {
   const out: ParsedFlags = { prose: text, any: false };
@@ -680,23 +683,57 @@ function nodeFlags(
 //    `-- explain, then do` shape; bullet lines land here too, since the
 //    consumed goal's tactic starts past the `·`).
 // 4. Dangling after everything (rare) → the last tactic before it.
+//
+// Rule 1's inner search asks "does a step BEGIN between the comment and the
+// container's end", and a step's own `position.start` cannot answer it: a
+// split `rw [h] at x` records its start at the RULE, inside the brackets,
+// while trivia inflation ends the container exactly at the `rw` KEYWORD — so
+// the inner step looked like it started past its container and every comment
+// written above an `rw` fell onto the tactic ABOVE it (reported; measured on
+// `have hpfac … ` / `rw [Nat.dvd_add_right hpfac] at hpdvd`, container stop
+// 10:2, step start 10:6). `tacticSlots` is the as-written unit and answers it
+// exactly, so the bound is tested against the step's SLOT start.
 function attributeComments(
   comments: SourceComment[],
   steps: ProofStep[],
   rootId: string | undefined,
+  slots: TacticSlot[],
 ): {
   text: Map<string, string>;
   ranges: Map<string, ProofStepPosition[]>;
   flags: Map<string, ParsedFlags>;
+  /** The DIRECTIVE comments' own source ranges, per node — what a flag
+  REMOVAL edit deletes. Kept separate from `ranges` on purpose: that map
+  means "the node whose strip is SHOWING this" and a flags-only comment
+  deliberately claims no entry there, but its range is still real text the
+  reverse gesture must be able to find. Recorded for every directive,
+  hyp-narrowing ones included (which never reach TreeNode.flags at all). */
+  flagRanges: Map<string, ProofStepPosition[]>;
 } {
   const out = new Map<string, string>();
   const ranges = new Map<string, ProofStepPosition[]>();
   const flags = new Map<string, ParsedFlags>();
+  const flagRanges = new Map<string, ProofStepPosition[]>();
   if (comments.length === 0 || steps.length === 0)
-    return { text: out, ranges, flags };
+    return { text: out, ranges, flags, flagRanges };
   const byStart = [...steps].sort((a, b) =>
     cmpPos(a.position.start, b.position.start),
   );
+  // Where the step's tactic BEGINS as written — the innermost containing slot
+  // (a bullet contains every slot inside it, and the tactic is the inner one).
+  // Falls back to the recorded start on a wire that ships no slots, which is
+  // exactly the behaviour this widening replaced.
+  const surfaceStart = (s: ProofStep) => {
+    let best: TacticSlot | undefined;
+    for (const sl of slots)
+      if (
+        cmpPos(sl.start, s.position.start) <= 0 &&
+        cmpPos(s.position.start, sl.stop) < 0 &&
+        (!best || cmpPos(sl.start, best.start) > 0)
+      )
+        best = sl;
+    return best?.start ?? s.position.start;
+  };
   const first = byStart[0];
   let cur: SourceComment;
   const add = (nodeId: string, raw: string) => {
@@ -716,6 +753,10 @@ function attributeComments(
         prose: f.prose || prev?.prose || "",
         any: true,
       });
+      flagRanges.set(nodeId, [
+        ...(flagRanges.get(nodeId) ?? []),
+        { start: cur.start, stop: cur.stop },
+      ]);
     }
     // A directive's own prose moves INTO the elision marker rather than being
     // drawn twice (see NodeFlags.note), so `.none why` reads as one thing.
@@ -761,7 +802,7 @@ function attributeComments(
           : byStart.find(
               (s) =>
                 cmpPos(s.position.start, c.stop) >= 0 &&
-                cmpPos(s.position.start, container.position.stop) <= 0,
+                cmpPos(surfaceStart(s), container.position.stop) <= 0,
             );
       add(tacticId((inner ?? container).goalBefore.id), text);
       continue;
@@ -780,7 +821,7 @@ function attributeComments(
       .find((s) => cmpPos(s.position.start, c.start) <= 0);
     if (prev) add(tacticId(prev.goalBefore.id), text);
   }
-  return { text: out, ranges, flags };
+  return { text: out, ranges, flags, flagRanges };
 }
 
 // Tactic labels are raw source text of the step's range — which, because the
@@ -819,11 +860,26 @@ export interface ProofToTreeOptions {
    * the engine is rebuilt when it flips (same as reflow).
    */
   brief?: boolean;
+  /**
+   * The as-written tactic slots, which comment attribution needs to bound rule
+   * 1's inner search (see `attributeComments`). An OPTION rather than a read of
+   * `proof.deleteSlots` because the widget deliberately keeps slots OFF its
+   * rebuilt `Proof` — one source of truth, on `stable` beside it — so the field
+   * is present on the CLI wire and absent on the widget's, and reading only the
+   * field silently gave the widget the unfixed behaviour. Falls back to the
+   * field, which is what the standalone app (no slots prop) rides.
+   */
+  slots?: TacticSlot[];
 }
 
 export function proofToTree(
   proof: Proof,
-  { hypMode = "used", hypGroup = true, brief = false }: ProofToTreeOptions = {},
+  {
+    hypMode = "used",
+    hypGroup = true,
+    brief = false,
+    slots,
+  }: ProofToTreeOptions = {},
 ): TreeNode[] {
   const goals = goalIndex(proof);
 
@@ -1340,6 +1396,7 @@ export function proofToTree(
     proof.comments ?? [],
     proof.steps,
     roots[0],
+    slots ?? proof.deleteSlots ?? [],
   );
 
   // Which GOAL each comment's hypothesis flags speak about. A flag comment
@@ -1474,6 +1531,13 @@ export function proofToTree(
         commentByNode.flags.get(goalId),
         step ? [tacticId(goalId)] : [],
       ),
+      flagRanges: commentByNode.flagRanges.get(goalId),
+      // A hyp-narrowing directive was consumed for THIS goal's context (its
+      // comment — and so its flagRanges — lives on the consuming tactic).
+      hypFlagged:
+        !!hypFlags.get(goalId)?.noHyps ||
+        (hypFlags.get(goalId)?.onlyHyps?.length ?? 0) > 0 ||
+        undefined,
       // Lean's tag is the full case PATH (`refine_1.calc.step`), whose head is
       // the case the goal above already badges — so show only what this goal
       // adds. Without that, the residue of a chain inside a branch reads as
@@ -1580,6 +1644,7 @@ export function proofToTree(
           (g) => g.id,
         ),
       ),
+      flagRanges: commentByNode.flagRanges.get(tId),
       // The repair chip for a block that never parsed, when a step DOES stand
       // for it (its first link was complete, so the block half-elaborated).
       // It rides the calc's own node — the thing the repair acts on — rather
