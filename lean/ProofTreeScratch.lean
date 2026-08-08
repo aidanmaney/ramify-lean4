@@ -202,3 +202,17 @@ theorem root_2_irrat_over_int :
   -- assoced_elim: but the only units of ℤ are ±1, so 2 ∼ 1 is a contradiction.
   rw [Int.isUnit_iff] at h2
   omega
+
+/-- **A still-open metavariable.** `Nat.le_trans`' midpoint is determined by
+neither the goal nor a `sorry`, so `?m` survives to the end of the command —
+and this is what that costs: `apply` promotes the undetermined midpoint to a
+goal of its OWN (`⊢ Nat`, tagged `m`), which the tree draws as a pending node
+next to two goals that mention `?m` and say nothing about where it came from.
+
+It cannot be written any other way. Lean refuses to finish a command with an
+unassigned natural metavariable, so this state is an `unsolved goals` ERROR,
+never a `sorry` warning — which is why it lives here and not in `proofs/`. -/
+theorem open_shared (a c : Nat) : a ≤ c := by
+  apply Nat.le_trans
+  · sorry
+  · sorry
