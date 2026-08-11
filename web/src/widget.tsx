@@ -19,6 +19,7 @@ import {
   type TreeDiagnostic,
 } from "./diagnostics";
 import { goalAnnotations, type GoalAnnotation } from "./lensGoals";
+import { posLE } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
 import {
   injectStyleOnce,
@@ -62,6 +63,39 @@ const TYPING_HOLD_MAX_MS = 5000;
 const EXPECT_EDIT_WINDOW_MS = 3000;
 // "clear" carries no meaningful range; the companion ignores it.
 const ORIGIN = { line: 0, character: 0 };
+
+/** Is the cursor still inside the declaration the drawn tree belongs to?
+ *
+ * This is what separates NAVIGATION (the reason a changed `proofId` bypasses
+ * the typing hold) from a transient PARSE BREAK, which produces the same
+ * signal and must not. Measured on `ProofTreeScratch.lean`: retyping `ring`
+ * inside a `calc` link reports, for the two keystrokes where the word is
+ * half-written, `proofId: "root_2_irrat_over_int"` with 17 steps — the NEXT
+ * theorem in the file. A broken `calc` swallows what follows it (documented
+ * under "A `calc` with no subsequent step…"), so the command containing the
+ * cursor is named after a declaration the author is nowhere near. Bypassing
+ * the hold there swapped a foreign theorem's tree in mid-word, and — since
+ * `proofKey` is the declaration name — reset fold, zoom, focus and scroll
+ * with it.
+ *
+ * The cursor is the honest witness: it never moved (line 162 throughout),
+ * while the payload's own `declRange` jumped from 143-174 to 177-203. So a
+ * `proofId` change counts as navigation only when the cursor has actually
+ * LEFT the range the drawn proof occupies.
+ *
+ * INCLUSIVE at the stop, unlike `positionContains`' half-open rule for step
+ * ranges (whose reason — trivia making consecutive tactics share a boundary —
+ * is about steps, not declarations). The bias is deliberate: a false "inside"
+ * costs one quiet period before a real navigation lands, a false "outside"
+ * restores the bug. No range shipped → fall back to trusting `proofId`, which
+ * is what this did before. */
+function cursorInDecl(
+  decl: ProofStepPosition | undefined,
+  p: { line: number; character: number },
+): boolean {
+  if (!decl) return false;
+  return posLE(decl.start, p) && posLE(p, decl.stop);
+}
 
 // The tree gets PRIMACY in the infoview: the info card's body renders its
 // sections as siblings (Tactic state, Expected type, panel widgets, then
@@ -615,16 +649,24 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   useEffect(() => {
     lastActivityRef.current = Date.now();
   }, [posKey]);
-  // Immediate swap paths, adjusted during render as before: the first draw, a
-  // DIFFERENT proof (the cursor moved theorems — holding a navigation would
-  // read as latency, and the fold/zoom state resets on proofKey anyway), and
-  // a zero hold (the setting's off switch, restoring swap-on-arrival).
+  // NAVIGATION: the payload is a different declaration AND the cursor has
+  // left the one on screen. Both halves are required — see `cursorInDecl`,
+  // where a half-typed tactic reports the next theorem's proof while the
+  // cursor has not moved at all. ONE coding, read by the render path and the
+  // hold effect below, because two spellings of this test would drift and the
+  // effect's job is precisely to not re-decide what the render already did.
+  const navigated =
+    !!stable &&
+    !!candidate &&
+    candidate.proof.proofId !== stable.proof.proofId &&
+    !cursorInDecl(stable.proof.declRange, pos);
+  // Immediate swap paths, adjusted during render as before: the first draw,
+  // real navigation (holding that would read as latency, and the view state
+  // resets on proofKey anyway), and a zero hold (the setting's off switch,
+  // restoring swap-on-arrival).
   if (
     candidate &&
-    (!stable ||
-      (stable.sig !== candidate.sig &&
-        (typingHoldMs <= 0 ||
-          candidate.proof.proofId !== stable.proof.proofId)))
+    (!stable || (stable.sig !== candidate.sig && (typingHoldMs <= 0 || navigated)))
   ) {
     setStable(candidate);
   }
@@ -663,12 +705,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     candidateRef.current = candidate;
   });
   const candSig = candidate?.sig ?? null;
-  const candProofId = candidate?.proof.proofId;
   useEffect(() => {
     if (candSig === null || !stable) return;
     if (stable.sig === candSig) return;
     // The render path above already took these cases.
-    if (typingHoldMs <= 0 || candProofId !== stable.proof.proofId) return;
+    if (typingHoldMs <= 0 || navigated) return;
     const swap = () => {
       const c = candidateRef.current;
       if (c && c.sig === candSig) setStable(c);
@@ -690,7 +731,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     return () => {
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [candSig, candProofId, stable, typingHoldMs]);
+  }, [candSig, navigated, stable, typingHoldMs]);
 
   // The RPC-REFERENCE-carrying half of the payload, deliberately NOT kept in
   // `stable`. Refs (`WithRpcRef`) live in the file's RPC session store, and
