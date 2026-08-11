@@ -3229,7 +3229,27 @@ export default function ProofTreeView({
     const el = scrollRef.current;
     if (!el) return;
     const prev = lastLayoutRef.current;
-    const { x: sx, y: sy } = lastScrollRef.current;
+    // Where the view ACTUALLY sits, reconciled against the recorded scroll.
+    // The live value is ground truth — `lastScrollRef` goes stale whenever a
+    // programmatic scroll lands between commits and its scroll event is late
+    // or never delivered (animateScroll's eased writes; hidden webviews fire
+    // no scroll events at all). Measured in the payload replay: cursor-follow
+    // at 3523, ref still 975, and every counterfactual swap "restored" 975 —
+    // the reported flash to the top of the proof while typing. The ref's ONE
+    // legitimate job is the case it was introduced for: a SHORTER new layout
+    // has already clamped `el.scrollTop` by the time this effect reads it,
+    // and that case is detectable — the live value sits pinned at the new
+    // maximum, below the recorded value. Only then does the record win.
+    const liveX = el.scrollLeft;
+    const liveY = el.scrollTop;
+    const clampedY =
+      liveY >= el.scrollHeight - el.clientHeight - 1 &&
+      lastScrollRef.current.y > liveY;
+    const clampedX =
+      liveX >= el.scrollWidth - el.clientWidth - 1 &&
+      lastScrollRef.current.x > liveX;
+    const sx = clampedX ? lastScrollRef.current.x : liveX;
+    const sy = clampedY ? lastScrollRef.current.y : liveY;
 
     // Match nodes to the previous layout by SOURCE POSITION, falling back to the
     // id — see `layoutKeys` for why the id alone loses exactly the nodes an edit
@@ -3249,14 +3269,36 @@ export default function ProofTreeView({
     // viewport centre instead, which needs no node in particular to survive.
     if (anchor && !findByKey(anchor.key)) anchor = null;
 
+    // The CURSOR'S node, when it survived the relayout and was on screen,
+    // beats the viewport-centre guess below: it is where the user is WORKING
+    // — the buffer's caret, the node the accent marks — and a swap landing
+    // mid-edit must leave the view focused there, not on whatever happened to
+    // sit nearest the centre. Same on-screen gate as the deleted-node walk
+    // underneath (its sibling: that one handles the chain head VANISHING,
+    // this one handles it surviving): a cursor parked in a proof you are not
+    // currently looking at must not yank the view back to itself. `refocus`
+    // rides along so a swap that would leave the node outside the comfort
+    // band (a clamp, growth above it) pulls it back in.
+    let refocus = false;
+    const chain = cursorChainRef.current;
+    if (!anchor && prev && chain.length > 0) {
+      const still = findByKey(chain[0]);
+      const was = prev.get(chain[0]);
+      if (still && was) {
+        const screenY = (MARGIN.top + PAD_Y + was.y) * zoom - sy;
+        if (screenY >= 0 && screenY <= el.clientHeight) {
+          anchor = { id: still.data.id, key: chain[0], x: was.x, y: was.y };
+          refocus = true;
+        }
+      }
+    }
+
     // The cursor's node was DELETED by this edit (see the note above). Walk its
     // recorded ancestor chain for the first link that survived and anchor there
     // instead — the tactic the deleted one hung under. Gated on that node having
     // been ON SCREEN in the layout we are replacing: if you were reading
     // somewhere else while an edit landed elsewhere, the thing you are looking
     // at is what should stay put, and the viewport-centre rule below says so.
-    let refocus = false;
-    const chain = cursorChainRef.current;
     if (!anchor && prev && chain.length > 0 && !findByKey(chain[0])) {
       const was0 = prev.get(chain[0]);
       const screenY0 = was0

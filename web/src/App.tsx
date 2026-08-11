@@ -1,7 +1,63 @@
 import { useEffect, useState } from "react";
-import { parseNdjson, type ProofRecord } from "./paperproof";
+import { parseNdjson, type Proof, type ProofRecord } from "./paperproof";
 import { proofTitle } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
+
+/** Dev-only replay of recorded WIDGET payloads (`?cf-replay=line:char`): fetch
+`/payload-<name>.json` blobs dumped by the LSP probe, rebuild each into the
+`Proof` the widget's `incoming` would build, and swap between them via
+`window.__cfStep(i)` — the same prop-swap path the widget's stable machinery
+drives, so view-stability bugs across a swap are reproducible (and measurable:
+read `scrollTop` around the swap) without an editor. Files live in web/public,
+uncommitted scratch. */
+function CfReplay({ line, character }: { line: number; character: number }) {
+  const [payloads, setPayloads] = useState<Record<string, unknown>[] | null>(
+    null,
+  );
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    void Promise.all(
+      ["baseline", "broken-0", "cf"].map((n) =>
+        fetch(`${import.meta.env.BASE_URL}payload-${n}.json`).then((r) =>
+          r.json(),
+        ),
+      ),
+    ).then(setPayloads);
+  }, []);
+  const [pos, setPos] = useState({ line, character });
+  useEffect(() => {
+    const w = window as unknown as {
+      __cfStep?: (i: number) => void;
+      __cfPos?: (line: number, character: number) => void;
+    };
+    w.__cfStep = (i) => setIdx(i);
+    w.__cfPos = (l, c) => setPos({ line: l, character: c });
+  }, []);
+  if (!payloads) return <div>loading replay…</div>;
+  const p = payloads[idx] as unknown as Proof & { cfPending?: boolean };
+  // The widget's `incoming` rebuild, field for field (paperproof.ts `Proof`).
+  const proof: Proof = {
+    steps: p.steps,
+    allGoals: p.allGoals,
+    comments: p.comments,
+    holes: p.holes,
+    calcChains: p.calcChains,
+    recovered: p.recovered,
+    calcRelations: p.calcRelations,
+    proofId: p.proofId,
+    declRange: p.declRange,
+    cfLine: p.cfLine,
+  };
+  return (
+    <ProofTreeView
+      proof={proof}
+      highlightPos={pos}
+      cfStub={
+        p.cfLine != null ? { line: p.cfLine, draft: "…typing…" } : null
+      }
+    />
+  );
+}
 
 // Where the committed sample proofs live (served from /public). This is the only
 // data-source-specific code in the app: the renderer (ProofTreeView) is fed a
@@ -13,6 +69,10 @@ export default function App() {
   const [records, setRecords] = useState<ProofRecord[] | null>(null);
   const [selected, setSelected] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Dev-only widget-payload replay; see CfReplay. Checked before the sample
+  // fetch effect does anything visible, but hooks must run unconditionally,
+  // so the branch sits at render time below.
+  const replayAt = new URLSearchParams(location.search).get("cf-replay");
 
   // Load every proof in the sample once. The picker selects which to render.
   useEffect(() => {
@@ -27,6 +87,11 @@ export default function App() {
   }, []);
 
   const proof = records?.[selected]?.data.proof ?? null;
+
+  if (replayAt !== null) {
+    const [l, c] = replayAt.split(":").map(Number);
+    return <CfReplay line={l || 0} character={c || 0} />;
+  }
 
   if (error || !records) {
     return (
