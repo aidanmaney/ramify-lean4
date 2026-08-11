@@ -1126,6 +1126,16 @@ export default function ProofTreeView({
   // focus-subtree buttons). The bar renders inside the node's own <g>, so
   // pointer travel from box to bar never leaves the hover region (no flicker).
   const [hoverId, setHoverId] = useState<string | null>(null);
+  // What a ◌ would take, faded while the pointer is on the button (or ⌥ is
+  // held over the tactic). Hover state like `hoverId`, and reset like it —
+  // nothing but ids, so a stale set can only fail to match. `anchor` is the
+  // node the gesture acts on; it deliberately does NOT fade, because the
+  // action bar rides inside the node's own <g> and a faded ◌ under the
+  // pointer reads as a disabled button (the armed delete's rule, same reason).
+  const [elidePreview, setElidePreview] = useState<{
+    anchor: string;
+    ids: Set<string>;
+  } | null>(null);
   // Clicking the widget BACKGROUND dismisses the editor-cursor accent: in the
   // infoview, any click focuses the panel while the editor cursor (and hence
   // highlightPos) stays put — this lets the user declutter without touching
@@ -2899,8 +2909,35 @@ export default function ProofTreeView({
   // exact — and the pointer stays on the ghost, where the restore click is).
   // Shared by the hover bar's ◌ and the ⌥-click fast path.
   const elideStep = (id: string) => {
+    setElidePreview(null);
     anchorAs(id, cutId({ kind: "step", id }));
     setElideCuts((cs) => [...cs, { kind: "step", id }]);
+  };
+
+  /** What a ◌ on `id` would take away, for the hover preview.
+   *
+   * Resolved against `treeNodes` (post-elision) rather than `baseNodes`, even
+   * though the COMMIT works on base ids: a cut nested inside this one is a
+   * ghost NODE here and a set of base members there, so basing the preview on
+   * the drawn tree is what lets an existing ghost fade along with everything
+   * around it. The two agree about the region either way — `disjointCuts`
+   * drops the inner cut when the bigger one lands.
+   *
+   * Two gestures take exactly the box you are pointing at and nothing else —
+   * a LEAF's ◌ folds its goal (see leafFoldTargets), a COMBINED run's swaps
+   * one marker for another — so both are the anchor alone. Since the anchor
+   * never dims, the preview shows nothing fading, which is the truth: the
+   * absence IS the answer, not a missing feature. (A combined run's own
+   * members are base ids that no drawn node carries, so asking for them here
+   * would compute a set that can never match.) */
+  const elideExtentIds = (
+    id: string,
+    combined: boolean,
+    leaf: boolean,
+  ): Set<string> => {
+    if (leaf || combined) return new Set([id]);
+    const byId = new Map(treeNodes.map((n) => [n.id, n]));
+    return new Set(resolveCut({ kind: "step", id }, byId));
   };
 
   // The combined-run analogue: a COMBINED node stands for several base
@@ -5291,8 +5328,17 @@ export default function ProofTreeView({
                   // shows the same answer the editor's highlight does. Paint
                   // only — nothing moves, and the fade is on the group so the
                   // node's action bar dims with it.
+                  //
+                  // A hovered ◌ fades its extent the same way, at the same
+                  // value, for the same reason — the difference being that
+                  // nothing is written, so it needs no arming step. Both
+                  // spare the node being acted ON: it is the one under the
+                  // pointer, and fading it would fade the button too.
                   opacity={
-                    arming && armedIds.has(id) && id !== arming.id
+                    (arming && armedIds.has(id) && id !== arming.id) ||
+                    (elidePreview &&
+                      elidePreview.anchor !== id &&
+                      elidePreview.ids.has(id))
                       ? 0.35
                       : undefined
                   }
@@ -5362,11 +5408,42 @@ export default function ProofTreeView({
                       : undefined
                   }
                   onMouseLeave={
-                    hasBar || hoverHighlights || isMini
+                    hasBar || hoverHighlights || isMini || elidable
                       ? () => {
                           if (hasBar || isMini)
                             setHoverId((cur) => (cur === id ? null : cur));
                           if (hoverHighlights) onHoverTactic!(null);
+                          if (elidable)
+                            setElidePreview((p) =>
+                              p?.anchor === id ? null : p,
+                            );
+                        }
+                      : undefined
+                  }
+                  // ⌥-hover previews the same extent the ⌥-CLICK would take —
+                  // the modifier is the gesture, so showing its reach before
+                  // the click costs one repaint and saves an undo. On
+                  // mousemove rather than mouseenter because the modifier can
+                  // go down and up while the pointer sits still; both branches
+                  // compare before writing, so a settled pointer re-renders
+                  // nothing. (A held ⌥ with a motionless pointer sends no
+                  // event at all — the rail's glyph swap has the same blind
+                  // spot, and the same answer: move a pixel.)
+                  onMouseMove={
+                    elidable
+                      ? (e) => {
+                          if (e.altKey) {
+                            if (elidePreview?.anchor !== id)
+                              setElidePreview({
+                                anchor: id,
+                                ids: elideExtentIds(
+                                  id,
+                                  isCombined,
+                                  leafFold !== undefined,
+                                ),
+                              });
+                          } else if (elidePreview?.anchor === id)
+                            setElidePreview(null);
                         }
                       : undefined
                   }
@@ -6056,6 +6133,19 @@ export default function ProofTreeView({
                                     : leafFold !== undefined
                                       ? toggle(leafFold)
                                       : elideStep(id),
+                                onHover: (on: boolean) =>
+                                  setElidePreview(
+                                    on
+                                      ? {
+                                          anchor: id,
+                                          ids: elideExtentIds(
+                                            id,
+                                            isCombined,
+                                            leafFold !== undefined,
+                                          ),
+                                        }
+                                      : null,
+                                  ),
                               },
                             ]
                           : []),
@@ -7991,6 +8081,11 @@ interface NodeAction {
   glyph: string;
   title: string;
   onClick: () => void;
+  /** Pointer entered/left this button. The one caller is ◌, which uses it to
+  fade what the cut would take — an action whose EXTENT isn't obvious from the
+  button deserves to show it before you commit, the armed delete's preview
+  without the arming step (nothing is written here, so nothing needs confirming). */
+  onHover?: (on: boolean) => void;
   /** Destructive: the glyph takes the editor's error colour so the one action
   that removes text does not look like the three that only navigate. */
   danger?: boolean;
@@ -8038,6 +8133,8 @@ function NodeActionBar({
               e.stopPropagation();
               a.onClick();
             }}
+            onMouseEnter={a.onHover ? () => a.onHover!(true) : undefined}
+            onMouseLeave={a.onHover ? () => a.onHover!(false) : undefined}
             style={{ cursor: "pointer" }}
           >
             <title>{a.title}</title>
