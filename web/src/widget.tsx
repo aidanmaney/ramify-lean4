@@ -282,6 +282,14 @@ type ProofTreeData = Proof & {
   webview that loads after elaboration finishes never hears it — measured, a
   restart on the demo file reliably drew no ribbons until the next edit. */
   diagnostics?: RawDiagnostic[];
+  /** The real document's current content on `cfLine` (indent stripped),
+  refreshed per request even when the tree comes from the server's cache.
+  NEVER in the stable signature — it changes per keystroke, which is exactly
+  what the typing hold exists to not redraw on. */
+  cfDraft?: string;
+  /** The server is elaborating a counterfactual in the background; re-poll
+  shortly rather than waiting for the next document event. */
+  cfPending?: boolean;
 };
 
 // The Lean infoview user-widget entry point. This is the default export bundled
@@ -325,6 +333,7 @@ function useThemeTokenColors(
   linkTint: boolean;
   linkMarks: boolean;
   typingHoldMs: number;
+  counterfactual: boolean;
   abbrev: AbbrevConfig;
 } {
   const [colors, setColors] = useState<Record<string, string>>();
@@ -340,6 +349,9 @@ function useThemeTokenColors(
   // falls back to the default hold, clamped so a stray settings.json value
   // can't park the tree for a minute.
   const [typingHoldMs, setTypingHoldMs] = useState(DEFAULT_TYPING_HOLD_MS);
+  // Defaults ON like linkMarks: absence means an older companion that never
+  // knew the key, and the counterfactual is the behaviour being shipped.
+  const [counterfactual, setCounterfactual] = useState(true);
   // vscode-lean4's own defaults until told otherwise, so the editor's unicode
   // input works with no companion installed — only a customised leader or a
   // custom translation needs this trip.
@@ -369,6 +381,7 @@ function useThemeTokenColors(
               ? Math.max(0, Math.min(Math.round(r.typingHoldMs), TYPING_HOLD_MAX_MS))
               : DEFAULT_TYPING_HOLD_MS,
           );
+          setCounterfactual(r.counterfactual !== false);
           if (r.input) {
             const next: AbbrevConfig = {
               enabled: r.input.enabled !== false,
@@ -425,6 +438,7 @@ function useThemeTokenColors(
     linkTint,
     linkMarks,
     typingHoldMs,
+    counterfactual,
     abbrev,
   };
 }
@@ -450,6 +464,9 @@ interface ThemeColorsResponse {
   DEFAULT_TYPING_HOLD_MS). Optional for the older-companion reason; missing
   means the default. */
   typingHoldMs?: number;
+  /** `proofTree.counterfactual` — the live sorry-stub preview while typing.
+  Defaults ON (absence = an older companion = the shipped behaviour). */
+  counterfactual?: boolean;
   /** `lean4.input.*` — settings again (ProofTreeWidget.lean `InputConfig`).
   Optional: an older companion's file simply has no such key. */
   input?: {
@@ -529,6 +546,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     linkTint,
     linkMarks,
     typingHoldMs,
+    counterfactual,
     abbrev,
   } = useThemeTokenColors(rs, docRev);
 
@@ -538,10 +556,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // proof — that's a normal outcome, not an error (see getProofTree).
   const st = useAsyncPersistent<ProofTreeData>(
     () =>
-      rs.call<{ pos: typeof pos }, ProofTreeData>("ProofTree.getProofTree", {
-        pos,
-      }),
-    [rs, pos.uri, pos.line, pos.character, docRev],
+      rs.call<{ pos: typeof pos; cf: boolean }, ProofTreeData>(
+        "ProofTree.getProofTree",
+        { pos, cf: counterfactual },
+      ),
+    [rs, pos.uri, pos.line, pos.character, docRev, counterfactual],
   );
 
   // The latest non-empty response, if any. Both holders below key off it.
@@ -593,6 +612,10 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       // exactly the warning it loses. It rides the signature for free: the
       // range moves whenever the declaration does.
       declRange: resolved.declRange,
+      // The counterfactual marker — IN the signature on purpose (entering and
+      // leaving cf mode is a real tree change), unlike its sibling `cfDraft`,
+      // which changes per keystroke and rides its own channel below.
+      cfLine: resolved.cfLine,
       // NOT here, deliberately: `deleteSlots`. Both wires ship it (see
       // ProofTreeData and Ppharness's resultToJson) and `Proof` declares it
       // optional, so adding it would typecheck — but the widget carries it as
@@ -752,6 +775,25 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // the next call after the reconnect installs live refs. Identity-compared
   // against the response object, so the persistent value returned while a
   // refetch is in flight doesn't loop.
+  // The counterfactual DRAFT — the buffer line's live content — adopted from
+  // every response UNGATED, unlike `interactive` below: it is paint-only (the
+  // stub overlay's text; nothing in layout reads it), and its whole point is
+  // to track the keystrokes the hold is refusing to relayout on.
+  const [cfDraft, setCfDraft] = useState<string | undefined>(undefined);
+  if (st.state === "resolved" && st.value.cfDraft !== cfDraft) {
+    setCfDraft(st.value.cfDraft);
+  }
+  // cfPending: the counterfactual is elaborating in the background. Re-poll
+  // shortly — without this, an author who stops typing before the elaboration
+  // finishes would wait for the next document event to see the preview.
+  // (The server never caches a pending payload as an answer, so this cannot
+  // loop on a stale flag.)
+  useEffect(() => {
+    if (!(st.state === "resolved" && st.value.cfPending)) return;
+    const t = window.setTimeout(() => setDocRev((r) => r + 1), 800);
+    return () => window.clearTimeout(t);
+  }, [st]);
+
   const [interactive, setInteractive] = useState<ProofTreeData | null>(null);
   // Adoption is GATED on the typing hold: while a swap is pending, the latest
   // response describes a document the drawn tree does not show, and adopting
@@ -1259,6 +1301,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         abbrev={abbrev}
         onPopoutEdit={popoutEdit}
         highlightPos={{ line: pos.line, character: pos.character }}
+        cfStub={
+          stable?.proof.cfLine != null
+            ? { line: stable.proof.cfLine, draft: cfDraft ?? "" }
+            : null
+        }
         // The room below our own top (see useFrameOffset — NOT a flat 100vh,
         // which overhangs by exactly that offset), less the deliberate strip
         // kept clear at the bottom. `max(…)` is the transient-measurement

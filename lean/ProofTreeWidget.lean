@@ -207,6 +207,23 @@ structure ProofTreeData where
   payload rather than the publish notification). Scoped to the command
   snapshot's own `msgLog`, which is exactly the span the client filter keeps. -/
   diagnostics   : Array TreeDiag := #[]
+  /-- COUNTERFACTUAL marker: when set, this payload's tree was elaborated from
+  the document with line `cfLine`'s content replaced by `sorry` — the live
+  preview shown while the author is mid-typing a tactic and the real document
+  does not elaborate. The client keys the stub node's identity on this (it is
+  stable across keystrokes, so it belongs in the text signature); the DRAFT —
+  the real line's current content — deliberately rides the separate `cfDraft`
+  field below, which the client must keep OUT of the signature or every
+  keystroke would defeat the typing hold this exists to serve. -/
+  cfLine        : Option Nat := none
+  /-- The real document's current content on `cfLine` (indent stripped),
+  refreshed per request even when the tree itself comes from the cache. Paint
+  only, never part of the client's stable signature. -/
+  cfDraft       : Option String := none
+  /-- A counterfactual is being elaborated in the background for this state;
+  the client may re-poll shortly instead of waiting for the next document
+  event. -/
+  cfPending     : Bool := false
   deriving Server.RpcEncodable
 
 /-- Every tactic's user-facing name, for the in-place editor's completion list.
@@ -225,12 +242,26 @@ def tacticNames (ctx : Elab.ContextInfo) : IO (Array String) :=
   ctx.runMetaM .empty do
     return (← Tactic.Doc.allTacticDocs).map (·.userName)
 
-/-- Parameters for `getProofTree`: just the cursor position. The widget passes the
+/-- Parameters for `getProofTree`: the cursor position, plus whether the client
+wants the counterfactual preview (`proofTree.counterfactual`, decided
+client-side since settings ride the companion channel). The widget passes the
 whole `DocumentPosition`; the extra `uri` field is ignored when decoding as an
 `Lsp.Position`. -/
 structure GetProofTreeParams where
   pos : Lsp.Position
-  deriving FromJson, ToJson
+  cf  : Bool := true
+  deriving ToJson
+
+/-- Hand-written for the theme-channel reason (`ThemeColors` below): the two
+ends can ship separately, and a derived instance makes a MISSING `cf` key an
+error rather than the default — an older bundle sends `{pos}` alone. -/
+instance : FromJson GetProofTreeParams where
+  fromJson? j := do
+    let pos ← j.getObjValAs? Lsp.Position "pos"
+    let cf := match j.getObjVal? "cf" >>= fromJson? with
+      | .ok b => b
+      | .error _ => true
+    return { pos, cf }
 
 /-- Collect an `InteractiveGoal` for every goal mentioned by any tactic in the
 info tree, keyed by mvarId string (= `GoalInfo.id` on the wire).
@@ -596,48 +627,24 @@ initialize proofTreeCache :
     -- moves stay cached.
     IO.Ref (Option ((String × Nat × Nat × Nat) × ProofTreeData)) ← IO.mkRef none
 
-/-- Parse the proof tree for the theorem under the cursor.
+/-- The whole enrichment pipeline, from a parsed `Result` to the wire payload:
+label fix-ups, slots, calc chains, recovery merge, tagged goals, comments,
+semantic tokens, the editing seam, hover refs, relations, holes.
 
-Mirrors the `.tree` branch of `Paperproof.getSnapshotData`: wait for the snapshot
-containing `pos`, then run `BetterParser_Tree` over its (fully elaborated) info
-tree. A cursor outside a tactic proof is a normal outcome, not an error: it
-returns an EMPTY proof (`steps := []`), which the widget renders as a quiet
-"no proof here" — keeping the empty state in the data model rather than encoding
-it in error-message strings the client would have to pattern-match. That empty
-answer short-circuits BEFORE the enrichment passes (tagged goals, tokens, hover
-index): the cursor sits outside a proof most of the time in a working file, and
-the client reads none of the rich payload in that state. -/
-@[server_rpc_method]
-def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTreeData) := do
-  withWaitFindSnapAtPos params.pos fun snap => do
-    let doc ← readDoc
-    let fileMap : FileMap := doc.meta.text
-    let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
-    -- The FILE's diagnostics, as reported so far — the very state the publish
-    -- path serves (on v4.32 `EditableDocumentCore.collectCurrentDiagnostics`,
-    -- sticky ++ per-version, mutex-guarded; it replaced v4.27's bare
-    -- `doc.diagnosticsRef`) — and NOT `snap.msgLog`, which looks right and is
-    -- empty: the file worker rebuilds these compat snapshots from the
-    -- incremental architecture (FileWorker/Utils.lean `mkCmdSnaps`), and the
-    -- `cmdState` it hands them has its `messages` already drained into the
-    -- reporting stream. The CLI path is different on purpose —
-    -- `IO.processCommands` populates `cmdState.messages`, which is why every
-    -- offline probe of the msgLog path passed while the live widget saw an
-    -- empty log (measured, by driving the real server over LSP and reading
-    -- the payload).
-    let interactiveDiags := (← doc.collectCurrentDiagnostics).toArray
-    let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, interactiveDiags.size)
-    if let some (key, payload) ← proofTreeCache.get then
-      if key == cacheKey then
-        return payload
-    let finish (payload : ProofTreeData) : RequestM ProofTreeData := do
-      proofTreeCache.set <| some (cacheKey, payload)
-      return payload
-    let parsed ← (do
-      match ← RequestM.runTermElabM snap
-        (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree) with
-      | some r => pure r
-      | none => pure { steps := [], allGoals := {} })
+Factored out of `getProofTree` so the COUNTERFACTUAL path (below) can run the
+identical pipeline over a synthetic snapshot — one re-elaborated from a
+spliced source — instead of growing a second, drifting copy. Everything here
+reads only `snap`/`fileMap`/`parsed` and the two diagnostic inputs; nothing
+touches the live document, which is precisely what makes a synthetic caller
+sound. `errorPositions`/`treeDiags` are PARAMETERS rather than computed here
+because the two callers get them from different places: the real path from
+`doc.collectCurrentDiagnostics` (see getProofTree — `snap.msgLog` is empty on
+the live server), the counterfactual from its own elaboration's message log
+(which IS populated, since we run the elaboration ourselves). -/
+def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
+    (parsed : Paperproof.Services.Result)
+    (errorPositions : Array Lsp.Position) (treeDiags : Array TreeDiag)
+    (snapStart : Nat) : RequestM ProofTreeData := do
     -- The label fix-ups (the `rw` location clause, a multi-line tactic's
     -- dropped tail), applied FIRST, before anything reads a label: the tokens
     -- align against it, brief mode collapses it, the completion list is keyed
@@ -659,30 +666,9 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     -- failed — measured, see ProofTreeRecover).
     let slots := tacticSlots fileMap snap.infoTree (extra := some snap.stx)
     let calcChains := collectCalcChains fileMap snap.infoTree (extra := some snap.stx)
-    -- Error starts for the recovery gate, and the payload's diagnostics, both
-    -- from `interactiveDiags` above (see its comment: `snap.msgLog` is EMPTY
-    -- on this path). File-wide is fine for both consumers: recovery tests
-    -- containment in this command's slots, and the client filters to the
-    -- declaration's span.
-    let errorPositions := interactiveDiags.foldl (init := #[]) fun acc d =>
-      if d.severity? == some .error then acc.push d.range.start else acc
-    let treeDiags : Array TreeDiag := interactiveDiags.map fun d =>
-      let full := d.fullRange?.getD d.range
-      { range := ⟨d.range.start, d.range.end⟩
-        fullRange := ⟨full.start, full.end⟩
-        severity := match d.severity? with
-          | some .error => 1 | some .warning => 2 | _ => 3
-        -- `toDiagnostic`'s flattener, NOT `d.message.stripTags`. The two agree
-        -- only when the editor initialised the server with `hasWidgets: false`
-        -- — which a bare LSP probe does and VS Code never does. In widget mode
-        -- an embed's text lives INSIDE the `MsgEmbed` constructor and the
-        -- outer tag's subtext is EMPTY, so `stripTags` walks past all of it
-        -- and every message flattened to "" (measured: 9/9 empty with
-        -- `initializationOptions.hasWidgets: true`, 9/9 full without).
-        message := d.toDiagnostic.message
-        isSilent := d.isSilent?.getD false
-        leanTags := (d.leanTags?.getD #[]).map fun
-          | .unsolvedGoals => 1 | .goalsAccomplished => 2 }
+    -- Error starts (`errorPositions`) gate the recovery below; `treeDiags` are
+    -- the payload's diagnostics. Both arrive as parameters — see the doc
+    -- comment above for why the two callers source them differently.
     let recovA ← Recover.recoverFailed fileMap snap.infoTree remapped.steps slots
       calcChains errorPositions
     -- Part B: a TERM-MODE proof (`:= term`, no `by`) parses to nothing at
@@ -696,7 +682,7 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       recovered := recovA.recovered ++ recovB.recovered }
     let parsedTree := recov.apply remapped
     if parsedTree.steps.isEmpty then
-      return ← finish { steps := [], allGoals := [] }
+      return { steps := [], allGoals := [] }
     -- Which print of each goal the client will draw, by its own rule (see
     -- `goalIndex` in proofToTree.ts): fewest metavariables, ties keeping the
     -- first offered, and `allGoals` is offered first. Mirrored here so the
@@ -948,7 +934,7 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     let tacticNames ← match anyGoalContext snap.infoTree with
       | some (ctx, _) => tacticNames ctx
       | none => pure #[]
-    finish {
+    return {
       proofId,
       tacticNames,
       declRange := snap.stx.getRange?.map fun r =>
@@ -966,6 +952,352 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       calcChains
       calcRelations
     }
+
+-- ======================= The counterfactual =================================
+
+/-- Splice for the counterfactual: the cursor line's content replaced by
+`sorry`, preserving what structure the line carries. Returns
+`(cfText, draft)` — the whole spliced source and the line's real content
+(indent stripped) for the client's stub label — or `none` when there is
+nothing to do.
+
+Tiers, from most to least structure preserved:
+* a line carrying a justification (`… := by ring`, a `calc` link or one-line
+  `have`) keeps everything through its LAST `:= by` — replacing the whole
+  line would break the link, and the counterfactual would elaborate to
+  nothing;
+* a bullet keeps its `· `; a case line keeps `| c =>` — the marker is block
+  structure, not the tactic;
+* an empty line takes the CURSOR's column as its indent (the editor put the
+  caret where a tactic belongs; the line itself has no whitespace to read);
+* anything else is replaced whole at its own indent.
+
+A wrong guess is SAFE by construction: the spliced command elaborates to
+nothing, `computeCf` caches the failure for this exact text, and the client
+keeps today's behaviour. -/
+private def cfSplice (fileMap : FileMap) (line : Nat) (cursorCol : Nat) :
+    Option (String × String) :=
+  if line + 1 ≥ fileMap.positions.size then none else
+  let src := fileMap.source
+  let lineStart := fileMap.lspPosToUtf8Pos ⟨line, 0⟩
+  let nextStart := fileMap.lspPosToUtf8Pos ⟨line + 1, 0⟩
+  let lineRaw := String.Pos.Raw.extract src lineStart nextStart
+  let hasNl := lineRaw.endsWith "\n"
+  let contentEnd : String.Pos.Raw :=
+    if hasNl then ⟨nextStart.byteIdx - 1⟩ else nextStart
+  let content := String.Pos.Raw.extract src lineStart contentEnd
+  let ws := (content.takeWhile fun c => c == ' ' || c == '\t').toString
+  let body := (content.drop ws.length).toString
+  let byParts := content.splitOn ":= by"
+  let arrowParts := content.splitOn "=>"
+  let newContent :=
+    if body.startsWith "--" || body.startsWith "/-" then
+      -- A comment line is never the tactic being typed; splicing it would
+      -- offer a preview with an extra sorry nobody is writing.
+      content
+    else if body.isEmpty then
+      -- An empty line with the caret at column 0 is not "typing a tactic";
+      -- leave it alone (this also keeps the between-declarations case out).
+      if cursorCol == 0 then content
+      else ("".pushn ' ' cursorCol) ++ "sorry"
+    else if byParts.length ≥ 2 then
+      String.intercalate ":= by" byParts.dropLast ++ ":= by sorry"
+    else if body.startsWith "· " then ws ++ "· sorry"
+    else if body.startsWith "| " && arrowParts.length ≥ 2 then
+      arrowParts.head! ++ "=> sorry"
+    else ws ++ "sorry"
+  if newContent == content then none
+  else
+    let cfText := String.Pos.Raw.extract src ⟨0⟩ lineStart
+      ++ newContent ++ (if hasNl then "\n" else "")
+      ++ String.Pos.Raw.extract src nextStart ⟨src.utf8ByteSize⟩
+    some (cfText, body)
+
+/-- Is the counterfactual wanted? Two conjuncts, both read off the payload the
+normal path just built (no extra parse):
+
+**Something is broken in this declaration** — no steps at all; a recovered
+(failed/skipped) step on the cursor's line; the declaration's range not
+containing the cursor (the calc-swallow signature: a broken block re-names the
+cursor's command after the NEXT theorem — the client-side `navigated` gate
+exists for the same measurement); or an error diagnostic intersecting the
+declaration. Declaration-wide, not cursor-line, deliberately: deleting a whole
+tactic line reports `unsolved goals` on the CONTAINER (`have`/`induction`),
+never on the now-blank line (measured — the line-scoped version missed the
+delete-and-retype scenario entirely).
+
+**AND the cursor's line holds no completed tactic** — no step STARTS on it.
+This is what keeps cf out of the way while merely READING a broken proof with
+the cursor on some valid line, and what hands back the real tree the moment
+the typed tactic elaborates. A false fire (cursor resting on a blank line of a
+broken proof) costs one background elaboration, cached by spliced text; the
+splice's own declines (comment lines, blank at column 0) keep the browsing
+cases out. -/
+private def cfWanted (real : ProofTreeData) (pos : Lsp.Position) : Bool :=
+  let declContains := match real.declRange with
+    | some r =>
+      (r.start.line < pos.line
+        || (r.start.line == pos.line && r.start.character ≤ pos.character))
+      && (pos.line < r.stop.line
+        || (pos.line == r.stop.line && pos.character ≤ r.stop.character))
+    | none => false
+  let errInDecl := real.diagnostics.any fun d =>
+    d.severity == 1 && (match real.declRange with
+      | some r =>
+        d.range.start.line ≤ r.stop.line && r.start.line ≤ d.fullRange.stop.line
+      | none => true)
+  let broken := real.steps.isEmpty
+    || real.recovered.any (·.start.line == pos.line)
+    || !declContains
+    || errInDecl
+  let lineIncomplete :=
+    !(real.steps.any fun s => s.position.start.line == pos.line)
+  broken && lineIncomplete
+
+/-- The counterfactual's two caches plus its in-flight marker. `cfElabCache`
+is the expensive layer, keyed by the HASH OF THE SPLICED TEXT — which is what
+makes the feature affordable: while the author types on one line, the real
+document changes every keystroke but the spliced document (that line reads
+`sorry` either way) does not, so ONE elaboration serves the whole burst. A
+`none` value records a failure, so a splice that elaborates to nothing is not
+retried per keystroke. `cfServeCache` short-circuits the splice+hash for the
+repeated identical request; `cfComputing` dedupes the background task (its
+timestamp expires a marker orphaned by a dead task). -/
+initialize cfElabCache : IO.Ref (Option (UInt64 × Option ProofTreeData)) ←
+  IO.mkRef none
+/-- (real-source hash, line, spliced-text hash, blob) — the last serve. The
+extra keys carry the STICKY rule; see `maybeCounterfactual`. -/
+initialize cfServeCache : IO.Ref (Option (UInt64 × Nat × UInt64 × ProofTreeData)) ←
+  IO.mkRef none
+initialize cfComputing : IO.Ref (Option (UInt64 × Nat)) ← IO.mkRef none
+
+/-- Elaborate the counterfactual: parse ONE command of the spliced text from
+the state the document's own elaboration reached just before it, run the
+elaborator over it, and push the result through the same `mkTreePayload`
+pipeline as the real path.
+
+The recipe is `Frontend.processCommand`'s, adapted to a mid-file start: the
+compat `Snapshot` carries `mpState`/`cmdState` — the parser and elaboration
+states AFTER its command — so the predecessor of the cursor's command is a
+valid restart point, and it is byte-identical in the spliced text (the splice
+touches only the cursor's line, which sits strictly after it). Three details
+are load-bearing:
+
+* **`Elab.async` is forced OFF.** The server runs with it ON, and an embedded
+  `elabCommandTopLevel` under async scatters messages and info subtrees into
+  snapshot tasks nothing here drains — the v4.29 "empty proofs" trap, in
+  exactly the environment where it is real (the option's own docstring names
+  this case).
+* **Kind-gated to `declaration`s.** An arbitrary command (`#eval`,
+  `initialize`) has genuinely global side effects a copied `Command.State`
+  does not sandbox.
+* The diagnostics come from the counterfactual's OWN message log — populated,
+  unlike the live compat snapshots' (nothing drained it; we ran the
+  elaboration). The injected stub's `declaration uses 'sorry'` warning is our
+  own noise and is dropped; everything else is honest and ribbons as usual. -/
+private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
+    (cfText : String) : RequestM (Option ProofTreeData) := do
+  let fileMap := doc.meta.text
+  let lineStart := fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩
+  let (snaps, _, _) ← doc.cmdSnaps.getFinishedPrefix
+  -- The LAST snapshot ending at or before the cursor's line start: the state
+  -- just before the command being counterfactually rebuilt. The list is
+  -- ordered, so the fold keeps the latest match.
+  let prev? := snaps.foldl (init := none) fun acc s =>
+    if s.endPos.byteIdx ≤ lineStart.byteIdx then some s else acc
+  let some prev := prev? | return none
+  let ictx := Parser.mkInputContext cfText doc.meta.uri
+  let cfMap := ictx.fileMap
+  let scopes := prev.cmdState.scopes.map fun sc =>
+    { sc with opts := Elab.async.set sc.opts false }
+  let cmdState0 : Command.State := { prev.cmdState with
+    scopes, messages := {}, traceState := {}, snapshotTasks := #[],
+    infoState := { enabled := true } }
+  let some scope := cmdState0.scopes.head? | return none
+  let pmctx : Parser.ParserModuleContext := {
+    env := cmdState0.env, options := scope.opts,
+    currNamespace := scope.currNamespace, openDecls := scope.openDecls }
+  let (stx, mpState', parseMsgs) :=
+    Parser.parseCommand ictx pmctx prev.mpState {}
+  unless stx.getKind == ``Lean.Parser.Command.declaration do return none
+  let some r := stx.getRange? | return none
+  unless r.start.byteIdx ≤ lineStart.byteIdx
+      && lineStart.byteIdx < r.stop.byteIdx do
+    return none
+  let cmdCtx : Command.Context := {
+    fileName := doc.meta.uri, fileMap := cfMap,
+    cmdPos := prev.mpState.pos, snap? := none, cancelTk? := none }
+  let ref ← IO.mkRef cmdState0
+  Command.withLoggingExceptions
+    (Elab.getResetInfoTrees *> Command.elabCommandTopLevel stx) cmdCtx ref
+  let stFinal ← ref.get
+  -- `Snapshot.infoTree` asserts exactly one tree; guard rather than trust.
+  unless stFinal.infoState.trees.size == 1 do return none
+  let synth : Snapshots.Snapshot :=
+    { stx, mpState := mpState', cmdState := stFinal }
+  let mut cfDiags : Array TreeDiag := #[]
+  let mut errPos : Array Lsp.Position := #[]
+  for m in parseMsgs.toList ++ stFinal.messages.toList do
+    let text ← m.data.toString
+    if m.severity == .warning && text.startsWith "declaration uses 'sorry'" then
+      continue
+    let s := cfMap.leanPosToLspPos m.pos
+    let e := match m.endPos with
+      | some e => cfMap.leanPosToLspPos e
+      | none => s
+    let sev := match m.severity with
+      | .error => 1 | .warning => 2 | .information => 3
+    cfDiags := cfDiags.push {
+      range := ⟨s, e⟩, fullRange := ⟨s, e⟩, severity := sev, message := text
+      leanTags := if text.startsWith "unsolved goals" then #[1] else #[] }
+    if sev == 1 then errPos := errPos.push s
+  let parsed ← (do
+    match ← RequestM.runTermElabM synth
+      (liftM <| Paperproof.Services.BetterParser_Tree cfMap synth.infoTree) with
+    | some res => pure res
+    | none => pure { steps := [], allGoals := {} })
+  let payload ← mkTreePayload synth cfMap parsed errPos cfDiags
+    ((stx.getRange?.map (·.start.byteIdx)).getD 0)
+  if payload.steps.isEmpty then return none
+  return some { payload with cfLine := some pos.line }
+
+/-- Decide the payload: the real one, or the counterfactual preview.
+
+Serving is two-level. The SERVE memo keys on (real source, cursor line) — the
+repeated request while nothing changed. The ELAB cache keys on the SPLICED
+text: a keystroke changes the real source but usually not the spliced one, so
+the elaboration is reused and only the `cfDraft` field is refreshed — which is
+also why the draft is attached HERE, per request, never inside the cached
+blob. A miss spawns the elaboration on a DETACHED task and returns the real
+payload marked `cfPending` — a request is never blocked on seconds of
+elaboration, the client re-polls, and the next request serves the cache. The
+pending answer is also served while a fresh marker is in flight, so a burst of
+keystrokes starts exactly one elaboration. -/
+private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
+    (doc : FileWorker.EditableDocument) (fileMap : FileMap)
+    (real : ProofTreeData) : RequestM ProofTreeData := do
+  unless wantCf do return real
+  let some (cfText, draft) := cfSplice fileMap pos.line pos.character
+    | return real
+  let srcHash : UInt64 := hash fileMap.source
+  let cfKey : UInt64 := hash cfText
+  -- The completeness witness: a step STARTING on the cursor's line means the
+  -- line's tactic elaborated for real, which is what turns the sticky serve
+  -- back off the moment the typed tactic becomes valid.
+  let stepStartsHere := real.steps.any fun s => s.position.start.line == pos.line
+  if let some (sh, ln, ck, blob) ← cfServeCache.get then
+    -- Identical request state: serve what was served.
+    if sh == srcHash && ln == pos.line then
+      return { blob with cfDraft := some draft }
+    -- The STICKY rule, and it exists because `cfWanted`'s signals RACE the
+    -- diagnostics reporter: measured, one keystroke after a delete the calc
+    -- CONTAINER step still covered the cursor's line, no error had been
+    -- published yet, and the raw 3-step wreck was served between two cf
+    -- serves. If the last serve was cf FOR THIS LINE, and the current text
+    -- splices to the SAME counterfactual (i.e. the edit stayed within the
+    -- line — the typing case by construction), and no step starts here, the
+    -- author is still mid-word: keep serving the cf.
+    if ln == pos.line && ck == cfKey && !stepStartsHere then
+      cfServeCache.set (some (srcHash, ln, ck, blob))
+      return { blob with cfDraft := some draft }
+  unless cfWanted real pos do return real
+  if let some (k, res) ← cfElabCache.get then
+    if k == cfKey then
+      match res with
+      | some blob =>
+        cfServeCache.set (some (srcHash, pos.line, cfKey, blob))
+        return { blob with cfDraft := some draft }
+      | none => return real
+  let now ← IO.monoMsNow
+  if let some (k, t0) ← cfComputing.get then
+    if k == cfKey && now - t0 < 20000 then
+      return { real with cfPending := true }
+  cfComputing.set (some (cfKey, now))
+  let rc ← read
+  let line := pos.line
+  let _ ← IO.asTask (prio := .default) do
+    let res ← match ← ((computeCf doc pos cfText).run rc).toBaseIO with
+      | .ok res => pure res
+      | .error _ => pure none
+    cfElabCache.set (some (cfKey, res))
+    if let some blob := res then
+      cfServeCache.set (some (srcHash, line, cfKey, blob))
+  return { real with cfPending := true }
+
+/-- Parse the proof tree for the theorem under the cursor.
+
+Mirrors the `.tree` branch of `Paperproof.getSnapshotData`: wait for the snapshot
+containing `pos`, run `BetterParser_Tree` over its (fully elaborated) info
+tree, then the enrichment pipeline (`mkTreePayload`). A cursor outside a tactic
+proof is a normal outcome, not an error: it returns an EMPTY proof
+(`steps := []`), which the widget renders as a quiet "no proof here" — keeping
+the empty state in the data model rather than encoding it in error-message
+strings the client would have to pattern-match.
+
+When the document is BROKEN at the cursor — the author is mid-typing — the
+payload may instead be the COUNTERFACTUAL preview: the same theorem with the
+cursor's line as `sorry`, so the tree keeps its shape and marks where the
+tactic being written lands. See `maybeCounterfactual`. -/
+@[server_rpc_method]
+def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTreeData) := do
+  withWaitFindSnapAtPos params.pos fun snap => do
+    let doc ← readDoc
+    let fileMap : FileMap := doc.meta.text
+    let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
+    -- The FILE's diagnostics, as reported so far — the very state the publish
+    -- path serves (on v4.32 `EditableDocumentCore.collectCurrentDiagnostics`,
+    -- sticky ++ per-version, mutex-guarded; it replaced v4.27's bare
+    -- `doc.diagnosticsRef`) — and NOT `snap.msgLog`, which looks right and is
+    -- empty: the file worker rebuilds these compat snapshots from the
+    -- incremental architecture (FileWorker/Utils.lean `mkCmdSnaps`), and the
+    -- `cmdState` it hands them has its `messages` already drained into the
+    -- reporting stream. The CLI path is different on purpose —
+    -- `IO.processCommands` populates `cmdState.messages`, which is why every
+    -- offline probe of the msgLog path passed while the live widget saw an
+    -- empty log (measured, by driving the real server over LSP and reading
+    -- the payload).
+    let interactiveDiags := (← doc.collectCurrentDiagnostics).toArray
+    let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, interactiveDiags.size)
+    if let some (key, payload) ← proofTreeCache.get then
+      -- A cached PENDING payload is a promise, not an answer: fall through
+      -- and re-decide, or the client's re-poll would loop on it forever
+      -- within one document version.
+      if key == cacheKey && !payload.cfPending then
+        return payload
+    let parsed ← (do
+      match ← RequestM.runTermElabM snap
+        (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree) with
+      | some r => pure r
+      | none => pure { steps := [], allGoals := {} })
+    -- Error starts for the recovery gate, and the payload's diagnostics, both
+    -- from `interactiveDiags` above (see its comment: `snap.msgLog` is EMPTY
+    -- on this path). File-wide is fine for both consumers: recovery tests
+    -- containment in this command's slots, and the client filters to the
+    -- declaration's span.
+    let errorPositions := interactiveDiags.foldl (init := #[]) fun acc d =>
+      if d.severity? == some .error then acc.push d.range.start else acc
+    let treeDiags : Array TreeDiag := interactiveDiags.map fun d =>
+      let full := d.fullRange?.getD d.range
+      { range := ⟨d.range.start, d.range.end⟩
+        fullRange := ⟨full.start, full.end⟩
+        severity := match d.severity? with
+          | some .error => 1 | some .warning => 2 | _ => 3
+        -- `toDiagnostic`'s flattener, NOT `d.message.stripTags`. The two agree
+        -- only when the editor initialised the server with `hasWidgets: false`
+        -- — which a bare LSP probe does and VS Code never does. In widget mode
+        -- an embed's text lives INSIDE the `MsgEmbed` constructor and the
+        -- outer tag's subtext is EMPTY, so `stripTags` walks past all of it
+        -- and every message flattened to "" (measured: 9/9 empty with
+        -- `initializationOptions.hasWidgets: true`, 9/9 full without).
+        message := d.toDiagnostic.message
+        isSilent := d.isSilent?.getD false
+        leanTags := (d.leanTags?.getD #[]).map fun
+          | .unsolvedGoals => 1 | .goalsAccomplished => 2 }
+    let real ← mkTreePayload snap fileMap parsed errorPositions treeDiags
+      snapStart
+    let payload ← maybeCounterfactual params.cf params.pos doc fileMap real
+    proofTreeCache.set <| some (cacheKey, payload)
+    return payload
 
 /-- Case-insensitive prefix test, allocation-free — the client's own matcher
 (`matches` in completion.ts) lowercases both sides, so the server must agree or
@@ -1250,6 +1582,12 @@ structure ThemeColors where
   default and the clamp — this end just carries the number). The one
   non-Bool setting on this wire. -/
   typingHoldMs : Nat := 600
+  /-- `proofTree.counterfactual` — the live sorry-stub preview while typing
+  (see `maybeCounterfactual`). Defaults TRUE like `linkMarks`: absence means
+  an older companion, which should get the shipped behaviour. The client
+  passes it back per `getProofTree` call, since the decision is made
+  server-side but the setting rides this channel. -/
+  counterfactual : Bool := true
   /-- `lean4.input.*` — unicode abbreviations for the in-place tactic editor.
   Settings again, so again the long way round. -/
   input : InputConfig := {}
@@ -1276,6 +1614,7 @@ instance : FromJson ThemeColors where
           linkTint := jsonField j "linkTint" false,
           linkMarks := jsonField j "linkMarks" true,
           typingHoldMs := jsonField j "typingHoldMs" 600,
+          counterfactual := jsonField j "counterfactual" true,
           input := jsonField j "input" {},
           colors := jsonField j "colors" #[] }
 

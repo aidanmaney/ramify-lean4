@@ -829,6 +829,15 @@ export interface ProofTreeViewProps {
    */
   highlightPos?: { line: number; character: number } | null;
   /**
+   * Widget-only: the COUNTERFACTUAL stub. When set, the proof on screen was
+   * elaborated with `line`'s content replaced by `sorry` (the document is
+   * mid-edit and does not elaborate), and `draft` is what the author has
+   * typed on that line so far. The tactic node anchored on that line draws
+   * the draft over its box, dashed and accent-inked, and takes no editing
+   * gestures — the buffer IS its editor right now.
+   */
+  cfStub?: { line: number; draft: string } | null;
+  /**
    * Extra controls placed at the left of the toolbar. The standalone app injects
    * its proof picker here; the widget leaves it empty.
    */
@@ -965,6 +974,7 @@ export default function ProofTreeView({
   linkTint = false,
   onPopoutEdit,
   highlightPos,
+  cfStub,
   headerExtra,
   height = "100vh",
   renderTaggedGoal,
@@ -3449,7 +3459,7 @@ export default function ProofTreeView({
   // them — you can pick, elide or fill a calc while focused.
   const hintUp =
     seq.mode !== "off" || !!elidePick || !!bandPick || !!editing?.calcStage;
-  const floaterRows = [!!headerExtra, focusId !== null, hintUp];
+  const floaterRows = [!!headerExtra, focusId !== null, hintUp, !!cfStub];
   const floaterTop = (row: number) =>
     8 + FLOATER_H * floaterRows.slice(0, row).filter(Boolean).length;
 
@@ -4177,6 +4187,68 @@ export default function ProofTreeView({
     }
   }
 
+  // The COUNTERFACTUAL stub overlay: the drawn tree holds a `sorry` where the
+  // author is typing (see the cfStub prop), and this paints their live draft
+  // over that node — dashed, accent-inked, widened to the draft like the
+  // in-place editor's overlay (fixed height; a growing box reads as the tree
+  // shifting). Rendered AFTER the nodes loop so it sits on top, and it TAKES
+  // the pointer: the node under it must not offer editing or delete while the
+  // buffer is its editor, and swallowing click/dblclick here is what enforces
+  // that (the hover bar never appears — the pointer is over the overlay, not
+  // the node's <g>). Body code, not a JSX IIFE (the house ref-taint rule).
+  let cfStubEl: ReactNode = null;
+  if (cfStub) {
+    const pn = nodes.find(
+      (n) =>
+        n.data.type === "tactic" &&
+        n.data.position &&
+        n.data.position.start.line === cfStub.line,
+    );
+    if (pn) {
+      const label = cfStub.draft.trim() === "" ? "…" : cfStub.draft;
+      const boxTop = pn.y + (bandTopH(pn.data) - pn.data.h) / 2;
+      const w = Math.max(
+        pn.data.w,
+        measureText(label, NODE_FONT_PX) + 2 * NODE_PAD,
+      );
+      cfStubEl = (
+        <g
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          <rect
+            x={pn.x - pn.data.w / 2}
+            y={boxTop}
+            width={w}
+            height={pn.data.h}
+            rx={4}
+            fill="var(--ptw-surface)"
+            stroke={SEQ_STROKE}
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+          >
+            <title>
+              {`being written in the buffer (line ${cfStub.line + 1}) — the tree holds a sorry here until it elaborates`}
+            </title>
+          </rect>
+          <text
+            x={pn.x - pn.data.w / 2 + NODE_PAD}
+            y={boxTop + pn.data.h / 2}
+            dominantBaseline="central"
+            fontSize={NODE_FONT_PX}
+            fontFamily={getCodeFontFamily()}
+            fill="var(--ptw-fg)"
+            xmlSpace="preserve"
+            style={{ letterSpacing: 0 }}
+            opacity={cfStub.draft.trim() === "" ? 0.5 : 1}
+          >
+            {label}
+          </text>
+        </g>
+      );
+    }
+  }
+
   // The flag prose prompt (`.none…` / `note…`): one line of free text below
   // the head's box. Blur is a NO-OP (the staged-fill lesson: the infoview's
   // reflows throw stray blurs); Enter commits, Esc cancels here, the document
@@ -4429,6 +4501,27 @@ export default function ProofTreeView({
               : "calc · right-hand side · this link steps, so name where it goes"}
         </div>
       )}
+      {/* The counterfactual banner: its own floater row (it COEXISTS with the
+          hints — you can be mid-pick while typing in the buffer), naming the
+          line so the dashed stub and the buffer read as one thing. */}
+      {cfStub && (
+        <div
+          style={{
+            position: "absolute",
+            top: floaterTop(3),
+            left: 8,
+            zIndex: 10,
+            fontFamily: "monospace",
+            fontSize: 12,
+            color: ACCENT_TEXT,
+            background: SEQ_STROKE,
+            padding: "3px 10px",
+            borderRadius: 999,
+          }}
+        >
+          {`✎ writing line ${cfStub.line + 1} — tree holds a sorry there`}
+        </div>
+      )}
       <ControlRail
         onExpandAll={() => {
           anchorRoot();
@@ -4583,7 +4676,7 @@ export default function ProofTreeView({
           // FLOATER_H apart — they are all one line of 12px text in the same
           // pill chrome, so one constant covers them rather than a per-row
           // measurement.
-          top={floaterTop(3)}
+          top={floaterTop(4)}
           onStep={stepDiag}
           // "Take me to it" means BOTH surfaces: the tree (unfold, page,
           // scroll — gotoDiagNode) and the SOURCE (the editor's cursor onto
@@ -6350,6 +6443,7 @@ export default function ProofTreeView({
                 here would be tainted). */}
             {selectionPillEl}
             {flagPromptEl}
+            {cfStubEl}
             {/* Overview peek: hovering a mini chip draws the node at FULL size
                 on top of everything — paint only, so pointing at chips never
                 relayouts (the no-relayout-on-hover rule; the geometry version

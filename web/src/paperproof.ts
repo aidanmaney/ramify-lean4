@@ -224,6 +224,13 @@ export interface Proof {
   (see ProofTreeWidget.lean's `tacticNames`). Environment-only, so it rides the
   once-per-edit cache. Widget-only: the CLI ships no editor. */
   tacticNames?: string[];
+  /** COUNTERFACTUAL marker (widget only): this proof was elaborated with the
+  named line's content replaced by `sorry`, because the real document is
+  mid-edit and does not elaborate there. Stable across keystrokes (the spliced
+  text does not change while typing stays on the line), so it belongs in the
+  stable signature; the live DRAFT deliberately does not ride `Proof` at all —
+  see `cfDraft` on the payload in widget.tsx. */
+  cfLine?: number;
 }
 
 /** One NDJSON line as emitted by the CLI: `{file, data:{index, proof}}`. */

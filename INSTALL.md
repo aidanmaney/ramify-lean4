@@ -131,11 +131,11 @@ touch any of them whatever state they are in. Open them, don't build them.
 Install the packaged extension:
 
 ```bash
-code --install-extension dist/proof-tree-companion-0.0.5.vsix
+code --install-extension dist/proof-tree-companion-0.0.6.vsix
 ```
 
 or in VS Code: **Extensions** → **⋯** → **Install from VSIX…** → pick
-`dist/proof-tree-companion-0.0.5.vsix`. Reload the window afterwards.
+`dist/proof-tree-companion-0.0.6.vsix`. Reload the window afterwards.
 
 <details>
 <summary>Developing on it instead (no packaging step)</summary>
@@ -144,7 +144,7 @@ The extension is deliberately build-step-free CommonJS, so a symlink is enough:
 
 ```bash
 ln -s "$PWD/ext/proof-tree-companion" \
-      ~/.vscode/extensions/aidan.proof-tree-companion-0.0.5
+      ~/.vscode/extensions/aidan.proof-tree-companion-0.0.6
 ```
 
 Changes to `extension.js` need only a window reload; changes to `package.json`
@@ -170,9 +170,11 @@ need a full VS Code restart (the manifest is rescanned at startup).
   the editor and runs the real command.
 - **Settings**: `proofTree.outlineOnly`, `proofTree.tallFrame`,
   `proofTree.linkMarks`, `proofTree.linkEmoji`, `proofTree.linkTint`,
-  `proofTree.typingHoldMs` (how long the tree waits for typing to go quiet
-  before redrawing — raise it if you type slowly and the tree still churns
-  mid-edit), `proofTree.lensGoals`,
+  `proofTree.counterfactual` (while you type a tactic, show the tree as if
+  the line you are writing were `sorry` — full shape held, a dashed stub
+  with your draft marking where it lands), `proofTree.typingHoldMs` (how
+  long the tree waits for typing to go quiet before redrawing — raise it if
+  you type slowly and the tree still churns mid-edit), `proofTree.lensGoals`,
   `proofTree.lensFold`, `proofTree.lensWordWrap`, `proofTree.lensShrinkNudges`,
   plus your `lean4.input.*` unicode-abbreviation customisations. (The
   abbreviation *table* is bundled, so `\dvd` → `∣` works in the tree's editor

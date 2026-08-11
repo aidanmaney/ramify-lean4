@@ -131,6 +131,11 @@ reading a VS Code setting:
 - `proofTree.linkEmoji` (default `false`) — draw those marks as 🎯/⚙️ instead.
 - `proofTree.linkTint` (default `false`) — tint each edge toward its target's
   hue.
+- `proofTree.counterfactual` (default `true`) — while you type a tactic and
+  the proof doesn't elaborate, the tree shows the theorem as if the line you
+  are writing were `sorry` (re-elaborated in the background, cached per
+  line): full shape held, a dashed stub carrying your draft where the tactic
+  lands, snapping to the real tree when it becomes valid.
 - `proofTree.typingHoldMs` (default `600`) — how long the cursor must sit
   still after typing before the tree redraws to match the changed proof, so
   typing in the buffer doesn't relayout the tree per keystroke. If you

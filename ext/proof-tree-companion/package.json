@@ -3,7 +3,7 @@
   "displayName": "Proof Tree Companion",
   "description": "Editor-side commands for the proof-tree infoview widget: opens a tactic in the lens (a slim editor group split below the infoview) and reveals tree nodes in it, relayed through a request file the widget's Lean RPC writes (the infoview's EditorApi has no executeCommand). Will also grow global settings / persistent state for the widget.",
   "publisher": "aidan",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -68,6 +68,11 @@
           "minimum": 0,
           "maximum": 8,
           "markdownDescription": "How far to shrink the lens below the 50% split it opens at. The split is roughly 8-9 nudges tall, so **lower is taller** — `0` leaves the lens at half the infoview column."
+        },
+        "proofTree.counterfactual": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "While you are typing a tactic and the proof doesn't elaborate, show the tree **as if the line you are writing were `sorry`** — elaborated in the background — so the tree keeps its full shape, marks where your tactic lands with a dashed stub carrying your draft, and snaps to the real tree the moment your tactic is valid. Costs one background re-elaboration of the current theorem per edited line (cached while you type on it). Untick to fall back to drawing whatever the broken document parses to."
         },
         "proofTree.typingHoldMs": {
           "type": "integer",

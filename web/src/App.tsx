@@ -85,6 +85,19 @@ export default function App() {
             },
           }
         : {})}
+      // Dev-only counterfactual stub, on `?cf-stub=<line>[:<draft>]`: the real
+      // thing is widget-only (the server elaborates the counterfactual), so
+      // this fakes the marker to make the overlay and its banner drawable in
+      // the preview harness. Paint verification only — the underlying proof
+      // is whatever the NDJSON holds.
+      {...(() => {
+        const v = new URLSearchParams(location.search).get("cf-stub");
+        if (v === null) return {};
+        const [line, ...rest] = v.split(":");
+        return {
+          cfStub: { line: Number(line), draft: rest.join(":") },
+        };
+      })()}
       headerExtra={
         <ProofPicker
           records={records}

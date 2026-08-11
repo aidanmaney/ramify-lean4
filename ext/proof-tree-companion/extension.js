@@ -314,6 +314,11 @@ function publishThemeColors() {
     const typingHoldMs = vscode.workspace
       .getConfiguration("proofTree")
       .get("typingHoldMs");
+    // The counterfactual preview. `!== false`: defaults ON, so an unset value
+    // must read as on (the linkMarks pattern).
+    const counterfactual =
+      vscode.workspace.getConfiguration("proofTree").get("counterfactual") !==
+      false;
     // The tree's in-place tactic editor has the buffer's own unicode input
     // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
     // The TABLE is bundled with the renderer, so this is only about the user's
@@ -347,6 +352,7 @@ function publishThemeColors() {
           linkTint,
           linkMarks,
           typingHoldMs,
+          counterfactual,
           input,
           colors: Object.keys(colors).map((type) => ({
             type,
@@ -367,7 +373,8 @@ function publishThemeColors() {
         `link emoji ${linkEmoji ? "on" : "off"}, ` +
         `link tint ${linkTint ? "on" : "off"}, ` +
         `link marks ${linkMarks ? "on" : "off"}, ` +
-        `typing hold ${typingHoldMs}ms): ` +
+        `typing hold ${typingHoldMs}ms, ` +
+        `counterfactual ${counterfactual ? "on" : "off"}): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),
@@ -1041,6 +1048,7 @@ function activate(context) {
         e.affectsConfiguration("proofTree.linkTint") ||
         e.affectsConfiguration("proofTree.linkMarks") ||
         e.affectsConfiguration("proofTree.typingHoldMs") ||
+        e.affectsConfiguration("proofTree.counterfactual") ||
         e.affectsConfiguration("lean4.input")
       )
         publishThemeColors();
