@@ -308,6 +308,12 @@ function publishThemeColors() {
     // colour), so it is an opt-out, and an unset value must read as on.
     const linkMarks =
       vscode.workspace.getConfiguration("proofTree").get("linkMarks") !== false;
+    // The typing hold's quiet period in ms — the one NUMBER on this wire.
+    // Written through raw; the widget owns the default and the clamp, so a
+    // bad value here degrades to the default there rather than in two places.
+    const typingHoldMs = vscode.workspace
+      .getConfiguration("proofTree")
+      .get("typingHoldMs");
     // The tree's in-place tactic editor has the buffer's own unicode input
     // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
     // The TABLE is bundled with the renderer, so this is only about the user's
@@ -340,6 +346,7 @@ function publishThemeColors() {
           linkEmoji,
           linkTint,
           linkMarks,
+          typingHoldMs,
           input,
           colors: Object.keys(colors).map((type) => ({
             type,
@@ -359,7 +366,8 @@ function publishThemeColors() {
         `tall frame ${tallFrame ? "on" : "off"}, ` +
         `link emoji ${linkEmoji ? "on" : "off"}, ` +
         `link tint ${linkTint ? "on" : "off"}, ` +
-        `link marks ${linkMarks ? "on" : "off"}): ` +
+        `link marks ${linkMarks ? "on" : "off"}, ` +
+        `typing hold ${typingHoldMs}ms): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),
@@ -1032,6 +1040,7 @@ function activate(context) {
         e.affectsConfiguration("proofTree.linkEmoji") ||
         e.affectsConfiguration("proofTree.linkTint") ||
         e.affectsConfiguration("proofTree.linkMarks") ||
+        e.affectsConfiguration("proofTree.typingHoldMs") ||
         e.affectsConfiguration("lean4.input")
       )
         publishThemeColors();

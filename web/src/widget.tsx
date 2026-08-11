@@ -40,6 +40,26 @@ const HOVER_DWELL_MS = 180;
 // diagnostics several times as it progresses, and only the last one is worth
 // re-parsing at. Short enough that a committed edit redraws immediately.
 const DOC_SETTLE_MS = 120;
+// The TYPING HOLD: how long a changed proof text must sit quiet before the
+// tree swaps it in (see the `stable` machinery below). DOC_SETTLE_MS alone
+// cannot do this job — it coalesces the diagnostics burst WITHIN one
+// elaboration round, while typing produces a fresh round per keystroke, each
+// with a genuinely different proof text that passed the signature gate and
+// relaid the tree out (per keystroke, through broken intermediates: `ri` is a
+// failed tactic, so the recovery node and error ribbon flickered too — the
+// reported "shudder"). Default only; `proofTree.typingHoldMs` overrides it
+// over the companion channel, and 0 restores the old swap-immediately
+// behaviour.
+const DEFAULT_TYPING_HOLD_MS = 600;
+// Ceiling on the setting: past a few seconds a "hold" reads as the tree being
+// broken, not settling.
+const TYPING_HOLD_MAX_MS = 5000;
+// After the widget itself writes the document (applyEdit, undo/redo), the
+// next re-elaboration is that edit's own — the tree should redraw promptly,
+// not sit out the typing hold. A window rather than a one-shot flag: the
+// first payload after an edit can be a stale elaboration finishing, and a
+// flag consumed by it would hold the real redraw instead.
+const EXPECT_EDIT_WINDOW_MS = 3000;
 // "clear" carries no meaningful range; the companion ignores it.
 const ORIGIN = { line: 0, character: 0 };
 
@@ -270,6 +290,7 @@ function useThemeTokenColors(
   linkEmoji: boolean;
   linkTint: boolean;
   linkMarks: boolean;
+  typingHoldMs: number;
   abbrev: AbbrevConfig;
 } {
   const [colors, setColors] = useState<Record<string, string>>();
@@ -281,6 +302,10 @@ function useThemeTokenColors(
   // Defaults ON, unlike its two neighbours: absent means an older companion
   // that never knew the key, and the marks are what it was already drawing.
   const [linkMarks, setLinkMarks] = useState(true);
+  // A NUMBER, unlike the rest of the wire's settings: absent or wrong-typed
+  // falls back to the default hold, clamped so a stray settings.json value
+  // can't park the tree for a minute.
+  const [typingHoldMs, setTypingHoldMs] = useState(DEFAULT_TYPING_HOLD_MS);
   // vscode-lean4's own defaults until told otherwise, so the editor's unicode
   // input works with no companion installed — only a customised leader or a
   // custom translation needs this trip.
@@ -305,6 +330,11 @@ function useThemeTokenColors(
           setLinkEmoji(!!r.linkEmoji);
           setLinkTint(!!r.linkTint);
           setLinkMarks(r.linkMarks !== false);
+          setTypingHoldMs(
+            typeof r.typingHoldMs === "number" && isFinite(r.typingHoldMs)
+              ? Math.max(0, Math.min(Math.round(r.typingHoldMs), TYPING_HOLD_MAX_MS))
+              : DEFAULT_TYPING_HOLD_MS,
+          );
           if (r.input) {
             const next: AbbrevConfig = {
               enabled: r.input.enabled !== false,
@@ -350,6 +380,7 @@ function useThemeTokenColors(
     linkEmoji,
     linkTint,
     linkMarks,
+    typingHoldMs,
     abbrev,
   };
 }
@@ -371,6 +402,10 @@ interface ThemeColorsResponse {
   linkEmoji?: boolean;
   linkTint?: boolean;
   linkMarks?: boolean;
+  /** `proofTree.typingHoldMs` — the typing hold's quiet period (see
+  DEFAULT_TYPING_HOLD_MS). Optional for the older-companion reason; missing
+  means the default. */
+  typingHoldMs?: number;
   /** `lean4.input.*` — settings again (ProofTreeWidget.lean `InputConfig`).
   Optional: an older companion's file simply has no such key. */
   input?: {
@@ -449,6 +484,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     linkEmoji,
     linkTint,
     linkMarks,
+    typingHoldMs,
     abbrev,
   } = useThemeTokenColors(rs, docRev);
 
@@ -528,25 +564,88 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     tacticEdits: TacticEditEntry[];
     deleteSlots: TacticSlot[];
   } | null>(null);
-  if (resolved && incoming && (!stable || stable.sig !== incoming.sig)) {
-    setStable({
-      sig: incoming.sig,
-      // `tacticNames` is attached HERE rather than in `incoming`, so it stays
-      // out of `sig`: it is ~500 strings that depend only on the imports, so
-      // stringifying them into every signature comparison would be pure cost
-      // for a value that cannot change while the file is open.
-      proof: { ...incoming.proof, tacticNames: resolved.tacticNames },
-      // Edits derive from the same source text as the steps, so refreshing
-      // them exactly when the proof signature changes keeps their ranges
-      // in sync with the document (positions live in the steps → any shift
-      // changes the sig).
-      tacticEdits: resolved.tacticEdits ?? [],
-      // Same reasoning as the edits: slots are positions into the same source
-      // text, so they refresh exactly when the proof's signature does and can
-      // never describe a document the tree isn't showing.
-      deleteSlots: resolved.deleteSlots ?? [],
-    });
+  // The full record a swap installs, memoized on the response so the typing
+  // hold below re-arms once per payload, not once per render.
+  const candidate = useMemo(
+    () =>
+      resolved && incoming
+        ? {
+            sig: incoming.sig,
+            // `tacticNames` is attached HERE rather than in `incoming`, so it
+            // stays out of `sig`: it is ~500 strings that depend only on the
+            // imports, so stringifying them into every signature comparison
+            // would be pure cost for a value that cannot change while the
+            // file is open.
+            proof: { ...incoming.proof, tacticNames: resolved.tacticNames },
+            // Edits derive from the same source text as the steps, so
+            // refreshing them exactly when the proof signature changes keeps
+            // their ranges in sync with the document (positions live in the
+            // steps → any shift changes the sig).
+            tacticEdits: resolved.tacticEdits ?? [],
+            // Same reasoning as the edits: slots are positions into the same
+            // source text, so they refresh exactly when the proof's signature
+            // does and can never describe a document the tree isn't showing.
+            deleteSlots: resolved.deleteSlots ?? [],
+          }
+        : null,
+    [resolved, incoming],
+  );
+  // Bypass window for the typing hold: written only by the widget's own
+  // document writes (the applyEdit commits and the undo/redo relay), read
+  // only inside the hold effect — never during render.
+  const expectEditRef = useRef(0);
+  // Immediate swap paths, adjusted during render as before: the first draw, a
+  // DIFFERENT proof (the cursor moved theorems — holding a navigation would
+  // read as latency, and the fold/zoom state resets on proofKey anyway), and
+  // a zero hold (the setting's off switch, restoring swap-on-arrival).
+  if (
+    candidate &&
+    (!stable ||
+      (stable.sig !== candidate.sig &&
+        (typingHoldMs <= 0 ||
+          candidate.proof.proofId !== stable.proof.proofId)))
+  ) {
+    setStable(candidate);
   }
+  // The TYPING HOLD. Same proof, new text is the shape of typing in the
+  // buffer (or the lens): every keystroke that survives long enough to
+  // elaborate lands a distinct text signature, and swapping each one in
+  // relaid the tree out per keystroke — through the broken intermediates
+  // (`ri` is a failed tactic), which is what the reported "shudder" was. So a
+  // changed text must sit QUIET for `typingHoldMs` before it is installed.
+  //
+  // Two details carry the design. The timer re-arms on the SIGNATURE, not the
+  // response object: elaboration settling down a long file bumps docRev
+  // repeatedly, and each bump re-parses to a fresh but text-identical payload
+  // — keying on identity would keep restarting the timer for the whole
+  // file's elaboration, holding the tree for tens of seconds instead of one
+  // quiet period. (The swap still installs the LATEST payload, via the ref
+  // below.) And the widget's own edits bypass the hold through
+  // `expectEditRef`, a time window rather than a consumed flag: the first
+  // payload after an applyEdit can be a stale elaboration finishing, and a
+  // one-shot flag spent on it would hold the real redraw.
+  const candidateRef = useRef<typeof candidate>(null);
+  useEffect(() => {
+    candidateRef.current = candidate;
+  });
+  const candSig = candidate?.sig ?? null;
+  const candProofId = candidate?.proof.proofId;
+  useEffect(() => {
+    if (candSig === null || !stable) return;
+    if (stable.sig === candSig) return;
+    // The render path above already took these cases.
+    if (typingHoldMs <= 0 || candProofId !== stable.proof.proofId) return;
+    const swap = () => {
+      const c = candidateRef.current;
+      if (c && c.sig === candSig) setStable(c);
+    };
+    if (Date.now() < expectEditRef.current) {
+      swap();
+      return;
+    }
+    const t = window.setTimeout(swap, typingHoldMs);
+    return () => window.clearTimeout(t);
+  }, [candSig, candProofId, stable, typingHoldMs]);
 
   // The RPC-REFERENCE-carrying half of the payload, deliberately NOT kept in
   // `stable`. Refs (`WithRpcRef`) live in the file's RPC session store, and
@@ -742,10 +841,21 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [editByStart, infoAt, colorBrackets],
   );
 
+  // Every handler that writes the document stamps this before the write, so
+  // the resulting re-elaboration bypasses the typing hold (see the hold
+  // effect above): the user asked for this redraw, so it should be prompt.
+  // Handler-phase only — writing a ref during render is the banned direction.
+  const expectOwnEdit = () => {
+    expectEditRef.current = Date.now() + EXPECT_EDIT_WINDOW_MS;
+  };
+
   // …and commit by replacing the tight range in the document. Goes through
   // the editor's own edit pipeline (applyEdit), so it lands on the undo
   // stack and triggers re-elaboration; the tree redraws off the next RPC.
+  // Comment edits and the flag writers route through here too, so one stamp
+  // covers them.
   const editTactic = (p: ProofStepPosition, newText: string) => {
+    expectOwnEdit();
     void ec.api.applyEdit({
       changes: { [pos.uri]: [{ range: { start: p.start, end: p.stop }, newText }] },
     });
@@ -764,6 +874,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     text: string,
     slots?: { lhs: TextSlot; rhs: TextSlot },
   ): AddResult => {
+    expectOwnEdit();
     const at2 = (p: { line: number; character: number }) =>
       editByStart.get(`${p.line}:${p.character}`);
     // The `calc` forms act on a range of their own rather than on a line
@@ -848,6 +959,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const deleteTactic = (spec: DeleteSpec) => {
     const e = deleteEdit(spec, stable?.deleteSlots ?? []);
     if (!e) return;
+    expectOwnEdit();
     void ec.api.applyEdit({
       changes: {
         [pos.uri]: [{ range: { start: e.range.start, end: e.range.end }, newText: e.newText }],
@@ -866,8 +978,12 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // Undo/redo, relayed because the tree's own edits leave focus in the
   // webview where ⌘Z reaches nothing (see runEditorCommand in the companion —
   // it activates the editor group first, since undo acts on what is focused).
-  const undo = (redo: boolean) =>
+  const undo = (redo: boolean) => {
+    // A document write like the applyEdit handlers (the companion runs the
+    // editor's own undo), so it takes the same hold bypass.
+    expectOwnEdit();
     callCompanion(redo ? "redo" : "undo", { start: ORIGIN, stop: ORIGIN });
+  };
 
   // Hovering a tactic node paints a decoration over its range in the editor.
   // DEBOUNCED here rather than in the view: every request is a file write by

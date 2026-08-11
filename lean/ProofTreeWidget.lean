@@ -1244,6 +1244,12 @@ structure ThemeColors where
   makes the field's absence — an older companion, which never wrote the key —
   mean exactly what that companion was already drawing. -/
   linkMarks : Bool := true
+  /-- `proofTree.typingHoldMs` — how long a changed proof text sits quiet
+  before the widget swaps the new tree in (the anti-shudder hold while typing
+  in the buffer; see the `stable` machinery in widget.tsx, which owns the
+  default and the clamp — this end just carries the number). The one
+  non-Bool setting on this wire. -/
+  typingHoldMs : Nat := 600
   /-- `lean4.input.*` — unicode abbreviations for the in-place tactic editor.
   Settings again, so again the long way round. -/
   input : InputConfig := {}
@@ -1269,6 +1275,7 @@ instance : FromJson ThemeColors where
           linkEmoji := jsonField j "linkEmoji" false,
           linkTint := jsonField j "linkTint" false,
           linkMarks := jsonField j "linkMarks" true,
+          typingHoldMs := jsonField j "typingHoldMs" 600,
           input := jsonField j "input" {},
           colors := jsonField j "colors" #[] }
 

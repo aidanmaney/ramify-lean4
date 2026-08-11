@@ -93,7 +93,7 @@ never-arrived from arrived-and-skipped from arrived-and-threw.
 No build step (plain CommonJS). Symlink into the extensions dir and reload:
 
 ```bash
-ln -s "$(pwd)/ext/proof-tree-companion" ~/.vscode/extensions/aidan.proof-tree-companion-0.0.3
+ln -s "$(pwd)/ext/proof-tree-companion" ~/.vscode/extensions/aidan.proof-tree-companion-0.0.4
 ```
 
 Uninstall by removing the symlink. After changing `package.json` (e.g.
@@ -131,6 +131,12 @@ reading a VS Code setting:
 - `proofTree.linkEmoji` (default `false`) — draw those marks as 🎯/⚙️ instead.
 - `proofTree.linkTint` (default `false`) — tint each edge toward its target's
   hue.
+- `proofTree.typingHoldMs` (default `600`) — how long the proof text must sit
+  unchanged before the tree redraws to match it, so typing in the buffer
+  doesn't relayout the tree per keystroke. Raise it if you type slowly and
+  still see churn; `0` redraws on every change. Edits made from the tree
+  itself always redraw immediately. Relayed raw; the widget owns the default
+  and the clamp (0–5000).
 
 `proofTree.lensFontScale` is **gone**: it scaled a user-global
 `editor.fontSize`, so it shrank every editor in the window (see above).
