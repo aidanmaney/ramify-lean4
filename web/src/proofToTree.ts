@@ -490,7 +490,9 @@ export function tacticNodeAt(
 // ---- Source comments → node attribution -------------------------------------
 
 type LspPos = { line: number; character: number };
-const cmpPos = (a: LspPos, b: LspPos): number =>
+// Exported alongside `posLE`: THE one coding of "compare two LSP positions"
+// in the web half — every sort or ordering test goes through these two.
+export const cmpPos = (a: LspPos, b: LspPos): number =>
   a.line - b.line || a.character - b.character;
 
 // A non-breaking space: the wrapper splits on ordinary spaces, so joining a
@@ -648,17 +650,30 @@ export function parseFlags(text: string): ParsedFlags {
 // are consumed in proofToTree (contextFor), so they never reach a TreeNode.
 // Returns undefined when nothing is left to say, keeping the field absent on
 // the overwhelming majority of nodes.
+//
+// The two directives need `targets` differently, and conflating them was a
+// silent drop: `.fold` folds the TARGETS, so with none it means nothing, but a
+// `.none` on a TACTIC cuts that tactic ITSELF (the seed block passes `n.id`
+// and never looks at targets). A CLOSING tactic has no goalsAfter and no
+// spawned goals, so the shared gate threw its `.none` away before the seed
+// ever saw it — `-- .none why this grind is dull` above the last step of a
+// proof did nothing at all, and the pill offered to write it.
 function nodeFlags(
   f: ParsedFlags | undefined,
   targets: string[],
+  /** True on a TACTIC node, where `.none` is self-targeting (above). */
+  selfElide = false,
 ): NodeFlags | undefined {
-  if (!f || (!f.fold && !f.elide) || targets.length === 0) return undefined;
+  if (!f) return undefined;
+  const fold = !!f.fold && targets.length > 0;
+  const elide = !!f.elide && (selfElide || targets.length > 0);
+  if (!fold && !elide) return undefined;
   const out: NodeFlags = { targets };
-  if (f.fold) out.fold = true;
-  if (f.elide) out.elide = true;
+  if (fold) out.fold = true;
+  if (elide) out.elide = true;
   // The note is only ever SHOWN in place of an elision; anywhere else the
   // prose is already the node's comment strip.
-  if (f.elide && f.prose) out.note = f.prose;
+  if (elide && f.prose) out.note = f.prose;
   return out;
 }
 
@@ -830,12 +845,23 @@ function attributeComments(
 // tidy the leftover line-end whitespace.
 function cleanLabel(label: string, comments: SourceComment[]): string {
   let t = label;
+  let scrubbed = false;
   for (const c of comments)
-    if (t.includes(c.text)) t = t.split(c.text).join("");
+    if (t.includes(c.text)) {
+      t = t.split(c.text).join("");
+      scrubbed = true;
+    }
   const lines = t.split("\n").map((l) => l.trimEnd());
   while (lines.length > 0 && lines[lines.length - 1].trim() === "")
     lines.pop();
-  return lines.join("\n");
+  // A comment that occupied a whole INTERIOR line of a multi-line label leaves
+  // that line empty after the scrub — a blank LINE_H inside the box. Drop
+  // empty interior lines only when a scrub happened: a blank line the author
+  // wrote inside a tactic never survives to a label (labels are tight slot
+  // slices), so this can only be the scrub's residue. Token alignment degrades
+  // gracefully past the divergence (the commonPrefix branch).
+  const kept = scrubbed ? lines.filter((l, i) => i === 0 || l !== "") : lines;
+  return kept.join("\n");
 }
 
 export interface ProofToTreeOptions {
@@ -1643,6 +1669,7 @@ export function proofToTree(
         (step.spawnedGoals.length > 0 ? step.spawnedGoals : step.goalsAfter).map(
           (g) => g.id,
         ),
+        true, // a `.none` here cuts THIS tactic, targets or not
       ),
       flagRanges: commentByNode.flagRanges.get(tId),
       // The repair chip for a block that never parsed, when a step DOES stand

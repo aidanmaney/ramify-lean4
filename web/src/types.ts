@@ -313,7 +313,10 @@ export interface TreeNode {
     // down to a whisper you can click back open.
     ghost?: boolean;
     // A `.none` source flag's own prose (see NodeFlags.note), shown as the
-    // ghost's label in place of the tactic preview.
+    // marker's label in place of the tactic preview or the `⋯ N tactics`
+    // count. Set for ANY cut the flagged tactic is the subject of, not only
+    // the seeded one: the flag is a durable fact about that step, so it must
+    // read the same whichever gesture put the step away (see applyElisions).
     note?: string;
   };
 }
@@ -450,4 +453,12 @@ export interface LayoutNode extends TreeNode {
   // lane, action bar and hover peek on this same bit — set only by the
   // engine's sizing, so geometry and render cannot disagree.
   mini?: boolean;
+  // Narration mode (⌥ on the -- rail button): this tactic's `lines` are its
+  // COMMENT prose standing in for the label — measured italic, drawn italic in
+  // comment ink, tagged/token rendering skipped outright (prose is not source,
+  // and letting the text-equality guard fail its way to the same answer would
+  // make "no colour" an accident instead of a decision). The tactic text
+  // itself moves to the box's <title>. Set only by the engine's sizing, the
+  // `mini` discipline.
+  proseLabel?: boolean;
 }

@@ -303,6 +303,11 @@ function publishThemeColors() {
       vscode.workspace.getConfiguration("proofTree").get("linkEmoji") === true;
     const linkTint =
       vscode.workspace.getConfiguration("proofTree").get("linkTint") === true;
+    // Whether the marks are drawn at all. `!== false` rather than `=== true`:
+    // this one DEFAULTS ON (shape is the baseline that survives without
+    // colour), so it is an opt-out, and an unset value must read as on.
+    const linkMarks =
+      vscode.workspace.getConfiguration("proofTree").get("linkMarks") !== false;
     // The tree's in-place tactic editor has the buffer's own unicode input
     // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
     // The TABLE is bundled with the renderer, so this is only about the user's
@@ -334,6 +339,7 @@ function publishThemeColors() {
           tallFrame,
           linkEmoji,
           linkTint,
+          linkMarks,
           input,
           colors: Object.keys(colors).map((type) => ({
             type,
@@ -352,7 +358,8 @@ function publishThemeColors() {
         `outline ${outline ? "on" : "off"}, ` +
         `tall frame ${tallFrame ? "on" : "off"}, ` +
         `link emoji ${linkEmoji ? "on" : "off"}, ` +
-        `link tint ${linkTint ? "on" : "off"}): ` +
+        `link tint ${linkTint ? "on" : "off"}, ` +
+        `link marks ${linkMarks ? "on" : "off"}): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),
@@ -1024,6 +1031,7 @@ function activate(context) {
         e.affectsConfiguration("proofTree.tallFrame") ||
         e.affectsConfiguration("proofTree.linkEmoji") ||
         e.affectsConfiguration("proofTree.linkTint") ||
+        e.affectsConfiguration("proofTree.linkMarks") ||
         e.affectsConfiguration("lean4.input")
       )
         publishThemeColors();

@@ -257,8 +257,11 @@ export function collapseLabel(label: string): CollapsedLabel | null {
   const emitKeep = (from: number, to: number) => {
     let s = from;
     let e = to;
-    while (s < e && label[s] === " ") s++;
-    while (e > s && label[e - 1] === " ") e--;
+    // `\n` trims like a space: a multi-line label (restored tails) elides
+    // ACROSS newlines, and a kept run must not open or close on one — brief's
+    // point is collapsing the label back toward one line.
+    while (s < e && (label[s] === " " || label[s] === "\n")) s++;
+    while (e > s && (label[e - 1] === " " || label[e - 1] === "\n")) e--;
     if (e <= s) return;
     // A space after a preceding `…`, unless this run opens with a closer.
     if (afterElision && text !== "" && !CLOSERS.includes(label[s])) text += " ";

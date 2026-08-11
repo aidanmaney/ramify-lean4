@@ -28,6 +28,8 @@ import {
   COMMENT_INDENT,
   CASE_FONT_PX,
   CASE_LINE_H,
+  bandTopH,
+  inkExtent,
   getCodeFontFamily,
   refreshCodeFontFamily,
   measureText,
@@ -82,6 +84,7 @@ import {
   tacticNodeAt,
   tacticTargets,
   posLE,
+  cmpPos,
 } from "./proofToTree";
 import type { HypMode } from "./proofToTree";
 import {
@@ -95,12 +98,14 @@ import {
   remapCut,
   resolveCut,
   selectionRun,
+  sourceView,
   stepElidable,
 } from "./elide";
 import {
   type DocPatch,
   flagLine,
   headTactics,
+  removeCommentPatch,
   removeFlagPatches,
   usedHypNames,
 } from "./flagEdit";
@@ -108,6 +113,7 @@ import {
   ACCENT_TEXT,
   CASE_FILL,
   COMMENT_FILL,
+  PROSE_FILL,
   EDIT_BG,
   EDIT_TEXT,
   HYP_MARK_FILL,
@@ -284,6 +290,9 @@ const stopToReflow = (v: number): ReflowMode =>
 // is what keeps the lane from drawing on whatever comes next.
 const CHIP_H = CHIP_LANE_H;
 const CHIP_GAP = 6;
+// Breathing room between the selection pill's chips and the edge of the
+// opaque card behind them.
+const CARD_PAD = 4;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
 // The fill-in-place chip names the hole rather than reading `+`. "Add a tactic
@@ -316,6 +325,10 @@ const CHIP_W_STEP = 30;
 // backs out everywhere.
 const CLOSE_RHS = "_";
 const CHIP_FONT_PX = 10;
+// The selection pill's verb chips (`elide`, `¬note`, `.no-hyps`…): WORDS, so
+// a step up from the lane's single glyphs, a step down from the picker's
+// relation symbols.
+const PILL_FONT_PX = 11;
 // Relation chips in the picker row (see PickerRow): a touch larger than the
 // word chips, since a single glyph carries the whole meaning.
 const PICK_FONT_PX = 12;
@@ -452,21 +465,27 @@ function inViewScroll(
   const cx = (MARGIN.left + padX + node.x) * zoom;
   const cy = (MARGIN.top + padY + node.y) * zoom;
   const halfW = (node.data.w / 2) * zoom;
-  // Approximate on purpose: for an aside tactic with a FLOATED strip (see
-  // floatsComment) the visual extent is the same total height but centered
-  // commentBlockH/2 higher than node.y suggests. The comfort band's `pad`
-  // slack absorbs the shift; threading the layout mode in here isn't worth it.
-  const halfH = ((node.data.h + node.data.commentBlockH) / 2) * zoom;
+  // The node's real ink span (inkExtent, the bandTopH sibling), not a
+  // symmetric half-height: a FLOATED strip hangs entirely above the band, so
+  // the comfort test has to reach further up than down. This was approximated
+  // for a while on the grounds that the `pad` slack absorbs the shift — true
+  // for a one-line strip, false from three lines up (a 4-line strip is a 41px
+  // error), and the omitted `caseH` was never absorbed at all. For a
+  // non-floating node the span is symmetric about `cy`, so this is a no-op
+  // everywhere except the aside modes.
+  const ink = inkExtent(node.data);
+  const inkTop = cy - ink.up * zoom;
+  const inkBot = cy + ink.down * zoom;
   const pad = 32;
   const maxX = el.scrollWidth - el.clientWidth;
   const maxY = el.scrollHeight - el.clientHeight;
   let left = el.scrollLeft;
   let top = el.scrollTop;
   if (
-    cy - halfH < el.scrollTop + pad ||
-    cy + halfH > el.scrollTop + el.clientHeight - pad
+    inkTop < el.scrollTop + pad ||
+    inkBot > el.scrollTop + el.clientHeight - pad
   )
-    top = clampScroll(cy - el.clientHeight / 2, maxY);
+    top = clampScroll((inkTop + inkBot) / 2 - el.clientHeight / 2, maxY);
   if (compact) {
     const leftEdge = cx - halfW;
     if (
@@ -756,15 +775,22 @@ export interface ProofTreeViewProps {
    */
   outline?: boolean;
   /**
-   * Widget-only settings on the same channel as `outline`, both default off.
-   * The link marks themselves (gap-with-dot = goal-bound, gap-with-dash =
-   * tactic-bound) are always drawn — they are the accessible baseline, not a
-   * setting. `linkEmoji` swaps them for unmistakable emoji (🎯 goal / ⚙️
-   * tactic); `linkTint` additionally pulls each edge's ink toward its target's
-   * hue. Both purely paint.
+   * Widget-only settings on the same channel as `outline`. `linkEmoji` swaps
+   * the marks for unmistakable emoji (🎯 goal / ⚙️ tactic) and `linkTint`
+   * pulls each edge's ink toward its target's hue; both default off, both
+   * purely paint.
+   *
+   * `linkMarks` gates the mark LAYER itself (`linkEmoji` only picks its
+   * style), and unlike the other two it defaults ON: the marks are the
+   * accessible baseline — the one channel that survives without colour — so
+   * dropping them is a deliberate opt-out for readers who find the ink
+   * distracting and read the target's kind off the tint or the box shape.
+   * Defaulting on also means an older companion, which sends no such key at
+   * all, keeps drawing exactly what it drew before.
    */
   linkEmoji?: boolean;
   linkTint?: boolean;
+  linkMarks?: boolean;
   /**
    * Widget-only, the rich-editing escape hatch behind a tactic's hover-bar
    * `⧉` button: opens the proof in the LENS — a slim editor group under the
@@ -915,6 +941,7 @@ export default function ProofTreeView({
   tokenColors,
   outline = false,
   linkEmoji = false,
+  linkMarks = true,
   linkTint = false,
   onPopoutEdit,
   highlightPos,
@@ -934,8 +961,10 @@ export default function ProofTreeView({
 }: ProofTreeViewProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Accordion: expanding a node collapses its sibling branches, so only one
-  // branch is open per level (the "view one branch at a time" mode).
-  const [accordion, setAccordion] = useState(true);
+  // branch is open per level (the "view one branch at a time" mode). OFF by
+  // default — it is a reading discipline, not a property of the proof, and as
+  // a default it silently shuts branches the reader had deliberately opened.
+  const [accordion, setAccordion] = useState(false);
   // Context verbosity, cycled by the rail (see HYP_MODES): `used` (default)
   // shows what the proof BELOW the goal depends on, `new` what the tactic
   // above bound, `delta` what the goal gained (plus anything its own tactic
@@ -990,11 +1019,40 @@ export default function ProofTreeView({
   // showing the tactics stacked, dropping the pass-through goals between them
   // (syntactic, not semantic — see elide.ts combineRuns). Engine-tier geometry.
   const [combine, setCombine] = useState(false);
+  // Base ids the AUTO combine pass must leave alone — the un-combine verb's
+  // memory. A ⇉-made run is recomputed every render rather than stored, so
+  // dissolving ONE of them needs a standing exclusion, not a cut removal.
+  // Remapped across re-parses like every other id set; cleared when ⇉ turns
+  // off (re-enabling the mode recombines everything, the same bargain ⊞
+  // makes with cuts) and on a proof change.
+  const [combineOff, setCombineOff] = useState<Set<string>>(new Set());
   // Overview: everything outside the cursor's local region lays out as a
   // one-line mini chip, so the tree reads as its shape; hover a chip to peek
   // at its full content (paint-only — see the peek overlay). Engine-tier
   // geometry, like brief/combine.
-  const [overview, setOverview] = useState(false);
+  //
+  // PARKED, not removed: the rail slot it used to hold (▦) now carries the
+  // comment toggle, which the author wanted more, and the rail is deliberately
+  // not growing a button per feature. Everything below it — the keep-set
+  // memos, the engine's mini sizing, the hover peek — is intact and correct;
+  // re-exposing it is one RailButton, so there is no setter here on purpose
+  // (a `false` that nothing writes is what makes the dead-state honest).
+  const [overview] = useState(false);
+  // Comment strips, globally. Engine-tier for the same reason brief is: the
+  // strip is part of a node's BAND, so hiding it has to give the room back.
+  // Three states: "shown" (strips above nodes, home), "hidden" (no strips),
+  // "instead" (narration — a commented tactic's prose replaces its label
+  // inside the box; see LayoutNode.proseLabel). Click walks shown↔hidden;
+  // ⌥-click walks instead↔shown — two axes on one button, the ⊞ precedent.
+  const [commentMode, setCommentMode] = useState<
+    "shown" | "hidden" | "instead"
+  >("shown");
+  // Ids whose strip is hidden individually (the selection pill's verb), on
+  // top of the global switch. The `combineOff` lifecycle exactly: remapped
+  // across re-parses, cleared on a proof change — and NOT cleared when the
+  // global toggle flips, so turning comments back on doesn't silently undo
+  // the ones you asked to hide.
+  const [commentsOff, setCommentsOff] = useState<Set<string>>(new Set());
   // Side-by-side branches (compact mode): a branching tactic's subtrees lay
   // out as columns sharing one vertical span instead of stacking down the
   // page. A computeLayout parameter, not an engine rebuild: geometry per
@@ -1124,6 +1182,26 @@ export default function ProofTreeView({
     // leaves the `sorry` standing rather than blanking the justification and
     // breaking the link.
     fill?: boolean;
+    // The step position the syntax-colouring mirror should align tokens
+    // against, when it is not the edited NODE's own. Set by a COMBINED node's
+    // per-part edit: the node's position is undefined (a marker spans several
+    // tactics), but the PART being edited has one, and its tokens are exactly
+    // the draft's.
+    tokPos?: ProofStepPosition;
+    // Present when what is being edited is the node's COMMENT, not its
+    // tactic: `pos` is the comment block's source range and `original` its
+    // verbatim text, delimiters included (`-- …`), reconstructed from
+    // `proof.comments` — the client never holds document text, and the strip's
+    // display string is lossy (markdown cleaned, soft-wraps joined), so it
+    // cannot be written back. The overlay hangs over the STRIP (the box stays
+    // visible), the colour mirror stays off (prose, not tactic tokens), and an
+    // EMPTY commit deletes the comment's whole line(s) — clearing a comment is
+    // how you remove one (`removeCommentPatch`, the slot-line veto included).
+    comment?: boolean;
+    // Comment edits only: the column the block's CONTINUATION lines sit at in
+    // source. Stripped for display and re-applied on commit, so the editor
+    // shows the block the way the file does (see commentEditFor).
+    commentIndent?: number;
   } | null>(null);
   // A `sorry` a calc gesture just wrote, waiting for the re-elaboration to
   // draw it. When the node appears the in-place editor opens on it, empty:
@@ -1340,8 +1418,10 @@ export default function ProofTreeView({
     // reset here rather than in a line of their own in each of commitEdit /
     // Escape / the two reset branches — the same reasoning as `completion`.
     setAbbrevSpans([]);
+    // No session for a COMMENT edit: prose keeps its backslashes (`\n` in a
+    // sentence about newlines must not become a glyph).
     setAbbrevSess(
-      editing && abbrev.enabled
+      editing && abbrev.enabled && !editing.comment
         ? { id: editingId!, session: newAbbrevSession(editing.value) }
         : null,
     );
@@ -1373,8 +1453,12 @@ export default function ProofTreeView({
     // then Enter writes `α`, the same as it would in the buffer. `flush` is
     // synchronous precisely so it can be used from here, where there is nothing
     // to await into.
+    // (Not for a COMMENT edit, which never opens an abbreviation session —
+    // prose keeps its backslashes.)
     const flushed =
-      abbrevSess?.id === editKey(cur0) ? abbrevSess.session.flush() : undefined;
+      !cur0.comment && abbrevSess?.id === editKey(cur0)
+        ? abbrevSess.session.flush()
+        : undefined;
     const cur =
       flushed !== undefined && flushed !== cur0.value
         ? { ...cur0, value: flushed }
@@ -1387,6 +1471,36 @@ export default function ProofTreeView({
     anchorOn(cur.id);
     if (cur.calcStage) {
       commitStage(cur.id, cur.calcStage, cur.value);
+      return;
+    }
+    if (cur.comment) {
+      // A comment edit replaces the block's range verbatim; an EMPTY commit
+      // deletes the comment's whole line(s) — clearing it is how you remove
+      // it — through the same shape (and the same slot-line veto: a comment
+      // sharing a line with code loses only its own range) as `unflag`.
+      if (cur.value.trim() === "") {
+        // Prop first, wire field as the fallback — the standing `deleteSlots`
+        // rule (the widget deliberately keeps the field off its rebuilt
+        // Proof; the standalone app has only the field).
+        const p = removeCommentPatch(
+          cur.pos,
+          deleteSlots ?? proof.deleteSlots ?? [],
+        );
+        onEditTactic?.({ start: p.start, stop: p.stop }, p.text);
+      } else if (cur.value !== cur.original) {
+        // Put the common indent back on every line after the first — the
+        // mirror of the strip commentEditFor did, so an untouched block
+        // round-trips byte-for-byte and a line the author ADDS lands at the
+        // block's own column rather than in column 0 (where a `--` would sit
+        // outside the tactic and re-attribute to a different node).
+        const ind = " ".repeat(cur.commentIndent ?? 0);
+        const text = cur.value
+          .split("\n")
+          .map((l, i) => (i === 0 || l === "" ? l : ind + l))
+          .join("\n");
+        onEditTactic?.(cur.pos, text);
+      }
+      setEditing(null);
       return;
     }
     if (cur.add) {
@@ -1746,13 +1860,13 @@ export default function ProofTreeView({
     let cuts = elideCuts;
     if (combine) {
       const byId = new Map(baseNodes.map((n) => [n.id, n]));
-      const manual = new Set<string>();
+      const manual = new Set<string>(combineOff);
       for (const c of elideCuts)
         for (const id of resolveCut(c, byId)) manual.add(id);
       cuts = [...elideCuts, ...combineRuns(baseNodes, manual)];
     }
     return applyElisions(baseNodes, cuts);
-  }, [baseNodes, elideCuts, combine]);
+  }, [baseNodes, elideCuts, combine, combineOff]);
   // Overview: which node the cursor is on, resolved over `treeNodes` with the
   // same pure pair the accent uses (so the two resolutions cannot disagree),
   // reduced to a STRING before the set is built — the id changes only when
@@ -1806,9 +1920,25 @@ export default function ProofTreeView({
         // them (see LayoutEngineOptions.chips).
         chips: !!onAddTactic,
         overview: overview ? { keep: overviewKeep } : undefined,
+        comments:
+          commentMode === "hidden"
+            ? false
+            : commentMode === "instead"
+              ? "instead"
+              : true,
+        commentsHidden: commentsOff,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [treeNodes, codeFont, reflow, forcedReflow, overview, overviewKeep],
+    [
+      treeNodes,
+      codeFont,
+      reflow,
+      forcedReflow,
+      overview,
+      overviewKeep,
+      commentMode,
+      commentsOff,
+    ],
   );
 
   // Two different events, and conflating them is what made editing painful.
@@ -1870,6 +2000,8 @@ export default function ProofTreeView({
     setSelection(null);
     setFlagPrompt(null);
     setClickAccent(null);
+    setCombineOff(new Set());
+    setCommentsOff(new Set());
     // A different proof's splits are different nodes entirely. (A same-proof
     // EDIT remaps the keys instead — see the shape branch; no pruning either
     // way: `pick` is read modulo the live child count, and keys naming a
@@ -1900,12 +2032,17 @@ export default function ProofTreeView({
       live.add(tacticId(st.goalBefore.id));
       for (const g of stepGoalsAfter(st)) live.add(g.id);
     }
-    setCollapsed((prev) => {
+    // One remap-prune for every id SET in view state (the fold set, the
+    // un-combine exclusions, the hidden strips): translate, drop dead ids,
+    // and preserve Set identity when nothing changed so downstream memos
+    // don't rebuild for a no-op.
+    const remapSet = (prev: Set<string>): Set<string> => {
       const next = new Set([...prev].map(to).filter((id) => live.has(id)));
       return next.size === prev.size && [...prev].every((id) => next.has(id))
         ? prev
         : next;
-    });
+    };
+    setCollapsed(remapSet);
     if (focusId) {
       const moved = to(focusId);
       if (!live.has(moved)) setFocusId(null);
@@ -1976,6 +2113,13 @@ export default function ProofTreeView({
       const next = new Set([...prev].map(to).filter((id) => live.has(id)));
       return next.size > 0 ? next : null;
     });
+    // The un-combine exclusions and the individually hidden strips are base
+    // ids like `collapsed`: same translation, same liveness prune. Without it,
+    // editing an EARLIER theorem renumbers every mvarId here and the strips
+    // you hid would all come back although nothing in this proof moved (the
+    // remapIds lesson, measured at 0/10 surviving by id).
+    setCombineOff(remapSet);
+    setCommentsOff(remapSet);
     // The prose prompt anchors on a head tactic by id; follow it or drop it.
     if (flagPrompt) {
       const moved = to(flagPrompt.headId);
@@ -2013,30 +2157,17 @@ export default function ProofTreeView({
   // `.fold` seeds the collapsed set. `.none` seeds a `step` ElideCut — the
   // hover bar's ◌, written into the proof instead of clicked: the tactic and
   // the blocks it opened leave the tree and the trunk closes up over a ghost,
-  // which restores them on a click. Seeded from `baseNodes` rather than the
-  // engine's, since applying that very cut is what removes the flagged node
-  // from the engine's tree.
+  // which restores them on a click. What each flag asks for is `sourceView`'s
+  // business (elide.ts), shared with the ⌥-⊞ reset so the two cannot drift.
   //
-  // A `.none` on a ROOT GOAL (the pre-proof narrative slot) targets the tactic
-  // that opens the proof, so its target ids are already tactic ids and the
-  // same cut applies to them; a `.none` on a tactic acts on that tactic
-  // itself.
+  // The empty writes are SKIPPED here and not in the reset: this runs in the
+  // same render as the proof-change branch above, which has already emptied
+  // both, so writing them again would only cost a render.
   const [seededFor, setSeededFor] = useState<string | null>(null);
   if (seededFor !== proofKey) {
     setSeededFor(proofKey);
-    const seed = baseNodes.flatMap((n) =>
-      n.flags?.fold ? (n.flags.targets ?? []) : [],
-    );
-    if (seed.length > 0) setCollapsed(new Set(seed));
-    const cuts: ElideCut[] = [];
-    for (const n of baseNodes) {
-      if (!n.flags?.elide) continue;
-      const note = n.flags.note;
-      if (n.type === "tactic") cuts.push({ kind: "step", id: n.id, note });
-      else
-        for (const t of n.flags.targets ?? [])
-          cuts.push({ kind: "step", id: t, note });
-    }
+    const { folds, cuts } = sourceView(baseNodes);
+    if (folds.length > 0) setCollapsed(new Set(folds));
     if (cuts.length > 0) setElideCuts(cuts);
   }
 
@@ -2199,14 +2330,41 @@ export default function ProofTreeView({
   // wanted the boolean "is this deletable" to gate a hover button — so an
   // unrelated re-render (a hover, a zoom, a scroll) was paying O(nodes × slots)
   // for an answer that had not changed.
-  const delExtents = useMemo(() => {
-    const out = new Map<string, DeleteExtent | null>();
-    if (!deleteSlots || !onDeleteTactic) return out;
-    for (const n of nodes)
-      if (n.data.deleteSpec && !n.data.synthetic)
-        out.set(n.data.id, deleteExtent(n.data.deleteSpec, deleteSlots));
-    return out;
-  }, [nodes, deleteSlots, onDeleteTactic]);
+  const { delExtents, delSpecs } = useMemo(() => {
+    const delExtents = new Map<string, DeleteExtent | null>();
+    // A COMBINED node carries no deleteSpec of its own (it is a marker), so
+    // its spec is synthesized here — the union of its member tactics' — and
+    // kept for the arming click, which needs the same spec the extent showed.
+    const delSpecs = new Map<string, DeleteSpec>();
+    if (!deleteSlots || !onDeleteTactic) return { delExtents, delSpecs };
+    // Lazily built: combined nodes exist only with ⇉ on, and the common
+    // no-combine relayout shouldn't pay an O(n) map for them.
+    let byId: Map<string, TreeNode> | null = null;
+    for (const n of nodes) {
+      if (n.data.elidedCut?.combined) {
+        byId ??= new Map(baseNodes.map((b) => [b.id, b]));
+        const anchors: ProofStepPosition[] = [];
+        const comments: ProofStepPosition[] = [];
+        for (const m of combineMemberIds(n.data.id) ?? []) {
+          const b = byId.get(m);
+          if (b?.type === "tactic" && b.deleteSpec) {
+            anchors.push(...b.deleteSpec.anchors);
+            comments.push(...b.deleteSpec.comments);
+          }
+        }
+        if (anchors.length === 0) continue;
+        // `combineMemberIds` decodes the marker id, which SORTS ids as
+        // strings — put the anchors back in source order, since deleteExtent
+        // measures from anchors[0] (its prevSameLine decline reads that slot).
+        anchors.sort((a, b) => cmpPos(a.start, b.start));
+        const spec: DeleteSpec = { kind: "tactic", anchors, comments };
+        delSpecs.set(n.data.id, spec);
+        delExtents.set(n.data.id, deleteExtent(spec, deleteSlots));
+      } else if (n.data.deleteSpec && !n.data.synthetic)
+        delExtents.set(n.data.id, deleteExtent(n.data.deleteSpec, deleteSlots));
+    }
+    return { delExtents, delSpecs };
+  }, [nodes, baseNodes, deleteSlots, onDeleteTactic]);
   const armedIds = useMemo(() => {
     const out = new Set<string>();
     const e = armExtent;
@@ -2294,6 +2452,70 @@ export default function ProofTreeView({
       return o && o.isTactic ? o.id : null;
     });
   }, [nodes, commentSpans]);
+
+  // The comment block a node's strip can EDIT: its range in the document and
+  // its verbatim text, delimiters included. The client never holds document
+  // text and the strip's display string is LOSSY (`--` stripped, markdown
+  // cleaned, soft-wraps joined), so the editor's original is reconstructed
+  // from `proof.comments` — joined back through `commentRanges` by start, the
+  // `removeFlagPatches`/`commentOwner` join. Several comments edit as ONE
+  // block only when they sit on strictly consecutive lines (the reconstruction
+  // `text + "\n" + indent` is exact there and only there — a blank line
+  // between comments would be invented text); otherwise the FIRST comment
+  // alone is offered, honest if less complete.
+  const commentEditFor = (d: {
+    commentRanges?: ProofStepPosition[];
+  }): {
+    pos: ProofStepPosition;
+    original: string;
+    indent: number;
+  } | null => {
+    const ranges = d.commentRanges ?? [];
+    if (ranges.length === 0) return null;
+    const cs = ranges.flatMap((r) => {
+      const c = (proof.comments ?? []).find(
+        (x) =>
+          x.start.line === r.start.line &&
+          x.start.character === r.start.character,
+      );
+      return c ? [c] : [];
+    });
+    if (cs.length === 0) return null;
+    let block = [cs[0]];
+    for (let i = 1; i < cs.length; i++) {
+      if (cs[i].start.line !== block[block.length - 1].stop.line + 1) {
+        block = [cs[0]];
+        break;
+      }
+      block.push(cs[i]);
+    }
+    // The block's COMMON indent, stripped for display and re-applied on
+    // commit. The edit range starts AT the first comment's `--`, so that
+    // line's own indent is outside the range and never drawn; giving the
+    // continuations their ABSOLUTE column (as this did) therefore rendered
+    // two source-aligned `--` lines as a flush line followed by an indented
+    // one — an indent the author never wrote, and read as theirs. Only the
+    // joins between separate comments are ours to normalize: a single
+    // `/- … -/` block's interior newlines are INSIDE the range and stay
+    // verbatim. Relative indent between continuations is preserved (the min,
+    // not the first), so a deliberately stepped block still reads as stepped.
+    const indent =
+      block.length > 1
+        ? Math.min(...block.slice(1).map((c) => c.start.character))
+        : block[0].start.character;
+    let original = block[0].text;
+    for (let i = 1; i < block.length; i++)
+      original +=
+        "\n" +
+        " ".repeat(Math.max(0, block[i].start.character - indent)) +
+        block[i].text;
+    return {
+      pos: { start: block[0].start, stop: block[block.length - 1].stop },
+      original,
+      indent,
+    };
+  };
+
   const cursorNodeId = useMemo(() => {
     if (hlDismissed) return null;
     // The clicked node stands in until the cursor actually gets there (see
@@ -2541,6 +2763,55 @@ export default function ProofTreeView({
     if (root) anchorOn(root.data.id);
   };
 
+  // ⌥-⊞ — back to the view the SOURCE asks for: `.fold` folded again, `.none`
+  // ghosted again, everything a reading session accumulated dropped. Plain ⊞
+  // is the opposite end (nothing hidden at all), so the two together make the
+  // flags reachable in BOTH directions without touching the file. That is what
+  // the seed's "a starting view, not a lock" promise was missing: undoing a
+  // directive by hand has always been one click, and there was no way back —
+  // ⊞ itself throws the `.none` ghosts away, so the reader who opened one to
+  // check it could not put the author's reading back.
+  //
+  // Writes UNCONDITIONALLY, unlike the seed's `length > 0` guards. On an
+  // unflagged proof "as the source asks" IS nothing folded and nothing cut,
+  // and that empty write is the entire gesture there; skipping it would leave
+  // the reader's own folds standing and make ⌥-⊞ silently do nothing.
+  const resetToSource = () => {
+    anchorRoot();
+    const { folds, cuts } = sourceView(baseNodes);
+    setCollapsed(new Set(folds));
+    setElideCuts(cuts);
+    // The rest of what "this proof, as opened" means, mirroring the
+    // proof-change reset above minus the things that aren't this proof's
+    // state. The SCOPING modes go (focus and sequence hide the rest of the
+    // proof, which no source flag asked for), the per-node exceptions to a
+    // rail setting go, the gallery's branch picks go, and every transient
+    // holding ids or ranges is dismissed — an armed delete or a half-made
+    // pick pointing into a tree that just moved is exactly what must not
+    // survive.
+    setFocusId(null);
+    setSeq({ mode: "off" });
+    setCombineOff(new Set());
+    setCommentsOff(new Set());
+    setPick({});
+    setSelection(null);
+    setElidePick(null);
+    setBandPick(null);
+    setMarquee(null);
+    setPicking(null);
+    setArming(null);
+    setFlagPrompt(null);
+    // The clicked accent can name a node that is inside a ghost again; drop it
+    // and let the cursor's own position be authoritative (see clickAccent).
+    setClickAccent(null);
+    // Deliberately NOT reset: zoom, and every rail toggle (layout, ⋯ brief,
+    // ¶ reflow, `--` comments, ⇉ combine, ⇅ accordion, ❮❯ gallery). Those are
+    // how this reader likes to read, not the state of this proof — and a
+    // gesture on the fold button has no business changing them. An open edit
+    // box and a pending calc fill stay too: they hold text the author typed,
+    // which a VIEW reset must not discard.
+  };
+
   const toggle = (id: string) => {
     anchorOn(id);
 
@@ -2627,6 +2898,16 @@ export default function ProofTreeView({
     setElideCuts((cs) => [...cs, { kind: "step", id }]);
   };
 
+  // The combined-run analogue: a COMBINED node stands for several base
+  // tactics, so its ◌ commits a BAND cut over exactly the member ids its own
+  // id encodes (boundary goals stay; the run collapses to one ⋯ marker).
+  // Exactly what `elideSelection` does for a swept combined node — dissolve
+  // to members, absorb a same-id manual cut, anchor at the marker — so it IS
+  // that, with a one-node selection.
+  const elideCombined = (id: string) => {
+    elideSelection(new Set([id]));
+  };
+
   // ----- The marquee selection's verbs -------------------------------------
 
   /** Apply a gesture's document patches through the ordinary edit hook,
@@ -2641,6 +2922,19 @@ export default function ProofTreeView({
     );
     for (const p of ordered)
       onEditTactic!({ start: p.start, stop: p.stop }, p.text);
+  };
+
+  /** Topmost of `ids` in base DFS preorder — the member whose slot the
+   * marker occupies (applyElisions' slotOf), i.e. the node to pair with the
+   * marker for scroll-identity anchoring. Null on an empty list; ids must be
+   * base ids. THE one coding of this pick — the elide commit, the marker's
+   * removal and the un-combine verb all anchor through it. */
+  const topMemberOf = (ids: readonly string[]): string | null => {
+    if (ids.length === 0) return null;
+    const index = new Map(baseNodes.map((n, i) => [n.id, i]));
+    return ids.reduce((a, b) =>
+      (index.get(a) ?? Infinity) <= (index.get(b) ?? Infinity) ? a : b,
+    );
   };
 
   /** Elide the selection to one marker — the ⇳ band cut with the marquee as
@@ -2673,10 +2967,7 @@ export default function ProofTreeView({
     // Hold the marker at its slot: topmost member in base preorder, anchored
     // from that node's own placed position when it is drawn, else from the
     // topmost selected node (its current representative).
-    const index = new Map(baseNodes.map((n, i) => [n.id, i]));
-    const top = [...ids].reduce((a, b) =>
-      index.get(a)! <= index.get(b)! ? a : b,
-    );
+    const top = topMemberOf([...ids])!;
     const topPlaced =
       nodes.find((p) => p.data.id === top) ??
       nodes
@@ -2719,6 +3010,13 @@ export default function ProofTreeView({
     const head = baseNodes.find((n) => n.id === p.headId);
     const prose = value.replace(/\s*\n\s*/g, " ").trim();
     if (!head || (p.kind === "note" && prose === "")) return;
+    // A CLOSING tactic can only be cut by a NOTED `.none` (elide.ts's
+    // `allowLeaf`: without prose the ghost would just restate the label it
+    // replaced). So a bare `.none` there is a directive both this apply and
+    // the next load's seed resolve to nothing — treat the empty commit as a
+    // cancel rather than leaving dead text in the author's proof. Everywhere
+    // else an empty `.none` stays legal, and the ghost keeps its preview.
+    if (p.kind === "none" && prose === "" && !elidableIds.has(head.id)) return;
     const directive = p.kind === "none" ? `.none${prose ? ` ${prose}` : ""}` : prose;
     const patch = flagLine(head, deleteSlots ?? [], directive);
     if (!patch) return;
@@ -2737,12 +3035,13 @@ export default function ProofTreeView({
   // Picking the second endpoint orders the pair by ancestry (whichever is the
   // ancestor becomes the chain's top); two unrelated nodes can't form a path,
   // so we just restart the selection from the latest.
-  const onNodeClick = (id: string, foldable: boolean) => {
+  const onNodeClick = (id: string, canFold: boolean) => {
     // An elision marker: click removes its cut (matched by the marker's id =
     // the cut's id). Works in any mode, so an elision is always one click from
     // being undone.
     // (A COMBINED node is not one of these — it's automatic, driven by the
-    // toggle rather than a stored cut, so it just folds like any other node.)
+    // toggle rather than a stored cut; its click is a tactic's, handled in
+    // the seq.mode === "off" branch below.)
     const clicked = nodes.find((n) => n.data.id === id)?.data;
     if (clicked?.elidedCut && !clicked.elidedCut.combined) {
       // Hold the restored subtree's head at the marker's y: the marker sat in
@@ -2753,14 +3052,8 @@ export default function ProofTreeView({
       const cut = elideCuts.find((c) => cutId(c) === id);
       if (cut) {
         const byId = new Map(baseNodes.map((n) => [n.id, n]));
-        const ids = resolveCut(cut, byId);
-        const index = new Map(baseNodes.map((n, i) => [n.id, i]));
-        if (ids.length > 0) {
-          const top = ids.reduce((a, b) =>
-            index.get(a)! <= index.get(b)! ? a : b,
-          );
-          anchorAs(id, top);
-        }
+        const top = topMemberOf(resolveCut(cut, byId));
+        if (top) anchorAs(id, top);
       }
       setElideCuts((cs) => cs.filter((c) => cutId(c) !== id));
       return;
@@ -2780,7 +3073,9 @@ export default function ProofTreeView({
       return;
     }
     if (seq.mode === "off") {
-      if (foldable) toggle(id);
+      // `canFold` is the nodes loop's fold gate — false on a COMBINED node,
+      // whose gestures are a tactic's and which must never fold.
+      if (canFold) toggle(id);
       return;
     }
     // In `pick` (after one endpoint) and in `view`, a click (re)sets `from`.
@@ -2966,13 +3261,20 @@ export default function ProofTreeView({
       // re-centring would pull the left-aligned trunk off screen.
       if (refocus) {
         const cy = (MARGIN.top + PAD_Y + now.y) * zoom;
-        const halfH = ((now.data.h + now.data.commentBlockH) / 2) * zoom;
+        // inkExtent, the same rule inViewScroll uses — this mirrors that test
+        // deliberately, so it must not be a second hand-rolled coding of it.
+        const ink = inkExtent(now.data);
+        const inkTop = cy - ink.up * zoom;
+        const inkBot = cy + ink.down * zoom;
         const pad = 32;
         if (
-          cy - halfH < el.scrollTop + pad ||
-          cy + halfH > el.scrollTop + el.clientHeight - pad
+          inkTop < el.scrollTop + pad ||
+          inkBot > el.scrollTop + el.clientHeight - pad
         )
-          el.scrollTop = clampScroll(cy - el.clientHeight / 2, maxY);
+          el.scrollTop = clampScroll(
+            (inkTop + inkBot) / 2 - el.clientHeight / 2,
+            maxY,
+          );
       }
     }
 
@@ -3117,11 +3419,7 @@ export default function ProofTreeView({
       maxX,
     );
     el.scrollTop = clampScroll(
-      (MARGIN.top +
-        PAD_Y +
-        root.y -
-        (root.data.h + root.data.commentBlockH) / 2) *
-        zoom -
+      (MARGIN.top + PAD_Y + root.y - inkExtent(root.data).up) * zoom -
         MARGIN.top,
       maxY,
     );
@@ -3350,11 +3648,7 @@ export default function ProofTreeView({
       compact ? n.x - n.data.w / 2 : n.x - effW(n) / 2;
     const minLeft = Math.min(...nodes.map(leftOf));
     const maxRight = Math.max(...nodes.map((n) => leftOf(n) + effW(n)));
-    const topY = Math.min(
-      ...nodes.map(
-        (n) => n.y - (n.data.h + n.data.commentBlockH) / 2,
-      ),
-    );
+    const topY = Math.min(...nodes.map((n) => n.y - inkExtent(n.data).up));
     const contentW = maxRight - minLeft + 2 * MARGIN.left;
     const z = clampZoom(el.clientWidth / contentW);
     const cx = (minLeft + maxRight) / 2;
@@ -3441,7 +3735,19 @@ export default function ProofTreeView({
   type SelVerb =
     | { label: string; title: string; kind: "elide" }
     | { label: string; title: string; kind: "combine"; ids: string[] }
-    | { label: string; title: string; kind: "fold"; ids: string[] }
+    | {
+        label: string;
+        title: string;
+        kind: "uncombine";
+        markers: { id: string; members: string[] }[];
+      }
+    | {
+        label: string;
+        title: string;
+        kind: "comments";
+        ids: string[];
+        hide: boolean;
+      }
     | {
         label: string;
         title: string;
@@ -3477,9 +3783,43 @@ export default function ProofTreeView({
         setElideCuts((cs) => [...cs, cut]);
         break;
       }
-      case "fold":
+      case "uncombine": {
+        // Two kinds under one verb: a MANUAL combine cut is removed; a
+        // ⇉-made run (no stored cut) is excluded from the auto pass via
+        // combineOff. Anchor the first marker's topmost member where the
+        // marker sat — the un-elide click's scroll-identity pairing.
+        const manualIds = new Set(elideCuts.map((c) => cutId(c)));
+        const first = v.markers[0];
+        if (first) {
+          const top = topMemberOf(first.members);
+          if (top) anchorAs(first.id, top);
+        }
+        const manualGone = v.markers
+          .filter((m) => manualIds.has(m.id))
+          .map((m) => m.id);
+        const auto = v.markers.filter((m) => !manualIds.has(m.id));
+        if (manualGone.length > 0)
+          setElideCuts((cs) =>
+            cs.filter((c) => !manualGone.includes(cutId(c))),
+          );
+        if (auto.length > 0)
+          setCombineOff(
+            (prev) => new Set([...prev, ...auto.flatMap((m) => m.members)]),
+          );
+        break;
+      }
+      case "comments":
+        // Pure view state — the source keeps its prose; this only stops
+        // DRAWING it. (Removing the comment is `unflag`'s business, and a
+        // very different gesture.) Anchored because the band shrinks or
+        // grows under the pointer by the strip's height.
         anchorOn(v.ids[0]);
-        setCollapsed((prev) => new Set([...prev, ...v.ids]));
+        setCommentsOff((prev) => {
+          const next = new Set(prev);
+          if (v.hide) for (const id of v.ids) next.add(id);
+          else for (const id of v.ids) next.delete(id);
+          return next;
+        });
         break;
       case "flagFold":
         // Write the flags AND fold now: the seed block only fires on a proof
@@ -3529,9 +3869,10 @@ export default function ProofTreeView({
     const slots = deleteSlots ?? [];
     const heads = canFlag ? headTactics(baseNodes, selBase, slots) : [];
     const writable = heads.filter((h) => flagLine(h, slots, ".fold"));
-    const foldableIds = engine.foldableIds();
-    const foldSel = [...selBase].filter(
-      (id) => foldableIds.has(id) && !collapsed.has(id),
+    // What the sweep actually caught, for the verbs that are about one step
+    // rather than about a subtree (see `.none…`).
+    const selTactics = [...selBase].filter(
+      (id) => byId.get(id)!.type === "tactic",
     );
     const runIds = selectionRun(baseNodes, selBase);
     const consumerOf = (g: TreeNode) =>
@@ -3571,13 +3912,52 @@ export default function ProofTreeView({
         title: "Merge this straight run of tactics into one stacked box",
         ids: runIds,
       });
-    if (foldSel.length > 0)
+    // Swept-up COMBINED nodes offer the reverse: dissolve back into their
+    // tactics (a manual cut is removed; a ⇉-made run is excluded from the
+    // auto pass until ⇉ is toggled off and on).
+    const combinedSel = selPlaced
+      .filter((p) => p.data.elidedCut?.combined)
+      .map((p) => ({
+        id: p.data.id,
+        members: (combineMemberIds(p.data.id) ?? []).filter((m) =>
+          byId.has(m),
+        ),
+      }))
+      .filter((m) => m.members.length > 0);
+    if (combinedSel.length > 0)
       verbs.push({
-        kind: "fold",
-        label: "fold",
-        title: "Collapse every selected goal's subtree (⊞ reopens)",
-        ids: foldSel,
+        kind: "uncombine",
+        label: "uncombine",
+        title: "Dissolve the selected combined run(s) back into their tactics",
+        markers: combinedSel,
       });
+    // Strips of the selected nodes, hidden or shown. Read off `treeNodes`,
+    // NOT the placed ones: the engine zeroes a hidden node's commentLines, so
+    // asking the drawn node whether it has a comment would make the verb
+    // vanish the moment it worked and leave no way back. One verb, flipped by
+    // whether the whole selection is already hidden (the already-flagged
+    // heads precedent) — never both directions at once.
+    //
+    // `¬note` / `¬¬note` rather than "hide note" / "show note": the pill
+    // already speaks in flag syntax (`.no-hyps`, `.h#used`), `¬` is the glyph
+    // this audience reads negation in, and the double negation is what keeps
+    // the restore direction from colliding with `note…`, the writer sitting a
+    // few chips along — "note" would have named two different gestures.
+    const commented = treeNodes
+      .filter((n) => selection.has(n.id) && !!n.comment)
+      .map((n) => n.id);
+    if (commented.length > 0) {
+      const allHidden = commented.every((id) => commentsOff.has(id));
+      verbs.push({
+        kind: "comments",
+        label: allHidden ? "¬¬note" : "¬note",
+        title: allHidden
+          ? "Draw the comment strip on the selected node(s) again"
+          : "Stop drawing the comment strip on the selected node(s) — the source keeps its prose",
+        ids: commented,
+        hide: !allHidden,
+      });
+    }
     if (foldHeads.length > 0)
       verbs.push({
         kind: "flagFold",
@@ -3588,12 +3968,22 @@ export default function ProofTreeView({
         anchor: foldHeads[0].id,
         targets: foldHeads.flatMap(foldTargetsOf),
       });
-    if (soleHead && !soleHead.flags?.elide)
+    // `.none…` asks for ONE TACTIC, not one head. Every other flag writer
+    // normalizes a ragged sweep to head tactics, which is right for them —
+    // `.fold`/`.no-hyps` describe a subtree, so a band of thirty nodes with
+    // one head is a sensible thing to flag. `.none` is not like that: it
+    // replaces a step and everything it opened with a SENTENCE about that
+    // step, and offering it over a sweep meant the ghost you got stood for
+    // far more than the tactic you thought you had picked. So the offer reads
+    // the selection itself. (One node of a multi-rule `rw` still counts as
+    // one tactic; `soleHead` stays the write target, since the comment goes
+    // above the SLOT — see headTactics.)
+    if (soleHead && selTactics.length === 1 && !soleHead.flags?.elide)
       verbs.push({
         kind: "prompt",
         label: ".none…",
         title:
-          "Replace this subtree with a sentence — writes `-- .none <your prose>` in the source; the ghost shows your words",
+          "Replace this step and whatever it opened with a sentence — writes `-- .none <your prose>` in the source; the ghost shows your words",
         headId: soleHead.id,
         prompt: "none",
       });
@@ -3636,10 +4026,18 @@ export default function ProofTreeView({
         kind: "unflag",
         label: "unflag",
         title:
-          "Remove the selected nodes' flag comments from the source (prose after a flag stays, as an ordinary comment)",
-        patches: flagged.flatMap((n) =>
-          removeFlagPatches(n, proof.comments ?? [], slots),
-        ),
+          "Remove the selected nodes' flag comments from the source — the whole line goes, prose included",
+        // Cross-node dedupe by start line: one comment attributes to one node,
+        // but a whole-line patch emitted twice would apply its second copy
+        // against already-shifted coordinates.
+        patches: (() => {
+          const seen = new Set<number>();
+          return flagged
+            .flatMap((n) => removeFlagPatches(n, proof.comments ?? [], slots))
+            .filter((p) =>
+              seen.has(p.start.line) ? false : (seen.add(p.start.line), true),
+            );
+        })(),
         elided: flagged
           .filter((n) => n.flags?.elide)
           .flatMap((n) =>
@@ -3652,13 +4050,17 @@ export default function ProofTreeView({
     if (selPlaced.length > 0 && verbs.length > 0) {
       const minX = Math.min(...selPlaced.map((p) => p.x - p.data.w / 2));
       const minY = Math.min(
-        ...selPlaced.map((p) => {
-          const topH =
-            p.data.caseH + (p.data.commentFloats ? 0 : p.data.commentBlockH);
-          return p.y + (topH - p.data.h) / 2;
-        }),
+        ...selPlaced.map((p) => p.y + (bandTopH(p.data) - p.data.h) / 2),
       );
       let cx = minX;
+      // Chip widths up front: the backing card has to span the whole row, and
+      // the row's width is only known once every chip is measured. Through
+      // `chipWidth` like every other measured chip — a private padding/floor
+      // pair here was a second answer to the one question that helper exists
+      // to own.
+      const chipWs = verbs.map((v) => chipWidth(v.label, PILL_FONT_PX));
+      const rowW =
+        chipWs.reduce((a, b) => a + b, 0) + CHIP_GAP * (verbs.length - 1);
       selectionPillEl = (
         <g
           // data-node: a mousedown on the pill must not start a new marquee
@@ -3666,10 +4068,29 @@ export default function ProofTreeView({
           data-node=""
           transform={`translate(0,${minY - CHIP_H - 10})`}
         >
-          {verbs.map((v) => {
-            const w = Math.max(34, measureText(v.label, 11) + 14);
+          {/* An OPAQUE card under the row. The chips are transparent by
+              design — under a pending goal they sit on empty canvas, where
+              a fill would read as a solid button — but the selection pill
+              hangs wherever the selection's top edge lands, which is
+              routinely over a comment strip or a box, and dashed outlines
+              full of tree ink behind them are simply unreadable. One card
+              rather than N opaque chips: the gaps between chips show the
+              same ink, so filling only the chips fixes half of it. */}
+          <rect
+            x={minX - CARD_PAD}
+            y={-CARD_PAD}
+            width={rowW + 2 * CARD_PAD}
+            height={CHIP_H + 2 * CARD_PAD}
+            rx={4}
+            fill="var(--ptw-surface)"
+            stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
+            strokeWidth={1}
+            style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))" }}
+          />
+          {verbs.map((v, vi) => {
+            const w = chipWs[vi];
             const at = cx;
-            cx += w + 6;
+            cx += w + CHIP_GAP;
             return (
               <FrontierChip
                 key={v.label}
@@ -3678,7 +4099,14 @@ export default function ProofTreeView({
                 x={at}
                 width={w}
                 color={SEQ_STROKE}
-                fontSize={11}
+                fontSize={PILL_FONT_PX}
+                // Measured with `measureText`, which measures in the EDITOR's
+                // code font — so these chips must PAINT in it, exactly as the
+                // relation picker does. Painting the default "monospace" over
+                // a code-font measurement is how a label drifts off-centre in
+                // its own outline (and overflows the backing card, whose width
+                // is summed from the same measurements).
+                fontFamily={getCodeFontFamily()}
                 onPick={() => runSelectionVerb(v)}
               />
             );
@@ -3698,10 +4126,8 @@ export default function ProofTreeView({
   if (flagPrompt) {
     const pn = nodes.find((n) => n.data.id === flagPrompt.headId);
     if (pn) {
-      const topH =
-        pn.data.caseH +
-        (pn.data.commentFloats ? 0 : pn.data.commentBlockH);
-      const boxBottom = pn.y + (topH - pn.data.h) / 2 + pn.data.h;
+      const boxBottom =
+        pn.y + (bandTopH(pn.data) - pn.data.h) / 2 + pn.data.h;
       flagPromptEl = (
         <foreignObject
           x={pn.x - pn.data.w / 2}
@@ -3718,9 +4144,13 @@ export default function ProofTreeView({
               autoFocus
               rows={1}
               placeholder={
-                flagPrompt.kind === "none"
-                  ? "why this part is not worth reading (Enter writes .none)"
-                  : "a comment for this tactic"
+                flagPrompt.kind !== "none"
+                  ? "a comment for this tactic"
+                  : elidableIds.has(flagPrompt.headId)
+                    ? "why this part is not worth reading (Enter writes .none)"
+                    : // A closing step has nothing below it to put away, so
+                      // the sentence IS the elision — an empty commit cancels.
+                      "why this closing step is not worth reading (the words are the point here)"
               }
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
@@ -3958,6 +4388,7 @@ export default function ProofTreeView({
           // something hidden.
           setElideCuts([]);
         }}
+        onResetView={resetToSource}
         onCollapseAll={() => {
           anchorRoot();
           setCollapsed(engine.foldableIds());
@@ -3998,11 +4429,14 @@ export default function ProofTreeView({
           // viewport centre instead — same treatment as ⇉ combine.
           setBrief(v);
         }}
-        overview={overview}
-        onOverviewChange={(v) => {
-          // Toggling re-centres via viewKey ("ov:"), so no anchorRoot() —
-          // the proportions change wholesale, like crossing in/out of reflow.
-          setOverview(v);
+        commentMode={commentMode}
+        onCommentModeChange={(v) => {
+          // No anchorRoot(): the structure you are reading is unchanged (the
+          // strips leave, or trade places with labels in the same boxes), and
+          // pinning the root would scroll away from it. The `[nodes]` anchor
+          // holds the node nearest the viewport centre — the ⋯ brief / ⇉
+          // combine treatment.
+          setCommentMode(v);
         }}
         combine={combine}
         onCombineChange={(v) => {
@@ -4012,6 +4446,9 @@ export default function ProofTreeView({
           // pin the surviving node nearest the viewport centre instead, which
           // keeps the new view as close as possible to the old one.
           setCombine(v);
+          // Leaving the mode forgets the un-combine exclusions: re-enabling
+          // ⇉ recombines everything, the same fresh-start ⊞ gives cuts.
+          if (!v) setCombineOff(new Set());
         }}
         hypMode={hypMode}
         onHypModeChange={(v) => {
@@ -4186,9 +4623,7 @@ export default function ProofTreeView({
             const picked = new Set<string>();
             for (const pn of nodes) {
               const d = pn.data;
-              const topH =
-                d.caseH + (d.commentFloats ? 0 : d.commentBlockH);
-              const boxTop = pn.y + (topH - d.h) / 2;
+              const boxTop = pn.y + (bandTopH(d) - d.h) / 2;
               if (
                 pn.x - d.w / 2 <= hi.x &&
                 pn.x + d.w / 2 >= lo.x &&
@@ -4246,29 +4681,19 @@ export default function ProofTreeView({
           {/* Coords originate at top-left */}
           <g transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}>
             {links.map((link, i) => {
-              // A node's band is caseH (badge) + commentBlockH (strip) + h
+              // A node's band is bandTopH (badge + non-floating strip) + h
               // (box), box at the bottom: edges leave a box's bottom edge and
               // land above the target's whole band — reading order goal →
-              // badge → comment → box. The band heights must include caseH or
-              // lanes stop short on badged nodes. EXCEPT a floated strip
-              // (aside modes — engine-stamped `commentFloats`), which lives
-              // above the band and so contributes nothing here; MIRRORED in
-              // layout.ts linkSpans.
-              const srcCB = link.source.data.commentFloats
-                ? 0
-                : link.source.data.commentBlockH;
-              const tgtCB = link.target.data.commentFloats
-                ? 0
-                : link.target.data.commentBlockH;
+              // badge → comment → box. MIRRORED in layout.ts linkSpans.
               const startY =
                 link.source.y +
-                (link.source.data.h + srcCB + link.source.data.caseH) / 2;
+                (link.source.data.h + bandTopH(link.source.data)) / 2;
               const bandTop =
                 link.target.y -
-                (link.target.data.h + tgtCB + link.target.data.caseH) / 2;
+                (link.target.data.h + bandTopH(link.target.data)) / 2;
               // The badge and comment strip are narrative, not dataflow:
               // landing points sit below them.
-              const contentTop = bandTop + link.target.data.caseH + tgtCB;
+              const contentTop = bandTop + bandTopH(link.target.data);
               const endY = bandTop - ARROW_GAP; // line ends just above the band
 
               const sLeft = link.source.x - link.source.data.w / 2;
@@ -4362,7 +4787,7 @@ export default function ProofTreeView({
                 // linkSpans.
                 const lane = link.lane;
                 const srcBoxMid =
-                  link.source.y + (link.source.data.caseH + srcCB) / 2;
+                  link.source.y + bandTopH(link.source.data) / 2;
                 if (Math.abs(tLeft - (lane - TRUNK_INSET)) < 0.5) {
                   d = `M${lane},${srcBoxMid} L${lane},${contentTop - ARROW_GAP}`;
                   // This run IS the trunk (stamped so it reads as one
@@ -4435,7 +4860,7 @@ export default function ProofTreeView({
               return (
                 <g key={i}>
                   <path fill="none" stroke={stroke} strokeWidth={1.5} d={d} />
-                  {startMark && (
+                  {linkMarks && startMark && (
                     <LinkMark
                       {...startMark}
                       goal={goalBound}
@@ -4443,7 +4868,7 @@ export default function ProofTreeView({
                       stroke={stroke}
                     />
                   )}
-                  {endMark && (
+                  {linkMarks && endMark && (
                     <LinkMark
                       {...endMark}
                       goal={goalBound}
@@ -4473,8 +4898,7 @@ export default function ProofTreeView({
               // leaves the band: topH drops it, and the strip is drawn above
               // the band instead, rising beside the goal.
               const floatComment = !!node.data.commentFloats;
-              const topH =
-                node.data.caseH + (floatComment ? 0 : node.data.commentBlockH);
+              const topH = bandTopH(node.data);
               const boxTop = (topH - h) / 2;
               const contentTop = boxTop + NODE_PAD_Y;
               const labelTop = contentTop + hypH;
@@ -4496,35 +4920,82 @@ export default function ProofTreeView({
               // the pending selection is "which nodes am I about to act on",
               // the same question the endpoint/cursor accents answer.
               const accent = isEndpoint || isCursor || !!selection?.has(id);
+              // A COMBINED node is a real (if synthetic) tactic node — the run's
+              // tactics stacked — so it draws and behaves like one: normal box,
+              // never folded, no dashed chip. Only an ELIDE marker gets the `⋯`
+              // chip treatment and the click-to-restore. It has no position of
+              // its own (a marker spans several tactics), so the position its
+              // GESTURES act through is the FIRST part's — reveal and the lens
+              // both want "where the run starts".
+              const isCombined = !!node.data.elidedCut?.combined;
+              const isMarker = !!node.data.elidedCut && !isCombined;
+              // A COMBINED node never folds — its gestures are a tactic's
+              // (reveal, part edit, hover bar), and a fold would hide the run
+              // behind a second mechanism nothing else clears. THE one coding
+              // of that rule: the click handler, `clickable` and the −/+
+              // glyph all read this bit.
+              const canFold = foldable && !isCombined;
+              const parts = node.data.elidedCut?.parts;
+              const actPos =
+                position ?? (isCombined ? parts?.[0]?.position : undefined);
               // A positioned node can reveal its source (widget only, outside
               // sequence mode). For a tactic node the whole box reveals; goal
               // nodes are the primary fold targets, so their box stays a fold
               // toggle and reveal rides the fast path (⌘/Ctrl-click — the
               // editor's own go-to-source gesture) or the hover action bar.
-              const canReveal = seq.mode === "off" && !!onReveal && !!position;
+              const canReveal = seq.mode === "off" && !!onReveal && !!actPos;
               const revealable = canReveal && type === "tactic";
               const goalRevealable = canReveal && type === "goal";
-              // Double-click on a tactic edits it in place (widget only).
-              // A COMBINED node is a real (if synthetic) tactic node — the run's
-              // tactics stacked — so it draws and behaves like one: normal box,
-              // foldable, no dashed chip. Only an ELIDE marker gets the `⋯`
-              // chip treatment and the click-to-restore.
-              const isCombined = !!node.data.elidedCut?.combined;
-              const isMarker = !!node.data.elidedCut && !isCombined;
               // A SYNTHETIC node (the `calc` of a block that failed to parse) is
               // editable too, and deliberately: it is the one node standing for
               // text that is unfinished, and its repair chip offers only the one
               // canned fix. The server ships it a `tacticEdits` entry keyed on
               // the chain's own start, so the lookup below resolves; the handler
               // still bails if it doesn't (the CLI ships no edits at all).
-              const editable =
+              // One gating policy for "may an in-place editor open here";
+              // the two flavours below differ only in what carries the range.
+              const editBase =
                 seq.mode === "off" &&
                 !elidePick &&
                 !bandPick &&
                 type === "tactic" &&
-                !!position &&
                 !!getTacticEdit &&
                 !!onEditTactic;
+              const editable = editBase && !!position;
+              // A COMBINED node edits PER PART: double-click resolves the
+              // line under the pointer to its constituent tactic (each drawn
+              // line carries its index; parts own segment ranges) and opens
+              // the ordinary in-place editor on that tactic's own range.
+              const partEditable =
+                editBase && isCombined && (parts?.length ?? 0) > 0;
+              // The node's COMMENT can be edited in place: double-click on
+              // the strip (or, in narration mode, on the prose-labelled box).
+              // Gated on `onEditTactic` alone — the range comes from
+              // `proof.comments`, not `tacticEdits`, so `getTacticEdit` has
+              // no say — and declined on markers/synthetic/recovered nodes,
+              // which stand for no single as-written span (the flag writers'
+              // decline set).
+              const commentEditable =
+                seq.mode === "off" &&
+                !elidePick &&
+                !bandPick &&
+                !!onEditTactic &&
+                !isMarker &&
+                !node.data.synthetic &&
+                !node.data.recovered;
+              const openCommentEdit = () => {
+                const q = commentEditFor(node.data);
+                if (!q) return;
+                cancelPendingReveal();
+                setEditing({
+                  id,
+                  pos: q.pos,
+                  original: q.original,
+                  value: q.original,
+                  comment: true,
+                  commentIndent: q.indent,
+                });
+              };
               // The tactic can be opened in the lens (its hover-bar ⧉).
               // Gated on its OWN hook only: the lens just needs a range to
               // select, so it must not ride `editable` — a tactic missing from
@@ -4533,7 +5004,7 @@ export default function ProofTreeView({
               const popoutable =
                 seq.mode === "off" &&
                 type === "tactic" &&
-                !!position &&
+                !!actPos &&
                 !!onPopoutEdit;
               const isEditing = editing?.id === id;
               // A replace-edit's overlay stands in for the box, so the box
@@ -4541,8 +5012,17 @@ export default function ProofTreeView({
               // while you answer it. A staged `calc` fill is the same case:
               // what it is asking about is the link it just wrote, so the goal
               // that link is proving belongs on screen beside the question.
+              // A comment edit's overlay stands in for the STRIP, so the box
+              // stays visible under it (the code being narrated belongs on
+              // screen while the narration is rewritten) — EXCEPT in
+              // narration mode, where the prose IS the box: there the overlay
+              // covers it exactly as a tactic edit does, and leaving it drawn
+              // put two boxes a few px apart with both borders showing.
               const hideForEdit =
-                isEditing && !editing?.add && !editing?.calcStage;
+                isEditing &&
+                !editing?.add &&
+                !editing?.calcStage &&
+                (!editing?.comment || !!node.data.proseLabel);
               // A step the supplemental parser synthesized: `failed` carries
               // an error, `skipped` never ran, `term` came from a term-mode
               // proof's structure. Failed/skipped draw DASHED — the tactic is
@@ -4573,22 +5053,19 @@ export default function ProofTreeView({
               const focusable =
                 type === "goal" && foldable && !seqActive && id !== focusId;
               const isFocusRoot = id === focusId && !seqActive;
-              // Deleting. Offered wherever the extent is well defined and the
-              // node stands for exactly one region of source: never on a
-              // COMBINED or elided marker (which map to several tactics — the
-              // same reason editing is off there), and never on the synthetic
-              // `calc` of a block that never parsed, whose text is what the
-              // repair chip exists to fix. A goal with no proof yet has no
-              // deleteSpec at all, so pending leaves fall out for free.
-              // Looked up, not recomputed (see `delExtents`). A declined
-              // extent — a sibling shares the start line — must not even show
-              // the button: arming it would offer nothing.
+              // Deleting. Offered wherever the extent is well defined: an
+              // ordinary node's spec rides the wire; a COMBINED run's is
+              // synthesized in `delExtents` (the union of its members', so ⊘
+              // takes the whole run as one region). Never on an elide marker,
+              // and never on the synthetic `calc` of a block that never
+              // parsed, whose text is what the repair chip exists to fix. A
+              // goal with no proof yet has no deleteSpec at all, so pending
+              // leaves fall out for free. Looked up, not recomputed (see
+              // `delExtents`). A declined extent — a sibling shares the start
+              // line — must not even show the button: arming it would offer
+              // nothing.
               const delExtent =
-                seq.mode === "off" &&
-                !elidePick &&
-                !bandPick &&
-                !isMarker &&
-                !isCombined
+                seq.mode === "off" && !elidePick && !bandPick && !isMarker
                   ? (delExtents.get(id) ?? null)
                   : null;
               const deletable = !!delExtent;
@@ -4600,20 +5077,19 @@ export default function ProofTreeView({
               // standing: this is for a subtree you have finished reading.
               //
               // Offered wherever the cut would do anything (see `stepIds` —
-              // only a childless tactic is declined), and never on a marker, a
-              // combined run or the synthetic `calc` of a block that never
-              // parsed — the same three the delete gesture declines, and for
-              // the same reason: they stand for no single tactic, and the
-              // synthetic one's whole purpose is the repair chip it carries.
+              // only a childless tactic is declined), plus every COMBINED run
+              // (≥2 tactics by construction, cut as a band over its member
+              // ids — see elideCombined); never on an elide marker or the
+              // synthetic `calc` of a block that never parsed, whose whole
+              // purpose is the repair chip it carries.
               const elidable =
                 seq.mode === "off" &&
                 !elidePick &&
                 !bandPick &&
                 type === "tactic" &&
                 !isMarker &&
-                !isCombined &&
                 !node.data.synthetic &&
-                elidableIds.has(id);
+                (isCombined || elidableIds.has(id));
               const isArming = arming?.id === id;
               // Secondary actions live in a hover bar with button-sized
               // targets (see NodeActionBar) instead of tiny corner glyphs or
@@ -4640,7 +5116,12 @@ export default function ProofTreeView({
                 !!elidePick ||
                 !!bandPick ||
                 isMarker ||
-                foldable ||
+                // `canFold`, not `foldable`: a bare click on a combined node
+                // (no reveal hook — the standalone app) does nothing and must
+                // not advertise a pointer. Its ⌥-elide still needs the click
+                // handler attached, though — hence `elidable`.
+                canFold ||
+                elidable ||
                 revealable ||
                 goalRevealable;
               // Native hover tooltip: ONLY what you can do here. It used to
@@ -4655,6 +5136,9 @@ export default function ProofTreeView({
                     ? `${CMD}-click to reveal in source`
                     : null,
                 editable ? "double-click to edit" : null,
+                partEditable
+                  ? "double-click a line to edit that tactic"
+                  : null,
                 elidable ? "⌥-click to elide into the trunk" : null,
                 focusable ? "⌥-click to focus this subtree" : null,
                 isFocusRoot ? "⌥-click (or Esc) to leave this focus" : null,
@@ -4669,7 +5153,11 @@ export default function ProofTreeView({
               const diagTip = (nodeDiags ?? [])
                 .map((d) => `${d.severity === 1 ? "⨯" : "⚠"} ${d.message}`)
                 .join("\n\n");
+              // Narration mode: the box shows PROSE, so the tooltip leads
+              // with the code it stands for — the tactic is one hover away,
+              // the mode's contract.
               const nodeTooltip = [
+                node.data.proseLabel ? node.data.label : "",
                 diagTip,
                 hints.map((h) => `· ${h}`).join("\n"),
               ]
@@ -4688,8 +5176,12 @@ export default function ProofTreeView({
               // colouring on a tactic. Both return one node per wrapped line in
               // the same geometry, so the render branch below is shared; null
               // keeps the plain SVG text.
-              const taggedLines =
-                type === "goal"
+              // A prose label (narration mode) is not source text; declining
+              // the tagged path OUTRIGHT is the decision, not letting the
+              // text-equality guard fail its way to the same answer.
+              const taggedLines = node.data.proseLabel
+                ? null
+                : type === "goal"
                   ? (renderTaggedGoal?.(
                       id,
                       lines.map((l) => l.text),
@@ -4722,7 +5214,7 @@ export default function ProofTreeView({
                 // While picking an elide endpoint (or on an elision marker), a
                 // click is a pick / un-elide — never a reveal or focus.
                 if (elidePick || bandPick || isMarker) {
-                  onNodeClick(id, foldable);
+                  onNodeClick(id, canFold);
                   return;
                 }
                 // Tactic fast path — ⌥-click elides it into the trunk (the
@@ -4730,7 +5222,8 @@ export default function ProofTreeView({
                 // precedent). Checked BEFORE reveal, which otherwise consumes
                 // every tactic click in the widget, modified or not.
                 if (elidable && e.altKey) {
-                  elideStep(id);
+                  if (isCombined) elideCombined(id);
+                  else elideStep(id);
                   return;
                 }
                 // In the widget, clicking a positioned tactic reveals its source
@@ -4741,8 +5234,8 @@ export default function ProofTreeView({
                 if (revealable) {
                   // The id seeds the instant accent — this branch is
                   // tactics only, which is exactly where the accent may land.
-                  if (editable) deferReveal(position!, id);
-                  else revealAt(position!, id);
+                  if (editable || partEditable) deferReveal(actPos!, id);
+                  else revealAt(actPos!, id);
                   return;
                 }
                 // Goal fast paths — the whole box is the target, no fiddly
@@ -4761,7 +5254,7 @@ export default function ProofTreeView({
                   exitFocus();
                   return;
                 }
-                onNodeClick(id, foldable);
+                onNodeClick(id, canFold);
               };
 
               return (
@@ -4769,8 +5262,10 @@ export default function ProofTreeView({
                   key={id}
                   // The marquee's background test: a mousedown inside any
                   // node <g> is a node gesture (click, double-click-to-edit,
-                  // chip pick), never the start of a drag-select.
-                  data-node=""
+                  // chip pick), never the start of a drag-select. The VALUE is
+                  // the node id — unread by the hit-test, but it lets the
+                  // preview harness address a node without React internals.
+                  data-node={id}
                   transform={`translate(${node.x},${node.y})`}
                   // Everything an armed delete would take fades, so the tree
                   // shows the same answer the editor's highlight does. Paint
@@ -4783,17 +5278,53 @@ export default function ProofTreeView({
                   }
                   onClick={clickable && !isEditing ? handleClick : undefined}
                   onDoubleClick={
-                    editable && !isEditing
+                    (editable ||
+                      partEditable ||
+                      (node.data.proseLabel && commentEditable)) &&
+                    !isEditing
                       ? (e) => {
                           e.stopPropagation();
                           cancelPendingReveal();
-                          const q = getTacticEdit!(position!);
+                          // Narration mode: the visible text IS the comment,
+                          // so double-click edits the comment — the tactic's
+                          // own editor is still reachable by leaving the mode.
+                          if (node.data.proseLabel) {
+                            openCommentEdit();
+                            return;
+                          }
+                          // What carries the range: the node's own position,
+                          // or — on a COMBINED node — the double-clicked
+                          // PART's. The tagged line divs carry their index;
+                          // map line → explicit-newline segment → part via
+                          // the same partSegSpans renderCombinedLines draws
+                          // by. A miss (box padding, plain-SVG fallback)
+                          // edits the first part.
+                          let editPos = position;
+                          if (partEditable) {
+                            const el = (e.target as Element).closest?.(
+                              "[data-ptw-lineidx]",
+                            ) as HTMLElement | null;
+                            const li = el ? Number(el.dataset.ptwLineidx) : 0;
+                            const seg = lines[li]?.seg ?? 0;
+                            const part =
+                              partSegSpans(parts!).find(
+                                (s) => seg < s.seg0 + s.span,
+                              )?.part ?? parts![0];
+                            if (!part.position) return;
+                            editPos = part.position;
+                          }
+                          if (!editPos) return;
+                          const q = getTacticEdit!(editPos);
                           if (!q) return;
                           setEditing({
                             id,
                             pos: q.pos,
                             original: q.text,
                             value: q.text,
+                            // The mirror aligns tokens by the PART's own
+                            // range on a combined node (whose own position
+                            // is undefined).
+                            ...(partEditable ? { tokPos: editPos } : {}),
                           });
                         }
                       : undefined
@@ -4869,7 +5400,39 @@ export default function ProofTreeView({
                       fontStyle="italic"
                       fill={COMMENT_FILL}
                       // Match the width measurer (no inherited letter-spacing).
+                      // The strip is a double-click EDIT surface (widget
+                      // only): its own handler, stopPropagation — the group's
+                      // handler would open the TACTIC editor. Hidden while
+                      // its own overlay is up (the box stays, unlike a tactic
+                      // edit — the code being narrated belongs on screen).
                       style={{ letterSpacing: 0 }}
+                      visibility={
+                        isEditing && editing?.comment ? "hidden" : undefined
+                      }
+                      // …and the CLICK is stopped too, which the dblclick
+                      // guard alone did not cover: a double-click delivers two
+                      // `click`s BEFORE the `dblclick`, and on a GOAL a click
+                      // is the fold. So double-clicking a goal's strip to edit
+                      // it folded and unfolded the whole subtree underneath —
+                      // most visibly on the root's "plan" comment, which is a
+                      // goal strip sitting above the entire tree. Tactics were
+                      // immune only because their click (reveal) is deferred
+                      // past the double-click window and cancelled by it.
+                      // The strip is its own surface: on it, a single click
+                      // does nothing and a double-click edits.
+                      onClick={
+                        commentEditable && !isEditing
+                          ? (e) => e.stopPropagation()
+                          : undefined
+                      }
+                      onDoubleClick={
+                        commentEditable && !isEditing
+                          ? (e) => {
+                              e.stopPropagation();
+                              openCommentEdit();
+                            }
+                          : undefined
+                      }
                     >
                       {node.data.commentLines.map((line, j) => (
                         <tspan
@@ -4924,7 +5487,13 @@ export default function ProofTreeView({
                     stroke={
                       accent
                         ? SEQ_STROKE
-                        : (recoveredStroke ?? diagInk ?? style.stroke)
+                        : (recoveredStroke ??
+                          diagInk ??
+                          // Narration mode: the box holds PROSE, so it is
+                          // outlined in comment ink rather than tactic green
+                          // — the border should say what kind of thing is
+                          // inside, and its editor borders the same way.
+                          (node.data.proseLabel ? PROSE_FILL : style.stroke))
                     }
                     strokeWidth={
                       accent || recovered === "failed" || diagSev === 1
@@ -4953,11 +5522,19 @@ export default function ProofTreeView({
                       // is actually readable without restoring it.
                       <title>
                         {`${
-                          node.data.elidedCut!.ghost
-                            ? node.data.elidedCut!.note
-                              ? "elided into the trunk by a .none flag in the source"
-                              : "elided into the trunk"
-                            : `${node.data.elidedCut!.tactics.length} tactics elided`
+                          // A NOTE is the source speaking, whichever gesture
+                          // made the cut (see applyElisions) — so it leads,
+                          // ahead of the ghost/band split, and the two agree
+                          // with the label the box is showing.
+                          node.data.elidedCut!.note
+                            ? "elided into the trunk by a .none flag in the source"
+                            : node.data.elidedCut!.ghost
+                              ? "elided into the trunk"
+                              : `${node.data.elidedCut!.tactics.length} ${
+                                  node.data.elidedCut!.tactics.length === 1
+                                    ? "tactic"
+                                    : "tactics"
+                                } elided`
                         } — click to restore\n\n${node.data.elidedCut!.tactics.join("\n")}`}
                       </title>
                     ) : (
@@ -5046,7 +5623,11 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {foldable && !seqActive && !revealable && !hideForEdit && !isMarker && (
+                  {canFold &&
+                    !seqActive &&
+                    !revealable &&
+                    !hideForEdit &&
+                    !isMarker && (
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -5086,6 +5667,10 @@ export default function ProofTreeView({
                         {taggedLines.map((line, j) => (
                           <div
                             key={j}
+                            // The line's index, read back by a COMBINED
+                            // node's double-click to resolve which PART sits
+                            // under the pointer.
+                            data-ptw-lineidx={j}
                             style={{
                               height: LINE_H,
                               // Hanging indent for width-wrapped continuation
@@ -5103,12 +5688,31 @@ export default function ProofTreeView({
                       textAnchor="start"
                       fontSize={NODE_FONT_PX}
                       fontFamily={getCodeFontFamily()}
+                      // Narration prose is drawn as the strip would draw it —
+                      // italic, comment ink — inside the tactic chrome, so it
+                      // reads as what the step SAYS, not what it types. The
+                      // measurer matched (proseLabelSize measures italic).
+                      fontStyle={
+                        node.data.proseLabel ? "italic" : undefined
+                      }
                       // A run marker's `⋯ N tactics` reads as an absence, so it
                       // takes the muted comment ink, not full node text.
-                      fill={isMarker ? "var(--ptw-comment)" : NODE_TEXT}
+                      fill={
+                        node.data.proseLabel
+                          ? PROSE_FILL
+                          : isMarker
+                            ? "var(--ptw-comment)"
+                            : NODE_TEXT
+                      }
                       // Match the width measurer in layout.ts, which doesn't include
                       // the page's inherited letter-spacing.
                       style={{ letterSpacing: 0 }}
+                      // A restored multi-line label's tail lines carry LEADING
+                      // SPACES (source-relative indent) that the measurer
+                      // counted; SVG's default whitespace handling would
+                      // collapse them and the line would render flush-left in
+                      // a box sized for the indent.
+                      xmlSpace="preserve"
                       visibility={hideForEdit ? "hidden" : undefined}
                     >
                       {lines.map((line, j) => (
@@ -5415,9 +6019,11 @@ export default function ProofTreeView({
                                 // to tell apart. `◌` is the dashed ghost this
                                 // one leaves behind.
                                 glyph: "◌",
-                                title:
-                                  "Elide into the trunk (⌥-click) — this tactic and anything it opened, leaving a ghost to click back open",
-                                onClick: () => elideStep(id),
+                                title: isCombined
+                                  ? "Elide into the trunk (⌥-click) — the whole run collapses to a ⋯ marker (click it to restore)"
+                                  : "Elide into the trunk (⌥-click) — this tactic and anything it opened, leaving a ghost to click back open",
+                                onClick: () =>
+                                  isCombined ? elideCombined(id) : elideStep(id),
                               },
                             ]
                           : []),
@@ -5459,7 +6065,7 @@ export default function ProofTreeView({
                                 title: "Open in lens",
                                 onClick: () =>
                                   onPopoutEdit!(
-                                    getTacticEdit?.(position!)?.pos ?? position!,
+                                    getTacticEdit?.(actPos!)?.pos ?? actPos!,
                                   ),
                               },
                             ]
@@ -5475,11 +6081,17 @@ export default function ProofTreeView({
                                 title:
                                   type === "goal"
                                     ? "Delete this goal's proof"
-                                    : "Delete this tactic",
+                                    : isCombined
+                                      ? "Delete this run of tactics"
+                                      : "Delete this tactic",
                                 onClick: () =>
                                   setArming({
                                     id,
-                                    spec: node.data.deleteSpec!,
+                                    // A combined node's spec is synthesized
+                                    // beside its extent (see delExtents).
+                                    spec:
+                                      node.data.deleteSpec ??
+                                      delSpecs.get(id)!,
                                   }),
                               },
                             ]
@@ -5521,7 +6133,10 @@ export default function ProofTreeView({
                 const ext = armExtent;
                 if (!an || !ext) return null;
                 const { w, h } = an.data;
-                const boxTop = (an.data.caseH + an.data.commentBlockH - h) / 2;
+                // Same bandTopH the node's own <g> uses: counting a FLOATED
+                // strip here hung the confirm chip commentBlockH/2 below the
+                // box on every annotated aside tactic.
+                const boxTop = (bandTopH(an.data) - h) / 2;
                 // No glyph on the confirm chip: the `⊘` said "you may delete
                 // here", and once armed that is settled — what is left to read
                 // is the COUNT, and repeating the symbol beside it only
@@ -5619,7 +6234,7 @@ export default function ProofTreeView({
                 // Anchor the peek's top-left on the chip's top-left, so the
                 // expansion grows right/down from what was pointed at.
                 const left = -pn.data.w / 2;
-                const topH = pn.data.caseH + pn.data.commentBlockH;
+                const topH = bandTopH(pn.data);
                 const boxTop = (topH - pn.data.h) / 2;
                 const gutter =
                   fullHyps.some((l) => l.used) &&
@@ -5678,6 +6293,10 @@ export default function ProofTreeView({
                       fontFamily={getCodeFontFamily()}
                       fill={NODE_TEXT}
                       style={{ letterSpacing: 0 }}
+                      // Restored multi-line labels indent their tail lines with
+                      // leading spaces the measurer counted (see the node label
+                      // render, same reason).
+                      xmlSpace="preserve"
                     >
                       {full.lines.map((line, j) => (
                         <tspan
@@ -5701,7 +6320,7 @@ export default function ProofTreeView({
                 const list = diag?.byNode.get(hoverDiag);
                 if (!dn || !list || list.length === 0) return null;
                 const { w, h } = dn.data;
-                const boxTop = (dn.data.caseH + dn.data.commentBlockH - h) / 2;
+                const boxTop = (bandTopH(dn.data) - h) / 2;
                 return (
                   <foreignObject
                     x={dn.x - w / 2 + NODE_PAD}
@@ -5767,20 +6386,59 @@ export default function ProofTreeView({
                 const en = nodes.find((n) => n.data.id === editing.id);
                 if (!en) return null;
                 const { w, h } = en.data;
-                const topH = en.data.caseH + en.data.commentBlockH;
+                // bandTopH, never an inline caseH + commentBlockH: in the
+                // aside modes (⊦ spine, || tracks) an annotated tactic's strip
+                // FLOATS out of the band, so the hand-rolled sum put the
+                // overlay commentBlockH/2 below the box it is meant to cover —
+                // the editor visibly stepping down off its own node.
+                const topH = bandTopH(en.data);
                 const boxTop = (topH - h) / 2;
                 // An ADD's textarea hangs below the goal box (where its chip
                 // sat), leaving the goal readable while you answer it — as does
                 // a staged `calc` fill, which is asking about the link it just
                 // wrote under that goal. A replace-edit covers the hidden box.
-                const overlayY =
-                  editing.add || editing.calcStage ? boxTop + h + 4 : boxTop;
+                // In NARRATION mode the prose is the box, so its editor is a
+                // box replace like any other — same y, same hidden box.
+                const proseEdit = !!editing.comment && !!en.data.proseLabel;
+                // A COMMENT edit's overlay otherwise hangs over the STRIP —
+                // the band above the box — where the text it replaces was
+                // drawn; the box stays visible below it (hideForEdit exempts
+                // it). A floated strip (aside tactics) sits ABOVE the band, so
+                // the overlay follows the same branch the strip's own y takes.
+                // Lifted by NODE_PAD_Y so the textarea's vertical padding
+                // STRADDLES the strip's ink instead of hanging entirely below
+                // it: unlifted, the overlay's bottom ate all of COMMENT_GAP
+                // and sat flush on the box.
+                const overlayY = proseEdit
+                  ? boxTop
+                  : editing.comment
+                    ? boxTop -
+                      topH +
+                      (en.data.commentFloats
+                        ? -en.data.commentBlockH
+                        : en.data.caseH) -
+                      NODE_PAD_Y
+                    : editing.add || editing.calcStage
+                      ? boxTop + h + 4
+                      : boxTop;
                 const valueLines = editing.value.split("\n");
+                // Measure in the font this overlay actually PAINTS in — a
+                // comment editor is italic at COMMENT_FONT_PX, everything else
+                // upright at NODE_FONT_PX (the proseLabelSize rule: measurement
+                // must match paint). Safe before only because 12px upright is
+                // wider than 11px italic, i.e. the overlay came out too wide
+                // rather than clipping; it would have bitten the moment the
+                // two sizes converged.
                 const fw = Math.max(
                   w,
                   320,
                   ...valueLines.map(
-                    (l) => measureText(l, NODE_FONT_PX) + 2 * NODE_PAD + 12,
+                    (l) =>
+                      (editing.comment
+                        ? measureText(l, COMMENT_FONT_PX, true)
+                        : measureText(l, NODE_FONT_PX)) +
+                      2 * NODE_PAD +
+                      12,
                   ),
                 );
                 // Height is fixed at OPEN time, from the text the editor
@@ -5796,7 +6454,16 @@ export default function ProofTreeView({
                   editing.add || editing.calcStage
                     ? 1
                     : editing.original.split("\n").length;
-                const fh = openLines * LINE_H + 2 * NODE_PAD_Y;
+                // A comment edit sizes to its raw source lines at the strip's
+                // own leading — never fewer than one line's worth, and in
+                // narration never less than the box it is covering (the raw
+                // source can wrap to fewer lines than the drawn prose).
+                const fh = editing.comment
+                  ? Math.max(
+                      Math.max(1, openLines) * COMMENT_LINE_H + 2 * NODE_PAD_Y,
+                      proseEdit ? h : 0,
+                    )
+                  : openLines * LINE_H + 2 * NODE_PAD_Y;
                 // Syntax colouring WHILE editing: a mirror element behind a
                 // see-through textarea, which is the only way to paint rich
                 // text under a real caret. The colours are the SAVED source's
@@ -5813,10 +6480,15 @@ export default function ProofTreeView({
                 // would be a different tactic's entirely; a stage is typing one
                 // END of a link rather than a tactic, so the tokens would be
                 // the whole link's.
+                // `tokPos` overrides the node's own position: a COMBINED
+                // node's per-part edit aligns tokens against the PART being
+                // edited (the node itself has no position — it is a marker).
+                const mirrorPos = editing.tokPos ?? en.data.position;
+                // …and skipped for COMMENT edits: prose, not tactic tokens.
                 const editHighlight =
-                  !editing.add && !editing.calcStage && en.data.position
+                  !editing.add && !editing.calcStage && !editing.comment && mirrorPos
                     ? (renderTaggedTactic?.(
-                        en.data.position,
+                        mirrorPos,
                         editing.value,
                         valueLines,
                       ) ?? null)
@@ -5907,7 +6579,12 @@ export default function ProofTreeView({
                         onChange={(e) => {
                           const { value, selectionStart } = e.target;
                           setEditing((cur) => cur && { ...cur, value });
-                          refreshCompletion(editing.id, value, selectionStart);
+                          // A comment edit is prose: no completion (the
+                          // candidates are tactics and terms), and the abbrev
+                          // session was never opened for it (syncAbbrev
+                          // no-ops without one).
+                          if (!editing.comment)
+                            refreshCompletion(editing.id, value, selectionStart);
                           syncAbbrev(editKey(editing)!, value, selectionStart);
                         }}
                         // A caret move with no edit changes what is being
@@ -6057,8 +6734,17 @@ export default function ProofTreeView({
                           height: "100%",
                           boxSizing: "border-box",
                           fontFamily: getCodeFontFamily(),
-                          fontSize: NODE_FONT_PX,
-                          lineHeight: `${LINE_H}px`,
+                          // A comment edit takes the STRIP's own metrics —
+                          // italic at the comment leading — so the overlay
+                          // reads as the strip made editable, not as a tactic
+                          // box that wandered up a band.
+                          fontSize: editing.comment
+                            ? COMMENT_FONT_PX
+                            : NODE_FONT_PX,
+                          fontStyle: editing.comment ? "italic" : undefined,
+                          lineHeight: `${
+                            editing.comment ? COMMENT_LINE_H : LINE_H
+                          }px`,
                           letterSpacing: 0,
                           padding: `${NODE_PAD_Y - 1}px ${NODE_PAD - 2}px`,
                           // With a mirror behind, the glyphs come from IT and
@@ -6072,7 +6758,17 @@ export default function ProofTreeView({
                           background: editHighlight ? "transparent" : EDIT_BG,
                           color: editHighlight ? "transparent" : EDIT_TEXT,
                           caretColor: EDIT_TEXT,
-                          border: `2px solid ${NODE_STYLES.tactic.stroke}`,
+                          // A comment edit borders in the COMMENT ink, not
+                          // the tactic green: the box says what kind of thing
+                          // is being typed, and prose in a tactic-coloured
+                          // box read as code. Both flavours take it — the
+                          // strip's overlay and narration mode's, where the
+                          // box it covers is prose too.
+                          border: `2px solid ${
+                            editing.comment
+                              ? PROSE_FILL
+                              : NODE_STYLES.tactic.stroke
+                          }`,
                           borderRadius: 4, // match the tactic box corners
                           outline: "none",
                           resize: "none",
@@ -6263,6 +6959,24 @@ const RAIL_BTN: CSSProperties = {
   color: "var(--vscode-icon-foreground, #2d3748)",
 };
 
+/** Each combined part with its explicit-newline segment range: part i covers
+seg `[seg0, seg0 + span)`. THE one coding of the parts↔segments mapping — the
+double-click's part resolution and `renderCombinedLines` both read it, so the
+editor can never open a different tactic than the one whose drawn line was
+clicked. */
+function partSegSpans(
+  parts: CombinedPart[],
+): { part: CombinedPart; seg0: number; span: number }[] {
+  const out: { part: CombinedPart; seg0: number; span: number }[] = [];
+  let seg = 0;
+  for (const part of parts) {
+    const span = part.label.split("\n").length;
+    out.push({ part, seg0: seg, span });
+    seg += span;
+  }
+  return out;
+}
+
 /**
  * Rich label lines for a COMBINED node (the ⇉ toggle's merged tactic run).
  *
@@ -6286,11 +7000,8 @@ function renderCombinedLines(
 ): ReactNode[] | null {
   if (!parts || parts.length === 0 || !render) return null;
   const out: ReactNode[] = [];
-  let seg = 0;
-  for (const part of parts) {
-    const span = part.label.split("\n").length;
-    const mine = lines.filter((l) => l.seg >= seg && l.seg < seg + span);
-    seg += span;
+  for (const { part, seg0, span } of partSegSpans(parts)) {
+    const mine = lines.filter((l) => l.seg >= seg0 && l.seg < seg0 + span);
     if (mine.length === 0) continue;
     if (!part.position) return null;
     const rendered = render(
@@ -6688,8 +7399,52 @@ function ReflowControl({
   );
 }
 
+/** Whether ⌥ is held right now. Three rail buttons carry a SECOND gesture on
+the modifier, and until this hook the only trace of that was a parenthetical in
+a tooltip nobody reads twice; while ⌥ is down each of those three swaps its
+glyph for what ⌥ would do, so the modifier announces itself on the control it
+applies to. Every other button is left alone — a glyph that does not change is
+telling the truth there, since ⌥-clicking it does the ordinary thing.
+
+TWO sources, because neither alone covers the widget. Key events reach a
+webview only when it has FOCUS, and in the infoview the caret normally lives in
+the editor — holding ⌥ while pointing at the tree would deliver nothing at all.
+So the rail's own mouse events feed it too: `altKey` rides every mouse event
+whatever holds focus, and the affordance only has to be right while the pointer
+is on the rail. (Neither is a substitute for the other: a held ⌥ with a still
+mouse sends no mouse events either.)
+
+A window blur CLEARS it: a webview that loses focus mid-press never sees the
+keyup, and a glyph stuck in the ⌥ reading is worse than one that never moved.
+
+Lives inside `ControlRail`, not the view, so a modifier press repaints three
+buttons instead of the tree. */
+function useAltHeld() {
+  const [alt, setAlt] = useState(false);
+  useEffect(() => {
+    // `e.altKey`, not `e.key === "Alt"`: it is set on EVERY key event, so a
+    // chord that begins with the modifier still reports it held, and Alt's own
+    // keyup reports false — which is exactly the release.
+    const onKey = (e: KeyboardEvent) => setAlt(e.altKey);
+    const clear = () => setAlt(false);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKey);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKey);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
+  return {
+    alt,
+    syncAlt: (e: React.MouseEvent) => setAlt(e.altKey),
+  };
+}
+
 function ControlRail({
   onExpandAll,
+  onResetView,
   onCollapseAll,
   accordion,
   onAccordionChange,
@@ -6707,8 +7462,8 @@ function ControlRail({
   onReflowOpenChange,
   brief,
   onBriefChange,
-  overview,
-  onOverviewChange,
+  commentMode,
+  onCommentModeChange,
   combine,
   onCombineChange,
   hypMode,
@@ -6727,6 +7482,8 @@ function ControlRail({
   onFit,
 }: {
   onExpandAll: () => void;
+  /** ⌥-⊞: the source's own reading, restored (see resetToSource). */
+  onResetView: () => void;
   onCollapseAll: () => void;
   accordion: boolean;
   onAccordionChange: (v: boolean) => void;
@@ -6744,8 +7501,8 @@ function ControlRail({
   onReflowOpenChange: (v: boolean) => void;
   brief: boolean;
   onBriefChange: (v: boolean) => void;
-  overview: boolean;
-  onOverviewChange: (v: boolean) => void;
+  commentMode: "shown" | "hidden" | "instead";
+  onCommentModeChange: (v: "shown" | "hidden" | "instead") => void;
   combine: boolean;
   onCombineChange: (v: boolean) => void;
   hypMode: HypMode;
@@ -6763,8 +7520,12 @@ function ControlRail({
   onZoomOut: () => void;
   onFit: () => void;
 }) {
+  const { alt, syncAlt } = useAltHeld();
   return (
     <div
+      // The rail's own read of the modifier, for when the keyboard's goes to
+      // the editor instead of the webview (see useAltHeld).
+      onMouseMove={syncAlt}
       style={{
         position: "absolute",
         top: 8,
@@ -6794,10 +7555,18 @@ function ControlRail({
           <div style={{ height: 6 }} />
         </>
       )}
+      {/* Two directions on one button: ⊞ opens everything, ⌥-⊞ puts the
+          source's own reading back (see resetToSource). Not a second rail
+          slot — they are the same axis, and the rail is not growing a button
+          per feature.
+
+          ⌥ shows ↺ — restore, the one thing the modifier does here. It inks
+          7.0px at the shared 14px against ⊞'s 7.3 (measured), so unlike the
+          other two swaps it needs no size override. */}
       <RailButton
-        glyph="⊞"
-        title="Expand all — unfold every branch and restore every elided run"
-        onClick={onExpandAll}
+        glyph={alt ? "↺" : "⊞"}
+        title="Expand all — unfold every branch and restore every elided run (⌥-click: back to the view the source asks for, .fold folded and .none ghosted)"
+        onClick={(e) => (e.altKey ? onResetView() : onExpandAll())}
       />
       <RailButton glyph="⊟" title="Collapse all" onClick={onCollapseAll} />
       <div style={{ height: 6 }} />
@@ -6841,11 +7610,30 @@ function ControlRail({
         pressed={brief}
         onClick={() => onBriefChange(!brief)}
       />
+      {/* Comment strips on/off. `--` is Lean's own comment marker, so the
+          glyph names what it hides; pressed = hidden, the away-from-home
+          convention. Full-em ink like `||`, hence RAIL_GLYPH_FULL — at the
+          shared 14px two hyphens draw a thin dash the eye slides off.
+
+          ⌥ shows ▤ — a box filled with lines, which is narration exactly: the
+          prose moves INSIDE the tactic's box. It inks 8.3px at the default
+          14px (◫'s figure), so the swap drops the `--`-only override. */}
       <RailButton
-        glyph="▦"
-        title="Overview: shrink every node to a one-line chip except where the cursor is — hover a chip to peek at its full content"
-        pressed={overview}
-        onClick={() => onOverviewChange(!overview)}
+        glyph={alt ? "▤" : "--"}
+        glyphPx={alt ? undefined : RAIL_GLYPH_FULL}
+        title="Comments: draw the source's comment strips above the nodes they annotate (drag-select a node to hide just its own; ⌥-click: narration — each comment stands in for the tactic it decorates, the tactic itself one hover away)"
+        pressed={commentMode !== "shown"}
+        onClick={(e) =>
+          onCommentModeChange(
+            e.altKey
+              ? commentMode === "instead"
+                ? "shown"
+                : "instead"
+              : commentMode === "shown"
+                ? "hidden"
+                : "shown",
+          )
+        }
       />
       <RailButton
         glyph="⇉"
@@ -6856,8 +7644,17 @@ function ControlRail({
       {/* Outline-only is NOT here: it is a standing preference about how boxes
           look rather than a gesture, so it lives in the companion's settings
           (`proofTree.outlineOnly`) and arrives as a prop. */}
+      {/* ⌥ shows ⇌ — the two orderings exchanged. Not a glyph for either
+          ORDER: the modifier flips between them, so a sign for one of the two
+          would have to be the button's own resting glyph in the other state,
+          i.e. show nothing changing exactly when you need to know the modifier
+          is live. Same reason ▤ above names narration rather than the
+          direction of the walk. The titles carry the direction; the glyph
+          says which axis ⌥ moves you along. ⇌ inks 6.8px at 14 (in band), and
+          is harpoons rather than ⇄'s full arrows so it cannot be read as the
+          ⇉ two buttons above. */}
       <RailButton
-        glyph={HYP_MODES[hypMode].glyph}
+        glyph={alt ? "⇌" : HYP_MODES[hypMode].glyph}
         title={`${HYP_MODES[hypMode].title}. ⌥-click: ${
           hypGroup
             ? "draw each context in Lean's own binder order instead of data-then-propositions"

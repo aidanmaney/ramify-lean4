@@ -166,6 +166,17 @@ const PALETTE_CSS = `
   --ptw-comment: #8b949e;
   --ptw-case: #6b7f99;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
+  /* Narration mode's prose, drawn INSIDE a node box rather than on the page.
+     Same words, different ground: --ptw-comment is mixed against --ptw-bg,
+     which is right for a strip riding on the background, but a box sits on
+     --ptw-surface (lifted 10% toward the foreground), so the identical ink
+     lands with visibly less contrast there — reported as exactly that. Mixed
+     against the SURFACE for the same reason --ptw-hyp-unused is, and at 75%
+     rather than 55%: a strip is an aside beside the content, while in
+     narration the prose IS the box's content and only the italic and the
+     hueless grey need to say it is not code. */
+  --ptw-prose: #b6bdc6;
+  --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
   --ptw-link: #9aa0a6;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
   /* Opt-in link tint (proofTree.linkTint): the neutral link ink pulled toward
@@ -234,6 +245,8 @@ const PALETTE_CSS = `
   --ptw-comment: #7d8590;
   --ptw-case: #8fa3bf;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
+  --ptw-prose: #aeb6c0;
+  --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
   --ptw-link: #6e7681;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
   --ptw-muted: #9ca3af;
@@ -284,6 +297,10 @@ export const HYP_USED_FILL = "var(--ptw-hyp-used)";
 export const HYP_UNUSED_FILL = "var(--ptw-hyp-unused)";
 export const HYP_MARK_FILL = "var(--ptw-hyp-mark)";
 export const COMMENT_FILL = "var(--ptw-comment)";
+/** Narration mode's in-box prose (and the borders that frame it): the comment
+voice, mixed against the node SURFACE it is drawn on rather than the page. See
+the recipe for why the strip's own ink is too dim once it moves inside a box. */
+export const PROSE_FILL = "var(--ptw-prose)";
 /** Case-name badge on a branch goal — hue-free, like the context lines. */
 export const CASE_FILL = "var(--ptw-case)";
 /** The `sorry` frontier chip. Shares the syntax palette's sorry colour, so a

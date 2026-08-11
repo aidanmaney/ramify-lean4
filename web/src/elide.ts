@@ -26,6 +26,40 @@ export type ElideCut =
   | { kind: "step"; id: string; note?: string }
   | { kind: "combine"; ids: string[] }; // a linear tactic run, shown stacked
 
+/** The view the SOURCE asks for: which goals `.fold` starts collapsed, and the
+ * `step` cuts `.none` starts as ghosts (see NodeFlags). Pure, and deliberately
+ * the ONLY place that translation lives — it is read once per proof by the
+ * seed and again by the ⌥-⊞ reset, and a reset that rebuilt the rule by hand
+ * would be a second answer to "what does the source say", exactly the kind of
+ * pair that drifts.
+ *
+ * Read off the BASE nodes, never the engine's: applying a `.none` cut is what
+ * removes the flagged node from the engine's tree, so asking the drawn tree
+ * would lose the flag the moment it worked.
+ *
+ * A `.none` on a ROOT GOAL (the pre-proof narrative slot) targets the tactic
+ * that opens the proof, so its targets are already tactic ids and the same cut
+ * applies to them; on a tactic it acts on that tactic itself. Cuts come out in
+ * DFS preorder, so nested flags arrive outer-first — see `disjointCuts`, which
+ * is where that ordering stops mattering. */
+export function sourceView(nodes: TreeNode[]): {
+  folds: string[];
+  cuts: ElideCut[];
+} {
+  const folds: string[] = [];
+  const cuts: ElideCut[] = [];
+  for (const n of nodes) {
+    if (n.flags?.fold) folds.push(...(n.flags.targets ?? []));
+    if (!n.flags?.elide) continue;
+    const note = n.flags.note;
+    if (n.type === "tactic") cuts.push({ kind: "step", id: n.id, note });
+    else
+      for (const t of n.flags.targets ?? [])
+        cuts.push({ kind: "step", id: t, note });
+  }
+  return { folds, cuts };
+}
+
 /** Stable marker id for a cut — also the key removal matches on. `»`/`·` can't
 occur in an mvarId. */
 export function cutId(cut: ElideCut): string {
@@ -109,16 +143,25 @@ one small box with one small ghost. Everywhere else there is something to gain
 — either the trunk closes up over the tactic, or a subtree you have finished
 reading goes away — so the gesture is offered. `pruneCuts` reads the same
 emptiness, so a cut whose tactic vanished (or lost its children) in an edit
-drops through the identical path. */
+drops through the identical path.
+
+`allowLeaf` lifts exactly that one declination, and NOTHING else decides it:
+the cut carries a NOTE. A bare cut on a closing tactic really is one box for
+one ghost, but `.none <prose>` puts the author's sentence where the tactic
+was, which is strictly more than the label it replaces — "the last step is
+`grind`, here is why you need not read it". So the ◌ button (no prose, gated
+on `stepElidable` below) still declines a leaf while a written `.none why`
+does not. */
 function stepIds(
   byId: Map<string, TreeNode>,
   tacticId: string,
   idx: Map<string, TreeNode[]> = childIndex(byId),
+  allowLeaf = false,
 ): string[] {
   const tactic = byId.get(tacticId);
   if (!tactic || tactic.type !== "tactic") return [];
   const kids = idx.get(tacticId) ?? [];
-  if (kids.length === 0) return [];
+  if (kids.length === 0) return allowLeaf ? [tacticId] : [];
   // Everything at or below the continuation is off limits. A proof tree is a
   // tree, so the walk below could not reach it anyway — but a node CAN have
   // several parents in principle, and the one thing this cut must never do is
@@ -141,9 +184,11 @@ function stepIds(
   return [...ids];
 }
 
-/** Every tactic a STEP cut is offered on, evaluated in ONE pass so the view
-can memoize it per base tree — the offer test walks a subtree, and running it
-per drawn node per render would be cubic. */
+/** Every tactic the note-less STEP cut (the hover bar's ◌ and its ⌥-click) is
+offered on, evaluated in ONE pass so the view can memoize it per base tree —
+the offer test walks a subtree, and running it per drawn node per render would
+be cubic. Leaves are absent by construction (`allowLeaf` is not passed); a
+written `.none <prose>` is the one thing that may cut one. */
 export function stepElidable(nodes: TreeNode[]): Set<string> {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const idx = childIndex(byId);
@@ -180,7 +225,11 @@ export function resolveCut(
   byId: Map<string, TreeNode>,
 ): string[] {
   if (cut.kind === "path") return pathIds(byId, cut.from, cut.to) ?? [];
-  if (cut.kind === "step") return stepIds(byId, cut.id);
+  // `!!cut.note` is the leaf licence (see stepIds): a written `.none <prose>`
+  // may cut a closing tactic, a note-less ◌ may not. Routed through here so
+  // `pruneCuts` and `applyElisions` cannot disagree about it.
+  if (cut.kind === "step")
+    return stepIds(byId, cut.id, childIndex(byId), !!cut.note);
   return cut.ids.filter((id) => byId.has(id));
 }
 
@@ -349,6 +398,51 @@ export function remapCut(cut: ElideCut, to: (id: string) => string): ElideCut {
 
 /** Drop cuts that no longer resolve to anything (after an edit). Returns the
 same array reference when nothing changed. */
+/** Keep only cuts whose node-sets are pairwise DISJOINT — the precondition the
+ * rest of this function has always assumed.
+ *
+ * `applyElisions` maps each swallowed node to ONE marker, so two cuts sharing a
+ * node emit two markers that each inherit the other's edges — a 2-CYCLE. The
+ * layout then draws a link from the lower ghost back UP into the higher one, and
+ * that link's terminating horizontal leg runs the width of the box it is aiming
+ * at: the reported "branches drawn through ghost nodes". Measured over the
+ * corpus: base trees and single cuts give 0 cycles and 0 back edges; of 318
+ * overlapping ordered pairs, 159 cycle, every one of them with a back edge in
+ * all four layouts. All 159 are NESTED (0 partial), which is the shape the two
+ * reachable routes make — and the ROUTE is why the rule below is not "latest
+ * gesture wins": the `.none` seed walks `baseNodes` in DFS preorder, so two
+ * nested flags in the source arrive OUTER FIRST, and dropping by recency would
+ * throw away the outer flag the author wrote.
+ *
+ * So the BIGGER set wins: a container hides its contents either way, which
+ * honours both flags, and it agrees with recency on every hand-made pair (you
+ * can only cut the outer one second — the inner's tactic is inside the ghost).
+ * Ties and partial overlap (unobserved) fall back to the later cut. An
+ * overlapped cut is dropped WHOLE rather than trimmed to the difference: a
+ * partial set is nothing anyone asked for, and it could only make a marker
+ * standing for tactics that no longer read as a unit. The dropped cut stays in
+ * the view's `elideCuts` on purpose — removing the survivor brings it back,
+ * which is exactly the state before the last gesture. */
+export function disjointCuts(
+  cuts: ElideCut[],
+  byId: Map<string, TreeNode>,
+): ElideCut[] {
+  if (cuts.length < 2) return cuts;
+  const sets = cuts.map((c) => resolveCut(c, byId));
+  const order = cuts
+    .map((_, i) => i)
+    .sort((a, b) => sets[b].length - sets[a].length || b - a);
+  const claimed = new Set<string>();
+  const kept = new Set<number>();
+  for (const i of order) {
+    if (sets[i].some((id) => claimed.has(id))) continue;
+    for (const id of sets[i]) claimed.add(id);
+    kept.add(i);
+  }
+  if (kept.size === cuts.length) return cuts;
+  return cuts.filter((_, i) => kept.has(i)); // input order, for stability
+}
+
 export function pruneCuts(nodes: TreeNode[], cuts: ElideCut[]): ElideCut[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const live = cuts.filter((c) => resolveCut(c, byId).length > 0);
@@ -357,11 +451,13 @@ export function pruneCuts(nodes: TreeNode[], cuts: ElideCut[]): ElideCut[] {
 
 /** Collapse each cut's node-set into one synthetic marker node. Non-overlapping
 cuts compose; a marker can even be another cut's parent (chained elisions),
-resolved through the `markerOf` remap. */
+resolved through the `markerOf` remap. Cuts that DO overlap are made disjoint
+first — see `disjointCuts`. */
 export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
   if (cuts.length === 0) return nodes;
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const index = new Map(nodes.map((n, i) => [n.id, i]));
+  cuts = disjointCuts(cuts, byId);
 
   // Every node inside SOME cut → that cut's marker id. `slotOf` is the index of
   // each marker's TOPMOST member, so the marker is emitted in that node's slot
@@ -392,6 +488,30 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
       elision: n.elision,
     }));
     const tactics = parts.map((p) => p.label);
+    // The `.none` prose of the tactic this cut is ABOUT, as a fallback note.
+    // The flag is a durable fact about that step — "not worth reading, and
+    // here is why" — so it should label the cut whenever that step is cut,
+    // not only when the seed block made the cut. Without this, expanding a
+    // seeded ghost and eliding it again by hand (⊞ clears cuts; the source
+    // still says `.none why`) replaced the author's sentence with `⋯ 1
+    // tactic`, and the same node read differently depending on which gesture
+    // had put it away.
+    //
+    // "About" is deliberately narrow: a STEP cut is about its own tactic
+    // (this is the very member set the seed builds, so ◌ on a flagged tactic
+    // and the flag itself now agree), and any other cut only when it
+    // collapses EXACTLY ONE tactic. A band sweeping five steps, one of them
+    // flagged, keeps `⋯ 5 tactics` — that note describes one step and would
+    // overstate itself as the label for the rest.
+    const about =
+      cut.kind === "step"
+        ? byId.get(cut.id)
+        : members.length === 1
+          ? members[0]
+          : undefined;
+    const note =
+      (cut.kind === "step" ? cut.note : undefined) ??
+      (about?.flags?.elide ? about.flags.note : undefined);
     let top = Infinity;
     for (const id of ids) {
       markerOf.set(id, mid);
@@ -403,7 +523,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
       parts,
       combine: cut.kind === "combine",
       ghost: cut.kind === "step",
-      note: cut.kind === "step" ? cut.note : undefined,
+      note,
       // The marker inherits its members' outgoing edges, so it must inherit
       // the chain flag too or a `calc` swallowed by ⇉ loses its column. The
       // LAST tactic is the one that has them: a combine run is linear, so
@@ -451,10 +571,12 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
           id: mid,
           type: "tactic",
           // A `combine` marker IS the run's tactics, stacked (the view draws it
-          // as a normal tactic box); an elide marker is the `⋯ N tactics` chip.
+          // as a normal tactic box); an elide marker is the `⋯ N tactics` chip
+          // — unless a NOTE stands for it, which is the whole point of the
+          // author's sentence and reads the same however the cut was made.
           label: combine
             ? tactics.join("\n")
-            : ghost
+            : ghost || note
               ? ghostLabel(tactics, note)
               : `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
           parents,
@@ -469,7 +591,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
             ? { tactics, combined: true, parts }
             : ghost
               ? { tactics, parts, ghost: true, note }
-              : { tactics, parts },
+              : { tactics, parts, note },
         });
       }
       continue; // the cut's own nodes are gone

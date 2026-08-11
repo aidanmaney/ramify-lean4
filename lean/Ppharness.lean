@@ -113,14 +113,13 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
   for tree in trees do
     match ← runParser finalEnv fileMap tree with
     | some r0 =>
-        -- Put back the `at …` clause Paperproof's prettifier drops (see
-        -- `collectRwLocations`). Done here, before anything else reads a label,
-        -- so `tacticString` means the same thing on both wires — the widget
-        -- does exactly this too.
-        let rwLocs := ProofTree.collectRwLocations fileMap tree
+        -- The label fix-ups (the `rw` location clause, a multi-line tactic's
+        -- dropped tail), applied before anything else reads a label so
+        -- `tacticString` means the same thing on both wires — `labelFixup`
+        -- is the one place the pass list and its order live.
+        let fixup := ProofTree.labelFixup fileMap tree
         let r1 := { r0 with steps := r0.steps.map fun s =>
-          { s with tacticString :=
-              ProofTree.withRwLocation rwLocs s.position.start s.tacticString } }
+          { s with tacticString := fixup s.position.start s.tacticString } }
         -- The supplemental parser: synthesize steps for tactics the vendored
         -- one lost to failure (their info subtree was rolled back; the syntax
         -- survives in tacticSlots). Merged HERE, before anything reads the

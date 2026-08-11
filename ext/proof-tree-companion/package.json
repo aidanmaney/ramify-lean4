@@ -3,7 +3,7 @@
   "displayName": "Proof Tree Companion",
   "description": "Editor-side commands for the proof-tree infoview widget: opens a tactic in the lens (a slim editor group split below the infoview) and reveals tree nodes in it, relayed through a request file the widget's Lean RPC writes (the infoview's EditorApi has no executeCommand). Will also grow global settings / persistent state for the widget.",
   "publisher": "aidan",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -31,6 +31,11 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Let the proof tree run closer to the bottom edge of the infoview. By default it stops a little short, leaving the next section's heading showing — both a reminder that the column continues below and somewhere to put the pointer, since the tree's own scroll container swallows the wheel. Tick this to give most of that strip back to the tree; what remains below it (the restart-file button included) still takes a scroll."
+        },
+        "proofTree.linkMarks": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Draw the connectors' target-type marks: a small gapped dot near either end of a line that runs into a goal, a gapped dash where it runs into a tactic — so you can tell what a line terminates at before following it. On by default because shape is the one channel that survives without colour. Untick to leave the connectors plain, which is the right call if you read the target's kind off `#proofTree.linkTint#` or the box shapes and find the marks fussy. Turning this off also suppresses `#proofTree.linkEmoji#`, which only changes what the marks are drawn AS."
         },
         "proofTree.linkEmoji": {
           "type": "boolean",

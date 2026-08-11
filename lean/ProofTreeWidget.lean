@@ -638,18 +638,17 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree) with
       | some r => pure r
       | none => pure { steps := [], allGoals := {} })
-    -- Put back the `at …` clause Paperproof's prettifier drops (see
-    -- `collectRwLocations`). FIRST, before anything reads a label: the tokens
+    -- The label fix-ups (the `rw` location clause, a multi-line tactic's
+    -- dropped tail), applied FIRST, before anything reads a label: the tokens
     -- align against it, brief mode collapses it, the completion list is keyed
     -- off it — so it has to be the same string everywhere, and on both wires
-    -- (`Ppharness` does exactly this too). `snap.stx` is the whole command,
-    -- which is what still finds a `rw` inside a tactic that failed to
-    -- elaborate.
-    let rwLocs := collectRwLocations fileMap snap.infoTree (extra := some snap.stx)
+    -- (`labelFixup` is the one place the pass list and its order live).
+    -- `snap.stx` is the whole command, which is what still finds a `rw`
+    -- inside a tactic that failed to elaborate.
+    let fixup := labelFixup fileMap snap.infoTree (extra := some snap.stx)
     let remapped := { parsed with
       steps := parsed.steps.map fun (s : Paperproof.Services.ProofStep) =>
-        { s with tacticString :=
-            withRwLocation rwLocs s.position.start s.tacticString } }
+        { s with tacticString := fixup s.position.start s.tacticString } }
     -- The supplemental parser: synthesize steps for tactics the vendored one
     -- lost to failure (their info subtree was rolled back; the syntax survives
     -- in the slots). Runs BEFORE the empty early-out — a proof whose only
@@ -793,8 +792,7 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         -- not the raw stop: a Paperproof range runs into the following trivia,
         -- so a step at the very end of its tactic (the synthetic `rfl` closing
         -- an `rw`) stops PAST the tactic that owns it and would never widen.
-        let e0t : String.Pos.Raw :=
-          ⟨b0.byteIdx + (trimmedEnd (String.Pos.Raw.extract src b0 e0)).byteIdx⟩
+        let e0t := tightStop src b0 e0
         -- A split step (`rw [a, b]` → one step per rule) edits and colours as
         -- the tactic it came from; everything else is its own range.
         let (b, e, start) : String.Pos.Raw × String.Pos.Raw × Lsp.Position :=
@@ -1238,6 +1236,14 @@ structure ThemeColors where
   /-- `proofTree.linkTint` — additionally tint each connector toward its
   target's hue. Ditto. -/
   linkTint : Bool := false
+  /-- `proofTree.linkMarks` — draw the target-type marks at all. Defaults
+  TRUE, the only setting on this wire that does, and deliberately: the marks
+  are the accessible baseline (the one channel that survives without colour),
+  so this is an opt-OUT for readers who find them distracting and take the
+  target's kind from the tint or the box shape instead. The default also
+  makes the field's absence — an older companion, which never wrote the key —
+  mean exactly what that companion was already drawing. -/
+  linkMarks : Bool := true
   /-- `lean4.input.*` — unicode abbreviations for the in-place tactic editor.
   Settings again, so again the long way round. -/
   input : InputConfig := {}
@@ -1262,6 +1268,7 @@ instance : FromJson ThemeColors where
           tallFrame := jsonField j "tallFrame" false,
           linkEmoji := jsonField j "linkEmoji" false,
           linkTint := jsonField j "linkTint" false,
+          linkMarks := jsonField j "linkMarks" true,
           input := jsonField j "input" {},
           colors := jsonField j "colors" #[] }
 

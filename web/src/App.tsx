@@ -52,6 +52,39 @@ export default function App() {
     // harness covers it too (a `key` remount here would bypass it).
     <ProofTreeView
       proof={proof!}
+      // Dev-only editing stubs, on `?stub-edit`: the widget-only gestures
+      // (in-place editing, the flag verbs, comment editing) are gated on
+      // these hooks, so the preview harness can only drive them with fakes.
+      // Writes land in `window.__edits` for the probe to read — the document
+      // behind the NDJSON never changes, so the tree won't redraw; these
+      // exist to verify ranges and gesture routing, not round trips.
+      {...(new URLSearchParams(location.search).has("stub-edit")
+        ? {
+            // The CLI wire already carries `deleteSlots` (it rides NDJSON so
+            // probes can run the real extent math offline), but the view gates
+            // the flag verbs, `⊘` delete and the arming row on the PROP — so
+            // without this line the harness could never drive any of them,
+            // even with the data sitting in the record. That blind spot is
+            // what let the selection pill paint its chips in the wrong font
+            // unnoticed; passing the wire's own slots closes it.
+            deleteSlots: proof!.deleteSlots,
+            getTacticEdit: (p: {
+              start: { line: number; character: number };
+            }) => ({
+              pos: p as never,
+              text: "«stub tactic»",
+            }),
+            onEditTactic: (
+              pos: unknown,
+              text: string,
+            ) => {
+              const w = window as unknown as {
+                __edits?: { pos: unknown; text: string }[];
+              };
+              w.__edits = [...(w.__edits ?? []), { pos, text }];
+            },
+          }
+        : {})}
       headerExtra={
         <ProofPicker
           records={records}

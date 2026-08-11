@@ -269,6 +269,7 @@ function useThemeTokenColors(
   tallFrame: boolean;
   linkEmoji: boolean;
   linkTint: boolean;
+  linkMarks: boolean;
   abbrev: AbbrevConfig;
 } {
   const [colors, setColors] = useState<Record<string, string>>();
@@ -277,6 +278,9 @@ function useThemeTokenColors(
   const [tallFrame, setTallFrame] = useState(false);
   const [linkEmoji, setLinkEmoji] = useState(false);
   const [linkTint, setLinkTint] = useState(false);
+  // Defaults ON, unlike its two neighbours: absent means an older companion
+  // that never knew the key, and the marks are what it was already drawing.
+  const [linkMarks, setLinkMarks] = useState(true);
   // vscode-lean4's own defaults until told otherwise, so the editor's unicode
   // input works with no companion installed — only a customised leader or a
   // custom translation needs this trip.
@@ -300,6 +304,7 @@ function useThemeTokenColors(
           setTallFrame(!!r.tallFrame);
           setLinkEmoji(!!r.linkEmoji);
           setLinkTint(!!r.linkTint);
+          setLinkMarks(r.linkMarks !== false);
           if (r.input) {
             const next: AbbrevConfig = {
               enabled: r.input.enabled !== false,
@@ -337,7 +342,16 @@ function useThemeTokenColors(
       window.removeEventListener("focus", fetchOnce);
     };
   }, [rs, tick]);
-  return { colors, brackets, outline, tallFrame, linkEmoji, linkTint, abbrev };
+  return {
+    colors,
+    brackets,
+    outline,
+    tallFrame,
+    linkEmoji,
+    linkTint,
+    linkMarks,
+    abbrev,
+  };
 }
 
 /** `ProofTree.themeColors`'s reply (ProofTreeWidget.lean `ThemeColors`). */
@@ -356,6 +370,7 @@ interface ThemeColorsResponse {
   Optional for the same older-companion reason; missing means off. */
   linkEmoji?: boolean;
   linkTint?: boolean;
+  linkMarks?: boolean;
   /** `lean4.input.*` — settings again (ProofTreeWidget.lean `InputConfig`).
   Optional: an older companion's file simply has no such key. */
   input?: {
@@ -433,6 +448,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     tallFrame,
     linkEmoji,
     linkTint,
+    linkMarks,
     abbrev,
   } = useThemeTokenColors(rs, docRev);
 
@@ -1023,6 +1039,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         outline={outlineOnly}
         linkEmoji={linkEmoji}
         linkTint={linkTint}
+        linkMarks={linkMarks}
         abbrev={abbrev}
         onPopoutEdit={popoutEdit}
         highlightPos={{ line: pos.line, character: pos.character }}

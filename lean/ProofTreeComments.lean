@@ -220,6 +220,13 @@ def trimmedEnd (s : String) : String.Pos.Raw := Id.run do
   -- byte-wise can't split a multibyte char).
   return ⟨e⟩
 
+/-- A range's stop tightened past trailing trivia: `trimmedEnd` of the range's
+own slice, re-anchored at its start. Idempotent when there is nothing to trim.
+THE one coding of the "tight stop" idiom — every site that narrows a
+trivia-inflated range goes through it. -/
+def tightStop (src : String) (start stop : String.Pos.Raw) : String.Pos.Raw :=
+  ⟨start.byteIdx + (trimmedEnd (String.Pos.Raw.extract src start stop)).byteIdx⟩
+
 /-- End of the line containing `p` (the newline itself, or end of string). -/
 def lineEnd (src : String) (p : String.Pos.Raw) : String.Pos.Raw := Id.run do
   let mut q := p
@@ -428,6 +435,19 @@ def collectRwLocations (fileMap : FileMap) (tree : Elab.InfoTree)
         { start, stop, text := String.Pos.Raw.extract src lr.start lr.stop }
   return out
 
+/-- The innermost of `items` whose HALF-OPEN `[start, stop)` span contains
+`pos` — latest start wins. The one containment-and-tie rule every label
+fix-up lookup shares (`withRwLocation`, `withTacticTail`). -/
+def innermostContaining (items : Array α)
+    (spanOf : α → Lsp.Position × Lsp.Position) (pos : Lsp.Position) :
+    Option α := Id.run do
+  let mut best : Option α := none
+  for it in items do
+    let (s, e) := spanOf it
+    if posLE s pos && !posLE e pos then
+      if best.all (fun b => posLE (spanOf b).1 s) then best := some it
+  return best
+
 /-- Put the clause back on a step's label.
 
 Applied by BOTH wires to every step before anything downstream sees it, so the
@@ -442,15 +462,33 @@ rewrite RULE's position for a split step and the bare `]` for the synthetic
 `rfl` that closes one, both of which sit inside the tactic — so every node of
 one `rw` picks up the same clause, which is what makes them read as one tactic. -/
 def withRwLocation (locs : Array RwLocation) (start : Lsp.Position)
-    (label : String) : String := Id.run do
-  unless label.startsWith "rw [" do return label
-  let mut best : Option RwLocation := none
-  for l in locs do
-    if posLE l.start start && !posLE l.stop start then
-      if best.all (fun b => posLE b.start l.start) then best := some l
-  match best with
-  | none => return label
-  | some l => return if label.endsWith l.text then label else label ++ " " ++ l.text
+    (label : String) : String :=
+  if !label.startsWith "rw [" then label
+  else match innermostContaining locs (fun l => (l.start, l.stop)) start with
+    | none => label
+    | some l => if label.endsWith l.text then label else label ++ " " ++ l.text
+
+/-- The tactic-sequence kinds every slot walk here descends to. -/
+def tacticSeqKinds : List Name :=
+  [``Lean.Parser.Tactic.tacticSeq1Indented,
+   ``Lean.Parser.Tactic.tacticSeqBracketed]
+
+/-- A tactic sequence's direct children, as syntax — a direct child IS one
+tactic as written. `sepBy1IndentSemicolon` interleaves elements with
+separators, so the elements are the EVEN indices; the bracketed form holds
+its sequence one slot in. THE one coding of that grammar-shape fact (exactly
+what breaks on a toolchain bump), consumed by `tacticSlots` and
+`collectTacticTails` — which must agree on it, or tails silently stop
+landing in their slots. -/
+def seqChildrenStx (seq : Syntax) : Array Syntax := Id.run do
+  let inner :=
+    if seq.getKind == ``Lean.Parser.Tactic.tacticSeqBracketed then seq[1]
+    else seq[0]
+  let args := inner.getArgs
+  let mut out := #[]
+  for i in [0:args.size] do
+    if i % 2 == 0 then out := out.push args[i]!
+  return out
 
 /-- Every tactic-sequence child in the tree, in source order per block.
 
@@ -465,13 +503,14 @@ def tacticSlots (fileMap : FileMap) (tree : Elab.InfoTree)
   let roots := tacticInfoRoots tree extra
   let mut blocks : Array (Lean.Syntax.Range × Array Lean.Syntax.Range) := #[]
   for root in roots do
-    for seq in nodesOfKind
-        [``Lean.Parser.Tactic.tacticSeq1Indented,
-         ``Lean.Parser.Tactic.tacticSeqBracketed] root do
+    for seq in nodesOfKind tacticSeqKinds root do
       let some r := seq.getRange? (canonicalOnly := true) | continue
       if blocks.any fun (br, _) => br.start == r.start && br.stop == r.stop then
         continue
-      let kids := seqChildren seq
+      -- A child with no canonical range (the parser's failed attempt) is
+      -- dropped.
+      let kids := (seqChildrenStx seq).filterMap
+        (·.getRange? (canonicalOnly := true))
       unless kids.isEmpty do
         blocks := blocks.push (r, kids)
   let mut out : Array TacticSlot := #[]
@@ -482,9 +521,7 @@ def tacticSlots (fileMap : FileMap) (tree : Elab.InfoTree)
       -- A canonical range's stop already excludes trailing trivia, but a
       -- structured tactic's does not always — tighten unconditionally, which
       -- is idempotent when there is nothing to trim.
-      let tight : String.Pos.Raw :=
-        ⟨kr.start.byteIdx +
-          (trimmedEnd (String.Pos.Raw.extract src kr.start kr.stop)).byteIdx⟩
+      let tight := tightStop src kr.start kr.stop
       let start := fileMap.utf8PosToLspPos kr.start
       let stop := fileMap.utf8PosToLspPos tight
       let lineBeg := fileMap.lspPosToUtf8Pos ⟨start.line, 0⟩
@@ -504,21 +541,137 @@ def tacticSlots (fileMap : FileMap) (tree : Elab.InfoTree)
           | none => false
       }
   return out
+
+/-- The source lines a MULTI-LINE tactic's label lost, verbatim, with the
+tactic's own slot range.
+
+This exists to undo another loss in the vendored parser: Paperproof's
+`prettifyTacticString` implements "strip the comments and blank lines after
+the tactic" as literally *keep the first line* — so a step's `position` covers
+the whole tactic while its LABEL is cut at the first newline. Single-line
+nested `by` survives (`(by order)`), multi-line does not: in
+
+```
+rcases foo <| by
+  grind
+  with ⟨p, hp, hpdvd⟩
+```
+
+the `with ⟨p, hp, hpdvd⟩` clause appears nowhere in the tree. The nested
+by-body is NOT part of the loss — it owns its own node — so what wants
+restoring is exactly the tail AFTER the last nested tactic block.
+
+`head` is the prettifier's own output for this slot (first line, trimmed) —
+the application guard: only a label that IS that truncation gets the tail, so
+re-synthesized labels (`rw […]`) and split multi-rule steps are never touched. -/
+structure TacticTail where
+  /-- The slot's tight span; a step of it starts inside `[start, stop)`. -/
+  start : Lsp.Position
+  stop  : Lsp.Position
+  /-- What `prettifyTacticString` produces for this slot: first line, trimmed. -/
+  head  : String
+  /-- The lines strictly after the last line any nested tactic block touches,
+  dedented by the slot's start column, joined with `\n`. With no nested block:
+  everything after the first line. -/
+  tail  : String
+  deriving Inhabited
+
+/-- Every multi-line tactic whose label truncation dropped real text.
+
+Same syntax descent as `tacticSlots` (direct children of every tactic
+sequence, over the same roots, deduped by range). The tail rule — lines
+strictly after the last line any NESTED block touches — is what keeps
+existing labels right everywhere the truncation is deliberate or harmless:
+`have … := by / tac / tac` (nested block runs to the slot's end → empty
+tail), `induction … with | zero => …` (the case bodies are the trailing
+blocks → empty tail; markers stay out of the label, the tree draws case
+badges instead). `calc` is excluded by KIND — its first-line label is
+deliberate, the chain's links are drawn by the tree itself. A multi-line
+tactic with NO nested block (`exact ⟨a,` / `b⟩`) restores its whole
+remainder, making label ≡ source. -/
+def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
+    (extra : Option Syntax := none) : Array TacticTail := Id.run do
+  let src := fileMap.source
+  let roots := tacticInfoRoots tree extra
+  let mut seenSeqs : Array Lean.Syntax.Range := #[]
+  let mut out : Array TacticTail := #[]
+  for root in roots do
+    for seq in nodesOfKind tacticSeqKinds root do
+      -- Dedupe by the SEQUENCE's range first (`tacticSlots`' structure):
+      -- `tacticInfoRoots` yields one root per TacticInfo, so each sequence
+      -- is re-discovered once per ancestor tactic, and a per-child dedupe
+      -- would re-scan every duplicate appearance's children.
+      let some sr := seq.getRange? (canonicalOnly := true) | continue
+      if seenSeqs.any (fun r => r.start == sr.start && r.stop == sr.stop) then
+        continue
+      seenSeqs := seenSeqs.push sr
+      for child in seqChildrenStx seq do
+        if child.getKind == ``Lean.calcTactic then continue
+        let some kr := child.getRange? (canonicalOnly := true) | continue
+        let tight := tightStop src kr.start kr.stop
+        let text := String.Pos.Raw.extract src kr.start tight
+        unless text.contains '\n' do continue
+        let start := fileMap.utf8PosToLspPos kr.start
+        let stop := fileMap.utf8PosToLspPos tight
+        -- The last document line any nested block touches (tightened the same
+        -- way, or a block's trailing trivia would swallow a tail line).
+        let mut lastBlockLine := start.line
+        for blk in nodesOfKind tacticSeqKinds child do
+          let some br := blk.getRange? (canonicalOnly := true) | continue
+          let bLine := (fileMap.utf8PosToLspPos (tightStop src br.start br.stop)).line
+          if bLine > lastBlockLine then lastBlockLine := bLine
+        let lines := (text.splitOn "\n").toArray
+        let head := (lines[0]?.getD text).trimAscii.toString
+        let mut tailLines : Array String := #[]
+        for j in [0:lines.size] do
+          if start.line + j > lastBlockLine then
+            tailLines := tailLines.push (dedent start.character lines[j]!)
+        let tail := "\n".intercalate tailLines.toList
+        unless tail.trimAscii.toString.isEmpty do
+          out := out.push { start, stop, head, tail }
+  return out
 where
-  /-- A sequence's direct children. `sepBy1IndentSemicolon` interleaves
-  elements with separators, so the elements are the EVEN indices; a child with
-  no canonical range (the parser's failed attempt) is dropped. -/
-  seqChildren (stx : Syntax) : Array Lean.Syntax.Range := Id.run do
-    let inner :=
-      if stx.getKind == ``Lean.Parser.Tactic.tacticSeqBracketed then stx[1]
-      else stx[0]
-    let args := inner.getArgs
-    let mut out := #[]
-    for i in [0:args.size] do
-      if i % 2 == 0 then
-        if let some r := args[i]!.getRange? (canonicalOnly := true) then
-          out := out.push r
-    return out
+  /-- Drop up to `col` leading spaces, so a tail line's indent reads relative
+  to the tactic rather than to the file's left margin. -/
+  dedent (col : Nat) (l : String) : String := Id.run do
+    let mut drop := 0
+    for c in l.toList do
+      if drop < col && c == ' ' then drop := drop + 1 else break
+    return (l.drop drop).toString
+
+/-- Put a truncated multi-line label's tail back.
+
+Applied by BOTH wires to every step right after `withRwLocation`, before
+anything downstream reads a label. The guard is exact: only a label equal to
+the slot's own first-line truncation (`TacticTail.head`) is extended — which
+excludes re-synthesized `rw` labels, the split steps of a multi-rule `rw`,
+the synthetic closing `rfl`, and anything already complete. Containment is
+HALF-OPEN, innermost slot wins, as everywhere else here. -/
+def withTacticTail (tails : Array TacticTail) (start : Lsp.Position)
+    (label : String) : String :=
+  match innermostContaining tails (fun t => (t.start, t.stop)) start with
+  | none => label
+  | some t =>
+    -- The equality guard alone already guarantees idempotence (an extended
+    -- label no longer equals `head`); the `endsWith` mirrors
+    -- `withRwLocation`'s shape as pure defense, and can only DECLINE the
+    -- pathological coincidence of a first line literally ending with its own
+    -- tail — conservative by choice.
+    if label == t.head && !label.endsWith t.tail then
+      label ++ "\n" ++ t.tail
+    else label
+
+/-- BOTH label fix-up passes, collected and composed in their required order —
+the rw clause first, then the multi-line tail, so each guard sees the label
+state it was written against. The ONE entry the two wires call (`Ppharness`
+and `getProofTree`), which is what keeps the pipeline and its order from
+diverging between them as fix-ups accrete. Returns the applier, so callers
+collect once and map it over every step. -/
+def labelFixup (fileMap : FileMap) (tree : Elab.InfoTree)
+    (extra : Option Syntax := none) : Lsp.Position → String → String :=
+  let rwLocs := collectRwLocations fileMap tree (extra := extra)
+  let tacTails := collectTacticTails fileMap tree (extra := extra)
+  fun start label => withTacticTail tacTails start (withRwLocation rwLocs start label)
 
 /-- A hole the AUTHOR wrote — a `?_` or a named `?foo` — with the goal it
 stands for and enough of what encloses it to edit it in place.

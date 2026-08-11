@@ -26,11 +26,16 @@ Current actions (the request file carries an `action` field):
   vim/LSP/keybindings apply and edits sync with zero re-elaboration; the
   lens is reused by subsequent popouts while it stays open. While a lens is
   open, chrome is stripped globally (no per-window settings API exists) to
-  maximize the infoview column: tab rows, breadcrumbs, glyph margin, folding
-  controls, minimap, sticky scroll, and a reduced `editor.fontSize` (scaled
-  from the user's own, so it suits any starting size) — all restored when the
-  lens closes, with a PID-stamped
-  on-disk snapshot for crash recovery. An existing lens is re-found down a
+  maximize the infoview column: tab rows, breadcrumbs, glyph margin, minimap
+  and sticky scroll — all restored when the lens closes, with a PID-stamped
+  on-disk snapshot for crash recovery. Two things are deliberately **not** in
+  that set any more: `editor.fontSize`, because a global setting resized every
+  editor in the window to buy the lens four lines, and `editor.folding`, which
+  is what buys the room instead — `proofTree.lensFold` collapses everything but
+  the tactic under the cursor, and disabling folding globally made those
+  commands silent no-ops. Restore iterates the *snapshot's* keys rather than
+  the current strip list, so a backup written by an older version still puts
+  back what that version took. An existing lens is re-found down a
   ladder (remembered column → our `lineNumbers: Off` tag → a second group
   already showing the doc), so a window reload or a viewColumn renumber
   can't strand one and split a second underneath it. Also reachable as a
@@ -44,6 +49,31 @@ Current actions (the request file carries an `action` field):
   visible editor for the document, without moving the cursor or stealing
   focus the way a reveal would. The only chatty traffic on the relay, so it
   is the one thing the log skips.
+
+- **Preview / preview-clear** (`action: "preview"` / `"preview-clear"` — the
+  first click on a node's `⊘`): light the exact extent a delete would remove,
+  so the second click confirms something you have seen. Its own action rather
+  than a reuse of `highlight`, whose range is clamped to one line.
+
+- **Annotate** (`action: "annotate"`, sent with a lens): draw each tactic's
+  resulting goal at the end of its last line as an inline decoration —
+  Alectryon-style, costing no lines. Lens only; the main editor has the
+  infoview. Dropped on the first document change and re-sent by the widget.
+
+- **Undo / redo** (`action: "undo"` / `"redo"` — the rail's `↶` `↷`): the
+  widget's own edits leave focus in the webview, where the editor's ⌘Z reaches
+  nothing. These are focus-dependent workbench commands with no
+  document-targeted API, so the companion resolves the editor for the URI
+  (the lens if one is open), focuses it, and executes — after which further
+  undos are native, which is the better end state anyway.
+
+The relay also has one **return** path: the companion resolves the active
+colour theme (following the theme JSON's `include` chain) plus a handful of VS
+Code settings the webview cannot read, and writes them to
+`~/.proof-tree-companion/theme-colors.json`, which the widget reads back over
+its own `ProofTree.themeColors` RPC. That is how tactic labels are coloured in
+the user's real theme: a webview has no access to TextMate token colours, and
+no CSS variable carries them.
 
 Only the window that owns the request reacts — it must have the document's
 workspace folder OR have the document open (a file outside any workspace
@@ -63,7 +93,7 @@ never-arrived from arrived-and-skipped from arrived-and-threw.
 No build step (plain CommonJS). Symlink into the extensions dir and reload:
 
 ```bash
-ln -s "$(pwd)/ext/proof-tree-companion" ~/.vscode/extensions/aidan.proof-tree-companion-0.0.2
+ln -s "$(pwd)/ext/proof-tree-companion" ~/.vscode/extensions/aidan.proof-tree-companion-0.0.3
 ```
 
 Uninstall by removing the symlink. After changing `package.json` (e.g.
@@ -72,14 +102,42 @@ rescan; `extension.js` changes need only a window reload.
 
 ## Settings
 
-- `proofTree.lensFontScale` (default `0.85`) — scales `editor.fontSize` while
-  the lens is open. Unavoidably global: VS Code has no per-editor font API, so
-  the main editor shrinks too. Set to `1` to leave your font untouched (the
-  key is then never written at all); height and sticky-scroll removal still
-  apply.
+The lens's own, acted on by this extension:
+
 - `proofTree.lensShrinkNudges` (default `3`) — how far to shrink the lens below
   the 50% split it opens at. The split is ~8-9 nudges tall, so **lower is
   taller**; `0` keeps it at half the column.
+- `proofTree.lensFold` (default `true`) — fold everything but the tactic under
+  the cursor when the lens opens, so a short pane still shows its context.
+- `proofTree.lensWordWrap` (default `true`) — turn on word wrap in the lens.
+  A per-editor *session* toggle, unlike the setting, so it affects nothing
+  else; an editor already wrapping is left alone.
+- `proofTree.lensGoals` (default `true`) — the inline goal annotations
+  described above.
+
+Settings the extension only *relays* — it writes them into
+`theme-colors.json` for the widget, which is the sole channel a webview has for
+reading a VS Code setting:
+
+- `proofTree.outlineOnly` (default `false`) — draw node boxes as outlines, no
+  fill.
+- `proofTree.tallFrame` (default `false`) — let the tree take 95% of the
+  infoview column rather than 90%. Deliberately not 100%: the tree's own scroll
+  container swallows the wheel, so the page needs a strip of itself to scroll
+  from.
+- `proofTree.linkMarks` (default `true`) — the small marks on each connector
+  saying whether it lands on a goal or a tactic. The accessible baseline (it
+  survives without colour), hence the only one of the three defaulting on.
+- `proofTree.linkEmoji` (default `false`) — draw those marks as 🎯/⚙️ instead.
+- `proofTree.linkTint` (default `false`) — tint each edge toward its target's
+  hue.
+
+`proofTree.lensFontScale` is **gone**: it scaled a user-global
+`editor.fontSize`, so it shrank every editor in the window (see above).
+
+The configuration listener watches every one of these keys as well as the
+colour theme — a key left out of it is a setting that would only take effect at
+the next theme change.
 
 Changing `package.json` needs a full VS Code restart (manifest rescan);
 `extension.js` changes need only a window reload.

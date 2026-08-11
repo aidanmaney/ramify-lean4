@@ -6,9 +6,14 @@ The tree draws the tactic script's effect on goals — `goalBefore ──(tactic
 goalsAfter` — so case splits, side conditions, `calc` chains and nested `have`
 blocks fall out of that relation rather than being drawn specially. It is also
 an **editing surface**: type a tactic into a node, add one to an unsolved goal,
-stub a branch with `sorry`, open or grow a `calc` chain, delete a step, undo.
-Every edit goes through the editor's own pipeline, so the buffer and the undo
-stack stay authoritative.
+stub a branch with `sorry`, open or grow a `calc` chain, delete a step, edit the
+comment above a tactic, write or remove Alectryon-style `.fold` / `.none`
+directives, undo. Every edit goes through the editor's own pipeline, so the
+buffer and the undo stack stay authoritative.
+
+Reading the tree is a second, separate vocabulary — four layout modes, elision,
+context breadth, brief labels, narration from the proof's own comments — all on
+one floating rail, none of it touching the file.
 
 - **Using it in your own project?** See [INSTALL.md](INSTALL.md).
 - **Working on it?** [OVERVIEW.md](OVERVIEW.md) is the architectural tour;

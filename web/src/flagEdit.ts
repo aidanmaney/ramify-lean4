@@ -20,7 +20,6 @@
 // tactic of a block is the container, not the tactic.
 
 import type { SourceComment, TacticSlot } from "./paperproof";
-import { FLAG_RE } from "./proofToTree";
 import type { TreeNode } from "./types";
 
 /** One document patch: replace `[start, stop)` with `text`. `start === stop`
@@ -157,47 +156,66 @@ export function usedHypNames(goal: TreeNode): string[] {
     .filter((n) => n && n !== "⊢" && !n.includes("✝"));
 }
 
-/** Split a raw comment (delimiters included) into its delimiter prefix, the
-directive words parseFlags would consume, and the rest. Mirrors parseFlags'
-scan — first line only, stop at the first non-flag word — via the same
-exported FLAG_RE. */
-function splitDirectives(
-  raw: string,
-): { prefix: string; flagsEnd: number } | null {
-  // Delimiter + following whitespace. `/--` is a docstring — never a flag
-  // carrier worth editing.
-  const m = /^(--\s*|\/-[-!]?\s*)/.exec(raw);
-  if (!m) return null;
-  const prefix = m[1];
-  const head = raw.slice(prefix.length).split("\n")[0];
-  let consumed = 0;
-  let sawFlag = false;
-  const re = /\S+\s*/g;
-  for (let w = re.exec(head); w; w = re.exec(head)) {
-    if (!FLAG_RE.test(w[0].trim())) break;
-    sawFlag = true;
-    consumed = re.lastIndex;
-  }
-  return sawFlag ? { prefix, flagsEnd: prefix.length + consumed } : null;
+/** The whole-line deletion patch for a comment, or the comment's own range
+when the line cannot be proven comment-only. Two tests, both lexical facts the
+wire can answer, and only their CONJUNCTION is safe:
+
+- **No slot STARTS or STOPS on any of the comment's lines.** A slot start is a
+  `·` bullet or code opening on the line (`· -- .fold`); a slot stop is code
+  ending there (`simp -- .fold`, a trailing comment — slot stops are TIGHT).
+  Mere CONTAINMENT does not veto: a bullet's or `induction … with`'s slot
+  spans every interior line, comment-only ones included, and testing spans
+  vetoed nearly every own-line flag in the corpus (measured: 9 of 11).
+- **The comment sits at the COLUMN of the next slot below it** — exactly the
+  shape `flagLine` writes (own line, the governed tactic's indent), so removal
+  accepts what the writer produces. This is what protects a `| zero => -- x`
+  case-marker line: no slot starts or stops there (the marker is interior to
+  the `induction` slot), but the trailing comment's column is nowhere near the
+  case body's, so it keeps only its own range and the marker survives.
+
+Covers multi-line block comments (`stop.line > start.line`). Shared by the
+`unflag` verb and the comment editor's empty commit. */
+export function removeCommentPatch(
+  c: { start: Pos; stop: Pos },
+  slots: TacticSlot[],
+): DocPatch {
+  let endpointOnLines = false;
+  for (const s of slots)
+    for (let l = c.start.line; l <= c.stop.line; l++)
+      if (s.start.line === l || s.stop.line === l) endpointOnLines = true;
+  let next: TacticSlot | null = null;
+  for (const s of slots)
+    if (cmp(c.stop, s.start) <= 0 && (!next || cmp(s.start, next.start) < 0))
+      next = s;
+  const atSlotColumn = !!next && next.start.character === c.start.character;
+  return endpointOnLines || !atSlotColumn
+    ? { start: c.start, stop: c.stop, text: "" }
+    : {
+        start: { line: c.start.line, character: 0 },
+        stop: { line: c.stop.line + 1, character: 0 },
+        text: "",
+      };
 }
 
 /** Removal patches for every directive comment a node carries.
 
-Two shapes per comment, decided by what parseFlags leaves behind:
-- flags-only → the whole comment goes. When its LINE holds nothing else (no
-  slot's range touches that line — a lexical test the wire can answer), the
-  patch takes the entire line including its newline; otherwise just the
-  comment's own range (a trailing `-- .fold` after code leaves the code).
-- flags + prose → only the directive words go; the prose stays and becomes an
-  ordinary comment strip.
+The comment's WHOLE LINE goes, prose included — `unflag` means "this comment
+is done", not "keep the sentence but forget it was a directive" (the old
+behaviour, which left `-- why` residue behind and was reversed by user
+directive). The only narrowing is `removeCommentPatch`'s slot-line veto: a
+comment sharing a line with code loses only its own range.
 
-Patches come back bottom-up, ready to apply sequentially. */
+Patches come back bottom-up and deduped by start line — two selected nodes
+whose flag comments share a line must not both emit a whole-line patch
+(`applyPatches` applies each against the original document; the duplicate's
+coordinates would be stale). */
 export function removeFlagPatches(
   node: TreeNode,
   comments: SourceComment[],
   slots: TacticSlot[],
 ): DocPatch[] {
   const out: DocPatch[] = [];
+  const seen = new Set<number>();
   for (const range of node.flagRanges ?? []) {
     const c = comments.find(
       (x) =>
@@ -205,43 +223,9 @@ export function removeFlagPatches(
         x.start.character === range.start.character,
     );
     if (!c) continue;
-    const split = splitDirectives(c.text);
-    if (!split) continue;
-    // Anything after the directive words on the first line, or any later
-    // line, is prose to keep.
-    const rest = c.text.slice(split.flagsEnd);
-    if (rest.trim() !== "" && !/^-\/\s*$/.test(rest.trim())) {
-      // Strip just the flag words: keep the delimiter, drop through to the
-      // prose. (Block comments keep their closing `-/` because it lives in
-      // `rest`.)
-      out.push({
-        start: {
-          line: c.start.line,
-          character: c.start.character + split.prefix.length,
-        },
-        stop: {
-          line: c.start.line,
-          character: c.start.character + split.flagsEnd,
-        },
-        text: "",
-      });
-    } else {
-      // Flags-only: the comment goes. Whole line iff no tactic shares it.
-      const lines = new Set<number>();
-      for (const s of slots)
-        for (let l = s.start.line; l <= s.stop.line; l++) lines.add(l);
-      const alone =
-        c.start.line === c.stop.line && !lines.has(c.start.line);
-      out.push(
-        alone
-          ? {
-              start: { line: c.start.line, character: 0 },
-              stop: { line: c.start.line + 1, character: 0 },
-              text: "",
-            }
-          : { start: c.start, stop: c.stop, text: "" },
-      );
-    }
+    if (seen.has(c.start.line)) continue;
+    seen.add(c.start.line);
+    out.push(removeCommentPatch(c, slots));
   }
   return out.sort((a, b) => cmp(b.start, a.start));
 }

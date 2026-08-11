@@ -8,6 +8,7 @@ import type {
   TreeNode,
   WrappedLine,
 } from "./types";
+import type { ProofStepPosition } from "./paperproof";
 
 // Links carry no data of their own: a goal's context now lives inside the goal
 // node's own box, not on the edge below it.
@@ -164,6 +165,10 @@ export const HYP_SEP_H = 7;
 // indent; connectors are orthogonal │└▶ elbows dropped from a column just
 // inside the parent box's left edge.
 export const TRUNK_INDENT = 56; // horizontal shift of a branched-off subtree
+// Cap, in character cells, on the EXTRA indent a spawned (nested-by) branch
+// gets past TRUNK_INDENT — the extra itself is source-column-derived (see the
+// spawnExtra computation in trunkLayout).
+const SPAWN_INDENT_MAX = 4;
 export const TRUNK_INSET = 16; // connector column, from a box's left edge
 // The SPINE variant (the ⊦ layout): TWO side-by-side tracks — goals stack
 // down the left track, and each TACTIC box stands in its own track to the
@@ -199,6 +204,34 @@ function floatsComment(
   return (
     !!aside && d.type === "tactic" && d.parents.length > 0 && d.commentBlockH > 0
   );
+}
+
+/** Height of the band ABOVE the box: case badge plus comment strip — unless
+the strip FLOATS (aside modes, `commentFloats`), when it lives outside the
+band and contributes nothing. THE one coding of this sum: every boxTop/band
+computation (nodeSpan, linkSpans, and all the render sites in ProofTreeView)
+must read it — an inline copy that forgets `commentFloats` hangs its ink
+half a strip off on every annotated aside tactic (the armed-delete confirm
+chip did exactly that). */
+export function bandTopH(d: LayoutNode): number {
+  return d.caseH + (d.commentFloats ? 0 : d.commentBlockH);
+}
+
+/** How far a node's INK reaches above and below its placed `y`, which is the
+band's centre — the sibling of `bandTopH` for everything that asks "is this
+node on screen" rather than "where does its box go".
+
+It is ASYMMETRIC exactly when the strip floats: a floated strip hangs entirely
+ABOVE the band (`up` gains all of `commentBlockH`), where the band arithmetic
+that `y` comes from has already dropped it. The scroll sites used to hand-roll
+`(h + commentBlockH) / 2` for both halves, which is wrong three ways at once —
+it omits `caseH`, it credits a floated strip's height to the BOTTOM where none
+of it is drawn, and it under-counts the top by the same amount. For a
+non-floating node `up === down` and the midpoint is `y`, so routing the old
+call sites through this changes nothing there; only floated ones move. */
+export function inkExtent(d: LayoutNode): { up: number; down: number } {
+  const half = (bandTopH(d) + d.h) / 2;
+  return { up: half + (d.commentFloats ? d.commentBlockH : 0), down: half };
 }
 // The frontier-chip lane (`+`/`sorry`/`calc`/`step`, and the relation picker)
 // hangs BELOW a node's box, outside its band — so unlike the comment strip and
@@ -253,6 +286,10 @@ function trunkLayout(
   // columns — it relies on the caller capping goal widths (the view forces
   // reflow's budget), since the column sits past the widest goal box.
   aside: boolean | "track" = false,
+  // Minimum source column of any tactic in a node's subtree (Infinity when
+  // none) — see the COL map in createLayoutEngine. Drives the spawned-branch
+  // extra indent below; the default keeps direct callers (tests) unchanged.
+  srcCol: (id: string) => number = () => Infinity,
 ): {
   nodes: PlacedNode[];
   links: PlacedLink[];
@@ -302,7 +339,7 @@ function trunkLayout(
   const nodeSpan = (pn: PlacedNode): Span => {
     const d = pn.data;
     const floats = !!d.commentFloats;
-    const band = d.caseH + (floats ? 0 : d.commentBlockH) + d.h;
+    const band = bandTopH(d) + d.h;
     const left = pn.x - d.w / 2;
     // A floated strip hangs ABOVE the band (beside the consumed goal), so the
     // span still covers its ink — without this, contour packing and the aside
@@ -322,13 +359,11 @@ function trunkLayout(
   function linkSpans(l: PlacedLink): Span[] {
     const sd = l.source.data;
     const td = l.target.data;
-    // Floated strips are outside the band, so their height must not enter the
-    // band arithmetic here either (the renderer's link mirror does the same).
-    const sCB = sd.commentFloats ? 0 : sd.commentBlockH;
-    const tCB = td.commentFloats ? 0 : td.commentBlockH;
-    const startY = l.source.y + (sd.h + sCB + sd.caseH) / 2;
-    const bandTop = l.target.y - (td.h + tCB + td.caseH) / 2;
-    const contentTop = bandTop + td.caseH + tCB;
+    // bandTopH keeps floated strips out of the band arithmetic here too (the
+    // renderer's link mirror does the same).
+    const startY = l.source.y + (sd.h + bandTopH(sd)) / 2;
+    const bandTop = l.target.y - (td.h + bandTopH(td)) / 2;
+    const contentTop = bandTop + bandTopH(td);
     const sLeft = l.source.x - sd.w / 2;
     const tLeft = l.target.x - td.w / 2;
     const col = sLeft + TRUNK_INSET;
@@ -348,7 +383,7 @@ function trunkLayout(
     // left edge (the ordinary rule below) would run it through the goal
     // boxes stacked left of the track.
     if (l.lane !== undefined) {
-      const srcBoxMid = l.source.y + (sd.caseH + sCB) / 2;
+      const srcBoxMid = l.source.y + bandTopH(sd) / 2;
       if (Math.abs(tLeft - (l.lane - TRUNK_INSET)) < 0.5)
         return [
           { y0: srcBoxMid, y1: contentTop - ARROW_GAP, lo: l.lane, hi: l.lane },
@@ -530,6 +565,19 @@ function trunkLayout(
     const stubY = y0 + n.caseH + cB + n.h / 2;
     const boxBottom = y0 + band + n.chipH;
     const mark = nodes.length;
+    // Claim the track BEFORE recursing. Every later tactic on this trunk is a
+    // DESCENDANT — placed inside the loop below — so a floor published after
+    // it (as this once was) is a floor nobody who needs it ever reads: down a
+    // linear spine it stayed -Infinity and the y-exclusivity the whole aside
+    // geometry assumes silently did not hold. It bit hardest with a FLOATED
+    // strip, whose ink starts commentBlockH ABOVE a y0 that sits only
+    // ASIDE_DROP + ASIDE_CLEAR + half a goal band below the previous tactic:
+    // a three-line comment then drew straight through the box above it.
+    // `boxBottom` is pure y arithmetic, already final here — the aside slide
+    // below only ever moves x — so publishing it early is exact, not an
+    // estimate. Monotone `max` for the same reason: a subtree placed lower
+    // must not be un-floored when its ancestor finishes.
+    if (isAside) trackFloor = Math.max(trackFloor, boxBottom + ASIDE_DROP);
     if (isAside) bottom = stubY + ASIDE_CLEAR;
     for (const c of order) {
       // A SPLIT keeps TRUNK_GAP_BRANCH between its branches even in spine
@@ -544,7 +592,27 @@ function trunkLayout(
             ? ASIDE_DROP
             : TRUNK_GAP_STEP
           : TRUNK_GAP_BRANCH;
-      const r = place(c, c === trunk ? x0 : x0 + TRUNK_INDENT, bottom + gap);
+      // A SPAWNED child is a nested by-block (`have … := by`'s side proof, a
+      // tactic-valued argument's body): indent it a little past a plain
+      // branch, echoing the source's own nesting. Column-DERIVED, not a
+      // constant — the extra is how far the block's first tactic sits past
+      // its parent tactic in the source, in character cells, capped so a
+      // deeply-hung `(by order)` can't walk its branch off-page. Stacked only:
+      // the aside slide overwrites branch x anyway, and side-by-side packs
+      // columns on contours.
+      const spawnCol = c.spawned ? srcCol(c.id) : Infinity;
+      const spawnExtra =
+        !aside && !sideBySide && Number.isFinite(spawnCol) && n.position
+          ? Math.min(
+              SPAWN_INDENT_MAX,
+              Math.max(0, spawnCol - n.position.start.character),
+            ) * CHAR_W
+          : 0;
+      const r = place(
+        c,
+        c === trunk ? x0 : x0 + TRUNK_INDENT + spawnExtra,
+        bottom + gap,
+      );
       // An aside tactic's outgoing links carry the trunk lane (the goal
       // column's, x0 + TRUNK_INSET) — its own left edge is in the right-hand
       // track and useless as a lane origin. See PlacedLink.lane.
@@ -587,7 +655,9 @@ function trunkLayout(
       pn.x = clearX + n.w / 2;
       right = Math.max(right, clearX + eff);
       bottom = Math.max(bottom, boxBottom);
-      trackFloor = boxBottom + ASIDE_DROP;
+      // Already published above, before the recursion; keep the max so a
+      // descendant's lower claim survives this node finishing.
+      trackFloor = Math.max(trackFloor, boxBottom + ASIDE_DROP);
     }
     return { pn, bottom, right };
   }
@@ -615,7 +685,14 @@ function trunkLayout(
           trackX,
           pn.x - pn.data.w / 2 + effOf(pn.data) + ASIDE_TRACK_GAP,
         );
-    for (const pn of nodes) if (isTrack(pn)) pn.x = trackX + pn.data.w / 2;
+    // MAX, never a plain assignment: a tactic's own slide may already have
+    // pushed it past `trackX` to clear something the goal-only maximum cannot
+    // see (a nested aside tactic in its own subtree). Overwriting that pulled
+    // it back LEFT, onto the very node it had just cleared. Aligning to "at
+    // least the column" keeps the two tracks reading as columns in every
+    // ordinary case and still lets a crowded tactic stand out to its right.
+    for (const pn of nodes)
+      if (isTrack(pn)) pn.x = Math.max(pn.x, trackX + pn.data.w / 2);
   }
   // Width is computed AFTER placement, not tracked during it: contour packing
   // shifts whole columns left after their nodes were pushed, so a running
@@ -1104,6 +1181,17 @@ export interface LayoutEngineOptions {
    * the VIEW's business (a paint-only peek overlay) precisely so pointing at
    * a chip never relayouts — the no-relayout-on-hover rule. */
   overview?: { keep: ReadonlySet<string> };
+  /** Comment strips: drawn (`true`, default), not drawn (`false` — GEOMETRY,
+   * not paint: the strip is part of a node's band, so hiding it has to
+   * un-reserve the room too or the tree keeps a ragged column of holes), or
+   * `"instead"` — narration mode: a commented TACTIC's prose stands in for its
+   * label inside the box (see LayoutNode.proseLabel) and the strip is zeroed;
+   * uncommented tactics, goals and markers keep their labels, so the tree
+   * stays readable as a tree and the prose reads as what the steps say. */
+  comments?: boolean | "instead";
+  /** Ids whose strip is hidden individually (the selection pill's verb), on
+   * top of whatever `comments` says globally. Same seam, same reason. */
+  commentsHidden?: ReadonlySet<string>;
 }
 
 // Overview chip geometry. Text stays at NODE_FONT_PX — a smaller font would
@@ -1131,9 +1219,40 @@ function miniSize(
   };
 }
 
+// Narration mode: the comment prose measured AS the label, italic at the
+// label's own font and budget. A sibling of `sizeOf` rather than a flag on it
+// because the two differ in every dimension that matters: italic (glyphs are
+// wider — the measurement must match the paint, the recorded trap), `"none"`
+// indent (prose has no bracket structure to hang under), and no hyp handling
+// (only tactic boxes take a prose label, and they carry no context block).
+function proseLabelSize(
+  text: string,
+  reflow: ReflowMode = "off",
+): Pick<LayoutNode, "lines" | "w" | "h" | "hypH" | "hyps"> {
+  const budget = budgetFor(reflow);
+  const lines = wrapText(text, budget, NODE_FONT_PX, true, "none", reflow !== "off");
+  const widest = Math.max(
+    ...lines.map((l) => l.indent + measureText(l.text, NODE_FONT_PX, true)),
+  );
+  const cap = reflow !== "off" ? budget + 2 * NODE_PAD : MAX_W;
+  return {
+    lines,
+    hyps: [],
+    w: Math.max(MIN_W, Math.min(cap, widest + 2 * NODE_PAD)),
+    h: lines.length * LINE_H + 2 * NODE_PAD_Y,
+    hypH: 0,
+  };
+}
+
 export function createLayoutEngine(
   data: TreeNode[],
-  { reflow = "off", chips = false, overview }: LayoutEngineOptions = {},
+  {
+    reflow = "off",
+    chips = false,
+    overview,
+    comments = true,
+    commentsHidden,
+  }: LayoutEngineOptions = {},
 ) {
   // Stable left-to-right order key for the wide layout, assigned below once
   // `SRC` exists so that siblings there read in SOURCE order too — the wide
@@ -1155,37 +1274,69 @@ export function createLayoutEngine(
       (CHILDREN.get(p.id) ?? CHILDREN.set(p.id, []).get(p.id)!).push(n.id);
   const NODE = new Map(data.map((n): [string, TreeNode] => [n.id, n]));
 
-  // Earliest source position anywhere in a node's SUBTREE, as one sortable
-  // number — what the compact layout orders branches by.
-  //
-  // It has to be the subtree's minimum, not the node's own position: a goal
-  // node carries the position of the step that PRODUCED it (proofToTree
-  // `producingPosition`), so every child of one tactic reports the same
-  // position and sorting on that would be a no-op. The first tactic reachable
-  // inside a branch is the thing that actually says where the branch lives.
-  // Computed over the full `data`, so folding never reorders anything.
-  const SRC = new Map<string, number>();
-  {
-    const own = (n: TreeNode) =>
-      n.type === "tactic" && n.position
-        ? n.position.start.line * 1e4 + n.position.start.character
-        : Infinity;
+  // Minimum of `own` over each node's whole SUBTREE (Infinity when no tactic
+  // carries a value). Memoized DFS with a cycle guard — shared children make
+  // the tree a DAG. Both consumers below need the SUBTREE's minimum, not the
+  // node's own position: a goal node carries the position of the step that
+  // PRODUCED it (proofToTree `producingPosition`), so every child of one
+  // tactic reports the same position, and the first tactic reachable inside a
+  // branch is the thing that actually says where the branch lives.
+  const subtreeMin = (own: (n: TreeNode) => number): Map<string, number> => {
+    const memo = new Map<string, number>();
     const visiting = new Set<string>();
-    const rank = (id: string): number => {
-      const memo = SRC.get(id);
-      if (memo !== undefined) return memo;
-      if (visiting.has(id)) return Infinity; // guard: shared children make a DAG
+    const walk = (id: string): number => {
+      const m = memo.get(id);
+      if (m !== undefined) return m;
+      if (visiting.has(id)) return Infinity;
       visiting.add(id);
       const n = NODE.get(id);
       let r = n ? own(n) : Infinity;
-      for (const c of CHILDREN.get(id) ?? []) r = Math.min(r, rank(c));
+      for (const c of CHILDREN.get(id) ?? []) r = Math.min(r, walk(c));
       visiting.delete(id);
-      SRC.set(id, r);
+      memo.set(id, r);
       return r;
     };
-    for (const n of data) rank(n.id);
-  }
+    for (const n of data) walk(n.id);
+    return memo;
+  };
+
+  // A tactic node's OWN source positions, in the one place both rankings read
+  // them. An ELIDE MARKER has no `position` of its own — deliberately, so
+  // layoutKey's tactic↔marker pair can never form (see layoutKey.ts) — but it
+  // STANDS IN for the tactics it swallowed and must rank exactly where they
+  // did. Without this its branch's subtree-min falls to Infinity and the
+  // branch changes places with its siblings: eliding the FIRST of two sibling
+  // branches sent it to the BOTTOM of the tree, and the reader's answer to
+  // "which branch is this" silently moved. `parts` is on every marker (ghost,
+  // path, band and combined alike), so one rule covers every cut.
+  const ownPositions = (n: TreeNode): ProofStepPosition[] =>
+    n.type !== "tactic"
+      ? []
+      : n.position
+        ? [n.position]
+        : (n.elidedCut?.parts ?? []).flatMap((p) =>
+            p.position ? [p.position] : [],
+          );
+  const ownMin = (n: TreeNode, of: (p: ProofStepPosition) => number): number => {
+    let r = Infinity;
+    for (const p of ownPositions(n)) r = Math.min(r, of(p));
+    return r;
+  };
+
+  // Earliest source position anywhere in a node's subtree, as one sortable
+  // number — what the compact layout orders branches by. Computed over the
+  // full `data`, so folding never reorders anything.
+  const SRC = subtreeMin((n) =>
+    ownMin(n, (p) => p.start.line * 1e4 + p.start.character),
+  );
   const srcRank = (id: string) => SRC.get(id) ?? Infinity;
+
+  // Minimum source COLUMN of any tactic in a node's subtree — what gives a
+  // SPAWNED branch (a nested by-block) its extra indent in the stacked layout
+  // (the real column, `grind`'s inside `rcases … <| by`, lives on the
+  // grandchild tactic).
+  const COL = subtreeMin((n) => ownMin(n, (p) => p.start.character));
+  const srcCol = (id: string) => COL.get(id) ?? Infinity;
   // Creation order (a DFS preorder of the full tree) breaks ties, so nodes
   // whose subtrees hold no tactic keep a deterministic place.
   data
@@ -1201,6 +1352,9 @@ export function createLayoutEngine(
   // label never changes for the lifetime of an engine, so measure once here —
   // computeLayout runs on every fold toggle, and re-wrapping every visible
   // label there is pure waste.
+  // Narration mode's bullet test needs a node's consumed goal; ids only, so a
+  // plain map over the same array the SIZE pass walks.
+  const BY_ID = new Map(data.map((n) => [n.id, n]));
   const SIZE = new Map(
     data.map(
       (
@@ -1210,7 +1364,7 @@ export function createLayoutEngine(
         ReturnType<typeof sizeOf> &
           ReturnType<typeof commentSize> &
           ReturnType<typeof caseSize> &
-          Pick<LayoutNode, "chipH" | "mini">,
+          Pick<LayoutNode, "chipH" | "mini" | "proseLabel">,
       ] => {
         // Overview: a node outside the keep set is a mini chip. Its comment
         // strip and chip lane go with the context block — the mode shows
@@ -1231,11 +1385,59 @@ export function createLayoutEngine(
               mini: true,
             },
           ];
+        // Hidden strips zero out at the ONE measurement seam, so every
+        // downstream reader is right for free: `floatsComment` requires
+        // commentBlockH > 0, so the aside float never gets stamped; the band
+        // arithmetic, nodeSpan, linkSpans and the renderer all see a node
+        // that simply has no comment. Same trick the overview branch uses.
+        const hideComment =
+          !comments || (commentsHidden?.has(n.id) ?? false);
+        // Narration: a commented TACTIC's prose becomes its label; the strip
+        // is zeroed (the prose moved, it didn't double). Only as-written
+        // tactics — markers/synthetic/recovered nodes stand for no single
+        // step, and goals keep their statements (the prose narrates the
+        // MOVES; the goals are what the moves are about). A locally-hidden
+        // node (`commentsHidden`, the pill's ¬note) falls back to its label —
+        // "this node's prose is off" means off in this mode too. A `· ` bullet
+        // prefixes the prose when the consumed goal is SPAWNED (a nested
+        // by-block): the box sits indented under the tactic that opened the
+        // block, and the bullet says "this narrates a step INSIDE it", the
+        // source's own marker for that nesting. NOT when that goal carries a
+        // case BADGE (induction branches arrive spawned too, via delayed
+        // assignment) — the badge already names the nesting, and a bullet on
+        // top double-marks it. Prefixed before measuring, so it is part of
+        // the wrapped first line, never an overlay.
+        if (
+          comments === "instead" &&
+          n.type === "tactic" &&
+          n.comment &&
+          !n.elidedCut &&
+          !n.synthetic &&
+          !n.recovered &&
+          !(commentsHidden?.has(n.id) ?? false)
+        ) {
+          const consumed = BY_ID.get(n.parents[0]?.id ?? "");
+          const spawnedBlock = !!consumed?.spawned && !consumed?.caseLabel;
+          const prose = (spawnedBlock ? "· " : "") + n.comment;
+          return [
+            n.id,
+            {
+              ...proseLabelSize(prose, reflow),
+              ...commentSize(undefined, reflow),
+              ...caseSize(n.caseLabel),
+              chipH:
+                chips && (n.addSpec || n.addLink)
+                  ? CHIP_TOP_GAP + CHIP_LANE_H
+                  : 0,
+              proseLabel: true,
+            },
+          ];
+        }
         return [
           n.id,
           {
             ...sizeOf(n.label, n.hyps, reflow),
-            ...commentSize(n.comment, reflow),
+            ...commentSize(hideComment ? undefined : n.comment, reflow),
             ...caseSize(n.caseLabel),
             chipH:
               chips && (n.addSpec || n.addLink)
@@ -1399,7 +1601,8 @@ export function createLayoutEngine(
         ...SIZE.get(n.id)!,
       }));
 
-    if (compact) return trunkLayout(visible, srcRank, sideBySide, aside);
+    if (compact)
+      return trunkLayout(visible, srcRank, sideBySide, aside, srcCol);
 
     const graph = graphStratify().parentData((d: LayoutNode) =>
       d.parents.map((p): [string, LinkDatum] => [p.id, undefined]),

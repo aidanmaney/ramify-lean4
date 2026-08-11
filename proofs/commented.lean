@@ -44,3 +44,23 @@ theorem rw_leading (a b : ℕ) (hab : a = b) (h : b + 0 = 2) : a = 2 := by
   rw [hb] at h
   -- One slot, three nodes: this lands on the first rule's node.
   rw [hab, h]
+
+/-!
+## Narration inside a nested `by` block
+
+For the ⌥-`--` narration mode: a commented tactic whose consumed goal is
+SPAWNED (a `have … := by`'s side proof) takes a `· ` bullet before its prose —
+the box already sits indented under the tactic that opened the block, and the
+bullet marks "this narrates a step INSIDE it". A commented tactic consuming a
+CASE goal takes no bullet (the case badge already names that nesting; see
+layout.ts's prose branch).
+-/
+
+/-- One nested block, narrated inside and out. -/
+theorem nested_narration (n : ℕ) : 0 < n + 1 := by
+  -- The bound comes from a helper fact proved inline.
+  have h : n + 1 = n + 1 := by
+    -- This step lives INSIDE the by-block, so its narration is bulleted.
+    rfl
+  -- Back on the trunk: no bullet here.
+  omega

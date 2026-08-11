@@ -162,6 +162,7 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
     calc (a + b) ^ 2
       = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
       _ ≤ _ := by linarith
+      -- _ ≤ _ := by linarith
   · -- Chain 2: the odd-sum identity again, this time as a calc chain inside the
     -- successor case of an induction — a calc nested under a case split.
     induction n with
