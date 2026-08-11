@@ -16,9 +16,8 @@ context breadth, brief labels, narration from the proof's own comments — all o
 one floating rail, none of it touching the file.
 
 - **Using it in your own project?** See [INSTALL.md](INSTALL.md).
-- **Working on it?** [OVERVIEW.md](OVERVIEW.md) is the architectural tour;
-  [CLAUDE.md](CLAUDE.md) is the dense engineering record (constraints,
-  measurements, and the reasons behind the non-obvious choices).
+- **Working on it?** [CLAUDE.md](CLAUDE.md) is the engineering record —
+  constraints, measurements, and the reasons behind the non-obvious choices.
 
 ## Two data sources, one renderer
 

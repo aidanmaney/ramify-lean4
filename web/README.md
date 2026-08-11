@@ -2,7 +2,7 @@
 
 React + Vite + d3-dag. This half knows nothing about Lean: it is handed a
 `Proof` and draws it. See [../README.md](../README.md) for the project, and
-[../OVERVIEW.md](../OVERVIEW.md) for how a proof becomes a tree.
+[../CLAUDE.md](../CLAUDE.md) for how a proof becomes a tree.
 
 The same code has **two entry points**, and the split is the thing to know
 before editing anything here:
