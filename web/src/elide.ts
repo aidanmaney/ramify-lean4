@@ -198,6 +198,40 @@ export function stepElidable(nodes: TreeNode[]): Set<string> {
   return out;
 }
 
+/** The CLOSING tactics ◌ is offered on anyway, mapped to the goal it folds.
+
+`stepElidable` declines a leaf because the cut would be one box for one ghost
+(see `stepIds`) — sound as far as it goes, but it leaves ◌ missing from 38% of
+the tactics in the corpus (78 of 204 measured), and a button that is present on
+most boxes and absent on the rest reads as broken rather than as declined. The
+gesture people want there is the same one: put the finished step away.
+
+So a leaf gets ◌ with a different ACTION — fold its consumed goal. At a leaf
+that hides exactly the tactic and nothing else, which is why the shape is
+checked rather than assumed: one parent, that parent a goal, and that goal with
+no other child. All 78 pass, so the gate never fires on the corpus; it is here
+because it is the reason the substitution is honest, and a tree that grew a
+second consumer would silently start hiding it. The restore differs and the
+tooltip says so — no ghost to click back, the goal's own `+` instead.
+
+Deliberately NOT folded into `stepElidable`: these ids must never reach
+`resolveCut`, which declines them (correctly — there is no cut here). Two sets,
+two actions, one glyph. */
+export function leafFoldTargets(nodes: TreeNode[]): Map<string, string> {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const idx = childIndex(byId);
+  const out = new Map<string, string>();
+  for (const n of nodes) {
+    if (n.type !== "tactic" || (idx.get(n.id) ?? []).length > 0) continue;
+    if (n.parents.length !== 1) continue;
+    const goal = byId.get(n.parents[0].id);
+    if (!goal || goal.type !== "goal") continue;
+    if ((idx.get(goal.id) ?? []).length !== 1) continue;
+    out.set(n.id, goal.id);
+  }
+  return out;
+}
+
 /** The node path from ancestor `from` down to descendant `to` (inclusive), or
 null if `from` is not an ancestor of `to`. Proof trees are trees, so we walk
 single parents up from `to`. Mirrors the engine's own `pathBetween`. */

@@ -95,6 +95,7 @@ import {
   cutId,
   pathIds,
   pruneCuts,
+  leafFoldTargets,
   remapCut,
   resolveCut,
   selectionRun,
@@ -1847,6 +1848,10 @@ export default function ProofTreeView({
   // pass per base tree: the test walks a subtree, so asking it per drawn node
   // per render would be cubic.
   const elidableIds = useMemo(() => stepElidable(baseNodes), [baseNodes]);
+  // Its complement on CLOSING tactics: the same ◌, folding the consumed goal
+  // instead of cutting (see leafFoldTargets — one box for one ghost buys
+  // nothing, but "put the finished step away" is still the gesture wanted).
+  const leafFoldIds = useMemo(() => leafFoldTargets(baseNodes), [baseNodes]);
   // The post-elision tree the engine is built from, as its own memo: the
   // overview keep set (below) has to resolve the CURSOR against exactly these
   // nodes, and doing that off `engine.allNodes()` would make the engine
@@ -5082,6 +5087,16 @@ export default function ProofTreeView({
               // ids — see elideCombined); never on an elide marker or the
               // synthetic `calc` of a block that never parsed, whose whole
               // purpose is the repair chip it carries.
+              //
+              // A CLOSING tactic is the one place the button does something
+              // else: `leafFold` names the goal to fold instead of a cut to
+              // commit (see leafFoldTargets). Same glyph, same two gestures,
+              // different restore — so it rides `elidable` and only the
+              // ACTION branches, which is what keeps the bar uniform.
+              const leafFold =
+                isCombined || node.data.synthetic
+                  ? undefined
+                  : leafFoldIds.get(id);
               const elidable =
                 seq.mode === "off" &&
                 !elidePick &&
@@ -5089,7 +5104,7 @@ export default function ProofTreeView({
                 type === "tactic" &&
                 !isMarker &&
                 !node.data.synthetic &&
-                (isCombined || elidableIds.has(id));
+                (isCombined || elidableIds.has(id) || leafFold !== undefined);
               const isArming = arming?.id === id;
               // Secondary actions live in a hover bar with button-sized
               // targets (see NodeActionBar) instead of tiny corner glyphs or
@@ -5139,7 +5154,11 @@ export default function ProofTreeView({
                 partEditable
                   ? "double-click a line to edit that tactic"
                   : null,
-                elidable ? "⌥-click to elide into the trunk" : null,
+                elidable
+                  ? leafFold !== undefined
+                    ? "⌥-click to put this step away"
+                    : "⌥-click to elide into the trunk"
+                  : null,
                 focusable ? "⌥-click to focus this subtree" : null,
                 isFocusRoot ? "⌥-click (or Esc) to leave this focus" : null,
                 hyps?.some((l) => l.used)
@@ -5223,6 +5242,7 @@ export default function ProofTreeView({
                 // every tactic click in the widget, modified or not.
                 if (elidable && e.altKey) {
                   if (isCombined) elideCombined(id);
+                  else if (leafFold !== undefined) toggle(leafFold);
                   else elideStep(id);
                   return;
                 }
@@ -6021,9 +6041,21 @@ export default function ProofTreeView({
                                 glyph: "◌",
                                 title: isCombined
                                   ? "Elide into the trunk (⌥-click) — the whole run collapses to a ⋯ marker (click it to restore)"
-                                  : "Elide into the trunk (⌥-click) — this tactic and anything it opened, leaving a ghost to click back open",
+                                  : leafFold !== undefined
+                                    ? // No ghost here: this tactic closes its
+                                      // goal, so the cut would be one box for
+                                      // one ghost. Folding the goal hides the
+                                      // same one box and leaves the goal's own
+                                      // + as the way back — hence the title
+                                      // naming a different restore.
+                                      "Put this step away (⌥-click) — folds the goal above; click its + to bring it back"
+                                    : "Elide into the trunk (⌥-click) — this tactic and anything it opened, leaving a ghost to click back open",
                                 onClick: () =>
-                                  isCombined ? elideCombined(id) : elideStep(id),
+                                  isCombined
+                                    ? elideCombined(id)
+                                    : leafFold !== undefined
+                                      ? toggle(leafFold)
+                                      : elideStep(id),
                               },
                             ]
                           : []),
