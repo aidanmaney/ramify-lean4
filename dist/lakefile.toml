@@ -16,8 +16,8 @@ name = "proofTree"
 defaultTargets = ["ProofTreeWidget", "Demo"]
 
 # --- Paperproof's Lean library (contains `Services.BetterParser`) -------------
-# Pinned to the exact commit the development package resolved, so an install is
-# reproducible; the development package tracks `main`. Core-only.
+# Pinned to the exact commit, so an install is reproducible. `lean/lakefile.toml`
+# pins the SAME rev and says why it must never float. Core-only.
 [[require]]
 name = "Paperproof"
 git = "https://github.com/Paper-Proof/paperproof.git"

@@ -54,9 +54,11 @@ Then:
 lake update proofTree && lake build
 ```
 
-It pulls **Paperproof** (the vendored parser, core-only) and **ProofWidgets
-v0.0.105** — the same version Mathlib `v4.32.2` pins, so a Mathlib project
-resolves to one copy rather than a conflict. It does **not** pull Mathlib.
+It pulls **Paperproof** — the proof-step parser, cloned from its own repository
+at a pinned commit — and **ProofWidgets v0.0.105**, the same version Mathlib
+`v4.32.2` pins, so a Mathlib project resolves to one copy rather than a
+conflict. Neither depends on Mathlib — Paperproof's Lean library is core-only —
+so this does **not** pull it.
 
 A from-scratch build takes a few minutes, nearly all of it ProofWidgets
 building its own widget JS (measured: 306s of a 320s cold build; our own Lean
