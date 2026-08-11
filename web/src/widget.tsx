@@ -352,8 +352,18 @@ function useThemeTokenColors(
             );
           }
           if (!r.colors?.length) return;
-          setColors(
-            Object.fromEntries(r.colors.map((c) => [c.type, c.color])),
+          // Identity-compared like `abbrev` above and for the same reason:
+          // this is a ProofTreeView PROP, refetched once per docRev (i.e.
+          // per re-elaboration while typing), and a fresh object per fetch
+          // invalidated every tokenColors-keyed memo for a byte-identical
+          // palette.
+          const next = Object.fromEntries(
+            r.colors.map((c) => [c.type, c.color]),
+          );
+          setColors((prev) =>
+            prev && JSON.stringify(prev) === JSON.stringify(next)
+              ? prev
+              : next,
           );
         })
         .catch(() => {
@@ -594,6 +604,17 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // document writes (the applyEdit commits and the undo/redo relay), read
   // only inside the hold effect — never during render.
   const expectEditRef = useRef(0);
+  // When the user last drove the buffer, read off the CURSOR: `pos` updates
+  // per keystroke (the infoview coalesces at ~50ms, nothing suppresses it),
+  // and typing moves the cursor — the one typing signal a webview actually
+  // has. Navigation bumps it too, deliberately accepted: deferring a pending
+  // swap while the user is moving around costs one quiet period, while any
+  // attempt to tell the two apart from (line, character) deltas guesses.
+  const lastActivityRef = useRef(0);
+  const posKey = `${pos.uri}:${pos.line}:${pos.character}`;
+  useEffect(() => {
+    lastActivityRef.current = Date.now();
+  }, [posKey]);
   // Immediate swap paths, adjusted during render as before: the first draw, a
   // DIFFERENT proof (the cursor moved theorems — holding a navigation would
   // read as latency, and the fold/zoom state resets on proofKey anyway), and
@@ -611,16 +632,29 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // buffer (or the lens): every keystroke that survives long enough to
   // elaborate lands a distinct text signature, and swapping each one in
   // relaid the tree out per keystroke — through the broken intermediates
-  // (`ri` is a failed tactic), which is what the reported "shudder" was. So a
-  // changed text must sit QUIET for `typingHoldMs` before it is installed.
+  // (`ri` is a failed tactic), which is what the reported "shudder" was.
   //
-  // Two details carry the design. The timer re-arms on the SIGNATURE, not the
-  // response object: elaboration settling down a long file bumps docRev
-  // repeatedly, and each bump re-parses to a fresh but text-identical payload
-  // — keying on identity would keep restarting the timer for the whole
-  // file's elaboration, holding the tree for tens of seconds instead of one
-  // quiet period. (The swap still installs the LATEST payload, via the ref
-  // below.) And the widget's own edits bypass the hold through
+  // The quiet measured is the CURSOR's, not the payload clock's — the first
+  // version debounced payload arrivals, and on a Mathlib file elaboration
+  // spaces payloads wider than any sane hold (1-2s per keystroke burst), so
+  // every intermediate still swapped in while a payload arriving AFTER the
+  // user went quiet was held for nothing. Now: a pending swap lands the
+  // moment `lastActivityRef` is at least `typingHoldMs` old — immediately on
+  // arrival when the user already stopped (no added latency), and only after
+  // the cursor goes still when typing continues, the timer re-checking the
+  // ref each time it fires. Accepted limit: after typing stops, ONE
+  // intermediate payload may still swap in before the final elaboration
+  // lands (two updates, not N). "Only swap payloads newer than the last
+  // keystroke" was considered and rejected — navigation bumps the activity
+  // clock too, so edit-then-navigate would strand a pending swap forever,
+  // waiting on a newer payload that is never coming.
+  //
+  // Two earlier details still carry it. The effect re-arms on the SIGNATURE,
+  // not the response object: elaboration settling down a long file bumps
+  // docRev repeatedly, each bump re-parsing to a fresh but text-identical
+  // payload — keying on identity would keep the effect churning for the
+  // whole file's elaboration. (The swap still installs the LATEST payload,
+  // via the ref below.) And the widget's own edits bypass the hold through
   // `expectEditRef`, a time window rather than a consumed flag: the first
   // payload after an applyEdit can be a stale elaboration finishing, and a
   // one-shot flag spent on it would hold the real redraw.
@@ -643,8 +677,19 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       swap();
       return;
     }
-    const t = window.setTimeout(swap, typingHoldMs);
-    return () => window.clearTimeout(t);
+    let timer: number | null = null;
+    const arm = () => {
+      const wait = lastActivityRef.current + typingHoldMs - Date.now();
+      if (wait <= 0) {
+        swap();
+        return;
+      }
+      timer = window.setTimeout(arm, wait);
+    };
+    arm();
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [candSig, candProofId, stable, typingHoldMs]);
 
   // The RPC-REFERENCE-carrying half of the payload, deliberately NOT kept in
@@ -667,11 +712,25 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // against the response object, so the persistent value returned while a
   // refetch is in flight doesn't loop.
   const [interactive, setInteractive] = useState<ProofTreeData | null>(null);
-  if (resolved && interactive !== resolved) {
+  // Adoption is GATED on the typing hold: while a swap is pending, the latest
+  // response describes a document the drawn tree does not show, and adopting
+  // it flashed every surface this feeds against the held tree — the error
+  // ribbons per response, and the tagged goal labels in and out of colour
+  // (mvarIds renumber per elaboration, so the text-equality guard dropped
+  // them to plain SVG until the swap landed). Freezing here makes the swap
+  // ATOMIC: `stable` changes, the very next render adopts the same response,
+  // and layout, colours, tooltips and diagnostics move together once. The
+  // consumers stay CONSISTENT during the hold, not merely quiet — everything
+  // reading this already pairs it against `stable.proof`.
+  const swapPending = !!(candidate && stable && candidate.sig !== stable.sig);
+  if (resolved && interactive !== resolved && !swapPending) {
     setInteractive(resolved);
   } else if (st.state === "rejected" && interactive !== null) {
     // A failed call is the one signal we get that the session may be gone;
-    // holding its refs afterwards can only produce dead popups.
+    // holding its refs afterwards can only produce dead popups. Deliberately
+    // NOT gated on the hold: session self-heal must not wait one out, and
+    // after a worker restart with unchanged text the sig matches anyway, so
+    // re-adoption is immediate.
     setInteractive(null);
   }
 

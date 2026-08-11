@@ -3,7 +3,7 @@
   "displayName": "Proof Tree Companion",
   "description": "Editor-side commands for the proof-tree infoview widget: opens a tactic in the lens (a slim editor group split below the infoview) and reveals tree nodes in it, relayed through a request file the widget's Lean RPC writes (the infoview's EditorApi has no executeCommand). Will also grow global settings / persistent state for the widget.",
   "publisher": "aidan",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -74,7 +74,7 @@
           "default": 600,
           "minimum": 0,
           "maximum": 5000,
-          "markdownDescription": "How long (in milliseconds) the proof text must sit unchanged before the tree redraws to match it. While you type in the buffer, each keystroke that gets elaborated is a different — usually broken — proof, and redrawing every one makes the tree shudder; the hold waits for a quiet moment and redraws once. Raise it if you type slowly and still see churn mid-edit; `0` redraws on every change, the old behaviour. Edits made *from the tree* (committing a tactic, chips, delete, undo) always redraw immediately, whatever this is set to."
+          "markdownDescription": "How long (in milliseconds) the cursor must sit still after you type before the tree redraws to match the changed proof. While you type in the buffer, each keystroke that gets elaborated is a different — usually broken — proof, and redrawing every one makes the tree shudder; the tree stays locked while the cursor is moving and updates once when you pause. If you already paused, the redraw lands the moment elaboration finishes — this setting adds no delay then. Raise it if you type slowly and still see churn mid-edit; `0` redraws on every change. Edits made *from the tree* (committing a tactic, chips, delete, undo) always redraw immediately, whatever this is set to."
         }
       }
     }

@@ -506,8 +506,17 @@ function inViewScroll(
 /** The in-flight view move. Held so a second one CANCELS the first rather than
 fighting it — a burst of cursor moves must land exactly where the last one alone
 would. Shared between the cursor follow and the diagnostic pager: they are both
-"move the view", and whichever spoke last wins. */
-type FollowAnim = { raf: number | null; timer: number | null };
+"move the view", and whichever spoke last wins — EXCEPT a repeat of the SAME
+destination, which is left to finish (`tgt`): the follow effect re-fires per
+cursor keystroke (its guard is the cursor key, deliberately — ids renumber per
+re-parse), so with the accented node outside the comfort band every keystroke
+restarted the ease toward one unchanging target, a scroll that never settled —
+part of the reported typing jiggle. */
+type FollowAnim = {
+  raf: number | null;
+  timer: number | null;
+  tgt: { left: number; top: number } | null;
+};
 
 /** Ease the scroll box to (left, top) on OUR schedule (FOLLOW_MS), cancelling
 whatever move was in flight.
@@ -523,8 +532,17 @@ function animateScroll(
   left: number,
   top: number,
 ) {
+  // Already easing to exactly this spot → let it finish (see FollowAnim).
+  if (
+    (anim.raf !== null || anim.timer !== null) &&
+    anim.tgt !== null &&
+    anim.tgt.left === left &&
+    anim.tgt.top === top
+  )
+    return;
   if (anim.raf !== null) cancelAnimationFrame(anim.raf);
   if (anim.timer !== null) window.clearTimeout(anim.timer);
+  anim.tgt = { left, top };
   const x0 = el.scrollLeft;
   const y0 = el.scrollTop;
   const dx = left - x0;
@@ -532,6 +550,7 @@ function animateScroll(
   const land = () => {
     anim.raf = null;
     anim.timer = null;
+    anim.tgt = null;
     el.scrollLeft = left;
     el.scrollTop = top;
   };
@@ -3537,7 +3556,7 @@ export default function ProofTreeView({
   // The in-flight view move (see FollowAnim). One ref, shared with the
   // diagnostic pager: they are both "move the view", so whichever spoke last
   // must cancel the other rather than race it.
-  const followAnim = useRef<FollowAnim>({ raf: null, timer: null });
+  const followAnim = useRef<FollowAnim>({ raf: null, timer: null, tgt: null });
   useEffect(() => {
     const a = followAnim.current;
     return () => {
