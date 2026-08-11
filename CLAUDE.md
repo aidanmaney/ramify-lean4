@@ -7,11 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Lean 4 proof rendered as an interactive tree. The renderer has **two data sources** feeding the same React/d3-dag view:
 
 ```
-# 1. Offline CLI (dev harness):
-proofs/*.lean ──ppharness (Lean CLI)──▶ NDJSON ──proofToTree (web)──▶ d3-dag tree
-
-# 2. Live infoview widget (production target):
+# 1. Live infoview widget (production target):
 cursor pos ──ProofTree.getProofTree RPC──▶ Proof ──proofToTree (web)──▶ d3-dag tree
+
+# 2. Offline CLI (dev harness — ships nowhere; `dist/` declares no lean_exe):
+proofs/*.lean ──ppharness (Lean CLI)──▶ NDJSON ──proofToTree (web)──▶ d3-dag tree
 ```
 
 - `lean/` — **ppharness**, a thin owned wrapper around Paperproof's `BetterParser_Tree`. Elaborates a `.lean` file to completion and harvests the elaborator's `InfoTree`s into proof steps, one NDJSON line per proof.
