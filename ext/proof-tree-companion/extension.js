@@ -1036,19 +1036,18 @@ function activate(context) {
       // A theme EDIT (tokenColorCustomizations) changes colours without
       // changing the active theme, so watch the customisation keys too — and
       // every SETTING the file carries alongside them, or toggling one would
-      // not be seen until the next theme change.
+      // not be seen until the next theme change. The whole `proofTree`
+      // SECTION rather than one line per key: the per-key list had to be fed
+      // by hand for every new setting (and a key left out shipped
+      // half-working — this is the recorded failure mode), while the section
+      // test covers future keys for free. Lens-only settings republishing is
+      // harmless: one file write.
       if (
         e.affectsConfiguration("workbench.colorTheme") ||
         e.affectsConfiguration("editor.tokenColorCustomizations") ||
         e.affectsConfiguration("editor.semanticTokenColorCustomizations") ||
         e.affectsConfiguration("editor.bracketPairColorization.enabled") ||
-        e.affectsConfiguration("proofTree.outlineOnly") ||
-        e.affectsConfiguration("proofTree.tallFrame") ||
-        e.affectsConfiguration("proofTree.linkEmoji") ||
-        e.affectsConfiguration("proofTree.linkTint") ||
-        e.affectsConfiguration("proofTree.linkMarks") ||
-        e.affectsConfiguration("proofTree.typingHoldMs") ||
-        e.affectsConfiguration("proofTree.counterfactual") ||
+        e.affectsConfiguration("proofTree") ||
         e.affectsConfiguration("lean4.input")
       )
         publishThemeColors();

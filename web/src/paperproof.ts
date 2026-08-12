@@ -233,6 +233,35 @@ export interface Proof {
   cfLine?: number;
 }
 
+/** Rebuild the STABLE `Proof` from a wire payload, field for field — the ONE
+coding of the projection, shared by widget.tsx's `incoming` and the dev replay
+harness (App.tsx `CfReplay`). It must be one coding because a field left out
+of this list is silently absent rather than a type error, and a second copy
+meant a new field could reach the editor but never the replay rig that
+measures it.
+
+What's IN is exactly what rides the stable signature — a change to any of
+these is a real tree change (each field's rationale is on `Proof` above). Two
+fields are OUT on purpose: `deleteSlots` (the widget carries it as a SIBLING
+on `stable`; a copy here would give the delete gesture two sources of truth)
+and `tacticNames` (environment-only ~500 strings that cannot change while the
+file is open; stringifying them into every signature comparison is pure cost,
+so widget.tsx attaches them after the signature is taken). */
+export function stableProofOf(p: Proof): Proof {
+  return {
+    steps: p.steps,
+    allGoals: p.allGoals,
+    comments: p.comments,
+    holes: p.holes,
+    calcChains: p.calcChains,
+    recovered: p.recovered,
+    calcRelations: p.calcRelations,
+    proofId: p.proofId,
+    declRange: p.declRange,
+    cfLine: p.cfLine,
+  };
+}
+
 /** One NDJSON line as emitted by the CLI: `{file, data:{index, proof}}`. */
 export interface ProofRecord {
   file: string;

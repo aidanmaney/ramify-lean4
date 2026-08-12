@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { parseNdjson, type Proof, type ProofRecord } from "./paperproof";
+import {
+  parseNdjson,
+  stableProofOf,
+  type Proof,
+  type ProofRecord,
+} from "./paperproof";
 import { proofTitle } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
 
@@ -34,20 +39,11 @@ function CfReplay({ line, character }: { line: number; character: number }) {
     w.__cfPos = (l, c) => setPos({ line: l, character: c });
   }, []);
   if (!payloads) return <div>loading replay…</div>;
-  const p = payloads[idx] as unknown as Proof & { cfPending?: boolean };
-  // The widget's `incoming` rebuild, field for field (paperproof.ts `Proof`).
-  const proof: Proof = {
-    steps: p.steps,
-    allGoals: p.allGoals,
-    comments: p.comments,
-    holes: p.holes,
-    calcChains: p.calcChains,
-    recovered: p.recovered,
-    calcRelations: p.calcRelations,
-    proofId: p.proofId,
-    declRange: p.declRange,
-    cfLine: p.cfLine,
-  };
+  const p = payloads[idx] as unknown as Proof;
+  // The widget's `incoming` rebuild — the SAME projection (stableProofOf), so
+  // a field added to the widget's stable proof reaches the replay rig too
+  // rather than silently measuring against a payload missing it.
+  const proof = stableProofOf(p);
   return (
     <ProofTreeView
       proof={proof}
@@ -65,6 +61,20 @@ function CfReplay({ line, character }: { line: number; character: number }) {
 // it fetches the same `Proof` over RPC instead of reading this file.
 const SAMPLE_URL = `${import.meta.env.BASE_URL}sample.ndjson`;
 
+// The dev-harness query flags, parsed once: `location.search` is fixed for the
+// page's life, so re-parsing it per render (one of them inside a JSX spread)
+// was three allocations for a constant.
+const QUERY = new URLSearchParams(location.search);
+const REPLAY_AT = QUERY.get("cf-replay");
+const STUB_EDIT = QUERY.has("stub-edit");
+// `?cf-stub=<line>[:<draft>]`, parsed to the prop shape up front.
+const CF_STUB = (() => {
+  const v = QUERY.get("cf-stub");
+  if (v === null) return null;
+  const [line, ...rest] = v.split(":");
+  return { line: Number(line), draft: rest.join(":") };
+})();
+
 export default function App() {
   const [records, setRecords] = useState<ProofRecord[] | null>(null);
   const [selected, setSelected] = useState(0);
@@ -72,7 +82,6 @@ export default function App() {
   // Dev-only widget-payload replay; see CfReplay. Checked before the sample
   // fetch effect does anything visible, but hooks must run unconditionally,
   // so the branch sits at render time below.
-  const replayAt = new URLSearchParams(location.search).get("cf-replay");
 
   // Load every proof in the sample once. The picker selects which to render.
   useEffect(() => {
@@ -88,8 +97,8 @@ export default function App() {
 
   const proof = records?.[selected]?.data.proof ?? null;
 
-  if (replayAt !== null) {
-    const [l, c] = replayAt.split(":").map(Number);
+  if (REPLAY_AT !== null) {
+    const [l, c] = REPLAY_AT.split(":").map(Number);
     return <CfReplay line={l || 0} character={c || 0} />;
   }
 
@@ -123,7 +132,7 @@ export default function App() {
       // Writes land in `window.__edits` for the probe to read — the document
       // behind the NDJSON never changes, so the tree won't redraw; these
       // exist to verify ranges and gesture routing, not round trips.
-      {...(new URLSearchParams(location.search).has("stub-edit")
+      {...(STUB_EDIT
         ? {
             // The CLI wire already carries `deleteSlots` (it rides NDJSON so
             // probes can run the real extent math offline), but the view gates
@@ -155,14 +164,7 @@ export default function App() {
       // this fakes the marker to make the overlay and its banner drawable in
       // the preview harness. Paint verification only — the underlying proof
       // is whatever the NDJSON holds.
-      {...(() => {
-        const v = new URLSearchParams(location.search).get("cf-stub");
-        if (v === null) return {};
-        const [line, ...rest] = v.split(":");
-        return {
-          cfStub: { line: Number(line), draft: rest.join(":") },
-        };
-      })()}
+      {...(CF_STUB ? { cfStub: CF_STUB } : {})}
       headerExtra={
         <ProofPicker
           records={records}

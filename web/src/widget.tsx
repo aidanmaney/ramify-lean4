@@ -7,7 +7,12 @@ import {
   mapRpcError,
   type PanelWidgetProps,
 } from "@leanprover/infoview";
-import type { Proof, ProofStepPosition, TacticSlot } from "./paperproof";
+import {
+  stableProofOf,
+  type Proof,
+  type ProofStepPosition,
+  type TacticSlot,
+} from "./paperproof";
 import type { AddResult, AddSpec, DeleteSpec, TextSlot } from "./types";
 import { DEFAULT_ABBREV, type AbbrevConfig } from "./abbreviation";
 import { calcEdit, fillRange, offsetToPosition } from "./calcEdit";
@@ -517,6 +522,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // every response, so the drawn errors can never be out of step with the
   // drawn tree); see `diagnostics` below and TreeDiag in ProofTreeWidget.lean.
   const [docRev, setDocRev] = useState(0);
+  // The cfPending re-poll's own tick — NOT a second writer of `docRev`, whose
+  // meaning ("the document re-elaborated") also keys the theme-colors fetch:
+  // riding it there sent a companion RPC and a settings-file read per 800ms
+  // poll for nothing. This one joins only the getProofTree deps.
+  const [pollRev, setPollRev] = useState(0);
   const revTimer = useRef<number | null>(null);
   useServerNotificationEffect<{ uri: string }>(
     "textDocument/publishDiagnostics",
@@ -560,7 +570,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         "ProofTree.getProofTree",
         { pos, cf: counterfactual },
       ),
-    [rs, pos.uri, pos.line, pos.character, docRev, counterfactual],
+    [rs, pos.uri, pos.line, pos.character, docRev, pollRev, counterfactual],
   );
 
   // The latest non-empty response, if any. Both holders below key off it.
@@ -578,51 +588,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // object: `useAsyncPersistent` returns the same value identity between
   // renders, and un-memoized this ran O(payload) on every render — each hover,
   // zoom tick and editing keystroke — not just per response.
+  // The projection itself is `stableProofOf` (paperproof.ts) — shared with the
+  // dev replay harness, so the field list (and its deliberate omissions:
+  // `deleteSlots` as a sibling on `stable`, `tacticNames` outside the sig)
+  // has exactly one coding. Each field's stable-signature rationale is
+  // documented there and on `Proof`.
   const incoming = useMemo(() => {
     if (!resolved) return null;
-    const proof: Proof = {
-      steps: resolved.steps,
-      allGoals: resolved.allGoals,
-      comments: resolved.comments,
-      // Plain data (positions + mvarIds), so it belongs in the stable half and
-      // rides the signature: a hole filled or a link inserted moves the ranges,
-      // and the chips must not keep pointing at where the `?_` used to be.
-      holes: resolved.holes,
-      calcChains: resolved.calcChains,
-      // The supplemental parser's sidecar — plain data keyed on positions, and
-      // it must ride the signature: whether a step is recovered changes how
-      // its node draws, and a re-elaboration that fixes the tactic changes
-      // exactly this.
-      recovered: resolved.recovered,
-      // Plain data too (relation SYMBOLS, not exprs), and it belongs in the
-      // signature for the same reason: a changed relation list means the goal
-      // itself changed, so the offer set must be recomputed with it.
-      calcRelations: resolved.calcRelations,
-      // The proof's identity, and part of the signature: moving the cursor to
-      // a DIFFERENT theorem must invalidate the stable proof even if its text
-      // somehow matched.
-      proofId: resolved.proofId,
-      // The declaration's own span, which `proofSpan` needs to decide which of
-      // the FILE's diagnostics are this proof's. Both wires ship it and it must
-      // be copied here: this object is rebuilt field by field, so a field left
-      // out is silently absent rather than a type error, and without it
-      // proofSpan falls back to the extent of the STEPS — which starts at the
-      // first tactic and so drops every diagnostic reported above one.
-      // `declaration uses 'sorry'` sits on the declaration NAME, so that is
-      // exactly the warning it loses. It rides the signature for free: the
-      // range moves whenever the declaration does.
-      declRange: resolved.declRange,
-      // The counterfactual marker — IN the signature on purpose (entering and
-      // leaving cf mode is a real tree change), unlike its sibling `cfDraft`,
-      // which changes per keystroke and rides its own channel below.
-      cfLine: resolved.cfLine,
-      // NOT here, deliberately: `deleteSlots`. Both wires ship it (see
-      // ProofTreeData and Ppharness's resultToJson) and `Proof` declares it
-      // optional, so adding it would typecheck — but the widget carries it as
-      // a SIBLING on `stable` below, and duplicating it here would give the
-      // delete gesture two sources of truth that drift apart the moment one
-      // is updated.
-    };
+    const proof = stableProofOf(resolved);
     return { proof, sig: JSON.stringify(proof) };
   }, [resolved]);
   const [stable, setStable] = useState<{
@@ -683,13 +656,19 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     !!candidate &&
     candidate.proof.proofId !== stable.proof.proofId &&
     !cursorInDecl(stable.proof.declRange, pos);
+  // ONE coding of "the drawn tree is behind the latest payload", like
+  // `navigated` above and for the same reason: it gates the immediate-swap
+  // branch here AND the `interactive` adoption below, and the sig compare is
+  // a full string scan of the serialized proof — once per render, not once
+  // per reader.
+  const swapPending = !!(candidate && stable && candidate.sig !== stable.sig);
   // Immediate swap paths, adjusted during render as before: the first draw,
   // real navigation (holding that would read as latency, and the view state
   // resets on proofKey anyway), and a zero hold (the setting's off switch,
   // restoring swap-on-arrival).
   if (
     candidate &&
-    (!stable || (stable.sig !== candidate.sig && (typingHoldMs <= 0 || navigated)))
+    (!stable || (swapPending && (typingHoldMs <= 0 || navigated)))
   ) {
     setStable(candidate);
   }
@@ -775,14 +754,16 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // the next call after the reconnect installs live refs. Identity-compared
   // against the response object, so the persistent value returned while a
   // refetch is in flight doesn't loop.
-  // The counterfactual DRAFT — the buffer line's live content — adopted from
+  // The counterfactual DRAFT — the buffer line's live content — read off
   // every response UNGATED, unlike `interactive` below: it is paint-only (the
   // stub overlay's text; nothing in layout reads it), and its whole point is
-  // to track the keystrokes the hold is refusing to relayout on.
-  const [cfDraft, setCfDraft] = useState<string | undefined>(undefined);
-  if (st.state === "resolved" && st.value.cfDraft !== cfDraft) {
-    setCfDraft(st.value.cfDraft);
-  }
+  // to track the keystrokes the hold is refusing to relayout on. Derived, not
+  // latched in state: `useAsyncPersistent` already keeps the previous
+  // resolved value while a refetch is in flight (the ref-lifetime comment
+  // above leans on the same fact), so a useState copy only bought an extra
+  // render per response — and a stale draft after a rejected call, where the
+  // stub now honestly dims to "…".
+  const cfDraft = st.state === "resolved" ? st.value.cfDraft : undefined;
   // cfPending: the counterfactual is elaborating in the background. Re-poll
   // shortly — without this, an author who stops typing before the elaboration
   // finishes would wait for the next document event to see the preview.
@@ -790,7 +771,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // loop on a stale flag.)
   useEffect(() => {
     if (!(st.state === "resolved" && st.value.cfPending)) return;
-    const t = window.setTimeout(() => setDocRev((r) => r + 1), 800);
+    const t = window.setTimeout(() => setPollRev((r) => r + 1), 800);
     return () => window.clearTimeout(t);
   }, [st]);
 
@@ -804,8 +785,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // ATOMIC: `stable` changes, the very next render adopts the same response,
   // and layout, colours, tooltips and diagnostics move together once. The
   // consumers stay CONSISTENT during the hold, not merely quiet — everything
-  // reading this already pairs it against `stable.proof`.
-  const swapPending = !!(candidate && stable && candidate.sig !== stable.sig);
+  // reading this already pairs it against `stable.proof`. (`swapPending` is
+  // the shared coding computed above the immediate-swap branch.)
   if (resolved && interactive !== resolved && !swapPending) {
     setInteractive(resolved);
   } else if (st.state === "rejected" && interactive !== null) {
@@ -991,17 +972,28 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     expectEditRef.current = Date.now() + EXPECT_EDIT_WINDOW_MS;
   };
 
-  // …and commit by replacing the tight range in the document. Goes through
-  // the editor's own edit pipeline (applyEdit), so it lands on the undo
-  // stack and triggers re-elaboration; the tree redraws off the next RPC.
-  // Comment edits and the flag writers route through here too, so one stamp
-  // covers them.
-  const editTactic = (p: ProofStepPosition, newText: string) => {
+  // The ONE door for the widget's own document writes: stamps the hold bypass
+  // and applies through the editor's own pipeline (undo stack,
+  // re-elaboration; the tree redraws off the next RPC). Route every future
+  // write here — a gesture calling `ec.api.applyEdit` directly would work and
+  // silently sit out the typing hold, a lag the stub harness (which has no
+  // hold) can never surface. The undo/redo relay below keeps its own stamp:
+  // it writes through the companion, not applyEdit.
+  const applyDocEdit = (
+    start: { line: number; character: number },
+    end: { line: number; character: number },
+    newText: string,
+  ) => {
     expectOwnEdit();
     void ec.api.applyEdit({
-      changes: { [pos.uri]: [{ range: { start: p.start, end: p.stop }, newText }] },
+      changes: { [pos.uri]: [{ range: { start, end }, newText }] },
     });
   };
+
+  // …and commit by replacing the tight range in the document. Comment edits
+  // and the flag writers route through here too.
+  const editTactic = (p: ProofStepPosition, newText: string) =>
+    applyDocEdit(p.start, p.stop, newText);
 
   // A (+) chip commit: INSERT a new tactic for a pending goal. The insertion
   // point is the end of the LINE holding the anchor step's TIGHT stop —
@@ -1016,7 +1008,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     text: string,
     slots?: { lhs: TextSlot; rhs: TextSlot },
   ): AddResult => {
-    expectOwnEdit();
     const at2 = (p: { line: number; character: number }) =>
       editByStart.get(`${p.line}:${p.character}`);
     // The `calc` forms act on a range of their own rather than on a line
@@ -1026,9 +1017,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     // is an ordinary line insertion, so it falls through below.
     const calc = calcEdit(spec, text);
     if (calc) {
-      void ec.api.applyEdit({
-        changes: { [pos.uri]: [{ range: calc.range, newText: calc.newText }] },
-      });
+      applyDocEdit(calc.range.start, calc.range.end, calc.newText);
       // Where the `sorry` this just wrote landed, so the view can open the
       // second half of the gesture on it (see calcEdit's STUB) — and, when the
       // edit left both ends of a link open, where those `_`s landed.
@@ -1074,9 +1063,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       .map((l, i) => (i === 0 ? indent + prefix + l : inner + l))
       .join("\n");
     const newText = "\n" + body;
-    void ec.api.applyEdit({
-      changes: { [pos.uri]: [{ range: { start: at, end: at }, newText }] },
-    });
+    applyDocEdit(at, at, newText);
     // The `calc` opener is the one line-inserted text that carries a stub (the
     // view assembles it — see calcOpenText). Anything else has no `sorry` in
     // it, which fillRange reports as null — except the `sorry` CHIP, whose
@@ -1101,12 +1088,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const deleteTactic = (spec: DeleteSpec) => {
     const e = deleteEdit(spec, stable?.deleteSlots ?? []);
     if (!e) return;
-    expectOwnEdit();
-    void ec.api.applyEdit({
-      changes: {
-        [pos.uri]: [{ range: { start: e.range.start, end: e.range.end }, newText: e.newText }],
-      },
-    });
+    applyDocEdit(e.range.start, e.range.end, e.newText);
   };
 
   // The region an armed delete would take, painted in the buffer. NOT the

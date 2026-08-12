@@ -2976,21 +2976,40 @@ export default function ProofTreeView({
     return new Set(resolveCut({ kind: "step", id }, byId));
   };
 
+  /** The ◌/⌥-elide GATE for a drawn node — null where the gesture is not
+   * offered. ONE coding, read directly by the render loop (whose button,
+   * click routing and titles also need `combined`/`leafFold`, hence the
+   * shape) and, through `elidePreviewFor` below, by every fade surface — so
+   * no surface can disagree with another about where the gesture exists. */
+  const elideGateOf = (
+    d: (typeof treeNodes)[number],
+  ): { combined: boolean; leafFold: string | undefined } | null => {
+    if (seq.mode !== "off" || elidePick || bandPick) return null;
+    if (d.type !== "tactic" || d.synthetic) return null;
+    const combined = !!d.elidedCut?.combined;
+    if (d.elidedCut && !combined) return null; // an elide marker
+    const leafFold = combined ? undefined : leafFoldIds.get(d.id);
+    if (!(combined || elidableIds.has(d.id) || leafFold !== undefined))
+      return null;
+    return { combined, leafFold };
+  };
+
   /** The elide-preview for `id`, or null where the gesture is not offered —
-   * ONE coding of the render loop's `elidable` gate for the surfaces that
-   * show the fade OUTSIDE the loop (the Alt-keydown listener below), so the
-   * keyboard path cannot disagree with the pointer paths about what fades. */
+   * the one door to the fade for EVERY surface that shows it: the
+   * Alt-keydown listener below, and the ⌥-mousemove branch and the bar's ◌
+   * hover in the render loop. (The loop's own `elidable` reads `elideGateOf`
+   * directly — it runs per node per render, and this helper pays a find per
+   * event.) */
   const elidePreviewFor = (
     id: string,
   ): { anchor: string; ids: Set<string> } | null => {
-    if (seq.mode !== "off" || elidePick || bandPick) return null;
     const d = treeNodes.find((n) => n.id === id);
-    if (!d || d.type !== "tactic" || d.synthetic) return null;
-    const isCombined = !!d.elidedCut?.combined;
-    if (d.elidedCut && !isCombined) return null; // an elide marker
-    const leaf = !isCombined && leafFoldIds.get(id) !== undefined;
-    if (!(isCombined || elidableIds.has(id) || leaf)) return null;
-    return { anchor: id, ids: elideExtentIds(id, isCombined, leaf) };
+    const g = d ? elideGateOf(d) : null;
+    if (!g) return null;
+    return {
+      anchor: id,
+      ids: elideExtentIds(id, g.combined, g.leafFold !== undefined),
+    };
   };
 
   // ⌥ pressed or released while the pointer RESTS on a tactic. The pointer
@@ -2999,39 +3018,39 @@ export default function ProofTreeView({
   // a real bug once the preview existed. Key events are the only signal for
   // it, with the known limit that a webview receives keys only while it has
   // FOCUS (clicking the tree grants it; while the caret sits in the editor
-  // the pointer paths remain the working pair). Latest state is read through
-  // refs written by a per-render effect (the candidateRef pattern), so the
-  // document listeners register once instead of churning per render; the
-  // keydown guards `repeat` — Alt autorepeats, and each unguarded fire would
-  // build a fresh Set and re-render a settled preview.
+  // the pointer paths remain the working pair). The DOWN handler reads latest
+  // state through a ref written by a per-render effect (the candidateRef
+  // pattern), so the document listeners register once instead of churning per
+  // render — the clear needs no ref, being a pure functional update that
+  // closes over nothing. The keydown guards `repeat`: Alt autorepeats, and
+  // each unguarded fire would build a fresh Set and re-render a settled
+  // preview.
   const altDownRef = useRef<() => void>(() => {});
-  const altUpRef = useRef<() => void>(() => {});
   useEffect(() => {
     altDownRef.current = () => {
       if (!hoverId) return;
       const p = elidePreviewFor(hoverId);
       if (p) setElidePreview({ ...p, from: "alt" });
     };
-    altUpRef.current = () =>
-      setElidePreview((p) => (p?.from === "alt" ? null : p));
   });
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.key === "Alt" && !e.repeat) altDownRef.current();
     };
+    const clearAlt = () =>
+      setElidePreview((p) => (p?.from === "alt" ? null : p));
     const up = (e: KeyboardEvent) => {
-      if (e.key === "Alt") altUpRef.current();
+      if (e.key === "Alt") clearAlt();
     };
     // A webview losing focus mid-press never sees the keyup (the rail's
     // glyph-swap rule): clear rather than strand a fade.
-    const blur = () => altUpRef.current();
     document.addEventListener("keydown", down);
     document.addEventListener("keyup", up);
-    window.addEventListener("blur", blur);
+    window.addEventListener("blur", clearAlt);
     return () => {
       document.removeEventListener("keydown", down);
       document.removeEventListener("keyup", up);
-      window.removeEventListener("blur", blur);
+      window.removeEventListener("blur", clearAlt);
     };
   }, []);
 
@@ -3316,6 +3335,11 @@ export default function ProofTreeView({
       lastScrollRef.current.x > liveX;
     const sx = clampedX ? lastScrollRef.current.x : liveX;
     const sy = clampedY ? lastScrollRef.current.y : liveY;
+    // Screen-space y of a node's OLD content y, against the reconciled
+    // scroll. ONE coding for this effect: CLAUDE.md records the bare formula
+    // hand-rolled wrong once already (the combine anchor's screenful bias),
+    // and it was up to four copies here before this helper.
+    const screenYOf = (y: number) => (MARGIN.top + PAD_Y + y) * zoom - sy;
 
     // Match nodes to the previous layout by SOURCE POSITION, falling back to the
     // id — see `layoutKeys` for why the id alone loses exactly the nodes an edit
@@ -3335,43 +3359,26 @@ export default function ProofTreeView({
     // viewport centre instead, which needs no node in particular to survive.
     if (anchor && !findByKey(anchor.key)) anchor = null;
 
-    // The CURSOR'S node, when it survived the relayout and was on screen,
-    // beats the viewport-centre guess below: it is where the user is WORKING
-    // — the buffer's caret, the node the accent marks — and a swap landing
-    // mid-edit must leave the view focused there, not on whatever happened to
-    // sit nearest the centre. Same on-screen gate as the deleted-node walk
-    // underneath (its sibling: that one handles the chain head VANISHING,
-    // this one handles it surviving): a cursor parked in a proof you are not
-    // currently looking at must not yank the view back to itself. `refocus`
-    // rides along so a swap that would leave the node outside the comfort
-    // band (a clamp, growth above it) pulls it back in.
+    // The CURSOR'S chain, when its head was ON SCREEN in the layout being
+    // replaced, beats the viewport-centre guess below: it is where the user
+    // is WORKING — the buffer's caret, the node the accent marks — and a swap
+    // landing mid-edit must leave the view focused there, not on whatever
+    // happened to sit nearest the centre. ONE walk covers both cases: the
+    // head SURVIVING is simply the loop's first hit (anchored at its old
+    // spot), and a head this edit DELETED falls through to the nearest
+    // surviving ANCESTOR — the tactic it hung under (see the note above). The
+    // on-screen gate is load-bearing in both directions: a cursor parked in a
+    // proof you are not currently looking at must not yank the view back to
+    // itself. `refocus` rides along so a swap that would leave the anchor
+    // outside the comfort band (a clamp, growth above it, a vanished subtree)
+    // pulls it back in.
     let refocus = false;
     const chain = cursorChainRef.current;
     if (!anchor && prev && chain.length > 0) {
-      const still = findByKey(chain[0]);
-      const was = prev.get(chain[0]);
-      if (still && was) {
-        const screenY = (MARGIN.top + PAD_Y + was.y) * zoom - sy;
-        if (screenY >= 0 && screenY <= el.clientHeight) {
-          anchor = { id: still.data.id, key: chain[0], x: was.x, y: was.y };
-          refocus = true;
-        }
-      }
-    }
-
-    // The cursor's node was DELETED by this edit (see the note above). Walk its
-    // recorded ancestor chain for the first link that survived and anchor there
-    // instead — the tactic the deleted one hung under. Gated on that node having
-    // been ON SCREEN in the layout we are replacing: if you were reading
-    // somewhere else while an edit landed elsewhere, the thing you are looking
-    // at is what should stay put, and the viewport-centre rule below says so.
-    if (!anchor && prev && chain.length > 0 && !findByKey(chain[0])) {
       const was0 = prev.get(chain[0]);
-      const screenY0 = was0
-        ? (MARGIN.top + PAD_Y + was0.y) * zoom - sy
-        : Number.NaN;
-      if (screenY0 >= 0 && screenY0 <= el.clientHeight) {
-        for (const key of chain.slice(1)) {
+      const y0 = was0 ? screenYOf(was0.y) : Number.NaN;
+      if (y0 >= 0 && y0 <= el.clientHeight) {
+        for (const key of chain) {
           const was = prev.get(key);
           const still = was && findByKey(key);
           if (was && still) {
@@ -3393,13 +3400,12 @@ export default function ProofTreeView({
       // shift below was still correct (a difference cancels the constant), so
       // it merely held the WRONG node steady.
       let best = Infinity;
-      const mid = sy + el.clientHeight / 2;
       for (const n of nodes) {
         const k = keys.get(n.data.id)!;
         const key = k.posKey && prev.has(k.posKey) ? k.posKey : k.idKey;
         const was = prev.get(key);
         if (!was) continue;
-        const d = Math.abs((MARGIN.top + PAD_Y + was.y) * zoom - mid);
+        const d = Math.abs(screenYOf(was.y) - el.clientHeight / 2);
         if (d < best) {
           best = d;
           anchor = { id: n.data.id, key, x: was.x, y: was.y };
@@ -4313,7 +4319,8 @@ export default function ProofTreeView({
         n.data.position.start.line === cfStub.line,
     );
     if (pn) {
-      const label = cfStub.draft.trim() === "" ? "…" : cfStub.draft;
+      const empty = cfStub.draft.trim() === "";
+      const label = empty ? "…" : cfStub.draft;
       const boxTop = pn.y + (bandTopH(pn.data) - pn.data.h) / 2;
       const w = Math.max(
         pn.data.w,
@@ -4348,7 +4355,7 @@ export default function ProofTreeView({
             fill="var(--ptw-fg)"
             xmlSpace="preserve"
             style={{ letterSpacing: 0 }}
-            opacity={cfStub.draft.trim() === "" ? 0.5 : 1}
+            opacity={empty ? 0.5 : 1}
           >
             {label}
           </text>
@@ -5350,18 +5357,9 @@ export default function ProofTreeView({
               // commit (see leafFoldTargets). Same glyph, same two gestures,
               // different restore — so it rides `elidable` and only the
               // ACTION branches, which is what keeps the bar uniform.
-              const leafFold =
-                isCombined || node.data.synthetic
-                  ? undefined
-                  : leafFoldIds.get(id);
-              const elidable =
-                seq.mode === "off" &&
-                !elidePick &&
-                !bandPick &&
-                type === "tactic" &&
-                !isMarker &&
-                !node.data.synthetic &&
-                (isCombined || elidableIds.has(id) || leafFold !== undefined);
+              const elideGate = elideGateOf(node.data);
+              const leafFold = elideGate?.leafFold;
+              const elidable = elideGate !== null;
               const isArming = arming?.id === id;
               // Secondary actions live in a hover bar with button-sized
               // targets (see NodeActionBar) instead of tiny corner glyphs or
@@ -5653,16 +5651,10 @@ export default function ProofTreeView({
                     elidable
                       ? (e) => {
                           if (e.altKey) {
-                            if (elidePreview?.anchor !== id)
-                              setElidePreview({
-                                anchor: id,
-                                ids: elideExtentIds(
-                                  id,
-                                  isCombined,
-                                  leafFold !== undefined,
-                                ),
-                                from: "alt",
-                              });
+                            if (elidePreview?.anchor !== id) {
+                              const p = elidePreviewFor(id);
+                              if (p) setElidePreview({ ...p, from: "alt" });
+                            }
                           } else if (
                             // Only the ⌥ path's own preview: the bar's ◌ sets
                             // one too, and this handler fires for every
@@ -6363,25 +6355,22 @@ export default function ProofTreeView({
                                     : leafFold !== undefined
                                       ? toggle(leafFold)
                                       : elideStep(id),
-                                onHover: (on: boolean) =>
-                                  setElidePreview((p) =>
-                                    on
-                                      ? {
-                                          anchor: id,
-                                          ids: elideExtentIds(
-                                            id,
-                                            isCombined,
-                                            leafFold !== undefined,
-                                          ),
-                                          from: "bar" as const,
-                                        }
-                                      : // Leaving the button clears only the
-                                        // bar's own preview — an ⌥-hover fade
-                                        // must survive the pointer crossing ◌.
-                                        p?.anchor === id && p.from === "bar"
+                                onHover: (on: boolean) => {
+                                  if (on) {
+                                    const p = elidePreviewFor(id);
+                                    if (p)
+                                      setElidePreview({ ...p, from: "bar" });
+                                  } else {
+                                    // Leaving the button clears only the
+                                    // bar's own preview — an ⌥-hover fade
+                                    // must survive the pointer crossing ◌.
+                                    setElidePreview((p) =>
+                                      p?.anchor === id && p.from === "bar"
                                         ? null
                                         : p,
-                                  ),
+                                    );
+                                  }
+                                },
                               },
                             ]
                           : []),

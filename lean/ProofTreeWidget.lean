@@ -242,6 +242,24 @@ def tacticNames (ctx : Elab.ContextInfo) : IO (Array String) :=
   ctx.runMetaM .empty do
     return (← Tactic.Doc.allTacticDocs).map (·.userName)
 
+/-- Read one field of a JSON object, falling back to `dflt` when it is absent
+or does not decode.
+
+This is what every hand-written `FromJson` in this file is made of, and the
+reason they are hand-written at all: the DERIVED instance treats a missing
+key as an error rather than as the field's default, so one absent field fails
+the whole decode. That matters exactly where the two ends of a wire ship
+separately — the companion (`ThemeColors` below) is a dev-installed extension
+that can easily be older than the server, and losing the whole palette over
+one new flag is exactly what happened before this; an older BUNDLE likewise
+sends `getProofTree` a `{pos}` with no `cf`. Shared so the rule cannot drift
+between the structures that depend on it. -/
+private def jsonField {α : Type} [FromJson α] (j : Json) (k : String)
+    (dflt : α) : α :=
+  match j.getObjVal? k >>= fromJson? with
+  | .ok v => v
+  | .error _ => dflt
+
 /-- Parameters for `getProofTree`: the cursor position, plus whether the client
 wants the counterfactual preview (`proofTree.counterfactual`, decided
 client-side since settings ride the companion channel). The widget passes the
@@ -252,16 +270,12 @@ structure GetProofTreeParams where
   cf  : Bool := true
   deriving ToJson
 
-/-- Hand-written for the theme-channel reason (`ThemeColors` below): the two
-ends can ship separately, and a derived instance makes a MISSING `cf` key an
-error rather than the default — an older bundle sends `{pos}` alone. -/
+/-- Hand-written for the shared-`jsonField` reason above: a derived instance
+makes a MISSING `cf` key an error rather than the default. -/
 instance : FromJson GetProofTreeParams where
   fromJson? j := do
     let pos ← j.getObjValAs? Lsp.Position "pos"
-    let cf := match j.getObjVal? "cf" >>= fromJson? with
-      | .ok b => b
-      | .error _ => true
-    return { pos, cf }
+    return { pos, cf := jsonField j "cf" true }
 
 /-- Collect an `InteractiveGoal` for every goal mentioned by any tactic in the
 info tree, keyed by mvarId string (= `GoalInfo.id` on the wire).
@@ -597,12 +611,14 @@ def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
           best := some it
   return best.map fun it => (it.start, it.stop, it.info)
 
-/-- One-entry cache for `getProofTree`'s payload, keyed on
-`(uri, document version, command start)`. Nothing in the payload depends on the
-cursor beyond which command snapshot it lands in, yet the handler runs on EVERY
-cursor move — so walking a proof line-by-line (the dominant interaction, and
-exactly what tree↔lens tracking generates) recomputed an identical payload per
-keypress: five info-tree walks plus a tagged pretty-print of every goal.
+/-- One-entry cache for `getProofTree`'s REAL payload (pre-counterfactual — a
+pure function of the key; the cf decision reads mutable cf-cache state and
+runs per request after this), keyed on `(uri, document version, command
+start)`. Nothing in the payload depends on the cursor beyond which command
+snapshot it lands in, yet the handler runs on EVERY cursor move — so walking
+a proof line-by-line (the dominant interaction, and exactly what tree↔lens
+tracking generates) recomputed an identical payload per keypress: five
+info-tree walks plus a tagged pretty-print of every goal.
 
 Caching the `WithRpcRef`-carrying halves is safe, and deliberately so: a ref's
 id is minted once by `WithRpcRef.mk`, but its session registration happens at
@@ -643,8 +659,14 @@ the live server), the counterfactual from its own elaboration's message log
 (which IS populated, since we run the elaboration ourselves). -/
 def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
     (parsed : Paperproof.Services.Result)
-    (errorPositions : Array Lsp.Position) (treeDiags : Array TreeDiag)
-    (snapStart : Nat) : RequestM ProofTreeData := do
+    (errorPositions : Array Lsp.Position) (treeDiags : Array TreeDiag) :
+    RequestM ProofTreeData := do
+    -- The command's start offset (the `proofId` fallback below). Derived from
+    -- `snap` here rather than taken as a parameter: both callers were passing
+    -- exactly this expression, and an inline copy at one call site is a drift
+    -- point. (`getProofTree` computes its own for the cache key — a different
+    -- consumer.)
+    let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
     -- The label fix-ups (the `rw` location clause, a multi-line tactic's
     -- dropped tail), applied FIRST, before anything reads a label: the tokens
     -- align against it, brief mode collapses it, the completion list is keyed
@@ -957,9 +979,9 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
 
 /-- Splice for the counterfactual: the cursor line's content replaced by
 `sorry`, preserving what structure the line carries. Returns
-`(cfText, draft)` — the whole spliced source and the line's real content
-(indent stripped) for the client's stub label — or `none` when there is
-nothing to do.
+`(mkText, draft)` — a THUNK building the whole spliced source (deferred; see
+the note at the return) and the line's real content (indent stripped) for the
+client's stub label — or `none` when there is nothing to do.
 
 Tiers, from most to least structure preserved:
 * a line carrying a justification (`… := by ring`, a `calc` link or one-line
@@ -976,7 +998,7 @@ A wrong guess is SAFE by construction: the spliced command elaborates to
 nothing, `computeCf` caches the failure for this exact text, and the client
 keeps today's behaviour. -/
 private def cfSplice (fileMap : FileMap) (line : Nat) (cursorCol : Nat) :
-    Option (String × String) :=
+    Option ((Unit → String) × String) :=
   if line + 1 ≥ fileMap.positions.size then none else
   let src := fileMap.source
   let lineStart := fileMap.lspPosToUtf8Pos ⟨line, 0⟩
@@ -1008,10 +1030,17 @@ private def cfSplice (fileMap : FileMap) (line : Nat) (cursorCol : Nat) :
     else ws ++ "sorry"
   if newContent == content then none
   else
-    let cfText := String.Pos.Raw.extract src ⟨0⟩ lineStart
-      ++ newContent ++ (if hasNl then "\n" else "")
-      ++ String.Pos.Raw.extract src nextStart ⟨src.utf8ByteSize⟩
-    some (cfText, body)
+    -- The whole-file concatenation DEFERRED behind a thunk: every cf-eligible
+    -- request pays the line-local decision above, but only the paths that
+    -- actually key or run the elaboration force the O(file) build — the
+    -- healthy-file path and the repeated-identical-request serve decline or
+    -- return without it (see maybeCounterfactual).
+    some
+      (fun _ =>
+        String.Pos.Raw.extract src ⟨0⟩ lineStart
+          ++ newContent ++ (if hasNl then "\n" else "")
+          ++ String.Pos.Raw.extract src nextStart ⟨src.utf8ByteSize⟩,
+       body)
 
 /-- Is the counterfactual wanted? Two conjuncts, both read off the payload the
 normal path just built (no extra parse):
@@ -1026,20 +1055,23 @@ tactic line reports `unsolved goals` on the CONTAINER (`have`/`induction`),
 never on the now-blank line (measured — the line-scoped version missed the
 delete-and-retype scenario entirely).
 
-**AND the cursor's line holds no completed tactic** — no step STARTS on it.
-This is what keeps cf out of the way while merely READING a broken proof with
-the cursor on some valid line, and what hands back the real tree the moment
-the typed tactic elaborates. A false fire (cursor resting on a blank line of a
-broken proof) costs one background elaboration, cached by spliced text; the
-splice's own declines (comment lines, blank at column 0) keep the browsing
-cases out. -/
-private def cfWanted (real : ProofTreeData) (pos : Lsp.Position) : Bool :=
+**AND the cursor's line holds no completed tactic** — no step STARTS on it
+(`stepStartsHere`, the completeness witness; computed ONCE by
+`maybeCounterfactual` and passed in, because the sticky-serve exit tests the
+same predicate and two codings of it would let the cf trigger and the way
+back out of cf disagree). This is what keeps cf out of the way while merely
+READING a broken proof with the cursor on some valid line, and what hands
+back the real tree the moment the typed tactic elaborates. A false fire
+(cursor resting on a blank line of a broken proof) costs one background
+elaboration, cached by spliced text; the splice's own declines (comment
+lines, blank at column 0) keep the browsing cases out. -/
+private def cfWanted (real : ProofTreeData) (pos : Lsp.Position)
+    (stepStartsHere : Bool) : Bool :=
+  -- INCLUSIVE at the stop (posLE both ways), like the client's `cursorInDecl`
+  -- and unlike the half-open step rule: a false "inside" costs one quiet
+  -- period, a false "outside" is a brokenness signal that never fires.
   let declContains := match real.declRange with
-    | some r =>
-      (r.start.line < pos.line
-        || (r.start.line == pos.line && r.start.character ≤ pos.character))
-      && (pos.line < r.stop.line
-        || (pos.line == r.stop.line && pos.character ≤ r.stop.character))
+    | some r => posLE r.start pos && posLE pos r.stop
     | none => false
   let errInDecl := real.diagnostics.any fun d =>
     d.severity == 1 && (match real.declRange with
@@ -1050,26 +1082,32 @@ private def cfWanted (real : ProofTreeData) (pos : Lsp.Position) : Bool :=
     || real.recovered.any (·.start.line == pos.line)
     || !declContains
     || errInDecl
-  let lineIncomplete :=
-    !(real.steps.any fun s => s.position.start.line == pos.line)
-  broken && lineIncomplete
+  broken && !stepStartsHere
 
-/-- The counterfactual's two caches plus its in-flight marker. `cfElabCache`
-is the expensive layer, keyed by the HASH OF THE SPLICED TEXT — which is what
-makes the feature affordable: while the author types on one line, the real
-document changes every keystroke but the spliced document (that line reads
-`sorry` either way) does not, so ONE elaboration serves the whole burst. A
-`none` value records a failure, so a splice that elaborates to nothing is not
-retried per keystroke. `cfServeCache` short-circuits the splice+hash for the
-repeated identical request; `cfComputing` dedupes the background task (its
-timestamp expires a marker orphaned by a dead task). -/
-initialize cfElabCache : IO.Ref (Option (UInt64 × Option ProofTreeData)) ←
-  IO.mkRef none
+/-- One entry of `cfElabCache`: the elaboration for a spliced text is either
+IN FLIGHT (`pending`, stamped so a marker orphaned by a dead task expires) or
+finished (`done`, where `none` records a splice that elaborated to nothing so
+it is not retried per keystroke). One value per state REPLACES what used to
+be a separate `cfComputing` ref: that marker was never cleared on completion
+— the answer beat it only by check ORDER — where completion now overwrites
+`pending` with `done` under the same key, so the stale state cannot exist. -/
+private inductive CfEntry where
+  | pending (startMs : Nat)
+  | done (payload : Option ProofTreeData)
+
+/-- The counterfactual's two caches. `cfElabCache` is the expensive layer,
+keyed by the HASH OF THE SPLICED TEXT — which is what makes the feature
+affordable: while the author types on one line, the real document changes
+every keystroke but the spliced document (that line reads `sorry` either way)
+does not, so ONE elaboration serves the whole burst. -/
+initialize cfElabCache : IO.Ref (Option (UInt64 × CfEntry)) ← IO.mkRef none
 /-- (real-source hash, line, spliced-text hash, blob) — the last serve. The
-extra keys carry the STICKY rule; see `maybeCounterfactual`. -/
+extra keys carry the STICKY rule; see `maybeCounterfactual`. The blob is kept
+here as well as in the elab entry ON PURPOSE: the elab cache holds one entry,
+so an edit that splices to a new key evicts the old blob there, and this copy
+is what still serves instantly when the edit is then reverted. -/
 initialize cfServeCache : IO.Ref (Option (UInt64 × Nat × UInt64 × ProofTreeData)) ←
   IO.mkRef none
-initialize cfComputing : IO.Ref (Option (UInt64 × Nat)) ← IO.mkRef none
 
 /-- Elaborate the counterfactual: parse ONE command of the spliced text from
 the state the document's own elaboration reached just before it, run the
@@ -1157,7 +1195,6 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
     | some res => pure res
     | none => pure { steps := [], allGoals := {} })
   let payload ← mkTreePayload synth cfMap parsed errPos cfDiags
-    ((stx.getRange?.map (·.start.byteIdx)).getD 0)
   if payload.steps.isEmpty then return none
   return some { payload with cfLine := some pos.line }
 
@@ -1177,51 +1214,62 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     (doc : FileWorker.EditableDocument) (fileMap : FileMap)
     (real : ProofTreeData) : RequestM ProofTreeData := do
   unless wantCf do return real
-  let some (cfText, draft) := cfSplice fileMap pos.line pos.character
+  let some (mkText, draft) := cfSplice fileMap pos.line pos.character
     | return real
-  let srcHash : UInt64 := hash fileMap.source
-  let cfKey : UInt64 := hash cfText
   -- The completeness witness: a step STARTING on the cursor's line means the
   -- line's tactic elaborated for real, which is what turns the sticky serve
-  -- back off the moment the typed tactic becomes valid.
+  -- back off the moment the typed tactic becomes valid. Also the second
+  -- conjunct of `cfWanted`, passed in so the trigger and the way back out of
+  -- cf cannot drift apart.
   let stepStartsHere := real.steps.any fun s => s.position.start.line == pos.line
   if let some (sh, ln, ck, blob) ← cfServeCache.get then
-    -- Identical request state: serve what was served.
-    if sh == srcHash && ln == pos.line then
-      return { blob with cfDraft := some draft }
-    -- The STICKY rule, and it exists because `cfWanted`'s signals RACE the
-    -- diagnostics reporter: measured, one keystroke after a delete the calc
-    -- CONTAINER step still covered the cursor's line, no error had been
-    -- published yet, and the raw 3-step wreck was served between two cf
-    -- serves. If the last serve was cf FOR THIS LINE, and the current text
-    -- splices to the SAME counterfactual (i.e. the edit stayed within the
-    -- line — the typing case by construction), and no step starts here, the
-    -- author is still mid-word: keep serving the cf.
-    if ln == pos.line && ck == cfKey && !stepStartsHere then
-      cfServeCache.set (some (srcHash, ln, ck, blob))
-      return { blob with cfDraft := some draft }
-  unless cfWanted real pos do return real
-  if let some (k, res) ← cfElabCache.get then
+    if ln == pos.line && !stepStartsHere then
+      let srcHash : UInt64 := hash fileMap.source
+      -- `sh == srcHash` is the repeated identical request (short-circuited,
+      -- so it never builds the spliced file). `ck == hash (mkText ())` is
+      -- the STICKY rule, and it exists because `cfWanted`'s signals RACE the
+      -- diagnostics reporter: measured, one keystroke after a delete the
+      -- calc CONTAINER step still covered the cursor's line, no error had
+      -- been published yet, and the raw 3-step wreck was served between two
+      -- cf serves. If the last serve was cf FOR THIS LINE, and the current
+      -- text splices to the SAME counterfactual (i.e. the edit stayed within
+      -- the line — the typing case by construction), and no step starts
+      -- here, the author is still mid-word: keep serving the cf.
+      if sh == srcHash || ck == hash (mkText ()) then
+        cfServeCache.set (some (srcHash, ln, ck, blob))
+        return { blob with cfDraft := some draft }
+  unless cfWanted real pos stepStartsHere do return real
+  -- Only past the WANTED gate is the whole-file work paid: the spliced text
+  -- (O(file)) and the two hashes run once per request while the document is
+  -- broken at the cursor, never on the healthy path.
+  let cfText := mkText ()
+  let cfKey : UInt64 := hash cfText
+  let srcHash : UInt64 := hash fileMap.source
+  let now ← IO.monoMsNow
+  if let some (k, entry) ← cfElabCache.get then
     if k == cfKey then
-      match res with
-      | some blob =>
+      match entry with
+      | .done (some blob) =>
         cfServeCache.set (some (srcHash, pos.line, cfKey, blob))
         return { blob with cfDraft := some draft }
-      | none => return real
-  let now ← IO.monoMsNow
-  if let some (k, t0) ← cfComputing.get then
-    if k == cfKey && now - t0 < 20000 then
-      return { real with cfPending := true }
-  cfComputing.set (some (cfKey, now))
+      | .done none => return real
+      | .pending t0 =>
+        -- In flight: a burst of keystrokes starts exactly one elaboration.
+        -- The timestamp expires a marker orphaned by a dead task.
+        if now - t0 < 20000 then
+          return { real with cfPending := true }
+  cfElabCache.set (some (cfKey, .pending now))
   let rc ← read
-  let line := pos.line
   let _ ← IO.asTask (prio := .default) do
     let res ← match ← ((computeCf doc pos cfText).run rc).toBaseIO with
       | .ok res => pure res
       | .error _ => pure none
-    cfElabCache.set (some (cfKey, res))
+    -- Completion IS the in-flight marker's clearing: `done` overwrites
+    -- `pending` under the same key (a different key's later `pending` simply
+    -- wins — single entry, single cursor).
+    cfElabCache.set (some (cfKey, .done res))
     if let some blob := res then
-      cfServeCache.set (some (srcHash, line, cfKey, blob))
+      cfServeCache.set (some (srcHash, pos.line, cfKey, blob))
   return { real with cfPending := true }
 
 /-- Parse the proof tree for the theorem under the cursor.
@@ -1258,46 +1306,57 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
     -- the payload).
     let interactiveDiags := (← doc.collectCurrentDiagnostics).toArray
     let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, interactiveDiags.size)
-    if let some (key, payload) ← proofTreeCache.get then
-      -- A cached PENDING payload is a promise, not an answer: fall through
-      -- and re-decide, or the client's re-poll would loop on it forever
-      -- within one document version.
-      if key == cacheKey && !payload.cfPending then
-        return payload
-    let parsed ← (do
-      match ← RequestM.runTermElabM snap
-        (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree) with
-      | some r => pure r
-      | none => pure { steps := [], allGoals := {} })
-    -- Error starts for the recovery gate, and the payload's diagnostics, both
-    -- from `interactiveDiags` above (see its comment: `snap.msgLog` is EMPTY
-    -- on this path). File-wide is fine for both consumers: recovery tests
-    -- containment in this command's slots, and the client filters to the
-    -- declaration's span.
-    let errorPositions := interactiveDiags.foldl (init := #[]) fun acc d =>
-      if d.severity? == some .error then acc.push d.range.start else acc
-    let treeDiags : Array TreeDiag := interactiveDiags.map fun d =>
-      let full := d.fullRange?.getD d.range
-      { range := ⟨d.range.start, d.range.end⟩
-        fullRange := ⟨full.start, full.end⟩
-        severity := match d.severity? with
-          | some .error => 1 | some .warning => 2 | _ => 3
-        -- `toDiagnostic`'s flattener, NOT `d.message.stripTags`. The two agree
-        -- only when the editor initialised the server with `hasWidgets: false`
-        -- — which a bare LSP probe does and VS Code never does. In widget mode
-        -- an embed's text lives INSIDE the `MsgEmbed` constructor and the
-        -- outer tag's subtext is EMPTY, so `stripTags` walks past all of it
-        -- and every message flattened to "" (measured: 9/9 empty with
-        -- `initializationOptions.hasWidgets: true`, 9/9 full without).
-        message := d.toDiagnostic.message
-        isSilent := d.isSilent?.getD false
-        leanTags := (d.leanTags?.getD #[]).map fun
-          | .unsolvedGoals => 1 | .goalsAccomplished => 2 }
-    let real ← mkTreePayload snap fileMap parsed errorPositions treeDiags
-      snapStart
-    let payload ← maybeCounterfactual params.cf params.pos doc fileMap real
-    proofTreeCache.set <| some (cacheKey, payload)
-    return payload
+    -- The cache holds the REAL payload — a pure function of the key — and the
+    -- cf DECISION runs per request AFTER it. Deliberately not the decided
+    -- payload: that value depends on the cf caches' mutable state at decision
+    -- time, so caching it forced a "pending is a promise, not an answer"
+    -- special case at the hit, and that miss re-ran the whole
+    -- parse+enrichment pipeline once per 800ms client poll while the cf
+    -- elaborated (~1-3s) — the exact cost this cache exists to avoid, on
+    -- exactly the big files where cf is slow. A poll now costs the
+    -- line-local splice decision plus at most one file build and two hashes
+    -- (see maybeCounterfactual's gating).
+    let cachedReal? : Option ProofTreeData :=
+      match ← proofTreeCache.get with
+      | some (key, payload) => if key == cacheKey then some payload else none
+      | none => none
+    let real ← match cachedReal? with
+      | some real => pure real
+      | none => do
+        let parsed ← (do
+          match ← RequestM.runTermElabM snap
+            (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree) with
+          | some r => pure r
+          | none => pure { steps := [], allGoals := {} })
+        -- Error starts for the recovery gate, and the payload's diagnostics,
+        -- both from `interactiveDiags` above (see its comment: `snap.msgLog`
+        -- is EMPTY on this path). File-wide is fine for both consumers:
+        -- recovery tests containment in this command's slots, and the client
+        -- filters to the declaration's span.
+        let errorPositions := interactiveDiags.foldl (init := #[]) fun acc d =>
+          if d.severity? == some .error then acc.push d.range.start else acc
+        let treeDiags : Array TreeDiag := interactiveDiags.map fun d =>
+          let full := d.fullRange?.getD d.range
+          { range := ⟨d.range.start, d.range.end⟩
+            fullRange := ⟨full.start, full.end⟩
+            severity := match d.severity? with
+              | some .error => 1 | some .warning => 2 | _ => 3
+            -- `toDiagnostic`'s flattener, NOT `d.message.stripTags`. The two
+            -- agree only when the editor initialised the server with
+            -- `hasWidgets: false` — which a bare LSP probe does and VS Code
+            -- never does. In widget mode an embed's text lives INSIDE the
+            -- `MsgEmbed` constructor and the outer tag's subtext is EMPTY, so
+            -- `stripTags` walks past all of it and every message flattened
+            -- to "" (measured: 9/9 empty with
+            -- `initializationOptions.hasWidgets: true`, 9/9 full without).
+            message := d.toDiagnostic.message
+            isSilent := d.isSilent?.getD false
+            leanTags := (d.leanTags?.getD #[]).map fun
+              | .unsolvedGoals => 1 | .goalsAccomplished => 2 }
+        let real ← mkTreePayload snap fileMap parsed errorPositions treeDiags
+        proofTreeCache.set <| some (cacheKey, real)
+        pure real
+    maybeCounterfactual params.cf params.pos doc fileMap real
 
 /-- Case-insensitive prefix test, allocation-free — the client's own matcher
 (`matches` in completion.ts) lowercases both sides, so the server must agree or
@@ -1484,22 +1543,6 @@ structure ThemeTokenColor where
   color : String
   deriving ToJson, FromJson
 
-/-- Read one field of a JSON object, falling back to `dflt` when it is absent
-or does not decode.
-
-This is what the two hand-written `FromJson` instances below are made of, and
-the reason they are hand-written at all: the DERIVED instance treats a missing
-key as an error rather than as the field's default, so one absent field fails
-the whole decode. That matters on this wire and nowhere else, because its two
-ends ship separately — the companion is a dev-installed extension that can
-easily be older than the server, and losing the whole palette over one new flag
-is exactly what happened before this. Shared so the rule cannot drift between
-the two structures that depend on it. -/
-private def jsonField {α : Type} [FromJson α] (j : Json) (k : String)
-    (dflt : α) : α :=
-  match j.getObjVal? k >>= fromJson? with
-  | .ok v => v
-  | .error _ => dflt
 
 /-- One of the user's `lean4.input.customTranslations` entries. An ARRAY of
 these rather than a JSON object keyed by abbreviation, for the same reason
