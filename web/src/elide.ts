@@ -392,7 +392,7 @@ const GHOST_NOTE_PREVIEW = 60;
 
 /** A step marker's label: a truncated preview of the tactic itself, not a
 count. A ghost stands for ONE named tactic (plus whatever blocks it opened, as
-a `+N` tail), and its whole job is to say which one — `⋯ 4 tactics` would be
+a `+N` tail), and its whole job is to say which one — `◌ 4 tactics` would be
 the same shadow whatever you cut.
 
 The label is the node's own, so with the rail's brief mode ON it is already
@@ -410,7 +410,7 @@ function ghostLabel(tactics: string[], note?: string): string {
   const text =
     head.length > cap ? head.slice(0, cap - 1).trimEnd() + "…" : head;
   const more = note ? 0 : tactics.length - 1;
-  return `⋯ ${text}${more > 0 ? `  +${more}` : ""}`;
+  return `◌ ${text}${more > 0 ? `  +${more}` : ""}`;
 }
 
 /** Translate a cut's member ids through a re-parse (see `remapIds`).
@@ -527,7 +527,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
     // here is why" — so it should label the cut whenever that step is cut,
     // not only when the seed block made the cut. Without this, expanding a
     // seeded ghost and eliding it again by hand (⊞ clears cuts; the source
-    // still says `.none why`) replaced the author's sentence with `⋯ 1
+    // still says `.none why`) replaced the author's sentence with `◌ 1
     // tactic`, and the same node read differently depending on which gesture
     // had put it away.
     //
@@ -535,7 +535,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
     // (this is the very member set the seed builds, so ◌ on a flagged tactic
     // and the flag itself now agree), and any other cut only when it
     // collapses EXACTLY ONE tactic. A band sweeping five steps, one of them
-    // flagged, keeps `⋯ 5 tactics` — that note describes one step and would
+    // flagged, keeps `◌ 5 tactics` — that note describes one step and would
     // overstate itself as the label for the rest.
     const about =
       cut.kind === "step"
@@ -605,14 +605,14 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
           id: mid,
           type: "tactic",
           // A `combine` marker IS the run's tactics, stacked (the view draws it
-          // as a normal tactic box); an elide marker is the `⋯ N tactics` chip
+          // as a normal tactic box); an elide marker is the `◌ N tactics` chip
           // — unless a NOTE stands for it, which is the whole point of the
           // author's sentence and reads the same however the cut was made.
           label: combine
             ? tactics.join("\n")
             : ghost || note
               ? ghostLabel(tactics, note)
-              : `⋯ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
+              : `◌ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
           parents,
           chain,
           // `parts` rides EVERY marker, not just a combined one. The renderer

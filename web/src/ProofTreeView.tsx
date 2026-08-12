@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useMemo,
   useState,
@@ -110,6 +111,15 @@ import {
   removeFlagPatches,
   usedHypNames,
 } from "./flagEdit";
+import {
+  CMD,
+  HYP_MARK,
+  VERB_DOC,
+  nodeHints,
+  type Caps,
+  type SelVerbDocKey,
+} from "./gestures";
+import { HelpPanel } from "./helpPanel";
 import {
   ACCENT_TEXT,
   CASE_FILL,
@@ -294,6 +304,9 @@ const CHIP_GAP = 6;
 // Breathing room between the selection pill's chips and the edge of the
 // opaque card behind them.
 const CARD_PAD = 4;
+// The gap that carries the selection pill's safety seam: a hairline and a ✎
+// between the verbs that change the VIEW and the verbs that change your FILE.
+const SEP_W = 26;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
 // The fill-in-place chip names the hole rather than reading `+`. "Add a tactic
@@ -436,7 +449,6 @@ const editOverlayLayer = (zIndex: number): CSSProperties => ({
 // threshold is the viewport itself, not a fraction of it, so it needs no
 // constant: it is measured off the element at the moment of the move.
 
-const HYP_MARK = "▸";
 
 /**
  * Where the scroll box must sit for `node` to be comfortably in view.
@@ -1039,6 +1051,30 @@ export default function ProofTreeView({
   const [reflow, setReflow] = useState<ReflowMode>("off");
   // Whether the ¶ button is expanded into its width slider (see ReflowControl).
   const [reflowOpen, setReflowOpen] = useState(false);
+  // Whether the gesture reference (HelpPanel) is open. Almost every gesture on
+  // this tree is a click, a modifier or a drag, and the one place they were
+  // written down — the node's native <title> — is COVERED by the tagged label's
+  // foreignObject in the infoview, which is the only place the widget actually
+  // ships. So the panel is not a nicety; without it the vocabulary is
+  // undiscoverable in the product and discoverable only in the dev harness.
+  //
+  // Pure paint: NOT in `viewKey`, no anchorRoot, not an engine dep, never
+  // remapped — it draws over the tree and moves nothing. And NOT cleared on a
+  // proof change: it is a reader's reference, the class of thing the ⌥-⊞
+  // source-view reset deliberately preserves (like zoom and the rail toggles).
+  const [helpOpen, setHelpOpen] = useState(false);
+  // What this HOST offers, from the hooks it handed us. The panel filters on
+  // it, so the standalone app shows a shorter and still-true list instead of a
+  // second hand-maintained one going stale next to the real one.
+  const caps: Caps = {
+    reveal: !!onReveal,
+    edit: !!getTacticEdit && !!onEditTactic,
+    add: !!onAddTactic,
+    popout: !!onPopoutEdit,
+    del: !!onDeleteTactic && !!deleteSlots,
+    flags: !!onEditTactic && !!deleteSlots,
+    undo: !!onUndo,
+  };
   // Aligned-tracks mode NEEDS boxes capped at a modest width — a single
   // page-wide goal would push the whole shared tactic column out to its edge —
   // so it forces reflow's default budget when the user hasn't set one; an
@@ -1180,6 +1216,10 @@ export default function ProofTreeView({
   const [elidePreview, setElidePreview] = useState<{
     anchor: string;
     ids: Set<string>;
+    // Whether the gesture takes the ANCHOR itself and nothing else (a closing
+    // tactic, where ⌥ folds the goal above). Only the ⌥ surface acts on it —
+    // see the node's opacity.
+    self: boolean;
     from: "alt" | "bar";
   } | null>(null);
   // Clicking the widget BACKGROUND dismisses the editor-cursor accent: in the
@@ -1298,6 +1338,18 @@ export default function ProofTreeView({
     id: string;
     spec: DeleteSpec;
   } | null>(null);
+  // The selection pill's own armed half, for `unflag` — the one verb there
+  // that DELETES text the author wrote (whole comment lines, prose included),
+  // which is exactly what `arming` exists for on ⊘. It reuses the PATTERN, not
+  // the state: `arming` is keyed on a node and its extent/dimming/preview all
+  // are, and a selection has no node.
+  //
+  // Like `arming` it holds PATCHES computed against the current document, so
+  // it must be cleared everywhere ranges go stale — the layer table, the
+  // background click, and the shape-change branch beside `setArming(null)`.
+  // That last one is the dangerous one: a re-elaboration between arming and
+  // confirming would otherwise write against coordinates that have moved.
+  const [pendingVerb, setPendingVerb] = useState<SelVerb | null>(null);
   // Which node's diagnostic popup is up (hovering its ribbon strip). A custom
   // popup rather than the strip's native <title>, for the two things a native
   // tooltip cannot do: appear NOW (the ~1s hover delay is the OS's, not ours —
@@ -1308,47 +1360,145 @@ export default function ProofTreeView({
   // so a node that unmounts under the pointer renders nothing rather than a
   // stale popup.
   const [hoverDiag, setHoverDiag] = useState<string | null>(null);
-  // Esc closes the picker, disarms a delete, folds the ¶ slider away, closes
-  // an UNFOCUSED staged calc fill, and — when none of those is up — leaves a
-  // focused subtree. None of them owns a focused element worth listening on
-  // (two are SVG chips, and the slider's own focus is the range input), so
-  // unlike the overlay's own Esc this has to listen on the document. A
-  // FOCUSED stage never reaches here: the textarea's keydown handles its own
-  // Esc and stops propagation — this layer exists because the stage's blur is
-  // deliberately a no-op, so a stray focus loss can leave the overlay open
-  // with nothing focused, and Esc must still work there.
+  // THE dismissal layering — everything that Esc can take back, in ONE place.
+  // Three consumers read it and there is no fourth: Esc (just below), the
+  // background click (the scroll container's onClick), and the hint pills,
+  // whose ✕ is the layer's own `off` so a pill and Esc cannot disagree about
+  // what leaving a mode means.
   //
-  // LAYERED on purpose: Esc dismisses the transient thing first and only
-  // unfocuses once there is nothing transient left. Unfocusing in the same
-  // keypress that closes a picker would throw away the scope the user is
-  // working inside as a side effect of cancelling something else — and focus,
-  // unlike the others, costs a gesture to rebuild.
+  // It replaced three hand-written lists that had already drifted apart, and
+  // the drift was not cosmetic: the three PICKING modes (⇝ sequence, ⇥ path,
+  // ⇳ band) appeared in NONE of them, so the three modes that take over every
+  // click on the tree were the three with no announced way out.
+  //
+  // `bg` says whether a click on the tree background dismisses the layer too.
+  // The picking modes say NO deliberately: between the first pick and the
+  // second the pointer crosses a tree full of background, and one miss would
+  // destroy the gesture. Their ways out are all deliberate ones — Esc, the
+  // rail button that turned the mode on, and the hint pill's ✕.
+  type Layer = { id: string; up: boolean; off: () => void; bg: boolean };
+  const layers: Layer[] = [
+    { id: "help", up: helpOpen, off: () => setHelpOpen(false), bg: true },
+    // The prose prompt sits ABOVE the selection that spawned it: backing out
+    // of `.none…` should hand you back the selection, not dissolve it.
+    {
+      id: "flagPrompt",
+      up: !!flagPrompt,
+      off: () => setFlagPrompt(null),
+      bg: true,
+    },
+    { id: "arming", up: !!arming, off: () => setArming(null), bg: true },
+    {
+      id: "pendingVerb",
+      up: !!pendingVerb,
+      off: () => setPendingVerb(null),
+      bg: true,
+    },
+    { id: "picking", up: !!picking, off: () => setPicking(null), bg: true },
+    // The ¶ slider is a floater over the tree, so clicking the tree is "done
+    // with it" — the rail sits outside the scroll container, so its own clicks
+    // (the ¶ button included) never land on the background.
+    {
+      id: "reflow",
+      up: reflowOpen,
+      off: () => setReflowOpen(false),
+      bg: true,
+    },
+    // A staged calc fill closes on Esc or a background click and writes
+    // NOTHING: the `_`s stand and the file stays valid. Its blur is
+    // deliberately a no-op, which is exactly why it needs this layer.
+    {
+      id: "calcStage",
+      up: !!editing?.calcStage,
+      off: () => setEditing((cur) => (cur?.calcStage ? null : cur)),
+      bg: true,
+    },
+    {
+      id: "seq",
+      up: seq.mode !== "off",
+      off: () => setSeq({ mode: "off" }),
+      bg: false,
+    },
+    {
+      id: "elidePick",
+      up: !!elidePick,
+      off: () => setElidePick(null),
+      bg: false,
+    },
+    {
+      id: "bandPick",
+      up: !!bandPick,
+      off: () => setBandPick(null),
+      bg: false,
+    },
+    // Second to last because a selection is EXPENSIVE to rebuild — it costs a
+    // drag — so anything cheaper should be what a stray Esc takes.
+    {
+      id: "selection",
+      up: !!selection,
+      off: () => setSelection(null),
+      bg: true,
+    },
+    // Last for the same reason, more so: focus costs a gesture to rebuild, and
+    // unfocusing as a SIDE EFFECT of cancelling something else throws away the
+    // scope the user is working inside.
+    {
+      id: "focus",
+      up: focusId !== null,
+      off: () => setFocusId(null),
+      bg: false,
+    },
+  ];
+  /** The way out of one layer, by name — what a hint pill's ✕ runs, so the
+  pill offers exactly what Esc would do and cannot drift from it. */
+  const layerOff = (id: string) => {
+    const l = layers.find((x) => x.id === id);
+    return l ? l.off : () => {};
+  };
+  // Esc dismisses the FIRST layer that is up — one keypress, ONE visible
+  // effect. It used to clear five at once, so closing the ¶ slider also threw
+  // away a marquee selection built by a drag; the argument the focus layer was
+  // always given now applies to every layer. Realistic depth is two: the
+  // picking modes are mutually exclusive with each other and with the fill.
+  //
+  // Registered ONCE, reading the table through a ref the render writes (the
+  // ⌥-keydown listener's pattern). The old effect listed its own state in the
+  // deps and so re-subscribed on every `editing` change — once per keystroke
+  // in the in-place editor. Nothing here reads a ref during render, and every
+  // `off` is a setState, so react-hooks/refs stays satisfied.
+  //
+  // A FOCUSED stage or prompt never reaches this listener: its own textarea
+  // handles Esc and stops propagation. This is the backstop for the unfocused
+  // case, which exists because those overlays' blur is deliberately a no-op.
+  const layersRef = useRef(layers);
   useEffect(() => {
-    const transient =
-      picking || arming || reflowOpen || !!selection || !!flagPrompt;
-    const stage = !!editing?.calcStage;
-    if (!transient && !stage && focusId === null) return;
+    layersRef.current = layers;
+  });
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (transient) {
-        setPicking(null);
-        setArming(null);
-        setReflowOpen(false);
-        // The marquee selection and its prose prompt are transient like the
-        // pickers (the prompt's own textarea handles its Esc when focused
-        // and stops propagation; this layer is the unfocused backstop, the
-        // calc-stage pattern).
-        setSelection(null);
-        setFlagPrompt(null);
-      } else if (stage) {
-        setEditing((cur) => (cur?.calcStage ? null : cur));
-      } else {
-        setFocusId(null);
-      }
+      layersRef.current.find((l) => l.up)?.off();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [picking, arming, reflowOpen, focusId, editing, selection, flagPrompt]);
+  }, []);
+  // `?` (and F1) opens the gesture reference. Layout-independent — the KEY is
+  // tested, not a shift+slash position — and skipped inside a textarea, where
+  // `?` is a character and where the completion list and the abbreviation
+  // session already own most of the keyboard. Registered once; nothing here
+  // reads state, so it needs no ref.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "?" && e.key !== "F1") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+      e.preventDefault();
+      setHelpOpen((v) => !v);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
   // Undo/redo from the tree. The widget's own edits leave focus in the
   // webview, where ⌘Z reaches nothing at all, so the tree has to offer it.
   // Skipped while a textarea has focus: the in-place editor's own undo is the
@@ -1570,6 +1720,16 @@ export default function ProofTreeView({
         // on it as soon as the redraw brings it in (see pendingFill).
         if (at?.fill) setPendingFill(at.fill);
       }
+    } else if (cur.value.trim() === "") {
+      // Emptying the box is how you BACK OUT of a replace, not how you delete
+      // the tactic — the rule the `add` and `fill` branches already followed,
+      // and the replace branch did not. Writing "" over the range bypassed
+      // deleteEdit.ts's whole extent model (whole-line vs exact-range, the
+      // `prevSameLine` refusal, block-becomes-`sorry`, the comment above) for
+      // a gesture that never asked to delete anything: ⌘A, Delete, click away.
+      // Deliberately NOT rerouted to onDeleteTactic either — that would make a
+      // slip into an unarmed destructive write, when the ARMED one is a glyph
+      // away in the same hover bar.
     } else if (cur.fill ? cur.value.trim() !== "" : cur.value !== cur.original) {
       onEditTactic?.(cur.pos, cur.value);
     }
@@ -1900,7 +2060,7 @@ export default function ProofTreeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [proof, hypMode, hypGroup, brief, codeFont, deleteSlots],
   );
-  // Every tactic the step cut (hover-bar ⋯) is offered on. Computed in one
+  // Every tactic the step cut (hover-bar ◌) is offered on. Computed in one
   // pass per base tree: the test walks a subtree, so asking it per drawn node
   // per render would be cubic.
   const elidableIds = useMemo(() => stepElidable(baseNodes), [baseNodes]);
@@ -2203,8 +2363,11 @@ export default function ProofTreeView({
     setEditing((cur) => (cur?.calcStage ? cur : null));
     setPicking(null);
     // An armed delete holds ranges too, and a shape change means the document
-    // moved under them — exactly what must not be committed blind.
+    // moved under them — exactly what must not be committed blind. The
+    // selection pill's armed `unflag` holds patches for the same reason and
+    // must go with it.
     setArming(null);
+    setPendingVerb(null);
   }
 
   // Display flags written in the source (see NodeFlags) seed the view ONCE per
@@ -2871,6 +3034,14 @@ export default function ProofTreeView({
     // gesture on the fold button has no business changing them. An open edit
     // box and a pending calc fill stay too: they hold text the author typed,
     // which a VIEW reset must not discard.
+    //
+    // Zoom's asymmetry with the proof-change reset (which DOES restore 1) is
+    // deliberate, not an oversight, and the wording above is what made it look
+    // like one: the rule is not "zoom is a reader preference" flat out. A zoom
+    // reached through ⛶ is fitted to ONE proof's width, so carrying it to a
+    // different theorem carries a number computed for something else — while
+    // within a proof, which is all this reset covers, the width has not
+    // changed and the number still means what the reader meant by it.
   };
 
   const toggle = (id: string) => {
@@ -3012,13 +3183,25 @@ export default function ProofTreeView({
    * event.) */
   const elidePreviewFor = (
     id: string,
-  ): { anchor: string; ids: Set<string> } | null => {
+  ): { anchor: string; ids: Set<string>; self: boolean } | null => {
     const d = treeNodes.find((n) => n.id === id);
     const g = d ? elideGateOf(d) : null;
     if (!g) return null;
     return {
       anchor: id,
       ids: elideExtentIds(id, g.combined, g.leafFold !== undefined),
+      // A CLOSING tactic's ⌥-click folds the goal above instead of eliding,
+      // and the box that disappears is this one. Nothing else fades, so
+      // without this the gesture that behaves differently on 78 of the
+      // corpus's 204 tactics previewed as doing nothing at all — and there is
+      // no glyph on a bare modifier to explain the substitution.
+      //
+      // Only the ⌥ path may act on it (see the render's opacity): the bar's ◌
+      // lives INSIDE the node's own <g>, so fading the anchor there would fade
+      // the button under the pointer, which reads as disabled. That is the
+      // whole reason for the anchor-never-fades rule, and it does not apply
+      // where there is no button under the pointer.
+      self: g.leafFold !== undefined,
     };
   };
 
@@ -3066,7 +3249,7 @@ export default function ProofTreeView({
 
   // The combined-run analogue: a COMBINED node stands for several base
   // tactics, so its ◌ commits a BAND cut over exactly the member ids its own
-  // id encodes (boundary goals stay; the run collapses to one ⋯ marker).
+  // id encodes (boundary goals stay; the run collapses to one ◌ marker).
   // Exactly what `elideSelection` does for a swept combined node — dissolve
   // to members, absorb a same-id manual cut, anchor at the marker — so it IS
   // that, with a one-node selection.
@@ -3927,46 +4110,70 @@ export default function ProofTreeView({
   // anchorAs/anchorOn, while the same closure in a JSX attribute is fine — so
   // the verbs carry precomputed payloads (patches are plain data) and the
   // chip's own onPick calls this by tag.
-  type SelVerb =
-    | { label: string; title: string; kind: "elide" }
-    | { label: string; title: string; kind: "combine"; ids: string[] }
+  //
+  // The label and tooltip are NOT here: they live in `VERB_DOC` (gestures.ts),
+  // keyed by `doc`, so the help panel and the chip say the same thing and a
+  // verb added without documenting it fails the typecheck. `doc` also carries
+  // whether the verb WRITES, which is what the pill draws its two classes
+  // apart on.
+  type SelVerb = { doc: SelVerbDocKey } & (
+    | { kind: "elide" }
+    | { kind: "combine"; ids: string[] }
+    | { kind: "uncombine"; markers: { id: string; members: string[] }[] }
+    | { kind: "comments"; ids: string[]; hide: boolean }
     | {
-        label: string;
-        title: string;
-        kind: "uncombine";
-        markers: { id: string; members: string[] }[];
-      }
-    | {
-        label: string;
-        title: string;
-        kind: "comments";
-        ids: string[];
-        hide: boolean;
-      }
-    | {
-        label: string;
-        title: string;
         kind: "flagFold";
         patches: DocPatch[];
         anchor: string;
         targets: string[];
       }
+    | { kind: "prompt"; headId: string; prompt: "none" | "note" }
+    | { kind: "patches"; patches: DocPatch[] }
     | {
-        label: string;
-        title: string;
-        kind: "prompt";
-        headId: string;
-        prompt: "none" | "note";
-      }
-    | { label: string; title: string; kind: "patches"; patches: DocPatch[] }
-    | {
-        label: string;
-        title: string;
         kind: "unflag";
         patches: DocPatch[];
         elided: string[];
         folded: string[];
-      };
+      }
+  );
+  /** One chip of the selection pill, as DATA (see `row`). */
+  type PillAct =
+    | { do: "run"; verb: SelVerb }
+    | { do: "arm"; verb: SelVerb }
+    | { do: "confirm" }
+    | { do: "cancel" };
+  type PillChip = {
+    label: string;
+    title: string;
+    color: string;
+    /** Writes to the document ⇒ sits after the ✎ seam. */
+    writes: boolean;
+    act: PillAct;
+  };
+  /** The pill's dispatcher — declared at component level like `commitDelete`
+  and for the same reason: it reaches `anchorAs`, and a function BUILT during
+  render that touches a ref is a render-phase read as far as the lint rule is
+  concerned. Called from a JSX attribute, it is fine. */
+  const runPillChip = (a: PillAct) => {
+    switch (a.do) {
+      case "run":
+        runSelectionVerb(a.verb);
+        break;
+      case "arm":
+        setPendingVerb(a.verb);
+        break;
+      case "confirm":
+        if (pendingVerb) {
+          const v = pendingVerb;
+          setPendingVerb(null);
+          runSelectionVerb(v);
+        }
+        break;
+      case "cancel":
+        setPendingVerb(null);
+        break;
+    }
+  };
   const runSelectionVerb = (v: SelVerb) => {
     switch (v.kind) {
       case "elide":
@@ -4095,18 +4302,9 @@ export default function ProofTreeView({
       heads.length === 1 && writable.length === 1 ? writable[0] : null;
     const verbs: SelVerb[] = [];
     if (selPlaced.some((p) => byId.has(p.data.id) || p.data.elidedCut))
-      verbs.push({
-        kind: "elide",
-        label: "elide",
-        title: "Collapse the selection to one ⋯ marker (click it to restore)",
-      });
+      verbs.push({ kind: "elide", doc: "elide" });
     if (runIds)
-      verbs.push({
-        kind: "combine",
-        label: "combine",
-        title: "Merge this straight run of tactics into one stacked box",
-        ids: runIds,
-      });
+      verbs.push({ kind: "combine", doc: "combine", ids: runIds });
     // Swept-up COMBINED nodes offer the reverse: dissolve back into their
     // tactics (a manual cut is removed; a ⇉-made run is excluded from the
     // auto pass until ⇉ is toggled off and on).
@@ -4122,8 +4320,7 @@ export default function ProofTreeView({
     if (combinedSel.length > 0)
       verbs.push({
         kind: "uncombine",
-        label: "uncombine",
-        title: "Dissolve the selected combined run(s) back into their tactics",
+        doc: "uncombine",
         markers: combinedSel,
       });
     // Strips of the selected nodes, hidden or shown. Read off `treeNodes`,
@@ -4145,10 +4342,7 @@ export default function ProofTreeView({
       const allHidden = commented.every((id) => commentsOff.has(id));
       verbs.push({
         kind: "comments",
-        label: allHidden ? "¬¬note" : "¬note",
-        title: allHidden
-          ? "Draw the comment strip on the selected node(s) again"
-          : "Stop drawing the comment strip on the selected node(s) — the source keeps its prose",
+        doc: allHidden ? "noteShow" : "noteHide",
         ids: commented,
         hide: !allHidden,
       });
@@ -4156,9 +4350,7 @@ export default function ProofTreeView({
     if (foldHeads.length > 0)
       verbs.push({
         kind: "flagFold",
-        label: ".fold",
-        title:
-          "Write a `-- .fold` flag above each head tactic — folded in the SOURCE, so it starts folded every time",
+        doc: "flagFold",
         patches: foldHeads.map((h) => flagLine(h, slots, ".fold")!),
         anchor: foldHeads[0].id,
         targets: foldHeads.flatMap(foldTargetsOf),
@@ -4176,35 +4368,27 @@ export default function ProofTreeView({
     if (soleHead && selTactics.length === 1 && !soleHead.flags?.elide)
       verbs.push({
         kind: "prompt",
-        label: ".none…",
-        title:
-          "Replace this step and whatever it opened with a sentence — writes `-- .none <your prose>` in the source; the ghost shows your words",
+        doc: "flagNone",
         headId: soleHead.id,
         prompt: "none",
       });
     if (soleHead)
       verbs.push({
         kind: "prompt",
-        label: "note…",
-        title:
-          "Write a plain comment above this tactic — it becomes the node's comment strip",
+        doc: "note",
         headId: soleHead.id,
         prompt: "note",
       });
     if (ctxGoals.length > 0)
       verbs.push({
         kind: "patches",
-        label: ".no-hyps",
-        title:
-          "Write `-- .no-hyps` for each selected goal: hide its context block (the goal alone is the point)",
+        doc: "noHyps",
         patches: ctxGoals.map((x) => flagLine(x.c, slots, ".no-hyps")!),
       });
     if (pinGoals.length > 0)
       verbs.push({
         kind: "patches",
-        label: ".h#used",
-        title:
-          "Pin each selected goal's context to its ▸-used hypotheses — writes one `.h#name` per used line",
+        doc: "hUsed",
         patches: pinGoals.map(
           (x) =>
             flagLine(
@@ -4219,9 +4403,7 @@ export default function ProofTreeView({
     if (canFlag && flagged.length > 0)
       verbs.push({
         kind: "unflag",
-        label: "unflag",
-        title:
-          "Remove the selected nodes' flag comments from the source — the whole line goes, prose included",
+        doc: "unflag",
         // Cross-node dedupe by start line: one comment attributes to one node,
         // but a whole-line patch emitted twice would apply its second copy
         // against already-shifted coordinates.
@@ -4253,9 +4435,64 @@ export default function ProofTreeView({
       // `chipWidth` like every other measured chip — a private padding/floor
       // pair here was a second answer to the one question that helper exists
       // to own.
-      const chipWs = verbs.map((v) => chipWidth(v.label, PILL_FONT_PX));
+      //
+      // Labels and tooltips come from VERB_DOC, so the panel and the chip
+      // cannot describe a verb differently, and `writes` splits the row into
+      // its two SAFETY classes. They were indistinguishable before: `elide`
+      // (pure view state) sat two chips from `.fold` (writes a line into your
+      // file) and five from `unflag` (deletes the author's prose), all in the
+      // same ink on the same card.
+      //
+      // ONE row shape, filled two ways: the verbs, or — once `unflag` has been
+      // armed — the confirm pair, in the SAME card. The armed delete's idiom
+      // exactly (count in the label, `×` to back out), which is the point:
+      // there should be one way to say "this is about to change your file".
+      // DATA, never closures: `runPillChip` reaches anchorOn/anchorAs, and
+      // react-hooks/refs treats a function built during render that
+      // transitively touches a ref as a render-phase read. Same rule the verbs
+      // themselves follow — the closure lives in JSX attribute position only.
+      const row: PillChip[] = pendingVerb
+        ? [
+            {
+              label: `remove ${pendingVerb.kind === "unflag" ? pendingVerb.patches.length : 0} comment line(s)`,
+              title: `Confirm — ${CMD}Z in the editor undoes it`,
+              color: DANGER_FILL,
+              writes: true,
+              act: { do: "confirm" },
+            },
+            {
+              label: "×",
+              title: "Leave the comments alone",
+              color: SEQ_STROKE,
+              writes: false,
+              act: { do: "cancel" },
+            },
+          ]
+        : verbs.map((v) => {
+            const d = VERB_DOC[v.doc];
+            return {
+              label: d.label,
+              title: d.title,
+              // The one verb that deletes text the AUTHOR wrote is the one
+              // that looks different before you click it, not only after.
+              color: v.kind === "unflag" ? DANGER_FILL : SEQ_STROKE,
+              writes: d.writes,
+              // …and the one that ARMS rather than running, for exactly the
+              // reason ⊘ does. The rest ADD a comment line, which shows up in
+              // the buffer at once and is one ⌘Z away — as their tooltips now
+              // say, in the armed delete's own words.
+              act:
+                v.kind === "unflag"
+                  ? ({ do: "arm", verb: v } as const)
+                  : ({ do: "run", verb: v } as const),
+            };
+          });
+      // Verbs are pushed view-first already; this only finds the seam.
+      const firstWriter = row.findIndex((c) => c.writes);
+      const chipWs = row.map((c) => chipWidth(c.label, PILL_FONT_PX));
+      const sepW = firstWriter > 0 ? SEP_W : 0;
       const rowW =
-        chipWs.reduce((a, b) => a + b, 0) + CHIP_GAP * (verbs.length - 1);
+        chipWs.reduce((a, b) => a + b, 0) + CHIP_GAP * (row.length - 1) + sepW;
       selectionPillEl = (
         <g
           // data-node: a mousedown on the pill must not start a new marquee
@@ -4282,28 +4519,58 @@ export default function ProofTreeView({
             strokeWidth={1}
             style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))" }}
           />
-          {verbs.map((v, vi) => {
+          {row.map((c, vi) => {
+            // The seam: a hairline and a ✎ before the first chip that writes,
+            // so "changes the view" and "changes your file" are two visible
+            // groups rather than one undifferentiated row.
+            const sep =
+              vi === firstWriter && firstWriter > 0 ? (
+                <g pointerEvents="none">
+                  <line
+                    x1={cx + 7}
+                    y1={2}
+                    x2={cx + 7}
+                    y2={CHIP_H - 2}
+                    stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
+                    strokeWidth={1}
+                  />
+                  <text
+                    x={cx + 17}
+                    y={CHIP_H / 2}
+                    dy="0.32em"
+                    textAnchor="middle"
+                    fontSize={PILL_FONT_PX}
+                    fill={SEQ_STROKE}
+                    style={{ userSelect: "none" }}
+                  >
+                    ✎
+                  </text>
+                </g>
+              ) : null;
+            if (sep) cx += SEP_W;
             const w = chipWs[vi];
             const at = cx;
             cx += w + CHIP_GAP;
             return (
-              <FrontierChip
-                key={v.label}
-                glyph={v.label}
-                title={v.title}
-                x={at}
-                width={w}
-                color={SEQ_STROKE}
-                fontSize={PILL_FONT_PX}
-                // Measured with `measureText`, which measures in the EDITOR's
-                // code font — so these chips must PAINT in it, exactly as the
-                // relation picker does. Painting the default "monospace" over
-                // a code-font measurement is how a label drifts off-centre in
-                // its own outline (and overflows the backing card, whose width
-                // is summed from the same measurements).
-                fontFamily={getCodeFontFamily()}
-                onPick={() => runSelectionVerb(v)}
-              />
+              <Fragment key={c.label}>
+                {sep}
+                <FrontierChip
+                  glyph={c.label}
+                  title={c.title}
+                  x={at}
+                  width={w}
+                  color={c.color}
+                  fontSize={PILL_FONT_PX}
+                  // Measured with `measureText`, which measures in the EDITOR's
+                  // code font — so these chips must PAINT in it, exactly as the
+                  // relation picker does. Painting the default "monospace" over
+                  // a code-font measurement is how a label drifts off-centre in
+                  // its own outline (and overflows the backing card, whose
+                  // width is summed from the same measurements).
+                  fontFamily={getCodeFontFamily()}
+                  onPick={() => runPillChip(c.act)}
+                />
+              </Fragment>
             );
           })}
         </g>
@@ -4569,92 +4836,67 @@ export default function ProofTreeView({
           <span style={{ opacity: 0.8 }}>✕</span>
         </button>
       )}
+      {/* The mode hints, all four through one HintPill — they were four
+          near-identical divs, which is how three of them ended up being the
+          only modes on the tree with no way out you could see. The ✕ runs the
+          layer's own `off`, so the pill and Esc cannot drift apart. */}
       {seq.mode !== "off" && (
-        <div
-          style={{
-            position: "absolute",
-            top: floaterTop(2),
-            left: 8,
-            zIndex: 10,
-            fontFamily: "monospace",
-            fontSize: 12,
-            color: ACCENT_TEXT,
-            background: SEQ_STROKE,
-            padding: "3px 10px",
-            borderRadius: 999,
-          }}
-        >
-          {seq.mode === "view"
-            ? "linear path · click a node to start over"
-            : seq.from !== null
-              ? "click the end node"
-              : "click the start node"}
-        </div>
+        <HintPill
+          top={floaterTop(2)}
+          text={
+            seq.mode === "view"
+              ? "linear path · click a node to start over"
+              : seq.from !== null
+                ? "click the end node"
+                : "click the start node"
+          }
+          title="Leave the linear path (Esc, or ⇝ on the rail)"
+          onExit={layerOff("seq")}
+        />
       )}
       {elidePick && (
-        <div
-          style={{
-            position: "absolute",
-            top: floaterTop(2),
-            left: 8,
-            zIndex: 10,
-            fontFamily: "monospace",
-            fontSize: 12,
-            color: ACCENT_TEXT,
-            background: SEQ_STROKE,
-            padding: "3px 10px",
-            borderRadius: 999,
-          }}
-        >
-          {elidePick.from !== null
-            ? "elide · click the end node"
-            : "elide · click the start node"}
-        </div>
+        <HintPill
+          top={floaterTop(2)}
+          text={
+            elidePick.from !== null
+              ? "elide · click the end node"
+              : "elide · click the start node"
+          }
+          title="Cancel this elision (Esc, or ⇥ on the rail)"
+          onExit={layerOff("elidePick")}
+        />
       )}
       {bandPick && (
-        <div
-          style={{
-            position: "absolute",
-            top: floaterTop(2),
-            left: 8,
-            zIndex: 10,
-            fontFamily: "monospace",
-            fontSize: 12,
-            color: ACCENT_TEXT,
-            background: SEQ_STROKE,
-            padding: "3px 10px",
-            borderRadius: 999,
-          }}
-        >
-          {bandPick.from !== null
-            ? "cut · click the bottom node"
-            : "cut · click the top node"}
-        </div>
+        <HintPill
+          top={floaterTop(2)}
+          text={
+            bandPick.from !== null
+              ? "cut · click the bottom node"
+              : "cut · click the top node"
+          }
+          title="Cancel this cut (Esc, or ⇳ on the rail)"
+          onExit={layerOff("bandPick")}
+        />
       )}
       {/* The staged `calc` fill says which end it is asking for. The link is
           already in the file, so this also has to say what Enter does — taking
-          the `_` is a real answer here, not a way of skipping the question. */}
+          the `_` is a real answer here, not a way of skipping the question.
+          It gets a ✕ more than the others do: its blur is deliberately a
+          no-op, so before this its only exits were Esc and a background
+          click, neither of which the overlay says anything about. */}
       {editing?.calcStage && (
-        <div
-          style={{
-            position: "absolute",
-            top: floaterTop(2),
-            left: 8,
-            zIndex: 10,
-            fontFamily: "monospace",
-            fontSize: 12,
-            color: ACCENT_TEXT,
-            background: SEQ_STROKE,
-            padding: "3px 10px",
-            borderRadius: 999,
-          }}
-        >
-          {editing.calcStage.stage === "lhs"
-            ? "calc · left-hand side · Enter keeps _"
-            : editing.calcStage.closes
-              ? "calc · right-hand side · Enter keeps _"
-              : "calc · right-hand side · this link steps, so name where it goes"}
-        </div>
+        <HintPill
+          top={floaterTop(2)}
+          text={
+            editing.calcStage.stage === "lhs"
+              ? "calc · left-hand side · Enter keeps _"
+              : editing.calcStage.closes
+                ? "calc · right-hand side · Enter keeps _"
+                : "calc · right-hand side · this link steps, so name where it goes"
+          }
+          title="Leave the link as it stands, both ends `_` (Esc)"
+          onExit={layerOff("calcStage")}
+        />
       )}
       {/* The counterfactual banner: its own floater row (it COEXISTS with the
           hints — you can be mid-pick while typing in the buffer), naming the
@@ -4708,6 +4950,7 @@ export default function ProofTreeView({
         layout={layout}
         onLayoutChange={setLayout}
         sideBySide={sideBySide}
+        sbsEnabled={compact}
         gallery={gallery}
         onGalleryChange={setGallery}
         onSideBySideChange={(v) => {
@@ -4802,6 +5045,10 @@ export default function ProofTreeView({
         onZoomIn={() => zoomBy(1.25)}
         onZoomOut={() => zoomBy(1 / 1.25)}
         onFit={fitWidth}
+        helpOpen={helpOpen}
+        onHelpOpenChange={setHelpOpen}
+        caps={caps}
+        fontFamily={codeFont}
       />
       {nodes.length === 0 && (
         <div
@@ -4958,23 +5205,16 @@ export default function ProofTreeView({
             marqueeDidDrag.current = false;
             return;
           }
-          setSelection(null);
-          setFlagPrompt(null);
           setHlDismissed(true);
           setClickAccent(null);
-          setPicking(null);
-          setArming(null);
-          // The ¶ slider is a floater over the tree, so clicking the tree is
-          // "done with it" — the rail sits outside this container, so its own
-          // clicks (the ¶ button included) never land here.
-          setReflowOpen(false);
-          // A staged calc fill closes on a background click — its blur is
-          // deliberately a no-op (see the textarea's onBlur), so this is one
-          // of its two ways out (Escape is the other). Closing writes
-          // nothing: the `_`s stand and the file is valid. Other editing
-          // states are untouched — their own blur has already committed by
-          // the time this click lands.
-          setEditing((cur) => (cur?.calcStage ? null : cur));
+          // Everything else the background dismisses is the layer table's to
+          // say (see `layers`) — unlike Esc, which takes the topmost layer
+          // only, a background click means "done with all of this" and takes
+          // every layer that opted in. The three picking modes deliberately do
+          // not: a miss between two picks must not destroy the gesture. Other
+          // editing states are untouched — their own blur has already
+          // committed by the time this click lands.
+          for (const l of layers) if (l.bg && l.up) l.off();
         }}
       >
         <svg
@@ -5231,7 +5471,7 @@ export default function ProofTreeView({
               const accent = isEndpoint || isCursor || !!selection?.has(id);
               // A COMBINED node is a real (if synthetic) tactic node — the run's
               // tactics stacked — so it draws and behaves like one: normal box,
-              // never folded, no dashed chip. Only an ELIDE marker gets the `⋯`
+              // never folded, no dashed chip. Only an ELIDE marker gets the `◌`
               // chip treatment and the click-to-restore. It has no position of
               // its own (a marker spans several tactics), so the position its
               // GESTURES act through is the FIRST part's — reveal and the lens
@@ -5378,7 +5618,7 @@ export default function ProofTreeView({
                   ? (delExtents.get(id) ?? null)
                   : null;
               const deletable = !!delExtent;
-              // Elide this tactic INTO the trunk (its hover-bar ⋯): the tactic
+              // Elide this tactic INTO the trunk (its hover-bar ◌): the tactic
               // and any block it opened are lifted out, leaving a small dashed
               // ghost — the trunk closing up over it where something follows,
               // the subtree simply gone where nothing does. The complement of
@@ -5439,27 +5679,23 @@ export default function ProofTreeView({
               // noise that buried the one thing a tooltip is good for. The
               // marker legend stays: `▸` is the sole bit of the box that isn't
               // self-explanatory.
-              const hints = [
-                revealable
-                  ? "click to reveal in source"
-                  : goalRevealable
-                    ? `${CMD}-click to reveal in source`
-                    : null,
-                editable ? "double-click to edit" : null,
-                partEditable
-                  ? "double-click a line to edit that tactic"
-                  : null,
-                elidable
-                  ? leafFold !== undefined
-                    ? "⌥-click to put this step away"
-                    : "⌥-click to elide into the trunk"
-                  : null,
-                focusable ? "⌥-click to focus this subtree" : null,
-                isFocusRoot ? "⌥-click (or Esc) to leave this focus" : null,
-                hyps?.some((l) => l.used)
-                  ? `${HYP_MARK} = used by the tactic below`
-                  : null,
-              ].filter(Boolean);
+              //
+              // The list itself lives in `gestures.ts` and is shared with the
+              // `?` panel, so a node's own hint and the reference cannot
+              // describe the same gesture differently — and the panel gets
+              // every gesture whose gate is a real predicate for free.
+              const hints = nodeHints({
+                revealable,
+                goalRevealable,
+                editable,
+                partEditable,
+                proseLabel: !!node.data.proseLabel,
+                elidable,
+                leafFold: leafFold !== undefined,
+                focusable,
+                isFocusRoot,
+                anyUsedHyp: !!hyps?.some((l) => l.used),
+              });
               // Diagnostics lead the tooltip and keep their full text: the
               // message IS the content here, where the action hints are a
               // reminder. Separated from them by a blank line rather than
@@ -5569,6 +5805,17 @@ export default function ProofTreeView({
                   exitFocus();
                   return;
                 }
+                // A MODIFIED click that reached here asked for something this
+                // node cannot do, and falling through to the unmodified action
+                // is the worst possible answer: `goalRevealable` needs a
+                // position, root goals carry none, so ⌘-click on the very
+                // first node anyone clicks folded the entire proof. (Same for
+                // ⌥ on a pending leaf, which is neither foldable nor
+                // focusable, and for ⌘ on any goal in the standalone app,
+                // which has no reveal at all.) A modifier that misses should
+                // do NOTHING — what the node does offer is in its hints and in
+                // the `?` panel.
+                if (e.metaKey || e.ctrlKey || e.altKey) return;
                 onNodeClick(id, canFold);
               };
 
@@ -5592,11 +5839,19 @@ export default function ProofTreeView({
                   // nothing is written, so it needs no arming step. Both
                   // spare the node being acted ON: it is the one under the
                   // pointer, and fading it would fade the button too.
+                  //
+                  // ONE exception, and it is the reason that rule has a
+                  // reason: on a CLOSING tactic ⌥-click folds the goal above,
+                  // so the box that goes is this one and nothing else fades —
+                  // the gesture previewed as doing nothing. The ⌥ path has no
+                  // button under the pointer to protect, so there the anchor
+                  // fades itself; the bar's ◌ still spares it.
                   opacity={
                     (arming && armedIds.has(id) && id !== arming.id) ||
                     (elidePreview &&
-                      elidePreview.anchor !== id &&
-                      elidePreview.ids.has(id))
+                      (elidePreview.anchor !== id
+                        ? elidePreview.ids.has(id)
+                        : elidePreview.self && elidePreview.from === "alt"))
                       ? 0.35
                       : undefined
                   }
@@ -5987,6 +6242,13 @@ export default function ProofTreeView({
                     !revealable &&
                     !hideForEdit &&
                     !isMarker && (
+                    // ⊞/⊟ rather than +/−, matching the rail buttons that do
+                    // this same thing globally. `+` had three meanings within
+                    // 30px of each other: this indicator, the insert-a-tactic
+                    // chip in the lane below the box, and the rail's zoom. The
+                    // chip is a real button and the more specific meaning, so
+                    // it keeps `+`; folding gets the vocabulary it already has
+                    // elsewhere. (`▸`/`▾` is unavailable — `▸` is HYP_MARK.)
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -5995,7 +6257,7 @@ export default function ProofTreeView({
                       fontFamily={getCodeFontFamily()}
                       fill={style.stroke}
                     >
-                      {isCollapsed ? "+" : "−"}
+                      {isCollapsed ? "⊞" : "⊟"}
                     </text>
                   )}
 
@@ -6054,7 +6316,7 @@ export default function ProofTreeView({
                       fontStyle={
                         node.data.proseLabel ? "italic" : undefined
                       }
-                      // A run marker's `⋯ N tactics` reads as an absence, so it
+                      // A run marker's `◌ N tactics` reads as an absence, so it
                       // takes the muted comment ink, not full node text.
                       fill={
                         node.data.proseLabel
@@ -6363,11 +6625,24 @@ export default function ProofTreeView({
                       x={w / 2 - BAR_OVERLAP}
                       y={type === "tactic" ? boxTop + h / 2 : boxTop}
                       actions={[
-                        // FIRST in the bar: the reading gesture, and the one
-                        // reached most often while working down a proof. The
-                        // bar is entered from the box, so the first slot is
-                        // both the nearest and the safest — the mirror of
-                        // ⊘ being last.
+                        // The gesture reference, first because it is the one
+                        // button that cannot do any harm and because this bar
+                        // is where a stranger's pointer already is when they
+                        // wonder what the others do. It answers finding one of
+                        // the interaction audit: the node's own `<title>` is
+                        // covered by its tagged label in the infoview, so
+                        // without a surface like this the vocabulary is
+                        // unreachable exactly where the widget ships.
+                        {
+                          glyph: "?",
+                          title:
+                            "What you can do here — every gesture on the tree (?)",
+                          onClick: () => setHelpOpen(true),
+                        },
+                        // Then the reading gesture, the one reached most often
+                        // while working down a proof. The bar is entered from
+                        // the box, so the early slots are both the nearest and
+                        // the safest — the mirror of ⊘ being last.
                         ...(elidable
                           ? [
                               {
@@ -6379,7 +6654,7 @@ export default function ProofTreeView({
                                 // one leaves behind.
                                 glyph: "◌",
                                 title: isCombined
-                                  ? "Elide into the trunk (⌥-click) — the whole run collapses to a ⋯ marker (click it to restore)"
+                                  ? "Elide into the trunk (⌥-click) — the whole run collapses to a ◌ marker (click it to restore)"
                                   : leafFold !== undefined
                                     ? // No ghost here: this tactic closes its
                                       // goal, so the cut would be one box for
@@ -6949,6 +7224,20 @@ export default function ProofTreeView({
                         autoFocus
                         value={editing.value}
                         spellCheck={false}
+                        // What an EMPTY box means, said exactly when the box is
+                        // empty — the one moment the answer matters and the one
+                        // moment a placeholder shows. It is not the same answer
+                        // on both surfaces: clearing a tactic backs out (⊘ is
+                        // the delete, and it arms), while clearing a comment
+                        // removes it, which is deliberate and is the only way
+                        // to remove one.
+                        placeholder={
+                          editing.comment
+                            ? "empty = delete this comment"
+                            : editing.add || editing.calcStage
+                              ? ""
+                              : "empty = cancel"
+                        }
                         // Keep the mirror's scroll locked to ours: the box is
                         // fixed-height, so a long draft scrolls. Found by DOM
                         // walk rather than a ref — `react-hooks/refs` forbids
@@ -7144,7 +7433,14 @@ export default function ProofTreeView({
                           position: "relative",
                           zIndex: 1,
                           background: editHighlight ? "transparent" : EDIT_BG,
-                          color: editHighlight ? "transparent" : EDIT_TEXT,
+                          // …but never while the box is EMPTY: there are no
+                          // glyphs for the mirror to paint, and a transparent
+                          // `color` would leave the placeholder's visibility up
+                          // to whatever the UA stylesheet does with it.
+                          color:
+                            editHighlight && editing.value !== ""
+                              ? "transparent"
+                              : EDIT_TEXT,
                           caretColor: EDIT_TEXT,
                           // A comment edit borders in the COMMENT ink, not
                           // the tactic green: the box says what kind of thing
@@ -7422,6 +7718,68 @@ const PILL_BTN: CSSProperties = {
   lineHeight: 1,
   color: "inherit",
 };
+
+/** One mode hint in the top-left floater stack — ⇝ sequence, ⇥ path-elide, ⇳
+band-elide, and the staged `calc` fill, which share a row because they are
+mutually exclusive.
+ *
+ * A BUTTON, for the reason the focus breadcrumb next to it is one: these are
+ * modes you need OUT of, not settings you reach for, and the pill naming the
+ * mode is already where the eye is. The three picking modes took over every
+ * click on the tree while their pills were inert `<div>`s and Esc did not
+ * reach them, so the only way out was the rail button that turned the mode on
+ * — twenty glyphs away, and only if you remembered which one it was.
+ *
+ * `onExit` is the layer's own `off` (see `layers`), never a second copy of the
+ * leaving logic, and `title` names Esc too so the pill teaches the key. */
+function HintPill({
+  top,
+  text,
+  title,
+  onExit,
+}: {
+  top: number;
+  text: string;
+  title: string;
+  onExit: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onExit}
+      style={{
+        position: "absolute",
+        top,
+        left: 8,
+        zIndex: 10,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        maxWidth: "min(60%, 460px)",
+        fontFamily: "monospace",
+        fontSize: 12,
+        color: ACCENT_TEXT,
+        background: SEQ_STROKE,
+        border: "none",
+        padding: "3px 10px",
+        borderRadius: 999,
+        cursor: "pointer",
+      }}
+    >
+      <span
+        style={{
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {text}
+      </span>
+      <span style={{ opacity: 0.8 }}>✕</span>
+    </button>
+  );
+}
 
 /**
  * The proof's diagnostics, as one status line with a pager.
@@ -7830,6 +8188,18 @@ function useAltHeld() {
   };
 }
 
+/** The floating icon rail: every view control, no top bar, words in tooltips.
+ *
+ * THE RULE about pressed and disabled, stated once because two buttons broke
+ * it: a control may draw PRESSED only where it changes the drawing. Where
+ * another mode makes it inert it is `disabled` with a title saying WHY (⇳'s
+ * pattern), and it never draws pressed while inert — a lit button that does
+ * nothing is the one thing a control panel must not do. Where the setting is
+ * still meaningful but currently OVERRIDDEN, the control reports the effective
+ * state rather than the setting (¶'s `forcedReflow` pattern).
+ *
+ * Disabling never clears the underlying state: a rail toggle is how this
+ * reader reads, so leaving and returning to a layout must restore it. */
 function ControlRail({
   onExpandAll,
   onResetView,
@@ -7840,6 +8210,7 @@ function ControlRail({
   layout,
   onLayoutChange,
   sideBySide,
+  sbsEnabled,
   onSideBySideChange,
   gallery,
   onGalleryChange,
@@ -7868,6 +8239,10 @@ function ControlRail({
   onZoomIn,
   onZoomOut,
   onFit,
+  helpOpen,
+  onHelpOpenChange,
+  caps,
+  fontFamily,
 }: {
   onExpandAll: () => void;
   /** ⌥-⊞: the source's own reading, restored (see resetToSource). */
@@ -7879,6 +8254,9 @@ function ControlRail({
   layout: LayoutMode;
   onLayoutChange: (v: LayoutMode) => void;
   sideBySide: boolean;
+  /** Whether side-by-side does anything in the CURRENT layout — `computeLayout`
+  hands it only to `trunkLayout`, which ⋔ wide never reaches. */
+  sbsEnabled: boolean;
   onSideBySideChange: (v: boolean) => void;
   gallery: boolean;
   onGalleryChange: (v: boolean) => void;
@@ -7907,6 +8285,12 @@ function ControlRail({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
+  helpOpen: boolean;
+  onHelpOpenChange: (v: boolean) => void;
+  /** What the host offers, so the panel promises only what exists here. */
+  caps: Caps;
+  /** The editor's code font, for the panel's input column. */
+  fontFamily: string;
 }) {
   const { alt, syncAlt } = useAltHeld();
   return (
@@ -7973,16 +8357,30 @@ function ControlRail({
         pressed={layout !== "stacked"}
         onClick={() => onLayoutChange(LAYOUT_MODES[layout].next)}
       />
+      {/* Both of the next two are INERT under another mode, so both say so
+          rather than lighting up and doing nothing (see the rule above). And
+          neither clears its own state on disable: a rail toggle is how this
+          reader reads, so coming back to ☰ must restore what was set. */}
       <RailButton
         glyph="◫"
-        title="Side-by-side branches: goals spawned by one tactic lay out as columns (compact mode; pairs well with ¶ reflow)"
-        pressed={sideBySide}
+        title={
+          sbsEnabled
+            ? "Side-by-side branches: goals spawned by one tactic lay out as columns (compact mode; pairs well with ¶ reflow)"
+            : "Side-by-side branches — compact layouts only; ⋔ wide lays branches out itself"
+        }
+        pressed={sbsEnabled && sideBySide}
+        disabled={!sbsEnabled}
         onClick={() => onSideBySideChange(!sideBySide)}
       />
       <RailButton
         glyph="❮❯"
-        title="Gallery: show one of a branching tactic's subtrees at a time, cycled by the ‹ n/m › pager under it"
-        pressed={gallery}
+        title={
+          seqActive
+            ? "Gallery — not while ⇝ has linearized a path; that already shows one branch"
+            : "Gallery: show one of a branching tactic's subtrees at a time, cycled by the ‹ n/m › pager under it"
+        }
+        pressed={gallery && !seqActive}
+        disabled={seqActive}
         onClick={() => onGalleryChange(!gallery)}
       />
       <ReflowControl
@@ -8003,13 +8401,28 @@ function ControlRail({
           convention. Full-em ink like `||`, hence RAIL_GLYPH_FULL — at the
           shared 14px two hyphens draw a thin dash the eye slides off.
 
-          ⌥ shows ▤ — a box filled with lines, which is narration exactly: the
-          prose moves INSIDE the tactic's box. It inks 8.3px at the default
-          14px (◫'s figure), so the swap drops the `--`-only override. */}
+          ▤ — a box filled with lines — is narration exactly: the prose moves
+          INSIDE the tactic's box. It inks 8.3px at the default 14px (◫'s
+          figure), so it drops the `--`-only override.
+
+          The RESTING glyph tracks the mode (the LAYOUT_MODES/HYP_MODES
+          precedent): `--` while comments are shown or hidden, ▤ while they are
+          narrating. Without that, "hidden" and "narrating" were the same glyph
+          in the same pressed state — indistinguishable on a control whose mode
+          silently changes what double-click edits. ⌥ then shows the OTHER end
+          of its axis, which is what a modifier hint is for; the earlier worry
+          that no glyph could name a destination dissolves once the two
+          destinations have distinct resting glyphs. */}
       <RailButton
-        glyph={alt ? "▤" : "--"}
-        glyphPx={alt ? undefined : RAIL_GLYPH_FULL}
-        title="Comments: draw the source's comment strips above the nodes they annotate (drag-select a node to hide just its own; ⌥-click: narration — each comment stands in for the tactic it decorates, the tactic itself one hover away)"
+        glyph={(commentMode === "instead") !== alt ? "▤" : "--"}
+        glyphPx={
+          (commentMode === "instead") !== alt ? undefined : RAIL_GLYPH_FULL
+        }
+        title={
+          commentMode === "instead"
+            ? "Narration: each comment stands in for the tactic it decorates, the tactic itself one hover (or double-click) away — ⌥-click for the ordinary comment strips"
+            : "Comments: draw the source's comment strips above the nodes they annotate (drag-select a node to hide just its own; ⌥-click: narration — the prose moves inside the box)"
+        }
         pressed={commentMode !== "shown"}
         onClick={(e) =>
           onCommentModeChange(
@@ -8103,6 +8516,27 @@ function ControlRail({
       />
       <RailButton glyph="−" title="Zoom out" onClick={onZoomOut} />
       <RailButton glyph="⛶" title="Fit width" onClick={onFit} />
+      {/* The gesture reference, in its own divided group like ↶↷ at the top and
+          for the same reason: it is not a view control. It also does not breach
+          "the rail is not growing a button per feature" — `?` is not a feature,
+          it is the index of them, and every other entry point to the panel (the
+          `?` key, the hover bar's `?`) is one you have to already know about. */}
+      <div style={{ height: 6 }} />
+      <div style={{ position: "relative", display: "flex" }}>
+        <RailButton
+          glyph="?"
+          title="What you can do here: every gesture on the tree, in one panel (?)"
+          pressed={helpOpen}
+          onClick={() => onHelpOpenChange(!helpOpen)}
+        />
+        {helpOpen && (
+          <HelpPanel
+            caps={caps}
+            fontFamily={fontFamily}
+            onClose={() => onHelpOpenChange(false)}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -8324,13 +8758,6 @@ function GalleryPager({
     </g>
   );
 }
-
-// Platform label for the reveal fast-path modifier (⌘ on mac, Ctrl elsewhere),
-// used in tooltips and button titles.
-const CMD =
-  typeof navigator !== "undefined" && /Mac/.test(navigator.platform)
-    ? "⌘"
-    : "Ctrl";
 
 // Hover action bar on a goal box: real button-sized targets for the node's
 // secondary actions (reveal in source, focus subtree), shown only while the
