@@ -198,7 +198,7 @@ export const GESTURES: Gesture[] = [
     when: (g) => g.elidable && g.leafFold,
     // The substitution `leafFoldTargets` makes, said out loud. It is invisible
     // otherwise — there is no glyph on a bare modifier to explain it.
-    note: "a closing step has nothing below to elide, so this folds the goal above; that goal's ⊞ brings it back",
+    note: "a closing step has nothing below to elide, so this folds the goal above; that goal's + brings it back",
   },
   {
     target: "tactic",

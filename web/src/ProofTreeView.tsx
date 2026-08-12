@@ -6242,13 +6242,14 @@ export default function ProofTreeView({
                     !revealable &&
                     !hideForEdit &&
                     !isMarker && (
-                    // ⊞/⊟ rather than +/−, matching the rail buttons that do
-                    // this same thing globally. `+` had three meanings within
-                    // 30px of each other: this indicator, the insert-a-tactic
-                    // chip in the lane below the box, and the rail's zoom. The
-                    // chip is a real button and the more specific meaning, so
-                    // it keeps `+`; folding gets the vocabulary it already has
-                    // elsewhere. (`▸`/`▾` is unavailable — `▸` is HYP_MARK.)
+                    // `+`/`−`, not the rail's ⊞/⊟. Those were tried, on the
+                    // argument that `+` means three things within 30px (this,
+                    // the insert-a-tactic chip below the box, the rail's
+                    // zoom) — but a fold indicator is a hairline mark inside
+                    // the box's padding, and the boxed glyphs read as buttons
+                    // there, which is the one thing this is not: the whole box
+                    // is the target. The ambiguity it was meant to fix is not
+                    // one anybody reported.
                     <text
                       x={w / 2 - 8}
                       y={boxTop + 12}
@@ -6257,7 +6258,7 @@ export default function ProofTreeView({
                       fontFamily={getCodeFontFamily()}
                       fill={style.stroke}
                     >
-                      {isCollapsed ? "⊞" : "⊟"}
+                      {isCollapsed ? "+" : "−"}
                     </text>
                   )}
 
@@ -6625,24 +6626,20 @@ export default function ProofTreeView({
                       x={w / 2 - BAR_OVERLAP}
                       y={type === "tactic" ? boxTop + h / 2 : boxTop}
                       actions={[
-                        // The gesture reference, first because it is the one
-                        // button that cannot do any harm and because this bar
-                        // is where a stranger's pointer already is when they
-                        // wonder what the others do. It answers finding one of
-                        // the interaction audit: the node's own `<title>` is
-                        // covered by its tagged label in the infoview, so
-                        // without a surface like this the vocabulary is
-                        // unreachable exactly where the widget ships.
-                        {
-                          glyph: "?",
-                          title:
-                            "What you can do here — every gesture on the tree (?)",
-                          onClick: () => setHelpOpen(true),
-                        },
-                        // Then the reading gesture, the one reached most often
-                        // while working down a proof. The bar is entered from
-                        // the box, so the early slots are both the nearest and
-                        // the safest — the mirror of ⊘ being last.
+                        // FIRST in the bar: the reading gesture, and the one
+                        // reached most often while working down a proof. The
+                        // bar is entered from the box, so the first slot is
+                        // both the nearest and the safest — the mirror of
+                        // ⊘ being last.
+                        //
+                        // The gesture reference is NOT here. It was, briefly,
+                        // on the argument that the bar is where the pointer
+                        // already is when you wonder what the buttons do — but
+                        // this bar appears on hover over every node in the
+                        // tree, so a button that opens a panel is a glyph of
+                        // pure overhead on every box, forever, to answer a
+                        // question asked once. It lives on the rail (and on
+                        // `?`), which is where a reference belongs.
                         ...(elidable
                           ? [
                               {
@@ -8516,11 +8513,14 @@ function ControlRail({
       />
       <RailButton glyph="−" title="Zoom out" onClick={onZoomOut} />
       <RailButton glyph="⛶" title="Fit width" onClick={onFit} />
-      {/* The gesture reference, in its own divided group like ↶↷ at the top and
-          for the same reason: it is not a view control. It also does not breach
+      {/* The gesture reference, in its own divided group like ↶↷ at the top
+          and for the same reason: it is not a view control. It does not breach
           "the rail is not growing a button per feature" — `?` is not a feature,
-          it is the index of them, and every other entry point to the panel (the
-          `?` key, the hover bar's `?`) is one you have to already know about. */}
+          it is the index of them. The rail is the ONLY visible entry point:
+          the `?` key is the other, and a key you have to already know about is
+          exactly why the panel needs a button somewhere. A per-node one was
+          tried and removed — the hover bar appears over every box in the tree,
+          so it charged every node forever for a question asked once. */}
       <div style={{ height: 6 }} />
       <div style={{ position: "relative", display: "flex" }}>
         <RailButton
