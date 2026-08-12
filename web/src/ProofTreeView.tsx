@@ -1161,9 +1161,16 @@ export default function ProofTreeView({
   // node the gesture acts on; it deliberately does NOT fade, because the
   // action bar rides inside the node's own <g> and a faded ◌ under the
   // pointer reads as a disabled button (the armed delete's rule, same reason).
+  // `from` names which surface put the preview up — the ⌥ gestures or the
+  // bar's ◌ button — because their CLEARS must not cross: the bar rides
+  // inside the node's <g>, so every pointer jiggle over the button fires the
+  // g's onMouseMove with altKey false, and an untagged clear there killed the
+  // button's own preview the instant it appeared (the reported "flashes but
+  // nothing real").
   const [elidePreview, setElidePreview] = useState<{
     anchor: string;
     ids: Set<string>;
+    from: "alt" | "bar";
   } | null>(null);
   // Clicking the widget BACKGROUND dismisses the editor-cursor accent: in the
   // infoview, any click focuses the panel while the editor cursor (and hence
@@ -2968,6 +2975,65 @@ export default function ProofTreeView({
     const byId = new Map(treeNodes.map((n) => [n.id, n]));
     return new Set(resolveCut({ kind: "step", id }, byId));
   };
+
+  /** The elide-preview for `id`, or null where the gesture is not offered —
+   * ONE coding of the render loop's `elidable` gate for the surfaces that
+   * show the fade OUTSIDE the loop (the Alt-keydown listener below), so the
+   * keyboard path cannot disagree with the pointer paths about what fades. */
+  const elidePreviewFor = (
+    id: string,
+  ): { anchor: string; ids: Set<string> } | null => {
+    if (seq.mode !== "off" || elidePick || bandPick) return null;
+    const d = treeNodes.find((n) => n.id === id);
+    if (!d || d.type !== "tactic" || d.synthetic) return null;
+    const isCombined = !!d.elidedCut?.combined;
+    if (d.elidedCut && !isCombined) return null; // an elide marker
+    const leaf = !isCombined && leafFoldIds.get(id) !== undefined;
+    if (!(isCombined || elidableIds.has(id) || leaf)) return null;
+    return { anchor: id, ids: elideExtentIds(id, isCombined, leaf) };
+  };
+
+  // ⌥ pressed or released while the pointer RESTS on a tactic. The pointer
+  // paths ride mouse events, which a modifier change over a motionless
+  // pointer never sends — the recorded "move a pixel" blind spot, reported as
+  // a real bug once the preview existed. Key events are the only signal for
+  // it, with the known limit that a webview receives keys only while it has
+  // FOCUS (clicking the tree grants it; while the caret sits in the editor
+  // the pointer paths remain the working pair). Latest state is read through
+  // refs written by a per-render effect (the candidateRef pattern), so the
+  // document listeners register once instead of churning per render; the
+  // keydown guards `repeat` — Alt autorepeats, and each unguarded fire would
+  // build a fresh Set and re-render a settled preview.
+  const altDownRef = useRef<() => void>(() => {});
+  const altUpRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    altDownRef.current = () => {
+      if (!hoverId) return;
+      const p = elidePreviewFor(hoverId);
+      if (p) setElidePreview({ ...p, from: "alt" });
+    };
+    altUpRef.current = () =>
+      setElidePreview((p) => (p?.from === "alt" ? null : p));
+  });
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "Alt" && !e.repeat) altDownRef.current();
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === "Alt") altUpRef.current();
+    };
+    // A webview losing focus mid-press never sees the keyup (the rail's
+    // glyph-swap rule): clear rather than strand a fade.
+    const blur = () => altUpRef.current();
+    document.addEventListener("keydown", down);
+    document.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("keydown", down);
+      document.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
 
   // The combined-run analogue: a COMBINED node stands for several base
   // tactics, so its ◌ commits a BAND cut over exactly the member ids its own
@@ -5595,8 +5661,18 @@ export default function ProofTreeView({
                                   isCombined,
                                   leafFold !== undefined,
                                 ),
+                                from: "alt",
                               });
-                          } else if (elidePreview?.anchor === id)
+                          } else if (
+                            // Only the ⌥ path's own preview: the bar's ◌ sets
+                            // one too, and this handler fires for every
+                            // pointer jiggle OVER that button (the bar lives
+                            // inside this <g>) with altKey false — an
+                            // untagged clear here was the "flashes but
+                            // nothing real" bug.
+                            elidePreview?.anchor === id &&
+                            elidePreview.from === "alt"
+                          )
                             setElidePreview(null);
                         }
                       : undefined
@@ -6288,7 +6364,7 @@ export default function ProofTreeView({
                                       ? toggle(leafFold)
                                       : elideStep(id),
                                 onHover: (on: boolean) =>
-                                  setElidePreview(
+                                  setElidePreview((p) =>
                                     on
                                       ? {
                                           anchor: id,
@@ -6297,8 +6373,14 @@ export default function ProofTreeView({
                                             isCombined,
                                             leafFold !== undefined,
                                           ),
+                                          from: "bar" as const,
                                         }
-                                      : null,
+                                      : // Leaving the button clears only the
+                                        // bar's own preview — an ⌥-hover fade
+                                        // must survive the pointer crossing ◌.
+                                        p?.anchor === id && p.from === "bar"
+                                        ? null
+                                        : p,
                                   ),
                               },
                             ]
