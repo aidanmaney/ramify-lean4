@@ -1285,7 +1285,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         highlightPos={{ line: pos.line, character: pos.character }}
         cfStub={
           stable?.proof.cfLine != null
-            ? { line: stable.proof.cfLine, draft: cfDraft ?? "" }
+            ? {
+                line: stable.proof.cfLine,
+                // The stub's exact position when the server ships it; the
+                // view falls back to the line rule when it doesn't.
+                pos: stable.proof.cfStubPos,
+                draft: cfDraft ?? "",
+              }
             : null
         }
         // The room below our own top (see useFrameOffset — NOT a flat 100vh,

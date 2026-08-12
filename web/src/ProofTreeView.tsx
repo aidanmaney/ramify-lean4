@@ -835,8 +835,18 @@ export interface ProofTreeViewProps {
    * typed on that line so far. The tactic node anchored on that line draws
    * the draft over its box, dashed and accent-inked, and takes no editing
    * gestures — the buffer IS its editor right now.
+   *
+   * `pos` is the stub step's exact `position.start` when the server ships it
+   * (`cfStubPos`): the injected `sorry` and its CONTAINER can both start on
+   * `line`, so naming the node by line alone picks the wrong box on the
+   * `:= by` splice tier. Optional — an older server sends only the line, and
+   * the harness fakes the marker without one.
    */
-  cfStub?: { line: number; draft: string } | null;
+  cfStub?: {
+    line: number;
+    pos?: { line: number; character: number };
+    draft: string;
+  } | null;
   /**
    * Extra controls placed at the left of the toolbar. The standalone app injects
    * its proof picker here; the widget leaves it empty.
@@ -4310,14 +4320,44 @@ export default function ProofTreeView({
   // buffer is its editor, and swallowing click/dblclick here is what enforces
   // that (the hover bar never appears — the pointer is over the overlay, not
   // the node's <g>). Body code, not a JSX IIFE (the house ref-taint rule).
+  //
+  // WHICH node is the stub is the SERVER's answer (`cfStubPos` — the splice
+  // knows the byte it wrote `sorry` at), matched the way `pendingFill` claims
+  // its own stub: exact position plus the label actually being `sorry`. The
+  // line rule it replaces is ambiguous in principle — a container and the
+  // injected stub can both start on the cursor's line — though the attempt to
+  // REACH that state failed: `cfWanted`'s completeness witness declines cf
+  // whenever a step starts on the line, and a one-line `have … := by` records
+  // its container step there in the real payload whether its body is deleted
+  // or left unparseable (measured, both shapes). So this is the guess removed
+  // rather than a bug observed, and it is the tier-proof form: the next splice
+  // tier gets the right node without re-arguing which one it is.
+  //
+  // A failed exact match falls back to the line rule rather than painting
+  // nothing: the overlay is the whole "here is where your tactic lands"
+  // affordance, and silently dropping it would be a worse failure than the
+  // ambiguity it guards against.
   let cfStubEl: ReactNode = null;
   if (cfStub) {
-    const pn = nodes.find(
-      (n) =>
-        n.data.type === "tactic" &&
-        n.data.position &&
-        n.data.position.start.line === cfStub.line,
-    );
+    const at = cfStub.pos;
+    const exact =
+      at &&
+      nodes.find(
+        (n) =>
+          n.data.type === "tactic" &&
+          n.data.label === "sorry" &&
+          n.data.position &&
+          n.data.position.start.line === at.line &&
+          n.data.position.start.character === at.character,
+      );
+    const pn =
+      exact ??
+      nodes.find(
+        (n) =>
+          n.data.type === "tactic" &&
+          n.data.position &&
+          n.data.position.start.line === cfStub.line,
+      );
     if (pn) {
       const empty = cfStub.draft.trim() === "";
       const label = empty ? "…" : cfStub.draft;

@@ -216,6 +216,20 @@ structure ProofTreeData where
   field below, which the client must keep OUT of the signature or every
   keystroke would defeat the typing hold this exists to serve. -/
   cfLine        : Option Nat := none
+  /-- Where the injected `sorry` LANDED — the exact `position.start` of the
+  stub step in this payload, so the client can name that node instead of
+  guessing it.
+
+  Guessing was the first version and it is wrong on the `:= by` splice tier: a
+  one-line `have` (or a `calc` link) leaves BOTH the container step and the
+  injected stub starting on the cursor's line, and "first tactic on the line"
+  in DFS preorder is the container — so the draft painted over the wrong box.
+  The splice knows the answer for free (`CfSplice.stubByte`), and every future
+  tier gets it for free too. `Lsp.Position`, not a range: its `ToJson` is
+  `{line, character}`, which is exactly `ProofStepPosition`'s shape on the
+  client — unlike `Lsp.Range`, whose second field is `end` (see `declRange`).
+  Rides the stable signature with `cfLine`, which it moves with. -/
+  cfStubPos     : Option Lsp.Position := none
   /-- The real document's current content on `cfLine` (indent stripped),
   refreshed per request even when the tree itself comes from the cache. Paint
   only, never part of the client's stable signature. -/
@@ -997,8 +1011,22 @@ Tiers, from most to least structure preserved:
 A wrong guess is SAFE by construction: the spliced command elaborates to
 nothing, `computeCf` caches the failure for this exact text, and the client
 keeps today's behaviour. -/
+private structure CfSplice where
+  /-- Builds the whole spliced source. A THUNK: every cf-eligible request pays
+  the line-local decision, but only the paths that key or run the elaboration
+  force the O(file) concatenation (see `maybeCounterfactual`). -/
+  text : Unit → String
+  /-- The real line's content, indent stripped — the client's stub label. -/
+  draft : String
+  /-- Absolute BYTE offset of the injected `sorry` in the spliced text. The
+  splice touches one line and adds no newline, so everything before it is
+  byte-identical to the real document; `computeCf` turns this into the LSP
+  position the payload's own steps are keyed by, and ships it as `cfStubPos`
+  so the client never has to GUESS which node is the stub. -/
+  stubByte : Nat
+
 private def cfSplice (fileMap : FileMap) (line : Nat) (cursorCol : Nat) :
-    Option ((Unit → String) × String) :=
+    Option CfSplice :=
   if line + 1 ≥ fileMap.positions.size then none else
   let src := fileMap.source
   let lineStart := fileMap.lspPosToUtf8Pos ⟨line, 0⟩
@@ -1030,17 +1058,17 @@ private def cfSplice (fileMap : FileMap) (line : Nat) (cursorCol : Nat) :
     else ws ++ "sorry"
   if newContent == content then none
   else
-    -- The whole-file concatenation DEFERRED behind a thunk: every cf-eligible
-    -- request pays the line-local decision above, but only the paths that
-    -- actually key or run the elaboration force the O(file) build — the
-    -- healthy-file path and the repeated-identical-request serve decline or
-    -- return without it (see maybeCounterfactual).
-    some
-      (fun _ =>
+    -- Every branch that CHANGES the line ends in the literal `sorry` (the two
+    -- that don't return `content` unchanged and are filtered just above), so
+    -- the stub's offset is the new line's end less those five ASCII bytes —
+    -- exact, and it needs no second search of the text.
+    some {
+      text := fun _ =>
         String.Pos.Raw.extract src ⟨0⟩ lineStart
           ++ newContent ++ (if hasNl then "\n" else "")
-          ++ String.Pos.Raw.extract src nextStart ⟨src.utf8ByteSize⟩,
-       body)
+          ++ String.Pos.Raw.extract src nextStart ⟨src.utf8ByteSize⟩
+      draft := body
+      stubByte := lineStart.byteIdx + newContent.utf8ByteSize - "sorry".utf8ByteSize }
 
 /-- Is the counterfactual wanted? Two conjuncts, both read off the payload the
 normal path just built (no extra parse):
@@ -1134,7 +1162,7 @@ are load-bearing:
   elaboration). The injected stub's `declaration uses 'sorry'` warning is our
   own noise and is dropped; everything else is honest and ribbons as usual. -/
 private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
-    (cfText : String) : RequestM (Option ProofTreeData) := do
+    (cfText : String) (stubByte : Nat) : RequestM (Option ProofTreeData) := do
   let fileMap := doc.meta.text
   let lineStart := fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩
   let (snaps, _, _) ← doc.cmdSnaps.getFinishedPrefix
@@ -1196,7 +1224,37 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
     | none => pure { steps := [], allGoals := {} })
   let payload ← mkTreePayload synth cfMap parsed errPos cfDiags
   if payload.steps.isEmpty then return none
-  return some { payload with cfLine := some pos.line }
+  -- Where the stub landed, in the SPLICED text's own coordinates — the very
+  -- space the payload's step positions are in, since both come from `cfMap`.
+  let stubPos := cfMap.utf8PosToLspPos ⟨stubByte⟩
+  -- The EDITING SEAM is withdrawn wherever it would describe the spliced line
+  -- rather than the buffer. Everything outside that one line is byte-identical
+  -- (the splice adds no newline), so this is the whole exposure — but it is a
+  -- real one: an entry's `text` here is a slice of the counterfactual, and
+  -- committing an in-place edit built from it would write `sorry` over what
+  -- the author is typing. The stub overlay already swallows POINTER gestures
+  -- on that node; withdrawing the data closes every other surface at once
+  -- (the marquee pill's verbs, and whatever is written next), through gates
+  -- the client already has — `getTacticEdit` missing means no in-place edit,
+  -- no flag write, no lens range; a missing slot means `deleteExtent`
+  -- declines. Two different rules, for two different exposures:
+  --   * `tacticEdits` carry TEXT, so any entry whose range TOUCHES the line is
+  --     dropped — a multi-line `have` containing it holds spliced text in the
+  --     middle. The cost is that such a container's label loses its syntax
+  --     colouring while the line is being typed (its tokens ride this entry);
+  --     paid deliberately, since the alternative risk is losing the draft.
+  --   * `deleteSlots` carry only RANGES, and a slot merely CONTAINING the
+  --     line has correct endpoints (the columns that move are on the line
+  --     itself) — so only slots that START or END on it are dropped, keeping
+  --     the delete gesture alive for enclosing blocks.
+  let onLine (p : Lsp.Position) := p.line == pos.line
+  let edits := payload.tacticEdits.filter fun e =>
+    !(e.start.line ≤ pos.line && pos.line ≤ e.stop.line)
+  let slots := payload.deleteSlots.filter fun s =>
+    !(onLine s.start || onLine s.stop)
+  return some { payload with
+    cfLine := some pos.line, cfStubPos := some stubPos
+    tacticEdits := edits, deleteSlots := slots }
 
 /-- Decide the payload: the real one, or the counterfactual preview.
 
@@ -1214,8 +1272,9 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     (doc : FileWorker.EditableDocument) (fileMap : FileMap)
     (real : ProofTreeData) : RequestM ProofTreeData := do
   unless wantCf do return real
-  let some (mkText, draft) := cfSplice fileMap pos.line pos.character
+  let some splice := cfSplice fileMap pos.line pos.character
     | return real
+  let draft := splice.draft
   -- The completeness witness: a step STARTING on the cursor's line means the
   -- line's tactic elaborated for real, which is what turns the sticky serve
   -- back off the moment the typed tactic becomes valid. Also the second
@@ -1226,7 +1285,7 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     if ln == pos.line && !stepStartsHere then
       let srcHash : UInt64 := hash fileMap.source
       -- `sh == srcHash` is the repeated identical request (short-circuited,
-      -- so it never builds the spliced file). `ck == hash (mkText ())` is
+      -- so it never builds the spliced file). `ck == hash (splice.text ())` is
       -- the STICKY rule, and it exists because `cfWanted`'s signals RACE the
       -- diagnostics reporter: measured, one keystroke after a delete the
       -- calc CONTAINER step still covered the cursor's line, no error had
@@ -1235,14 +1294,14 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
       -- text splices to the SAME counterfactual (i.e. the edit stayed within
       -- the line — the typing case by construction), and no step starts
       -- here, the author is still mid-word: keep serving the cf.
-      if sh == srcHash || ck == hash (mkText ()) then
+      if sh == srcHash || ck == hash (splice.text ()) then
         cfServeCache.set (some (srcHash, ln, ck, blob))
         return { blob with cfDraft := some draft }
   unless cfWanted real pos stepStartsHere do return real
   -- Only past the WANTED gate is the whole-file work paid: the spliced text
   -- (O(file)) and the two hashes run once per request while the document is
   -- broken at the cursor, never on the healthy path.
-  let cfText := mkText ()
+  let cfText := splice.text ()
   let cfKey : UInt64 := hash cfText
   let srcHash : UInt64 := hash fileMap.source
   let now ← IO.monoMsNow
@@ -1261,7 +1320,7 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
   cfElabCache.set (some (cfKey, .pending now))
   let rc ← read
   let _ ← IO.asTask (prio := .default) do
-    let res ← match ← ((computeCf doc pos cfText).run rc).toBaseIO with
+    let res ← match ← ((computeCf doc pos cfText splice.stubByte).run rc).toBaseIO with
       | .ok res => pure res
       | .error _ => pure none
     -- Completion IS the in-flight marker's clearing: `done` overwrites

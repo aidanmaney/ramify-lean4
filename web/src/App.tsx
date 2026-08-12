@@ -49,7 +49,9 @@ function CfReplay({ line, character }: { line: number; character: number }) {
       proof={proof}
       highlightPos={pos}
       cfStub={
-        p.cfLine != null ? { line: p.cfLine, draft: "…typing…" } : null
+        p.cfLine != null
+          ? { line: p.cfLine, pos: p.cfStubPos, draft: "…typing…" }
+          : null
       }
     />
   );
@@ -67,7 +69,10 @@ const SAMPLE_URL = `${import.meta.env.BASE_URL}sample.ndjson`;
 const QUERY = new URLSearchParams(location.search);
 const REPLAY_AT = QUERY.get("cf-replay");
 const STUB_EDIT = QUERY.has("stub-edit");
-// `?cf-stub=<line>[:<draft>]`, parsed to the prop shape up front.
+// `?cf-stub=<line>[:<draft>]`, parsed to the prop shape up front. Line only,
+// so this drives the overlay's FALLBACK node rule; the exact-position path
+// (`cfStubPos`, which only a real server mints) is exercised by `?cf-replay`
+// over recorded payloads.
 const CF_STUB = (() => {
   const v = QUERY.get("cf-stub");
   if (v === null) return null;

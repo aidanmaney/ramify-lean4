@@ -231,6 +231,13 @@ export interface Proof {
   stable signature; the live DRAFT deliberately does not ride `Proof` at all —
   see `cfDraft` on the payload in widget.tsx. */
   cfLine?: number;
+  /** Where the injected `sorry` LANDED — the stub step's own `position.start`
+  in this payload (see `cfStubPos` in ProofTreeWidget.lean). The overlay names
+  that node by position instead of guessing "first tactic on `cfLine`", which
+  picks the CONTAINER on the `:= by` splice tier. Absent from an older server;
+  the view falls back to the line rule. Moves exactly when `cfLine` does, so it
+  rides the stable signature with it. */
+  cfStubPos?: { line: number; character: number };
 }
 
 /** Rebuild the STABLE `Proof` from a wire payload, field for field — the ONE
@@ -259,6 +266,7 @@ export function stableProofOf(p: Proof): Proof {
     proofId: p.proofId,
     declRange: p.declRange,
     cfLine: p.cfLine,
+    cfStubPos: p.cfStubPos,
   };
 }
 
