@@ -20,9 +20,12 @@ Current actions (the request file carries an `action` field):
 - **Lens edit** (the `⧉` button on a tactic node's hover bar, or the
   `Proof Tree: Open Tactic in Lens` command acting on the active editor's
   cursor): open the
-  proof in a slim **lens editor group split off directly below the Lean
+  proof in a **lens editor group split off directly below the Lean
   infoview's group**, with the tactic's tight range selected and revealed at
-  the top, line numbers off. Same window, same document, same Lean server —
+  the top, line numbers off. It keeps the height the split gives it — it used
+  to be shrunk by a run of view-height nudges, and each of those is an animated
+  resize of the whole editor area, so opening a lens visibly stepped the window
+  down and then re-placed its text. Same window, same document, same Lean server —
   vim/LSP/keybindings apply and edits sync with zero re-elaboration; the
   lens is reused by subsequent popouts while it stays open. While a lens is
   open, chrome is stripped globally (no per-window settings API exists) to
@@ -31,9 +34,8 @@ Current actions (the request file carries an `action` field):
   on-disk snapshot for crash recovery. Two things are deliberately **not** in
   that set any more: `editor.fontSize`, because a global setting resized every
   editor in the window to buy the lens four lines, and `editor.folding`, which
-  is what buys the room instead — `proofTree.lensFold` collapses everything but
-  the tactic under the cursor, and disabling folding globally made those
-  commands silent no-ops. Restore iterates the *snapshot's* keys rather than
+  is simply the user's own editor working normally and costs nothing in a pane
+  with line numbers off. Restore iterates the *snapshot's* keys rather than
   the current strip list, so a backup written by an older version still puts
   back what that version took. An existing lens is re-found down a
   ladder (remembered column → our `lineNumbers: Off` tag → a second group
@@ -104,11 +106,6 @@ rescan; `extension.js` changes need only a window reload.
 
 The lens's own, acted on by this extension:
 
-- `proofTree.lensShrinkNudges` (default `3`) — how far to shrink the lens below
-  the 50% split it opens at. The split is ~8-9 nudges tall, so **lower is
-  taller**; `0` keeps it at half the column.
-- `proofTree.lensFold` (default `true`) — fold everything but the tactic under
-  the cursor when the lens opens, so a short pane still shows its context.
 - `proofTree.lensWordWrap` (default `true`) — turn on word wrap in the lens.
   A per-editor *session* toggle, unlike the setting, so it affects nothing
   else; an editor already wrapping is left alone.

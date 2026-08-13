@@ -1,5 +1,5 @@
 import ProofTreeWidget
-
+import Init.Data.Nat.Basic
 /-!
 # Proof-tree widget tour
 
@@ -120,7 +120,6 @@ goals grow dashed CHIPS under their boxes — the tactic that isn't there:
 Note the `unsolved goals` error does NOT show in the pill here: the chips are
 already saying it, louder. -/
 theorem tour_frontier (n : Nat) : 0 < n + 1 ∧ n + 0 = n := by
-  constructor
 
 /-! ## 6 · When it goes wrong
 
@@ -136,5 +135,4 @@ To fix it, use section 3's gestures on the broken node itself: arm [⊘] on the
 dashed `rw` and confirm — the `exact Nat.add_comm a b` below it already
 closes the goal — or double-click it and type the rewrite you meant. -/
 theorem tour_errors (a b : Nat) : a + b = b + a := by
-  rw [Nat.succ_ne_zero]
   exact Nat.add_comm a b

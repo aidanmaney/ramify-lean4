@@ -162,7 +162,6 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
     calc (a + b) ^ 2
       = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
       _ ≤ _ := by linarith
-      -- _ ≤ _ := by linarith
   · -- Chain 2: the odd-sum identity again, this time as a calc chain inside the
     -- successor case of an induction — a calc nested under a case split.
     induction n with
@@ -187,6 +186,7 @@ theorem root_2_irrat_over_int :
   rintro ⟨m, n, hcop, hmn⟩
   -- Assert ⌜2 ∣ m⌝: m * m = 2 * n * n is even, and 2 is prime, so m is even.
   have hm : (2 : ℤ) ∣ m := by
+    -- This is a comment on have
     have hmm : m * m = 2 * (n * n) := by linear_combination hmn
     rcases Int.prime_two.dvd_or_dvd (⟨n * n, hmm⟩ : (2 : ℤ) ∣ m * m) with h | h <;>
       exact h

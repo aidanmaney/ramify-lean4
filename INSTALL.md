@@ -131,11 +131,11 @@ touch any of them whatever state they are in. Open them, don't build them.
 Install the packaged extension:
 
 ```bash
-code --install-extension dist/proof-tree-companion-0.0.7.vsix
+code --install-extension dist/proof-tree-companion-0.0.8.vsix
 ```
 
 or in VS Code: **Extensions** → **⋯** → **Install from VSIX…** → pick
-`dist/proof-tree-companion-0.0.7.vsix`. Reload the window afterwards.
+`dist/proof-tree-companion-0.0.8.vsix`. Reload the window afterwards.
 
 <details>
 <summary>Developing on it instead (no packaging step)</summary>
@@ -144,7 +144,7 @@ The extension is deliberately build-step-free CommonJS, so a symlink is enough:
 
 ```bash
 ln -s "$PWD/ext/proof-tree-companion" \
-      ~/.vscode/extensions/aidan.proof-tree-companion-0.0.7
+      ~/.vscode/extensions/aidan.proof-tree-companion-0.0.8
 ```
 
 Changes to `extension.js` need only a window reload; changes to `package.json`
@@ -154,10 +154,9 @@ need a full VS Code restart (the manifest is rescanned at startup).
 ### What the companion adds
 
 - **The lens** (`⧉` on a tactic's hover bar) — opens the proof in a slim editor
-  pane split below the infoview, with the tactic selected, folded to the path
-  you are on, and each tactic's resulting goal drawn inline at the end of its
-  line. Same window, same document, same Lean server, so vim/LSP/keybindings
-  all still apply.
+  pane split below the infoview, with the tactic selected and each tactic's
+  resulting goal drawn inline at the end of its line. Same window, same
+  document, same Lean server, so vim/LSP/keybindings all still apply.
 - **Theme-accurate syntax colours.** A webview cannot read the editor's token
   colours (they are not in the `--vscode-*` variable set and the extension API
   has no member for them), so the companion resolves the active theme's JSON
@@ -175,7 +174,7 @@ need a full VS Code restart (the manifest is rescanned at startup).
   with your draft marking where it lands), `proofTree.typingHoldMs` (how
   long the tree waits for typing to go quiet before redrawing — raise it if
   you type slowly and the tree still churns mid-edit), `proofTree.lensGoals`,
-  `proofTree.lensFold`, `proofTree.lensWordWrap`, `proofTree.lensShrinkNudges`,
+  `proofTree.lensWordWrap`,
   plus your `lean4.input.*` unicode-abbreviation customisations. (The
   abbreviation *table* is bundled, so `\dvd` → `∣` works in the tree's editor
   either way; only a customised input mode needs the companion.)

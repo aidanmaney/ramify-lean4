@@ -399,12 +399,14 @@ const STATIC_STRIP = {
   "workbench.editor.showTabs": "none",
   "breadcrumbs.enabled": false,
   "editor.glyphMargin": false,
-  // NOT `editor.folding: false` any more. It used to be stripped for the last
-  // scrap of gutter, but folding is what buys the lens its vertical room now
-  // (see foldToCursor): a lens on one branch of a `by_cases` can collapse the
-  // other instead of scrolling past it. Disabling folding globally made the
-  // fold commands silent no-ops. The gutter cost is nil in the lens, which has
-  // `lineNumbers: Off`, and leaving it alone is one less global side effect.
+  // NOT `editor.folding: false`. It was stripped once for the last scrap of
+  // gutter, then kept because the lens folded itself down to the cursor's
+  // path — and that fold is now gone too (it collapsed and re-expanded the
+  // whole file every time a lens opened, which is half of the reported
+  // shaking). What remains is the plain reason not to strip it: the gutter
+  // costs nothing in a pane with `lineNumbers: Off`, folding is the user's own
+  // editor working normally, and leaving it alone is one less global side
+  // effect.
   "editor.minimap.enabled": false,
   // Sticky scroll pins the enclosing declaration to the top of the editor —
   // in a lens a few lines tall that is `theorem foo … := by` eating a large
@@ -430,13 +432,8 @@ const STATIC_STRIP = {
 // pane meant for typing — and it gains no lines either, since line height
 // derives from the fontSize setting rather than the painted glyphs.
 //
-// The height knob is now `lensShrinkNudges` alone.
-
-/** A numeric setting from `proofTree.*`, falling back when unset/invalid. */
-function tuning(key, fallback) {
-  const v = vscode.workspace.getConfiguration("proofTree").get(key);
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
+// There is no height knob at all any more: the lens is whatever the split
+// makes it (see popout).
 // Keys to snapshot and restore. Every strip now has a static target, so this
 // is exactly STATIC_STRIP's keys. (A crash backup written by an OLDER version
 // may still carry `editor.fontSize`; restore iterates the SNAPSHOT's keys, not
@@ -523,11 +520,6 @@ async function restoreEditorChrome(fromDisk) {
 
 // ---- the lens group ------------------------------------------------------
 
-// How many `decreaseViewHeight` nudges to take off the fresh 50% split. The
-// split is empirically ≈ 9 nudges tall, so the lens ends up ≈ (9−n) slices:
-// LOWER IS TALLER. 5 was too cramped to edit in comfortably.
-const DEFAULT_LENS_SHRINK_NUDGES = 3;
-
 // `workbench.action.newGroupBelow` acts on the ACTIVE group, and the only
 // way to activate an arbitrary group from an extension is the positional
 // focus commands.
@@ -576,11 +568,12 @@ const LENS_TOP_FRACTION = 1 / 3;
 
 /** Scroll the lens so `selection` sits LENS_TOP_FRACTION down it. There is no
  * "reveal at fraction" API, so this reveals a line that far ABOVE the target
- * AtTop instead, measuring the pane's height in lines from `visibleRanges` —
- * which is why the first popout re-reveals after the shrink nudges (before
- * them the pane is twice the height it will end up). Degenerate readings (an
- * editor that hasn't laid out yet, a tactic near the top of the file) clamp to
- * a zero pad, i.e. back to plain AtTop. */
+ * AtTop instead, measuring the pane's height in lines from `visibleRanges`.
+ * It runs ONCE, and that is a consequence of the shrink nudges being gone:
+ * while they existed this measured a pane twice the height it would end up at,
+ * so a first popout had to reveal again afterwards. Nothing resizes the lens
+ * after it now. Degenerate readings (an editor that hasn't laid out yet, a
+ * tactic near the top of the file) clamp to a zero pad, i.e. plain AtTop. */
 function revealAtFraction(ed, selection) {
   const vis = ed.visibleRanges[0];
   const lines = vis ? vis.end.line - vis.start.line + 1 : 0;
@@ -596,39 +589,6 @@ function revealAtFraction(ed, selection) {
 function flag(key, fallback) {
   const v = vscode.workspace.getConfiguration("proofTree").get(key);
   return typeof v === "boolean" ? v : fallback;
-}
-
-/** Collapse everything that is not on the way to the cursor.
- *
- * The lens is a few lines tall, so what costs it most is the proof AROUND the
- * tactic — the other branch of a `by_cases`, the `have` block you are not in.
- * `foldAll` then `unfoldRecursively` at the cursor leaves exactly the path to
- * the tactic open, with its siblings as one-line `⋯` stubs, which is the same
- * thing the tree does with ⇥ and ⇳ one surface over.
- *
- * Best-effort by construction, and deliberately so: folding ranges come from
- * the language server (or VS Code's indentation fallback when it offers none),
- * so how much this collapses depends on what Lean's server publishes. If it
- * publishes nothing the commands are silent no-ops and the lens is exactly as
- * it was — the failure mode is "no gain", never a broken pane.
- *
- * Only ever issued while the lens is the ACTIVE editor: both commands act on
- * whatever is focused, and folding the MAIN buffer instead would be a
- * destructive-feeling surprise a long way from where the user is looking. */
-async function foldToCursor(ed) {
-  if (!flag("lensFold", true)) return;
-  if (vscode.window.activeTextEditor !== ed) {
-    say("  fold: lens is not the active editor, skipping");
-    return;
-  }
-  try {
-    await vscode.commands.executeCommand("editor.foldAll");
-    // `foldAll` can hide the cursor's own line; unfolding is by POSITION, not
-    // by what is visible, so the cursor still names the region to open.
-    await vscode.commands.executeCommand("editor.unfoldRecursively");
-  } catch (e) {
-    say(`  fold: ${e}`);
-  }
 }
 
 /** Turn word wrap on for the lens, once.
@@ -683,10 +643,9 @@ async function showInLens(doc, selection, column) {
   // a structured tactic's range ends deep inside its last nested tactic — so a
   // cursor at the end selects the wrong node. Its start is unambiguous.
   ed.selection = new vscode.Selection(selection.end, selection.start);
-  // Both of these change which lines are visible, so they must run BEFORE the
-  // reveal that positions the tactic a third of the way down.
+  // Wrapping changes which lines are visible, so it runs BEFORE the reveal
+  // that positions the tactic a third of the way down.
   await wrapLens(ed);
-  await foldToCursor(ed);
   revealAtFraction(ed, selection);
   return { ed, selection };
 }
@@ -977,27 +936,19 @@ async function popout(uri, selection) {
   await vscode.commands.executeCommand("workbench.action.newGroupBelow");
   lensColumn = vscode.window.tabGroups.activeTabGroup.viewColumn;
   say(`  popout: lens opened in column ${lensColumn}`);
-  const shown = await showInLens(doc, selection, lensColumn);
+  // The lens takes the split's own height and keeps it. It used to be shrunk
+  // by a run of `decreaseViewHeight` nudges, which is REMOVED: each nudge is a
+  // discrete animated resize of the whole editor area, so opening a lens made
+  // the window step down three times and then re-place its text — reported as
+  // stuttering and shaking, and it looked like it. The height is the split's
+  // to decide; a pane you type in can afford to be the size VS Code made it.
+  //
+  // With the shrink gone the reveal inside `showInLens` is also the LAST word:
+  // it used to run a second time here because the first measured a pane twice
+  // the height it would end up at. Nothing resizes after it now, so one reveal
+  // is both correct and the only one the eye sees.
+  await showInLens(doc, selection, lensColumn);
   await stripEditorChrome();
-  // Shrink the lens: the split starts at 50% of the infoview column; each
-  // nudge takes a fixed slice off (empirically the split ≈ 9 nudges, so
-  // height ≈ (9−n) slices: 6→~3 lines, 3→double that, 5→two-thirds of 3's).
-  // Height commands act on the active group (the lens); best-effort.
-  try {
-    const nudges = tuning("lensShrinkNudges", DEFAULT_LENS_SHRINK_NUDGES);
-    for (let i = 0; i < nudges; i++) {
-      await vscode.commands.executeCommand(
-        "workbench.action.decreaseViewHeight",
-      );
-    }
-  } catch {
-    // sizing is cosmetic — an unshrunk lens still works
-  }
-  // The pane is only now at its final height, and the reveal inside showInLens
-  // measured the pre-shrink one — so place the tactic again against what the
-  // lens actually is. Reused lenses (the early return above) are already
-  // settled and need no second pass.
-  if (shown) revealAtFraction(shown.ed, shown.selection);
 }
 
 function activate(context) {

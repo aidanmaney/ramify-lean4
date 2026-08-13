@@ -3,7 +3,7 @@
   "displayName": "Proof Tree Companion",
   "description": "Editor-side commands for the proof-tree infoview widget: opens a tactic in the lens (a slim editor group split below the infoview) and reveals tree nodes in it, relayed through a request file the widget's Lean RPC writes (the infoview's EditorApi has no executeCommand). Will also grow global settings / persistent state for the widget.",
   "publisher": "aidan",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -52,22 +52,10 @@
           "default": true,
           "markdownDescription": "Show each tactic's resulting goal inline at the end of its line in the lens, so a proof read there carries its intermediate states. Lens only — the main editor has the infoview for this. The text is drawn as a decoration, so it costs no lines and no width the code was using, and it is dropped as soon as you edit (the widget re-sends it once the file re-elaborates)."
         },
-        "proofTree.lensFold": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Collapse everything that is not on the way to the tactic when opening it in the lens, leaving sibling branches as one-line stubs. The lens is only a few lines tall, and what costs it most is the proof around the tactic. Best-effort: how much collapses depends on the folding ranges the Lean server publishes, and with none it simply does nothing."
-        },
         "proofTree.lensWordWrap": {
           "type": "boolean",
           "default": true,
           "markdownDescription": "Wrap long lines in the lens, so a slim pane does not spend its width on horizontal scrolling. Applies to the lens editor ALONE — it uses the word-wrap toggle command, not the `#editor.wordWrap#` setting, so nothing leaks to your other editors or windows. Skipped when you already wrap globally."
-        },
-        "proofTree.lensShrinkNudges": {
-          "type": "integer",
-          "default": 3,
-          "minimum": 0,
-          "maximum": 8,
-          "markdownDescription": "How far to shrink the lens below the 50% split it opens at. The split is roughly 8-9 nudges tall, so **lower is taller** — `0` leaves the lens at half the infoview column."
         },
         "proofTree.counterfactual": {
           "type": "boolean",
