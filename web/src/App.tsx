@@ -15,20 +15,32 @@ import ProofTreeView from "./ProofTreeView";
 drives, so view-stability bugs across a swap are reproducible (and measurable:
 read `scrollTop` around the swap) without an editor. Files live in web/public,
 uncommitted scratch. */
-function CfReplay({ line, character }: { line: number; character: number }) {
+function CfReplay({
+  line,
+  character,
+  set,
+}: {
+  line: number;
+  character: number;
+  set: string;
+}) {
   const [payloads, setPayloads] = useState<Record<string, unknown>[] | null>(
     null,
   );
   const [idx, setIdx] = useState(0);
   useEffect(() => {
+    const names =
+      set === "payload"
+        ? ["baseline", "broken-0", "cf"]
+        : ["baseline", "broken", "cf"];
     void Promise.all(
-      ["baseline", "broken-0", "cf"].map((n) =>
-        fetch(`${import.meta.env.BASE_URL}payload-${n}.json`).then((r) =>
+      names.map((n) =>
+        fetch(`${import.meta.env.BASE_URL}${set}-${n}.json`).then((r) =>
           r.json(),
         ),
       ),
     ).then(setPayloads);
-  }, []);
+  }, [set]);
   const [pos, setPos] = useState({ line, character });
   useEffect(() => {
     const w = window as unknown as {
@@ -50,9 +62,26 @@ function CfReplay({ line, character }: { line: number; character: number }) {
       highlightPos={pos}
       cfStub={
         p.cfLine != null
-          ? { line: p.cfLine, pos: p.cfStubPos, draft: "…typing…" }
+          ? {
+              line: p.cfLine,
+              pos: p.cfStubPos,
+              // The payload's OWN draft, not a placeholder: what the overlay
+              // paints (and how wide it gets) is exactly what the widget
+              // would show, so a width-dependent paint bug reproduces here.
+              draft: (p as { cfDraft?: string }).cfDraft ?? "…typing…",
+              col: (p as { cfDraftCol?: number }).cfDraftCol,
+            }
           : null
       }
+      // The stub's own editor is gated on this hook like every other edit;
+      // writes land in `window.__edits` so a probe can read the RANGE, which
+      // is the whole thing worth checking here (it must be the REAL line's).
+      onEditTactic={(pos, text) => {
+        const w = window as unknown as {
+          __edits?: { pos: unknown; text: string }[];
+        };
+        w.__edits = [...(w.__edits ?? []), { pos, text }];
+      }}
     />
   );
 }
@@ -103,8 +132,14 @@ export default function App() {
   const proof = records?.[selected]?.data.proof ?? null;
 
   if (REPLAY_AT !== null) {
-    const [l, c] = REPLAY_AT.split(":").map(Number);
-    return <CfReplay line={l || 0} character={c || 0} />;
+    const [l, c, set] = REPLAY_AT.split(":");
+    return (
+      <CfReplay
+        line={Number(l) || 0}
+        character={Number(c) || 0}
+        set={set || "payload"}
+      />
+    );
   }
 
   if (error || !records) {

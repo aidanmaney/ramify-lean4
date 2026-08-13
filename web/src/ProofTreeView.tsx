@@ -587,6 +587,50 @@ function animateScroll(
   }, FOLLOW_MS + 60);
 }
 
+/**
+ * Which node a counterfactual stub names, among `ns`, or null.
+ *
+ * WHICH node is the stub is the SERVER's answer (`cfStubPos` — the splice knows
+ * the byte it wrote `sorry` at), matched the way `pendingFill` claims its own
+ * stub: exact position plus the label actually being `sorry`. The line rule it
+ * replaces is ambiguous in principle — a container and the injected stub can
+ * both start on the cursor's line — though the attempt to REACH that state
+ * failed: `cfWanted`'s completeness witness declines cf whenever a step starts
+ * on the line. A failed exact match falls back to the line rule rather than
+ * answering nothing: the overlay is the whole "here is where your tactic lands"
+ * affordance, and dropping it is the worse failure.
+ *
+ * ONE coding, because two surfaces ask: the overlay (over the DRAWN nodes) and
+ * the seek that reveals the stub when it is hidden (over the BASE nodes, which
+ * is the only list an elided node is still in). They must name the same node or
+ * the seek would open a cut the overlay then declines to paint in.
+ */
+function cfStubNodeId(
+  ns: readonly TreeNode[],
+  stub: { line: number; pos?: { line: number; character: number } },
+): string | null {
+  const at = stub.pos;
+  const exact =
+    at &&
+    ns.find(
+      (n) =>
+        n.type === "tactic" &&
+        n.label === "sorry" &&
+        n.position &&
+        n.position.start.line === at.line &&
+        n.position.start.character === at.character,
+    );
+  const pn =
+    exact ??
+    ns.find(
+      (n) =>
+        n.type === "tactic" &&
+        n.position &&
+        n.position.start.line === stub.line,
+    );
+  return pn?.id ?? null;
+}
+
 // The diagnostic RIBBON: a bar down the inside of a node's left edge, in the
 // worst severity's ink. Drawn INSIDE the box's own footprint on purpose — the
 // box already reserves NODE_PAD (12) of left padding, so the ribbon sits in
@@ -845,19 +889,28 @@ export interface ProofTreeViewProps {
    * elaborated with `line`'s content replaced by `sorry` (the document is
    * mid-edit and does not elaborate), and `draft` is what the author has
    * typed on that line so far. The tactic node anchored on that line draws
-   * the draft over its box, dashed and accent-inked, and takes no editing
-   * gestures — the buffer IS its editor right now.
+   * the draft over its box, dashed and accent-inked.
    *
    * `pos` is the stub step's exact `position.start` when the server ships it
    * (`cfStubPos`): the injected `sorry` and its CONTAINER can both start on
    * `line`, so naming the node by line alone picks the wrong box on the
    * `:= by` splice tier. Optional — an older server sends only the line, and
    * the harness fakes the marker without one.
+   *
+   * `col` is where `draft` begins in the REAL line (`cfDraftCol`), and it is
+   * what makes the stub EDITABLE. A double-click opens the ordinary in-place
+   * editor prefilled with `draft`, committing over `[{line, col}, end of
+   * line]` in real coordinates — the author's own line, never the spliced
+   * one, so the editing-seam withdrawal that drops `tacticEdits` here is not
+   * reopened (nothing in this path carries counterfactual TEXT). Absent ⇒ the
+   * overlay is inert, which is the old behaviour and what an older server
+   * still gets.
    */
   cfStub?: {
     line: number;
     pos?: { line: number; character: number };
     draft: string;
+    col?: number;
   } | null;
   /**
    * Extra controls placed at the left of the toolbar. The standalone app injects
@@ -1299,6 +1352,17 @@ export default function ProofTreeView({
     // source. Stripped for display and re-applied on commit, so the editor
     // shows the block the way the file does (see commentEditFor).
     commentIndent?: number;
+    // Present when what is being edited is the COUNTERFACTUAL STUB — i.e. the
+    // line the author is mid-typing, offered in the tree because the box that
+    // shows their draft ought to behave like every other box that shows source.
+    // `pos` is a REAL-document range (`cfDraftCol` → the clamped-huge
+    // end-of-line character the insertion path already relies on) and
+    // `original` the real line's own text, so nothing here is a counterfactual
+    // coordinate and nothing written can be a counterfactual byte — which is
+    // what keeps the editing-seam withdrawal intact rather than reopened. The
+    // number is the line's indent, re-applied to continuation lines on commit
+    // like `commentIndent`. Empty commit CANCELS, the tactic rule.
+    cfIndent?: number;
   } | null>(null);
   // A `sorry` a calc gesture just wrote, waiting for the re-elaboration to
   // draw it. When the node appears the in-place editor opens on it, empty:
@@ -1706,6 +1770,24 @@ export default function ProofTreeView({
           .map((l, i) => (i === 0 || l === "" ? l : ind + l))
           .join("\n");
         onEditTactic?.(cur.pos, text);
+      }
+      setEditing(null);
+      return;
+    }
+    if (cur.cfIndent !== undefined) {
+      // The counterfactual stub. Same shape as a comment block's commit — a
+      // verbatim range replace with the indent put back on continuation lines
+      // — but the tactic's EMPTY rule: blanking the box backs out, it does not
+      // erase the line the author is in the middle of writing.
+      if (cur.value.trim() !== "" && cur.value !== cur.original) {
+        const ind = " ".repeat(cur.cfIndent);
+        onEditTactic?.(
+          cur.pos,
+          cur.value
+            .split("\n")
+            .map((l, i) => (i === 0 || l === "" ? l : ind + l))
+            .join("\n"),
+        );
       }
       setEditing(null);
       return;
@@ -2369,6 +2451,16 @@ export default function ProofTreeView({
     setArming(null);
     setPendingVerb(null);
   }
+  // TRUE in the very render where the two branches above are re-keying view
+  // state, and it has to be read by anything that asks "is this node DRAWN?"
+  // during render. The memos below were built from the state as it stood BEFORE
+  // those writes, so in this pass `elideCuts` still holds the PREVIOUS
+  // elaboration's ids: they resolve to nothing against the new base tree, every
+  // ghost's members come back as ordinary nodes, and `nodes` describes a tree
+  // that will never be committed. Cost of ignoring it, measured on the cf seek
+  // below: the stub looked drawn in this pass, so the seek latched itself as
+  // satisfied and the render that actually re-elided it never ran the reveal.
+  const rekeying = proofKey !== prevProof || shapeKey !== prevShape;
 
   // Display flags written in the source (see NodeFlags) seed the view ONCE per
   // proof — a starting view, not a lock: both directives can be undone by hand
@@ -3895,7 +3987,7 @@ export default function ProofTreeView({
     animateScroll(followAnim.current, el, left, top);
   }, [cursorNodeId, hlKey, hlDismissed, nodes, zoom, PAD_X, PAD_Y, compact]);
 
-  // The diagnostic pager owes a view move: the node was named, the unfold and
+  // A REVEAL owes a view move: the node was named, the unfold, the un-elide and
   // the gallery paging were requested synchronously, and the SCROLL has to wait
   // for the relayout those cause — so the request is held and the effect below
   // spends it on the first layout that actually contains the node.
@@ -3908,25 +4000,52 @@ export default function ProofTreeView({
   // down for this — simply leaves the request unspent; if a later unfold does
   // reveal it, the move happens then, which is the same behaviour the cursor
   // follow has for a node hidden at cursor-move time.
-  const [diagSeek, setDiagSeek] = useState<{ id: string } | null>(null);
-  const soughtDiag = useRef<{ id: string } | null>(null);
+  //
+  // TWO callers now: the diagnostic pager, and the counterfactual stub seek
+  // below. Both are "the tree must take me to THIS node", so they share one
+  // request slot — whichever spoke last owns the view, the same bargain
+  // `followAnim` already makes between the follow and the pager.
+  const [seek, setSeek] = useState<{ id: string } | null>(null);
+  const sought = useRef<{ id: string } | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !diagSeek || soughtDiag.current === diagSeek) return;
-    const node = nodes.find((n) => n.data.id === diagSeek.id);
+    if (!el || !seek || sought.current === seek) return;
+    const node = nodes.find((n) => n.data.id === seek.id);
     if (!node) return;
-    soughtDiag.current = diagSeek;
+    sought.current = seek;
     const { left, top } = inViewScroll(el, node, zoom, PAD_X, PAD_Y, compact);
     if (left !== el.scrollLeft || top !== el.scrollTop)
       animateScroll(followAnim.current, el, left, top);
-  }, [diagSeek, nodes, zoom, PAD_X, PAD_Y, compact]);
+  }, [seek, nodes, zoom, PAD_X, PAD_Y, compact]);
 
-  // Go to a diagnostic's node: unfold whatever hides it, page the gallery to
-  // it, then scroll it into view once the relayout lands. Unfolding walks the
-  // FIRST parent chain, which is enough — `computeLayout` hides a node only
-  // when ALL its parents are collapsed or hidden.
-  const gotoDiagNode = (id: string | null) => {
-    if (!id) return; // a diagnostic that belongs to the proof but to no node
+  // Go to a node: undo whatever hides it, page the gallery to it, then scroll it
+  // into view once the relayout lands. Unfolding walks the FIRST parent chain,
+  // which is enough — `computeLayout` hides a node only when ALL its parents are
+  // collapsed or hidden.
+  //
+  // An ELIDE CUT is the other way to be hidden, and it has to be undone HERE
+  // rather than by unfolding: a cut lifts its members out of the tree BEFORE the
+  // engine sees them (`applyElisions` over `baseNodes`), so a cut node is not in
+  // `engine.allNodes()` at all and no amount of unfolding reaches it. Only the
+  // ONE cut containing the target is dropped, anchored like a click on its ghost
+  // (`anchorAs`) so the restored subtree's head lands where the ghost sat.
+  //
+  // `unhide` is the half that is safe to run REPEATEDLY and from RENDER (the cf
+  // seek below does both): every write it makes is conditional on there being
+  // something to undo, so once the node is reachable it is a pure no-op — which
+  // is what stops a render-phase caller from looping. `setSeek` is deliberately
+  // NOT in it: that one mints a fresh object every call (asking for the same
+  // node twice must move the view twice, for the pager's `‹ ›`), so it belongs
+  // to the event-driven entry point alone.
+  const unhide = (id: string) => {
+    const baseById = new Map(baseNodes.map((n) => [n.id, n]));
+    const covering = elideCuts.find((c) =>
+      resolveCut(c, baseById).includes(id),
+    );
+    if (covering) {
+      const gid = cutId(covering);
+      setElideCuts((cs) => cs.filter((c) => cutId(c) !== gid));
+    }
     const byId = new Map(engine.allNodes().map((n) => [n.id, n]));
     setCollapsed((prev) => {
       let next: Set<string> | null = null;
@@ -3940,14 +4059,73 @@ export default function ProofTreeView({
       return next ?? prev;
     });
     pageTo(id);
-    setDiagSeek({ id });
   };
+  const revealNode = (id: string | null) => {
+    if (!id) return; // a diagnostic that belongs to the proof but to no node
+    // The ghost's own anchor rule, so an un-elide from here lands where a click
+    // on the ghost would: the restored subtree's head at the marker's y.
+    const baseById = new Map(baseNodes.map((n) => [n.id, n]));
+    const covering = elideCuts.find((c) =>
+      resolveCut(c, baseById).includes(id),
+    );
+    if (covering) {
+      const top = topMemberOf(resolveCut(covering, baseById));
+      if (top) anchorAs(cutId(covering), top);
+    }
+    unhide(id);
+    setSeek({ id });
+  };
+
+  // THE COUNTERFACTUAL STUB IS SOUGHT, not merely followed. The stub marks where
+  // the caret is RIGHT NOW — the tree is drawing a `sorry` in place of the words
+  // being typed — so a stub the reader cannot see makes the `✎ writing line N`
+  // floater a claim about nothing. Measured on the user's own file
+  // (ProofTreeScratch.lean, retyping `ring` on line 92 under the `.none` on line
+  // 84): the stub sits INSIDE the seeded ghost, so the overlay found no node and
+  // drew nothing at all, while the cursor accent landed on the ghost 955px below
+  // the fold — the reported "I'm editing somewhere totally offscreen".
+  //
+  // Why the cursor follow cannot cover this. It is guarded on the CURSOR key by
+  // design (ids renumber per re-parse), and the counterfactual arrives SECONDS
+  // after the keystroke that caused it (7.3s on the first splice of a Mathlib
+  // file, measured over LSP) — by then the cursor has been still, so the guard
+  // is closed and the payload that first contains a stub is never sought. And
+  // even when it does fire, the follow deliberately declines a hidden node
+  // ("don't fight the user"), which is right for a cursor parked in a folded
+  // region and wrong for the one node the reader is writing into.
+  //
+  // Fires ONCE per stub, keyed on the stub's SOURCE position — not on the draft,
+  // which changes per keystroke, and not on the node id, which renumbers per
+  // re-elaboration. So entering a counterfactual moves the view at most once and
+  // then holds still however long the word takes; leaving one re-arms it.
+  //
+  // ADJUSTED DURING RENDER, the `galleryFollowed` pattern, not in an effect: the
+  // reveal is a state change derived from a prop and the house lint refuses
+  // setState in an effect body. It converges because `unhide` writes nothing
+  // once there is nothing left to undo — so the pass after the relayout falls
+  // through to the seek, and a stub no narrowing will ever draw (sequence mode,
+  // a focus scope) simply re-runs a no-op per relayout.
+  const cfSeekKey = cfStub
+    ? `${cfStub.line}:${cfStub.pos?.line ?? "?"}:${cfStub.pos?.character ?? "?"}`
+    : null;
+  const [cfSeeked, setCfSeeked] = useState<string | null>(null);
+  if (cfSeekKey === null || !cfStub) {
+    if (cfSeeked !== null) setCfSeeked(null); // left the cf — re-arm
+  } else if (cfSeeked !== cfSeekKey && !rekeying) {
+    // Resolved over the BASE nodes: an elided stub is in no other list.
+    const id = cfStubNodeId(baseNodes, cfStub);
+    if (!id) setCfSeeked(cfSeekKey); // nothing to seek; don't retry per render
+    else if (nodes.some((n) => n.data.id === id)) {
+      setCfSeeked(cfSeekKey);
+      setSeek({ id });
+    } else unhide(id);
+  }
   /** Step the pager by `d` (wrapping) and go to what it lands on. */
   const stepDiag = (d: number) => {
     if (diagList.length === 0) return;
     const n = (diagIdx + d + diagList.length) % diagList.length;
     setDiagSel(diagList[n].diag.key);
-    gotoDiagNode(diagList[n].nodeId);
+    revealNode(diagList[n].nodeId);
   };
 
   // After a zoom change re-renders the (resized) SVG, restore scroll so the
@@ -4583,10 +4761,20 @@ export default function ProofTreeView({
   // over that node — dashed, accent-inked, widened to the draft like the
   // in-place editor's overlay (fixed height; a growing box reads as the tree
   // shifting). Rendered AFTER the nodes loop so it sits on top, and it TAKES
-  // the pointer: the node under it must not offer editing or delete while the
-  // buffer is its editor, and swallowing click/dblclick here is what enforces
-  // that (the hover bar never appears — the pointer is over the overlay, not
-  // the node's <g>). Body code, not a JSX IIFE (the house ref-taint rule).
+  // the pointer, so the node under it offers none of ITS gestures: those all
+  // route through `tacticEdits`, which the cf payload withdrew on this line
+  // precisely because its text is spliced. Body code, not a JSX IIFE (the
+  // house ref-taint rule).
+  //
+  // What the overlay does offer is a DOUBLE-CLICK of its own, when the server
+  // shipped `cfStub.col`: a box in this tree that shows source text should be
+  // editable like every other one, and the withdrawal was never an argument
+  // against editing THE AUTHOR'S LINE — only against editing a range whose
+  // text came from the counterfactual. `col` + `cfLine` is that line in real
+  // coordinates and `draft` is its real content, so the edit commits over
+  // `[{line, col}, end of line]` with the author's own text (the huge end
+  // character is clamped by the editor, the insertion path's own trick) and no
+  // spliced byte is ever readable, let alone writable, from here.
   //
   // WHICH node is the stub is the SERVER's answer (`cfStubPos` — the splice
   // knows the byte it wrote `sorry` at), matched the way `pendingFill` claims
@@ -4604,28 +4792,55 @@ export default function ProofTreeView({
   // nothing: the overlay is the whole "here is where your tactic lands"
   // affordance, and silently dropping it would be a worse failure than the
   // ambiguity it guards against.
+  //
+  // The node's OWN box hides under it (`cfStubId`, read by the nodes loop's
+  // `hideForEdit`), for the reason a narration-mode comment edit hides its box:
+  // the overlay stands IN for the box, and leaving both drawn showed two
+  // borders. Here they do not even coincide — the overlay widens to the draft
+  // while the box stays `sorry`-sized — so the node's solid stroke filled the
+  // dash gaps along the shared top and bottom edges and its right edge stood as
+  // a bar inside the overlay: one border reading as "partly dashed, partly
+  // full", reported on a whole-theorem-line draft where the width gap is
+  // largest.
+  const cfStubId = cfStub
+    ? cfStubNodeId(
+        nodes.map((n) => n.data),
+        cfStub,
+      )
+    : null;
+  const cfEditable =
+    !!cfStub && cfStub.col !== undefined && !!onEditTactic && seq.mode === "off";
+  /** Open the in-place editor on the counterfactual line. See `editing.cfIndent`
+  for why every coordinate here is the REAL document's. */
+  const editCfStub = (id: string) => {
+    if (!cfStub || cfStub.col === undefined) return;
+    setEditing({
+      id,
+      pos: {
+        start: { line: cfStub.line, character: cfStub.col },
+        // To END OF LINE, and that is what makes a range derived from a
+        // SNAPSHOT honest about a line still being typed in: however many more
+        // characters have landed since this payload was built, the replacement
+        // still takes the whole line. The editor clamps a character past the
+        // line's end when the edit applies (`addTactic` leans on exactly this
+        // and the widget never holds document text) — same `1e5`, deliberately
+        // the same number rather than a second magic one.
+        stop: { line: cfStub.line, character: 1e5 },
+      },
+      original: cfStub.draft,
+      value: cfStub.draft,
+      cfIndent: cfStub.col,
+    });
+  };
   let cfStubEl: ReactNode = null;
   if (cfStub) {
-    const at = cfStub.pos;
-    const exact =
-      at &&
-      nodes.find(
-        (n) =>
-          n.data.type === "tactic" &&
-          n.data.label === "sorry" &&
-          n.data.position &&
-          n.data.position.start.line === at.line &&
-          n.data.position.start.character === at.character,
-      );
-    const pn =
-      exact ??
-      nodes.find(
-        (n) =>
-          n.data.type === "tactic" &&
-          n.data.position &&
-          n.data.position.start.line === cfStub.line,
-      );
-    if (pn) {
+    const pn = cfStubId
+      ? nodes.find((n) => n.data.id === cfStubId)
+      : undefined;
+    // While its own editor is open the overlay steps aside: the edit overlay
+    // stands in for the box (the one-border rule this whole node already
+    // learned), and two dashed rectangles over one box is the defect twice.
+    if (pn && editing?.id !== pn.data.id) {
       const empty = cfStub.draft.trim() === "";
       const label = empty ? "…" : cfStub.draft;
       const boxTop = pn.y + (bandTopH(pn.data) - pn.data.h) / 2;
@@ -4633,10 +4848,15 @@ export default function ProofTreeView({
         pn.data.w,
         measureText(label, NODE_FONT_PX) + 2 * NODE_PAD,
       );
+      const nodeId = pn.data.id;
       cfStubEl = (
         <g
           onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            if (cfEditable) editCfStub(nodeId);
+          }}
+          style={cfEditable ? { cursor: "text" } : undefined}
         >
           <rect
             x={pn.x - pn.data.w / 2}
@@ -4650,7 +4870,8 @@ export default function ProofTreeView({
             strokeDasharray="4 3"
           >
             <title>
-              {`being written in the buffer (line ${cfStub.line + 1}) — the tree holds a sorry here until it elaborates`}
+              {`being written in the buffer (line ${cfStub.line + 1}) — the tree holds a sorry here until it elaborates` +
+                (cfEditable ? "\n· double-click to edit that line here" : "")}
             </title>
           </rect>
           <text
@@ -5081,7 +5302,7 @@ export default function ProofTreeView({
           top={floaterTop(4)}
           onStep={stepDiag}
           // "Take me to it" means BOTH surfaces: the tree (unfold, page,
-          // scroll — gotoDiagNode) and the SOURCE (the editor's cursor onto
+          // scroll — revealNode) and the SOURCE (the editor's cursor onto
           // the error, through the same lens-aware reveal a node click uses;
           // a diagnostic's range is already the shape onReveal takes, and the
           // widget's tacticEdits lookup simply misses and falls through to
@@ -5093,7 +5314,7 @@ export default function ProofTreeView({
           // the error's line resolves — agreeing with the ribboned node by
           // construction, both being derived from the same range.start.
           onGo={() => {
-            gotoDiagNode(diagCur.nodeId);
+            revealNode(diagCur.nodeId);
             revealAt(diagCur.diag.range);
           }}
         />
@@ -5567,11 +5788,15 @@ export default function ProofTreeView({
               // narration mode, where the prose IS the box: there the overlay
               // covers it exactly as a tactic edit does, and leaving it drawn
               // put two boxes a few px apart with both borders showing.
+              // The counterfactual stub's overlay is the same case: it stands IN
+              // for this box (see cfStubId), so the box, its label and its
+              // ribbon go with it. One border, not two.
               const hideForEdit =
-                isEditing &&
-                !editing?.add &&
-                !editing?.calcStage &&
-                (!editing?.comment || !!node.data.proseLabel);
+                id === cfStubId ||
+                (isEditing &&
+                  !editing?.add &&
+                  !editing?.calcStage &&
+                  (!editing?.comment || !!node.data.proseLabel));
               // A step the supplemental parser synthesized: `failed` carries
               // an error, `skipped` never ran, `term` came from a term-mode
               // proof's structure. Failed/skipped draw DASHED — the tactic is
@@ -7159,8 +7384,18 @@ export default function ProofTreeView({
                 // edited (the node itself has no position — it is a marker).
                 const mirrorPos = editing.tokPos ?? en.data.position;
                 // …and skipped for COMMENT edits: prose, not tactic tokens.
+                // …and for the COUNTERFACTUAL line, where the node's position
+                // is a SPLICED coordinate: its tokens describe the injected
+                // `sorry`, not the draft, and the cf payload has withdrawn the
+                // entry anyway. Stated rather than left to fall out of the
+                // withdrawal, so a future tier that kept the entry cannot
+                // quietly start colouring a draft from spliced bytes.
                 const editHighlight =
-                  !editing.add && !editing.calcStage && !editing.comment && mirrorPos
+                  !editing.add &&
+                  !editing.calcStage &&
+                  !editing.comment &&
+                  editing.cfIndent === undefined &&
+                  mirrorPos
                     ? (renderTaggedTactic?.(
                         mirrorPos,
                         editing.value,

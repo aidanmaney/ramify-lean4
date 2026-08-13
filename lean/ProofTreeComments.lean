@@ -661,17 +661,36 @@ def withTacticTail (tails : Array TacticTail) (start : Lsp.Position)
       label ++ "\n" ++ t.tail
     else label
 
-/-- BOTH label fix-up passes, collected and composed in their required order —
-the rw clause first, then the multi-line tail, so each guard sees the label
-state it was written against. The ONE entry the two wires call (`Ppharness`
-and `getProofTree`), which is what keeps the pipeline and its order from
-diverging between them as fix-ups accrete. Returns the applier, so callers
-collect once and map it over every step. -/
+/-- BOTH label fix-up passes' collected inputs, gathered once per payload.
+
+A STRUCTURE rather than the composed applier this used to return, and the
+reason is a compilation fact rather than a taste: a `def` whose result type is
+a function is eta-expanded to the full arity, so `labelFixup fileMap tree extra`
+was not a closure over two computed arrays — it was a partial application of a
+five-argument function, and BOTH collectors (two whole-info-tree syntax
+descents) re-ran on EVERY step the caller mapped it over. Measured on a live
+Mathlib proof: 38 steps × ~24ms = 904ms of a 1382ms cache miss, the same shape
+at every size (17 steps → 156ms, 8 → 25ms). A constructor application is
+strict, so building this record runs each collector exactly once, and
+`apply` below is two array lookups. -/
+structure LabelFixup where
+  rwLocs   : Array RwLocation
+  tacTails : Array TacticTail
+
+/-- BOTH label fix-up passes, collected in their required order. The ONE entry
+the two wires call (`Ppharness` and `getProofTree`), which is what keeps the
+pipeline and its order from diverging between them as fix-ups accrete. Callers
+collect once and map `apply` over every step. -/
 def labelFixup (fileMap : FileMap) (tree : Elab.InfoTree)
-    (extra : Option Syntax := none) : Lsp.Position → String → String :=
-  let rwLocs := collectRwLocations fileMap tree (extra := extra)
-  let tacTails := collectTacticTails fileMap tree (extra := extra)
-  fun start label => withTacticTail tacTails start (withRwLocation rwLocs start label)
+    (extra : Option Syntax := none) : LabelFixup :=
+  { rwLocs   := collectRwLocations fileMap tree (extra := extra)
+    tacTails := collectTacticTails fileMap tree (extra := extra) }
+
+/-- Apply both passes to one label, rw clause first then the multi-line tail,
+so each guard sees the label state it was written against. -/
+def LabelFixup.apply (f : LabelFixup) (start : Lsp.Position) (label : String) :
+    String :=
+  withTacticTail f.tacTails start (withRwLocation f.rwLocs start label)
 
 /-- A hole the AUTHOR wrote — a `?_` or a named `?foo` — with the goal it
 stands for and enough of what encloses it to edit it in place.

@@ -244,6 +244,21 @@ structure ProofTreeData where
   refreshed per request even when the tree itself comes from the cache. Paint
   only, never part of the client's stable signature. -/
   cfDraft       : Option String := none
+  /-- The column `cfDraft` STARTS at in the real document — i.e. the width of
+  the line's indent. With `cfLine` this is a range in REAL coordinates, and that
+  is the whole point: it is what lets the stub be edited without reopening the
+  hazard the editing-seam withdrawal exists to close.
+
+  The withdrawal drops `tacticEdits` touching `cfLine` because those carry the
+  spliced TEXT — a container's slice holds the injected `sorry`, and committing
+  an in-place edit built from it would write that `sorry` over the author's
+  draft. This field carries no text at all: the client pairs it with `cfDraft`
+  (the real line, which is also what the overlay is already painting) and
+  commits to end-of-line with the clamped-huge character the insertion path
+  already uses, so what is written is the author's own line with their own
+  edit — never a counterfactual byte. Refreshed per request beside `cfDraft`
+  and out of the stable signature for the same reason. -/
+  cfDraftCol    : Option Nat := none
   /-- A counterfactual is being elaborated in the background for this state;
   the client may re-poll shortly instead of waiting for the next document
   event. -/
@@ -781,7 +796,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
     let fixup := labelFixup fileMap snap.infoTree (extra := some snap.stx)
     let remapped := { parsed with
       steps := parsed.steps.map fun (s : Paperproof.Services.ProofStep) =>
-        { s with tacticString := fixup s.position.start s.tacticString } }
+        { s with tacticString := fixup.apply s.position.start s.tacticString } }
     -- The supplemental parser: synthesize steps for tactics the vendored one
     -- lost to failure (their info subtree was rolled back; the syntax survives
     -- in the slots). Runs BEFORE the empty early-out — a proof whose only
@@ -1125,6 +1140,12 @@ private structure CfSplice where
   text : Unit → String
   /-- The real line's content, indent stripped — the client's stub label. -/
   draft : String
+  /-- The column `draft` starts at in the REAL line (its indent's width). Ships
+  as `cfDraftCol`; see that field for why a column and not a range, and why it
+  does not reopen what the editing-seam withdrawal closes. Read off the same
+  `ws` the splice already measured, so the two cannot disagree about where the
+  author's text begins. -/
+  draftCol : Nat
   /-- Absolute BYTE offset of the injected `sorry` in the spliced text. The
   splice touches one line and adds no newline, so everything before it is
   byte-identical to the real document; `computeCf` turns this into the LSP
@@ -1175,6 +1196,7 @@ private def cfSplice (fileMap : FileMap) (line : Nat) (cursorCol : Nat) :
           ++ newContent ++ (if hasNl then "\n" else "")
           ++ String.Pos.Raw.extract src nextStart ⟨src.utf8ByteSize⟩
       draft := body
+      draftCol := ws.length
       stubByte := lineStart.byteIdx + newContent.utf8ByteSize - "sorry".utf8ByteSize }
 
 /-- Is the counterfactual wanted? Two conjuncts, both read off the payload the
@@ -1443,7 +1465,7 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
       -- here, the author is still mid-word: keep serving the cf.
       if sh == srcHash || ck == hash (splice.text ()) then
         cfServeCache.set (some (srcHash, ln, ck, blob))
-        return { blob with cfDraft := some draft }
+        return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
   unless cfWanted real pos stepStartsHere do return real
   -- Only past the WANTED gate is the whole-file work paid: the spliced text
   -- (O(file)) and the two hashes run once per request while the document is
@@ -1457,7 +1479,7 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
       match entry with
       | .done (some blob) =>
         cfServeCache.set (some (srcHash, pos.line, cfKey, blob))
-        return { blob with cfDraft := some draft }
+        return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
       | .done none => return real
       | .pending t0 =>
         -- In flight: a burst of keystrokes starts exactly one elaboration.

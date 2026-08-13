@@ -132,7 +132,7 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
         -- is the one place the pass list and its order live.
         let fixup := ProofTree.labelFixup fileMap tree
         let r1 := { r0 with steps := r0.steps.map fun s =>
-          { s with tacticString := fixup s.position.start s.tacticString } }
+          { s with tacticString := fixup.apply s.position.start s.tacticString } }
         -- The supplemental parser: synthesize steps for tactics the vendored
         -- one lost to failure (their info subtree was rolled back; the syntax
         -- survives in tacticSlots). Merged HERE, before anything reads the

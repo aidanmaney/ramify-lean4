@@ -292,6 +292,11 @@ type ProofTreeData = Proof & {
   NEVER in the stable signature — it changes per keystroke, which is exactly
   what the typing hold exists to not redraw on. */
   cfDraft?: string;
+  /** The column `cfDraft` starts at in the REAL document (its indent's width).
+  With `cfLine` it is a real-coordinate range, which is what makes the stub
+  editable without touching counterfactual bytes — see `cfDraftCol` in
+  ProofTreeWidget.lean. Out of the stable signature like `cfDraft`. */
+  cfDraftCol?: number;
   /** The server is elaborating a counterfactual in the background; re-poll
   shortly rather than waiting for the next document event. */
   cfPending?: boolean;
@@ -764,6 +769,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // render per response — and a stale draft after a rejected call, where the
   // stub now honestly dims to "…".
   const cfDraft = st.state === "resolved" ? st.value.cfDraft : undefined;
+  // Its column in the real line — the other half of the range the stub's own
+  // editor commits over (see `cfDraftCol` in ProofTreeWidget.lean). Read off
+  // the SAME response as the draft, so the two can never describe different
+  // snapshots of the line.
+  const cfDraftCol = st.state === "resolved" ? st.value.cfDraftCol : undefined;
   // cfPending: the counterfactual is elaborating in the background. Re-poll
   // shortly — without this, an author who stops typing before the elaboration
   // finishes would wait for the next document event to see the preview.
@@ -1291,6 +1301,10 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
                 // view falls back to the line rule when it doesn't.
                 pos: stable.proof.cfStubPos,
                 draft: cfDraft ?? "",
+                // Absent from an older server, and the view treats absence as
+                // "not editable" rather than guessing a column — a guessed
+                // one would write the author's line at the wrong offset.
+                col: cfDraftCol,
               }
             : null
         }
