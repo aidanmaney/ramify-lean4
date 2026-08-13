@@ -5463,7 +5463,14 @@ export default function ProofTreeView({
       <div
         style={{
           position: "absolute",
-          top: 0,
+          // BELOW the signature header, not at the container's top edge. The
+          // veil fades content that scrolls under the FLOATERS, and those now
+          // start under the header — while the header itself is opaque chrome
+          // with text of its own, which the gradient was washing out (reported
+          // as a blur across the statement). Moving it keeps the calm ground
+          // the floaters need; deleting it would put node text straight under
+          // them again.
+          top: hdrH,
           left: 0,
           right: 0,
           height: 26,

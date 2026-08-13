@@ -597,8 +597,25 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   );
 
   // The latest non-empty response, if any. Both holders below key off it.
+  // A payload counts as a PROOF when it has steps OR an open block. The step
+  // count alone was the gate, and it silently dropped the one payload whose
+  // entire content is a goal: `:= by` with nothing written into it harvests no
+  // steps and carries `openBlock` — the root goal it owes, plus the chips that
+  // act on it. So the server sent the right answer, this line threw it away,
+  // and the tree read "no proof tree here" for a theorem whose body had just
+  // been deleted (the client then holding the PREVIOUS proof, which is why it
+  // also looked like a stale cache).
+  //
+  // This is the THIRD time today the same sentence has been wrong — twice in
+  // the server (the entry nudge's fallback, the header-line cf refusal) and
+  // here. The rule, now stated where the payload first enters the client: a
+  // payload's worth is not its step count. Any new "is there a proof here?"
+  // test must ask what the payload CONTAINS.
   const resolved =
-    st.state === "resolved" && st.value.steps.length > 0 ? st.value : null;
+    st.state === "resolved" &&
+    (st.value.steps.length > 0 || st.value.openBlock !== undefined)
+      ? st.value
+      : null;
 
   // Hold the last rendered NON-EMPTY proof, keyed by the payload's TEXT parts,
   // so re-highlighting on cursor moves within a proof doesn't churn the layout
