@@ -1199,6 +1199,38 @@ private def cfSplice (fileMap : FileMap) (line : Nat) (cursorCol : Nat) :
       draftCol := ws.length
       stubByte := lineStart.byteIdx + newContent.utf8ByteSize - "sorry".utf8ByteSize }
 
+/-- Does the payload's declaration range contain the cursor? INCLUSIVE at the
+stop (posLE both ways), like the client's `cursorInDecl` and unlike the
+half-open step rule: a false "inside" costs one quiet period, a false "outside"
+is a brokenness signal that never fires. Factored out so `cfWanted`'s trigger
+and the sticky serve's EXIT (`payloadHealthy`) read one coding of it. -/
+private def declContainsPos (real : ProofTreeData) (pos : Lsp.Position) : Bool :=
+  match real.declRange with
+  | some r => posLE r.start pos && posLE pos r.stop
+  | none => false
+
+/-- Is an ERROR diagnostic reported inside the payload's declaration?
+Declaration-wide by line, for the reason `cfWanted` gives. Same factoring
+rationale as `declContainsPos`. -/
+private def errInDecl (real : ProofTreeData) : Bool :=
+  real.diagnostics.any fun d =>
+    d.severity == 1 && (match real.declRange with
+      | some r =>
+        d.range.start.line ≤ r.stop.line && r.start.line ≤ d.fullRange.stop.line
+      | none => true)
+
+/-- Positive evidence that the REAL payload is a complete answer for the
+declaration under the cursor: it drew steps, it identified a declaration the
+cursor is inside, and nothing in that declaration is in error.
+
+Deliberately NOT `!cfWanted`: the sticky serve's exit needs a CLAIM about the
+real payload, not the absence of a trigger — `cfWanted` also fires on a
+recovered step and, through `stepStartsHere`, on facts about the LINE rather
+than about the declaration's health. See `maybeCounterfactual` for the one
+branch licensed to act on this, and why it is only that one. -/
+private def payloadHealthy (real : ProofTreeData) (pos : Lsp.Position) : Bool :=
+  !real.steps.isEmpty && declContainsPos real pos && !errInDecl real
+
 /-- Is the counterfactual wanted? Two conjuncts, both read off the payload the
 normal path just built (no extra parse):
 
@@ -1227,17 +1259,8 @@ An OPEN BLOCK never reaches this test at all — `maybeCounterfactual` refuses
 above it, ahead of the sticky serve. See there for why. -/
 private def cfWanted (real : ProofTreeData) (pos : Lsp.Position)
     (stepStartsHere : Bool) : Bool :=
-  -- INCLUSIVE at the stop (posLE both ways), like the client's `cursorInDecl`
-  -- and unlike the half-open step rule: a false "inside" costs one quiet
-  -- period, a false "outside" is a brokenness signal that never fires.
-  let declContains := match real.declRange with
-    | some r => posLE r.start pos && posLE pos r.stop
-    | none => false
-  let errInDecl := real.diagnostics.any fun d =>
-    d.severity == 1 && (match real.declRange with
-      | some r =>
-        d.range.start.line ≤ r.stop.line && r.start.line ≤ d.fullRange.stop.line
-      | none => true)
+  let declContains := declContainsPos real pos
+  let errInDecl := errInDecl real
   let broken := real.steps.isEmpty
     || real.recovered.any (·.start.line == pos.line)
     || !declContains
@@ -1261,12 +1284,22 @@ affordable: while the author types on one line, the real document changes
 every keystroke but the spliced document (that line reads `sorry` either way)
 does not, so ONE elaboration serves the whole burst. -/
 initialize cfElabCache : IO.Ref (Option (UInt64 × CfEntry)) ← IO.mkRef none
-/-- (real-source hash, line, spliced-text hash, blob) — the last serve. The
-extra keys carry the STICKY rule; see `maybeCounterfactual`. The blob is kept
-here as well as in the elab entry ON PURPOSE: the elab cache holds one entry,
-so an edit that splices to a new key evicts the old blob there, and this copy
-is what still serves instantly when the edit is then reverted. -/
-initialize cfServeCache : IO.Ref (Option (UInt64 × Nat × UInt64 × ProofTreeData)) ←
+/-- How long the source must have been UNCHANGED before the sticky serve's
+health exit may fire. It exists because the diagnostics reporter lags the
+elaboration by a window nothing on the wire names — measured at ~158ms on the
+calc delete/retype replay — and inside that window a mid-typing wreck passes
+every structural test for health. See `maybeCounterfactual` for the two
+structural alternatives that were tried and measured NOT to close it. -/
+private def cfExitSettleMs : Nat := 750
+
+/-- (real-source hash, that hash's first-serve time, line, spliced-text hash,
+blob) — the last serve. The extra keys carry the STICKY rule; see
+`maybeCounterfactual`. The blob is kept here as well as in the elab entry ON
+PURPOSE: the elab cache holds one entry, so an edit that splices to a new key
+evicts the old blob there, and this copy is what still serves instantly when
+the edit is then reverted. -/
+initialize cfServeCache :
+    IO.Ref (Option (UInt64 × Nat × Nat × UInt64 × ProofTreeData)) ←
   IO.mkRef none
 
 /-- Elaborate the counterfactual: parse ONE command of the spliced text from
@@ -1440,9 +1473,21 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     (doc : FileWorker.EditableDocument) (fileMap : FileMap)
     (real : ProofTreeData) : RequestM ProofTreeData := do
   unless wantCf do return real
-  if real.openBlock.isSome then return real
+  -- EVICTION. Serving the truth erases the lie: every exit that hands back the
+  -- REAL tree for a line holding a serve entry clears that entry first, so a
+  -- latch cannot outlive the condition that made it. The cache used to be
+  -- written and never cleared, which is why leaving a latched line and coming
+  -- back re-latched instantly on an unchanged document — the entry was still
+  -- there and `sh == srcHash` still held. Not used for the `cfPending` exits
+  -- (a cf serve in flight is not a real answer) nor for `unless wantCf` (cf is
+  -- switched off; leave the ref alone rather than have the setting mutate it).
+  let serveReal (r : ProofTreeData) : RequestM ProofTreeData := do
+    if let some (_, _, ln, _, _) ← cfServeCache.get then
+      if ln == pos.line then cfServeCache.set none
+    return r
+  if real.openBlock.isSome then return ← serveReal real
   let some splice := cfSplice fileMap pos.line pos.character
-    | return real
+    | return ← serveReal real
   let draft := splice.draft
   -- The completeness witness: a step STARTING on the cursor's line means the
   -- line's tactic elaborated for real, which is what turns the sticky serve
@@ -1450,9 +1495,10 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
   -- conjunct of `cfWanted`, passed in so the trigger and the way back out of
   -- cf cannot drift apart.
   let stepStartsHere := real.steps.any fun s => s.position.start.line == pos.line
-  if let some (sh, ln, ck, blob) ← cfServeCache.get then
+  if let some (sh, seen, ln, ck, blob) ← cfServeCache.get then
     if ln == pos.line && !stepStartsHere then
       let srcHash : UInt64 := hash fileMap.source
+      let now ← IO.monoMsNow
       -- `sh == srcHash` is the repeated identical request (short-circuited,
       -- so it never builds the spliced file). `ck == hash (splice.text ())` is
       -- the STICKY rule, and it exists because `cfWanted`'s signals RACE the
@@ -1463,10 +1509,66 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
       -- text splices to the SAME counterfactual (i.e. the edit stayed within
       -- the line — the typing case by construction), and no step starts
       -- here, the author is still mid-word: keep serving the cf.
-      if sh == srcHash || ck == hash (splice.text ()) then
-        cfServeCache.set (some (srcHash, ln, ck, blob))
+      --
+      -- THE EXIT, and it is licensed on the FIRST branch ONLY. On a signature
+      -- line no tactic can ever start, so `stepStartsHere` — the designed way
+      -- out — is structurally unreachable there, and a single false-broken
+      -- signal (the column-0 trivia artifact, a stale diagnostic, a transient
+      -- parse break) latched the cf for as long as the cursor stayed on the
+      -- line. So on a document BYTE-IDENTICAL to the last serve, positive
+      -- health of the real payload overrules the sticky rule and evicts.
+      --
+      -- Why only here: the recorded race is a real payload that LOOKS healthy
+      -- while the diagnostics lag, so the health test alone does not
+      -- discriminate — measured on the recorded calc-delete race payloads, the
+      -- 3-step wreck has 37 steps, a `declRange` containing the cursor and
+      -- ZERO error diagnostics, i.e. it passes `payloadHealthy` outright. What
+      -- separates the two cases is the DOCUMENT: the latch sits on an unedited
+      -- file (`sh == srcHash`), while the wreck arrives one keystroke after an
+      -- edit, so `sh` is the pre-edit hash and the sticky matches through `ck`.
+      -- The `ck` branch below is therefore left exactly as it was.
+      --
+      -- AND the source must have been STILL for `cfExitSettleMs`. `sh ==
+      -- srcHash` alone leaves a window, and the window is REACHABLE — measured,
+      -- not feared: a `ck`-matched serve refreshes `sh` to the current hash
+      -- (below), so the SECOND poll of an unchanged mid-typing document does
+      -- satisfy `sh == srcHash`, and with the reporter still lagging the wreck
+      -- passes `payloadHealthy`. Polling four times per keystroke through the
+      -- calc delete/retype replay served the 3-STEP WRECK on exactly that beat
+      -- (1 drop in 17 post-cf rows) — the very race this sticky exists for. So
+      -- `seen` records when the CURRENT source hash was first served, and the
+      -- exit waits that out. Two alternatives were tried and are refuted, not
+      -- merely rejected:
+      --
+      -- * `cmdSnaps.getFinishedPrefix`'s `isComplete` — "the reporter has had
+      --   its chance" stated in the file worker's own terms. MEASURED TRUE at
+      --   the wreck beat (the drop survived it verbatim): elaboration of the
+      --   finished prefix completes before `collectCurrentDiagnostics` has the
+      --   messages, which is exactly the gap the race lives in. A conjunct
+      --   that does not discriminate is only cost, so it is not kept.
+      -- * Not refreshing `sh` on a `ck`-matched serve. It closes this window,
+      --   and it reopens the defect being fixed: on a signature line the broken
+      --   and the fixed text splice to the same `… := by sorry`, so after any
+      --   edit the `ck` branch would serve forever and the exit would again be
+      --   structurally unreachable — the reported bug, one edit later.
+      --
+      -- The clock is honest about what it is: the race is a TIMING gap between
+      -- elaboration and publication, and nothing on the wire names it. Measured
+      -- on the replay, the diagnostics land ~158ms after the wreck beat; the
+      -- threshold is ~5× that, and still far under one re-elaboration cycle, so
+      -- it never delays a handback that `stepStartsHere` would have made anyway.
+      if sh == srcHash then
+        if now - seen ≥ cfExitSettleMs && payloadHealthy real pos then
+          cfServeCache.set none
+          return real
+        -- Same hash: `seen` must NOT be refreshed, or the clock never runs out.
+        cfServeCache.set (some (srcHash, seen, ln, ck, blob))
         return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
-  unless cfWanted real pos stepStartsHere do return real
+      if ck == hash (splice.text ()) then
+        -- A DIFFERENT hash: the source just moved, so the settle clock restarts.
+        cfServeCache.set (some (srcHash, now, ln, ck, blob))
+        return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
+  unless cfWanted real pos stepStartsHere do return ← serveReal real
   -- Only past the WANTED gate is the whole-file work paid: the spliced text
   -- (O(file)) and the two hashes run once per request while the document is
   -- broken at the cursor, never on the healthy path.
@@ -1478,9 +1580,9 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     if k == cfKey then
       match entry with
       | .done (some blob) =>
-        cfServeCache.set (some (srcHash, pos.line, cfKey, blob))
+        cfServeCache.set (some (srcHash, now, pos.line, cfKey, blob))
         return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
-      | .done none => return real
+      | .done none => return ← serveReal real
       | .pending t0 =>
         -- In flight: a burst of keystrokes starts exactly one elaboration.
         -- The timestamp expires a marker orphaned by a dead task.
@@ -1497,28 +1599,62 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     -- wins — single entry, single cursor).
     cfElabCache.set (some (cfKey, .done res))
     if let some blob := res then
-      cfServeCache.set (some (srcHash, pos.line, cfKey, blob))
+      -- A FRESH clock, not the `now` captured before the elaboration: seconds
+      -- have passed, and stamping the entry as already-settled would let the
+      -- very next poll take the exit on whatever `real` happens to say.
+      cfServeCache.set (some (srcHash, ← IO.monoMsNow, pos.line, cfKey, blob))
   return { real with cfPending := true }
 
-/-- Parse the proof tree for the theorem under the cursor.
+/-- Where to ask for the snapshot when the cursor sits at COLUMN 0 of a line
+that has content — the entry nudge, and it exists because column 0 is a
+one-column artifact rather than a fact about the proof.
 
-Mirrors the `.tree` branch of `Paperproof.getSnapshotData`: wait for the snapshot
-containing `pos`, run `BetterParser_Tree` over its (fully elaborated) info
-tree, then the enrichment pipeline (`mkTreePayload`). A cursor outside a tactic
-proof is a normal outcome, not an error: it returns an EMPTY proof
-(`steps := []`), which the widget renders as a quiet "no proof here" — keeping
-the empty state in the data model rather than encoding it in error-message
-strings the client would have to pattern-match.
+`withWaitFindSnapAtPos` takes the first snapshot with `s.endPos >= pos`, and
+the `>=` is the whole story: a command's `endPos` is exactly the byte the next
+line's leading trivia begins at, so at column 0 of a `theorem … := by` line the
+PREVIOUS command answers. Its payload is `steps=0, proofId="", declRange=null`,
+which is `cfWanted`'s first disjunct — so a perfectly healthy proof entered the
+counterfactual, and the sticky serve then spread that one column across the
+whole line. Vim makes this the hot path, not an edge case: `0`, `^`, `gg` and
+`j`/`k` off a short line all land on column 0.
 
-When the document is BROKEN at the cursor — the author is mid-typing — the
-payload may instead be the COUNTERFACTUAL preview: the same theorem with the
-cursor's line as `sorry`, so the tree keeps its shape and marks where the
-tactic being written lands. See `maybeCounterfactual`. -/
-@[server_rpc_method]
-def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTreeData) := do
-  withWaitFindSnapAtPos params.pos fun snap => do
-    let doc ← readDoc
-    let fileMap : FileMap := doc.meta.text
+Two rules, and both were arrived at by correction:
+
+* **The target is `max 1 firstNonWs`, NOT "the first non-whitespace
+  character".** A `theorem` starts at column 0, so the literal rule names the
+  cursor's own column and the retry is a no-op on exactly the reported shape.
+  One character past the line start is enough: `lineStart < nudge`, and the
+  previous command ended at or before `lineStart`, so the nudged lookup
+  necessarily resolves to the command the LINE belongs to.
+* **A blank line at column 0 declines** (`body.isEmpty`), leaving the
+  genuinely-between-declarations case exactly as it was — the same shape
+  `cfSplice` declines, and the two must keep agreeing.
+
+This is a LOOKUP position only. `params.pos` travels on unchanged, so the
+splice tier, `cfStubPos` and the client's accent all still see the real
+cursor. -/
+private def cfNudgePos? (fileMap : FileMap) (pos : Lsp.Position) :
+    Option String.Pos.Raw :=
+  if pos.character != 0 then none
+  else if pos.line + 1 ≥ fileMap.positions.size then none
+  else
+    let src := fileMap.source
+    let lineStart := fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩
+    let nextStart := fileMap.lspPosToUtf8Pos ⟨pos.line + 1, 0⟩
+    let lineRaw := String.Pos.Raw.extract src lineStart nextStart
+    let contentEnd : String.Pos.Raw :=
+      if lineRaw.endsWith "\n" then ⟨nextStart.byteIdx - 1⟩ else nextStart
+    let content := String.Pos.Raw.extract src lineStart contentEnd
+    let ws := (content.takeWhile fun c => c == ' ' || c == '\t').toString
+    let body := (content.drop ws.length).toString
+    if body.isEmpty then none
+    else some (fileMap.lspPosToUtf8Pos ⟨pos.line, max 1 ws.length⟩)
+
+/-- The REAL payload for one snapshot: parse, enrich, cache. Factored out of
+`getProofTree` so the entry nudge can run it against either snapshot without a
+second coding of the pipeline. -/
+private def realPayloadFor (doc : FileWorker.EditableDocument) (fileMap : FileMap)
+    (snap : Snapshots.Snapshot) : RequestM ProofTreeData := do
     let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
     -- The FILE's diagnostics, as reported so far — the very state the publish
     -- path serves (on v4.32 `EditableDocumentCore.collectCurrentDiagnostics`,
@@ -1548,7 +1684,7 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       match ← proofTreeCache.get with
       | some (key, payload) => if key == cacheKey then some payload else none
       | none => none
-    let real ← match cachedReal? with
+    match cachedReal? with
       | some real => pure real
       | none => do
         let parsed ← (do
@@ -1584,7 +1720,57 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
         let real ← mkTreePayload snap fileMap parsed errorPositions treeDiags
         proofTreeCache.set <| some (cacheKey, real)
         pure real
-    maybeCounterfactual params.cf params.pos doc fileMap real
+
+/-- Parse the proof tree for the theorem under the cursor.
+
+Mirrors the `.tree` branch of `Paperproof.getSnapshotData`: wait for the snapshot
+containing `pos`, run `BetterParser_Tree` over its (fully elaborated) info
+tree, then the enrichment pipeline (`mkTreePayload`). A cursor outside a tactic
+proof is a normal outcome, not an error: it returns an EMPTY proof
+(`steps := []`), which the widget renders as a quiet "no proof here" — keeping
+the empty state in the data model rather than encoding it in error-message
+strings the client would have to pattern-match.
+
+When the document is BROKEN at the cursor — the author is mid-typing — the
+payload may instead be the COUNTERFACTUAL preview: the same theorem with the
+cursor's line as `sorry`, so the tree keeps its shape and marks where the
+tactic being written lands. See `maybeCounterfactual`.
+
+The snapshot is looked up at `cfNudgePos?` FIRST when that helper offers one,
+falling back to the plain `pos` lookup only when the nudged payload is EMPTY.
+The order is not cosmetic: `proofTreeCache` holds exactly ONE entry, so
+computing the plain answer and retrying on empty would store the trivia
+payload, then evict it storing the nudged one — two pipeline MISSES (26-520ms
+each) on every column-0 request, i.e. on a vim user's hottest traffic. Nudging
+first costs one run, and it lands under the same key a column-5 request hits,
+so the request after it is a cache hit.
+
+The two orders differ observably in exactly one case, and the difference is the
+intent: when BOTH the trivia command and the line's own command have payloads
+(a signature line whose predecessor is itself a theorem), the tree shows the
+declaration the cursor's LINE belongs to rather than the one above it. -/
+@[server_rpc_method]
+def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTreeData) := do
+  let doc ← readDoc
+  let fileMap : FileMap := doc.meta.text
+  let withCf (real : ProofTreeData) : RequestM (RequestTask ProofTreeData) :=
+    RequestM.pureTask (maybeCounterfactual params.cf params.pos doc fileMap real)
+  -- `withWaitFindSnapAtPos`'s own body, spelled out so the nudge can sit beside
+  -- it: same predicate, same not-found error.
+  let atCursor : RequestM (RequestTask ProofTreeData) :=
+    let cursorPos := fileMap.lspPosToUtf8Pos params.pos
+    RequestM.bindWaitFindSnap doc (fun s => s.endPos >= cursorPos)
+      (notFoundX := throw ⟨.invalidParams, s!"no snapshot found at {params.pos}"⟩)
+      (x := fun snap => do withCf (← realPayloadFor doc fileMap snap))
+  match cfNudgePos? fileMap params.pos with
+  | none => atCursor
+  | some nudge =>
+    RequestM.bindWaitFindSnap doc (fun s => s.endPos >= nudge)
+      -- Never a new error where the old code answered.
+      (notFoundX := atCursor)
+      (x := fun snap => do
+        let real ← realPayloadFor doc fileMap snap
+        if real.steps.isEmpty then atCursor else withCf real)
 
 /-- Case-insensitive prefix test, allocation-free — the client's own matcher
 (`matches` in completion.ts) lowercases both sides, so the server must agree or
