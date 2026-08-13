@@ -3929,12 +3929,22 @@ export default function ProofTreeView({
   // rendering steps and a hidden webview runs none.
   const hdrRef = useRef<HTMLDivElement | null>(null);
   const [hdrH, setHdrH] = useState(0);
+  // The header shows ONE line at rest and the whole statement on hover — and
+  // the expansion is an OVERLAY, not a taller bar: `hdrH` is what every
+  // floater and the scroll box offset by, so letting it grow would push the
+  // proof down the moment the pointer crossed the top of the panel, which is
+  // the view-stability complaint in miniature. The measurement is therefore
+  // frozen while expanded — the observer is simply not subscribed, so `hdrH`
+  // keeps the collapsed value it was last read at and the effect re-measures
+  // on the way back down.
+  const [hdrOpen, setHdrOpen] = useState(false);
   useLayoutEffect(() => {
     const el = hdrRef.current;
     if (!el) {
       setHdrH(0);
       return;
     }
+    if (hdrOpen) return;
     const read = () => {
       const h = el.getBoundingClientRect().height;
       // 1px hysteresis, the frame-offset rule: sub-pixel reflow must not
@@ -3945,7 +3955,7 @@ export default function ProofTreeView({
     const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [declHeader]);
+  }, [declHeader, hdrOpen]);
   const floaterTop = (row: number) =>
     8 + hdrH + FLOATER_H * floaterRows.slice(0, row).filter(Boolean).length;
 
@@ -5120,10 +5130,8 @@ export default function ProofTreeView({
         <div
           ref={hdrRef}
           onClick={onRevealHeader}
-          title={
-            "The statement this proof belongs to" +
-            (onRevealHeader ? "\n· click to put the caret on it" : "")
-          }
+          onMouseEnter={() => setHdrOpen(true)}
+          onMouseLeave={() => setHdrOpen(false)}
           style={{
             position: "absolute",
             top: 0,
@@ -5134,7 +5142,6 @@ export default function ProofTreeView({
             // The alternative, ending the bar before the rail, leaves a notch
             // of tree showing above the header on the right.
             zIndex: 9,
-            padding: "6px 46px 6px 10px",
             boxSizing: "border-box",
             fontFamily: getCodeFontFamily(),
             fontSize: NODE_FONT_PX,
@@ -5151,10 +5158,33 @@ export default function ProofTreeView({
             background: "var(--ptw-bg)",
             borderBottom: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
             cursor: onRevealHeader ? "pointer" : "default",
-            // A statement can be long; cap it rather than let it eat the panel,
-            // and let the rest scroll inside its own box.
-            maxHeight: "30%",
-            overflowY: "auto",
+            // At rest the bar is ONE line and anything past it is clipped; the
+            // hover state is where the whole statement lives, capped so a
+            // monstrous one still leaves tree showing and scrolls inside its
+            // own box.
+            //
+            // Expanded it also rises ABOVE the floater stack (z 10) — the
+            // floaters offset by the FROZEN collapsed height, so they sit
+            // inside the expanded bar's own area and drew straight through the
+            // statement. It stops short of the rail instead of passing under
+            // it, since z 11 would otherwise paint over the buttons; at one
+            // line there is nothing to collide with, so the resting bar keeps
+            // its full-width background and its padded gutter.
+            //
+            // The padding is written as the SHORTHAND in both branches, never
+            // shorthand-plus-longhand: React clears a longhand it no longer
+            // sees by writing `""` over that one property, which does not
+            // restore the shorthand's value — the resting bar lost its 46px
+            // rail gutter entirely and ran its text under the buttons.
+            ...(hdrOpen
+              ? {
+                  padding: "6px 10px",
+                  maxHeight: "60%",
+                  overflowY: "auto",
+                  zIndex: 11,
+                  right: 38,
+                }
+              : { padding: "6px 46px 6px 10px", overflow: "hidden" }),
           }}
         >
           {/* THE TRAIL. Two segments, one verb each — the statement reveals,
@@ -5166,87 +5196,125 @@ export default function ProofTreeView({
               different clicks with nothing visible to say which. The focus
               segment is inked in the goal colour so the trail reads as
               "statement › the goal you scoped to" in both directions. */}
-          <span
-            style={
-              focusId
-                ? {
-                    display: "inline-block",
-                    verticalAlign: "bottom",
-                    whiteSpace: "nowrap",
-                  }
-                : undefined
-            }
+          <div
+            style={{
+              display: "flex",
+              // Bottom-aligned so an EXPANDED multi-line statement keeps the
+              // pill on its last line rather than floating it beside the first.
+              alignItems: "flex-end",
+              // A flex row is what guarantees the pill's own ✕ survives: the
+              // statement is the shrinkable item and the pill is not, so a long
+              // theorem eats its own tail instead of pushing the exit control
+              // out through the header's clip. It used to be inline with a
+              // `maxWidth: 40%` pill, and an `overflow-y` on the bar computes
+              // `overflow-x` to `auto` — so the ✕ was scrolled out of sight
+              // rather than dropped (reported as missing).
+              minWidth: 0,
+            }}
           >
-            {(() => {
-              // FOCUSED: the statement collapses to its keyword and NAME, and
-              // the ellipsis sits right after them. A CSS clip cannot promise
-              // that much — it cuts at whatever width is left, which on a long
-              // binder list ate the name itself — and the name is the only
-              // part that identifies the theorem. Everything else is one hover
-              // away in the title, and the room it frees goes to the pill,
-              // which is the half you are actually navigating by. Plain ink
-              // here: two tokens are not worth re-aligning the colouring for,
-              // and the full statement is coloured whenever it is shown whole.
-              if (focusId) {
-                const head = declHeader.trimStart().split(/\s+/).slice(0, 2);
-                return <span>{head.join(" ") + " …"}</span>;
-              }
-              const src = declHeader.split("\n");
-              const tagged = renderDeclHeader?.(src);
-              // ONE BLOCK PER SOURCE LINE. `renderTacticTokens` returns a node
-              // per line and they were rendered inline into a `pre-wrap` box,
-              // so the statement's own line breaks disappeared and its source
-              // INDENTATION reappeared as gaps in the middle of running text
-              // (reported as "whitespace is all weird"). Same shape the node
-              // labels use for exactly the same reason.
-              //
-              // Continuation lines keep their indent — it is how the author
-              // laid the statement out, and it is what makes a long `∧` chain
-              // readable — while `pre-wrap` still lets a line too wide for the
-              // panel wrap instead of scrolling.
-              return (tagged ?? src).map((ln, i) => (
-                <span key={i} style={{ display: "block" }}>
-                  {ln}
+            <span
+              style={{
+                flex: "0 1 auto",
+                minWidth: 0,
+                ...(hdrOpen
+                  ? {}
+                  : {
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "pre",
+                    }),
+              }}
+            >
+              {(() => {
+                const src = declHeader.split("\n");
+                const tagged = renderDeclHeader?.(src);
+                const lines = tagged ?? src;
+                // AT REST: one line. A statement is routinely six lines of
+                // binders and conjuncts, and a header that tall is no longer
+                // chrome — it is a second pane the proof has to live under.
+                // The first source line carries the keyword and the NAME, the
+                // part that identifies the theorem; the rest is one hover away.
+                // Two truncations, deliberately: `…` for the lines not drawn
+                // (a fact about the source) and the CSS ellipsis for a first
+                // line too wide for the panel (a fact about the window).
+                //
+                // FOCUSED it shrinks again, to keyword + name, cut at a known
+                // point rather than by the clip — the clip cuts at whatever
+                // width is left, which on a long binder list ate the name
+                // itself, and the room it frees goes to the pill.
+                if (!hdrOpen) {
+                  if (focusId) {
+                    const head = declHeader.trimStart().split(/\s+/).slice(0, 2);
+                    return <span>{head.join(" ") + " …"}</span>;
+                  }
+                  return (
+                    <>
+                      {lines[0]}
+                      {src.length > 1 ? (
+                        <span style={{ opacity: 0.6 }}> …</span>
+                      ) : null}
+                    </>
+                  );
+                }
+                // ONE BLOCK PER SOURCE LINE. `renderTacticTokens` returns a
+                // node per line and they were rendered inline into a
+                // `pre-wrap` box, so the statement's own line breaks
+                // disappeared and its source INDENTATION reappeared as gaps in
+                // the middle of running text (reported as "whitespace is all
+                // weird"). Same shape the node labels use for the same reason.
+                //
+                // Continuation lines keep their indent — it is how the author
+                // laid the statement out, and it is what makes a long `∧`
+                // chain readable — while `pre-wrap` still lets a line too wide
+                // for the panel wrap instead of scrolling.
+                return lines.map((ln, i) => (
+                  <span key={i} style={{ display: "block" }}>
+                    {ln}
+                  </span>
+                ));
+              })()}
+            </span>
+            {focusId && (
+              <>
+                <span
+                  style={{ opacity: 0.5, padding: "0 6px", flexShrink: 0 }}
+                >
+                  ›
                 </span>
-              ));
-            })()}
-          </span>
-          {focusId && (
-            <>
-              <span style={{ opacity: 0.5, padding: "0 6px" }}>›</span>
-              <button
-                type="button"
-                title="Back to the whole proof (Esc, or ◎ / ⌥-click on the focused goal)"
-                onClick={(e) => {
-                  // The statement's own click is REVEAL; this segment's is
-                  // EXIT. Stopping here is what keeps one verb per segment.
-                  e.stopPropagation();
-                  exitFocus();
-                }}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  maxWidth: "40%",
-                  verticalAlign: "bottom",
-                  fontFamily: "inherit",
-                  fontSize: "inherit",
-                  color: ACCENT_TEXT,
-                  background: NODE_STYLES.goal.stroke,
-                  border: "none",
-                  padding: "1px 8px",
-                  borderRadius: 999,
-                  cursor: "pointer",
-                }}
-              >
-                <span>◎</span>
-                <span style={{ whiteSpace: "nowrap" }}>
-                  {focusLabel}
-                </span>
-                <span style={{ opacity: 0.8 }}>✕</span>
-              </button>
-            </>
-          )}
+                <button
+                  type="button"
+                  title="Back to the whole proof (Esc, or ◎ / ⌥-click on the focused goal)"
+                  onClick={(e) => {
+                    // The statement's own click is REVEAL; this segment's is
+                    // EXIT. Stopping here is what keeps one verb per segment.
+                    e.stopPropagation();
+                    exitFocus();
+                  }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    // Never the shrinking half of the row: the label is already
+                    // truncated to a readable length by `focusLabel`, and what
+                    // a flex shrink would take off the end here is the ✕.
+                    flexShrink: 0,
+                    fontFamily: "inherit",
+                    fontSize: "inherit",
+                    color: ACCENT_TEXT,
+                    background: NODE_STYLES.goal.stroke,
+                    border: "none",
+                    padding: "1px 8px",
+                    borderRadius: 999,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span>◎</span>
+                  <span style={{ whiteSpace: "nowrap" }}>{focusLabel}</span>
+                  <span style={{ opacity: 0.8 }}>✕</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
       ) : null}
       {/* No top bar: the top edge stays empty so the eye falls straight from
