@@ -6650,6 +6650,14 @@ export default function ProofTreeView({
                                 // to tell apart. `◌` is the dashed ghost this
                                 // one leaves behind.
                                 glyph: "◌",
+                                // The leaf case overlays the fold indicator's
+                                // own − inside the ring (see the title below),
+                                // so the button itself says which residue this
+                                // press leaves.
+                                sub:
+                                  !isCombined && leafFold !== undefined
+                                    ? "−"
+                                    : undefined,
                                 title: isCombined
                                   ? "Elide into the trunk (⌥-click) — the whole run collapses to a ◌ marker (click it to restore)"
                                   : leafFold !== undefined
@@ -6658,7 +6666,13 @@ export default function ProofTreeView({
                                       // one ghost. Folding the goal hides the
                                       // same one box and leaves the goal's own
                                       // + as the way back — hence the title
-                                      // naming a different restore.
+                                      // naming a different restore. The − the
+                                      // `sub` above overlays in the ◌ is that
+                                      // fold indicator's own mark, so the
+                                      // button says "this one folds" where it
+                                      // is pressed — the visible answer to one
+                                      // glyph having two residues, which until
+                                      // now only this tooltip distinguished.
                                       "Put this step away (⌥-click) — folds the goal above; click its + to bring it back"
                                     : "Elide into the trunk (⌥-click) — this tactic and anything it opened, leaving a ghost to click back open",
                                 onClick: () =>
@@ -8782,6 +8796,11 @@ interface NodeAction {
   /** Destructive: the glyph takes the editor's error colour so the one action
   that removes text does not look like the three that only navigate. */
   danger?: boolean;
+  /** A second, smaller glyph drawn over the button's centre. The one caller is
+  the leaf ◌, which overlays the fold indicator's − so a button with two
+  possible residues (a ghost mid-proof, a folded goal at a leaf) says at the
+  point of use which one this press leaves behind. */
+  sub?: string;
 }
 function NodeActionBar({
   placement = "top-right",
@@ -8853,6 +8872,36 @@ function NodeActionBar({
             >
               {a.glyph}
             </text>
+            {a.sub && (
+              // Concentric with the glyph above, small enough to sit inside
+              // ◌'s ring. Same fill expression, so the pair reads as one mark
+              // rather than a badge stuck on the corner.
+              //
+              // The dy is MEASURED, not padding: U+25CC is a combining-mark
+              // CARRIER, so its ring is drawn low in the em box — rendered ink
+              // centres 1.05px below the anchor at fontSize 13, while a − at
+              // fontSize 7 centres 0.1px below it. Sharing the anchor
+              // therefore puts the dash a third of the ring's interior radius
+              // high, which reads as a misprint; dy=1 brings the two ink
+              // centres to within 0.05px. At 7px the dash is 3.7px wide inside
+              // a ~6.5px interior — clear of the rim on both sides.
+              <text
+                x={bx + BAR_BTN / 2}
+                y={y0 + BAR_PAD + BAR_BTN / 2}
+                dy={1}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={7}
+                fontFamily="monospace"
+                fill={
+                  a.danger
+                    ? DANGER_FILL
+                    : "var(--vscode-icon-foreground, #2d3748)"
+                }
+              >
+                {a.sub}
+              </text>
+            )}
           </g>
         );
       })}
