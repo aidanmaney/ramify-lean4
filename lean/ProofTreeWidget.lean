@@ -844,6 +844,22 @@ private def tokenInfoAt (env : Environment) (stx : Syntax) (hoverIdx : HoverInde
       return (some
         { start := t.start
           doc := stxDoc?.map (FileWorker.Hover.rewriteExamples ·.1) }, refCache)
+    -- NOTHING TO SHOW: the info node resolves, but its popup would render
+    -- empty and no parser docstring stands in — so shipping the ref opens an
+    -- empty bordered box under the pointer, which is what the reader sees.
+    -- Ship no info at all instead; the token still gets its colour, and the
+    -- buffer shows nothing there either (that is the same emptiness, reached
+    -- the same way). Reaching here means `stxDoc?` was none — a doc that does
+    -- NOT contain this node already won above, and one that does wins exactly
+    -- when the popup is empty — so this is the second half of that same test,
+    -- for the case where there was no doc to lose the contest to. Measured
+    -- over LSP by asking `infoToInteractive` for every shipped ref: one token
+    -- per proof comes back with all three fields absent, the `theorem`
+    -- keyword itself (198 refs on `sum_range_odd`, 121 on `calc_workout`).
+    -- Cheap: `popupNonempty` answers term-like nodes without a lookup, so
+    -- only the rare non-term node pays its two.
+    unless (← popupNonempty env ictx.info) do
+      return (none, refCache)
     -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates the
     -- session-scoped id the client hands back to `infoToInteractive` when the
     -- popup opens. Keyed by the info node's range, so tokens resolving to the
