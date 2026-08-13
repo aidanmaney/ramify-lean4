@@ -917,7 +917,11 @@ export interface ProofTreeViewProps {
   declHeader?: string;
   /** Colour + popups for it, as a hook (the `renderTaggedTactic` shape, and
   source-agnostic for the same reason). Absent ⇒ plain text. */
-  renderDeclHeader?: (lines: string[]) => ReactNode[] | null;
+  renderDeclHeader?: (
+    lines: string[],
+    /** A truncated stand-in for the statement; aligned, so it keeps colour. */
+    label?: string,
+  ) => ReactNode[] | null;
   /** Click: put the buffer's caret on the statement. Reveal is the ONLY
   gesture here, and deliberately so — it was briefly editable in place and the
   author reverted it after using it. An in-place statement editor immediately
@@ -3876,6 +3880,43 @@ export default function ProofTreeView({
     });
   };
   const exitFocus = () => setFocusId(null);
+  // The signature header's box is MEASURED rather than derived from its line
+  // count: it wraps, so the count is not the number of drawn lines at any
+  // given width. Same shape as `useFrameOffset` — a ResizeObserver plus an
+  // explicit mount read, because RO delivery rides rendering steps and a
+  // hidden webview runs none. The WIDTH comes off the same callback and the
+  // focus pill's label length is cut from it (below), so one observer answers
+  // both questions and they cannot disagree.
+  const hdrRef = useRef<HTMLDivElement | null>(null);
+  const [hdrH, setHdrH] = useState(0);
+  const [hdrW, setHdrW] = useState(0);
+  // The header shows ONE line at rest and the whole statement on hover — and
+  // the expansion is an OVERLAY, not a taller bar: `hdrH` is what every
+  // floater and the scroll box offset by, so letting it grow would push the
+  // proof down the moment the pointer crossed the top of the panel, which is
+  // the view-stability complaint in miniature. The measurement is therefore
+  // frozen while expanded — the observer is simply not subscribed, so the
+  // collapsed values stand and the effect re-measures on the way back down.
+  const [hdrOpen, setHdrOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = hdrRef.current;
+    if (!el) {
+      setHdrH(0);
+      return;
+    }
+    if (hdrOpen) return;
+    const read = () => {
+      const r = el.getBoundingClientRect();
+      // 1px hysteresis, the frame-offset rule: sub-pixel reflow must not
+      // re-render the whole view.
+      setHdrH((prev) => (Math.abs(prev - r.height) > 1 ? r.height : prev));
+      setHdrW((prev) => (Math.abs(prev - r.width) > 1 ? r.width : prev));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [declHeader, hdrOpen]);
   // The focus root, for the breadcrumb pill's label. Read from `allNodes()`
   // rather than the drawn `nodes` because folding the root itself must not
   // make the way OUT of focus disappear — the whole point of the pill.
@@ -3891,6 +3932,16 @@ export default function ProofTreeView({
       focusId ? (engine.allNodes().find((n) => n.id === focusId) ?? null) : null,
     [engine, focusId],
   );
+  // What the statement collapses to while focused: keyword + name, cut at a
+  // known point rather than by a clip (a clip cuts at whatever width is left,
+  // which on a long binder list ate the name — the only part that identifies
+  // the theorem). ONE definition, because the pill's label length is measured
+  // from it and a second copy would let the two disagree about the width.
+  const declHead = useMemo(
+    () =>
+      (declHeader ?? "").trimStart().split(/\s+/).slice(0, 2).join(" ") + " …",
+    [declHeader],
+  );
   const focusLabel = useMemo(() => {
     if (!focusNode) return "focused";
     if (focusNode.caseLabel) return focusNode.caseLabel;
@@ -3899,11 +3950,25 @@ export default function ProofTreeView({
     // prefix, so cutting the head throws away the only distinguishing part —
     // the whole reason the head-cut version read the same for every branch.
     const body = raw.startsWith(TURNSTILE) ? raw.slice(TURNSTILE.length) : raw;
-    const MAX = 34;
+    // The cut is taken from the MEASURED bar, not a constant — a fixed 34 left
+    // most of a wide panel empty and overflowed a narrow one. What is left for
+    // the label is the bar minus the collapsed statement (measured in the same
+    // font, so this is exact rather than a guess) and the fixed chrome: the
+    // rail gutter, the bar's padding, the `›`, and the pill's own `◎ ✕` and
+    // padding. Erring SHORT is the safe direction and costs nothing — the
+    // slack goes to the statement, which then draws in full instead of being
+    // squeezed. Erring long is what must not happen: the CSS ellipsis takes
+    // over and it cuts the TAIL, the half this truncation exists to keep.
+    const cell = measureText("M", NODE_FONT_PX) || 7.2;
+    const PILL_CHROME = 120;
+    const room = hdrW - measureText(declHead, NODE_FONT_PX) - PILL_CHROME;
+    const MAX = Math.max(16, Math.floor(room / cell));
     return body.length <= MAX
       ? raw
       : `${TURNSTILE}…${body.slice(body.length - (MAX - 1))}`;
-  }, [focusNode]);
+    // No `codeFont` dep: a font change resizes the bar, so the observer's
+    // `hdrW` moves with it and re-cuts this.
+  }, [focusNode, hdrW, declHead]);
 
   // The top-left floaters stack in a fixed order, each row FLOATER_H apart:
   // the caller's slot (standalone only), the focus breadcrumb, whichever hint
@@ -3922,40 +3987,6 @@ export default function ProofTreeView({
   // Focus is no longer a row: it rides the signature header as the trail's
   // second segment. The rows left are the caller's slot and the hints.
   const floaterRows = [!!headerExtra, hintUp];
-  // The signature header sits above every floater, and its height is MEASURED
-  // rather than derived from its line count: it wraps, so the count is not the
-  // number of drawn lines at any given width. Same shape as `useFrameOffset` —
-  // a ResizeObserver plus an explicit mount read, because RO delivery rides
-  // rendering steps and a hidden webview runs none.
-  const hdrRef = useRef<HTMLDivElement | null>(null);
-  const [hdrH, setHdrH] = useState(0);
-  // The header shows ONE line at rest and the whole statement on hover — and
-  // the expansion is an OVERLAY, not a taller bar: `hdrH` is what every
-  // floater and the scroll box offset by, so letting it grow would push the
-  // proof down the moment the pointer crossed the top of the panel, which is
-  // the view-stability complaint in miniature. The measurement is therefore
-  // frozen while expanded — the observer is simply not subscribed, so `hdrH`
-  // keeps the collapsed value it was last read at and the effect re-measures
-  // on the way back down.
-  const [hdrOpen, setHdrOpen] = useState(false);
-  useLayoutEffect(() => {
-    const el = hdrRef.current;
-    if (!el) {
-      setHdrH(0);
-      return;
-    }
-    if (hdrOpen) return;
-    const read = () => {
-      const h = el.getBoundingClientRect().height;
-      // 1px hysteresis, the frame-offset rule: sub-pixel reflow must not
-      // re-render the whole view.
-      setHdrH((prev) => (Math.abs(prev - h) > 1 ? h : prev));
-    };
-    read();
-    const ro = new ResizeObserver(read);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [declHeader, hdrOpen]);
   const floaterTop = (row: number) =>
     8 + hdrH + FLOATER_H * floaterRows.slice(0, row).filter(Boolean).length;
 
@@ -5130,8 +5161,6 @@ export default function ProofTreeView({
         <div
           ref={hdrRef}
           onClick={onRevealHeader}
-          onMouseEnter={() => setHdrOpen(true)}
-          onMouseLeave={() => setHdrOpen(false)}
           style={{
             position: "absolute",
             top: 0,
@@ -5213,8 +5242,18 @@ export default function ProofTreeView({
             }}
           >
             <span
+              // THE HOVER TARGET IS THE STATEMENT, not the bar. Opening on the
+              // whole bar meant crossing the header at all — on the way to the
+              // pill, most of all — dropped a full statement over the tree,
+              // and it left the two segments entangled: the pill sat marooned
+              // at the end of the expanded text.
+              onMouseEnter={() => setHdrOpen(true)}
+              onMouseLeave={() => setHdrOpen(false)}
               style={{
-                flex: "0 1 auto",
+                // Shrinks TEN times as readily as the pill: while focused this
+                // is already down to `theorem <name> …`, and the rest of the
+                // bar is the pill's to use.
+                flex: "0 10 auto",
                 minWidth: 0,
                 ...(hdrOpen
                   ? {}
@@ -5238,14 +5277,17 @@ export default function ProofTreeView({
                 // (a fact about the source) and the CSS ellipsis for a first
                 // line too wide for the panel (a fact about the window).
                 //
-                // FOCUSED it shrinks again, to keyword + name, cut at a known
-                // point rather than by the clip — the clip cuts at whatever
-                // width is left, which on a long binder list ate the name
-                // itself, and the room it frees goes to the pill.
+                // FOCUSED it shrinks again, to `declHead` — and it is still
+                // COLOURED: the truncated head goes through the renderer as a
+                // stand-in LABEL, and the alignment returns the prefix where
+                // it agrees with the source (see `renderDeclHeader`), so the
+                // keyword keeps its ink and its popup and only the `…` past
+                // the cut is plain.
                 if (!hdrOpen) {
                   if (focusId) {
-                    const head = declHeader.trimStart().split(/\s+/).slice(0, 2);
-                    return <span>{head.join(" ") + " …"}</span>;
+                    return (
+                      renderDeclHeader?.([declHead], declHead)?.[0] ?? declHead
+                    );
                   }
                   return (
                     <>
@@ -5274,11 +5316,15 @@ export default function ProofTreeView({
                 ));
               })()}
             </span>
-            {focusId && (
+            {/* The two segments never share the bar in the OPEN state:
+                reading the whole statement is a different act from navigating
+                out of a subtree, and while the statement is expanded the pill
+                has nowhere honest to sit — it ended up marooned at the end of
+                the last line, which is what made the pair read as one confused
+                control. It comes back the moment the pointer leaves. */}
+            {focusId && !hdrOpen && (
               <>
-                <span
-                  style={{ opacity: 0.5, padding: "0 6px", flexShrink: 0 }}
-                >
+                <span style={{ opacity: 0.5, padding: "0 6px", flexShrink: 0 }}>
                   ›
                 </span>
                 <button
@@ -5294,10 +5340,12 @@ export default function ProofTreeView({
                     display: "inline-flex",
                     alignItems: "center",
                     gap: 6,
-                    // Never the shrinking half of the row: the label is already
-                    // truncated to a readable length by `focusLabel`, and what
-                    // a flex shrink would take off the end here is the ✕.
-                    flexShrink: 0,
+                    // The pill yields last, and when it does the LABEL is what
+                    // gives — `◎` and `✕` are `flexShrink: 0` inside it, so a
+                    // panel too narrow for everything clips the text and never
+                    // the way out.
+                    flexShrink: 1,
+                    minWidth: 0,
                     fontFamily: "inherit",
                     fontSize: "inherit",
                     color: ACCENT_TEXT,
@@ -5308,9 +5356,18 @@ export default function ProofTreeView({
                     cursor: "pointer",
                   }}
                 >
-                  <span>◎</span>
-                  <span style={{ whiteSpace: "nowrap" }}>{focusLabel}</span>
-                  <span style={{ opacity: 0.8 }}>✕</span>
+                  <span style={{ flexShrink: 0 }}>◎</span>
+                  <span
+                    style={{
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      minWidth: 0,
+                    }}
+                  >
+                    {focusLabel}
+                  </span>
+                  <span style={{ opacity: 0.8, flexShrink: 0 }}>✕</span>
                 </button>
               </>
             )}

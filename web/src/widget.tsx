@@ -1055,12 +1055,19 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     const start = stable?.proof.declHeaderStart;
     const text = stable?.proof.declHeader ?? "";
     if (!toks || toks.length === 0 || !start || text === "") return undefined;
-    return (lines: string[]) =>
+    // `label` defaults to the whole statement, and the header passes a
+    // TRUNCATED one when it is collapsed — `alignInLabel` returns the segments
+    // where label and source agree character for character, so the head that
+    // survives the cut keeps its colouring and its popups and the `…` past it
+    // simply aligns to nothing. Same mechanism a split `rw` label rides; the
+    // alternative (plain ink while focused) was the reported "obviously not
+    // ideal".
+    return (lines: string[], label?: string) =>
       renderTacticTokens(
         text,
         start,
         toks,
-        text,
+        label ?? text,
         lines,
         infoAt,
         undefined,
