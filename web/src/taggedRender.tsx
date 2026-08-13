@@ -76,6 +76,14 @@ const TAGGED_CSS = [
     // timing — no restyling — and applies only to tooltips carrying code
     // content, leaving the infoview's menu tooltips alone.
     "@keyframes ptw-tooltip-hold { from, 99% { opacity: 0; pointer-events: none } to { opacity: 1 } }",
+    // POPUPS ABOVE THE SIGNATURE HEADER. They portal to `document.body`, but
+    // the header is a positioned, painted bar inside our own root, and a token
+    // hovered IN the header opens its popup right where the header is — which
+    // drew the popup UNDER it, the statement's own glyphs sitting on top of
+    // the popup's text (reported). Raising the popups is the right direction
+    // rather than lowering the header: a popup is transient and must win over
+    // everything, while the header is chrome that must sit above the tree.
+    ".tooltip { z-index: 3000; }\n" +
     ".tooltip:has(.tooltip-code-content):not(:has(.tooltip-code-content > *))" +
       " { animation: ptw-tooltip-hold 150ms both; }",
     // Drop the popup's type line when there is no type to show. The infoview

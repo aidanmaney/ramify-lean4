@@ -918,11 +918,15 @@ export interface ProofTreeViewProps {
   /** Colour + popups for it, as a hook (the `renderTaggedTactic` shape, and
   source-agnostic for the same reason). Absent ⇒ plain text. */
   renderDeclHeader?: (lines: string[]) => ReactNode[] | null;
-  /** Put the buffer's caret on the statement. This is how the signature is
-  EDITED: it is the one piece of source the tree shows that the tree has no
-  business rewriting in place — a statement change re-types the whole proof —
-  so the header hands you to the editor rather than opening a box over it. */
+  /** Single click: put the buffer's caret on the statement. */
   onRevealHeader?: () => void;
+  /** Double click commits an edited statement over its own real range. The
+  statement IS editable here, by user directive — I had made it reveal-only on
+  the reasoning that changing a statement re-types the whole proof, and that is
+  a reason to be CAREFUL, not a reason to refuse: the header shows source, and
+  a surface in this tree that shows source and cannot be edited is the exact
+  complaint the theorem-line stub earned. Absent ⇒ reveal only. */
+  onEditHeader?: (text: string) => void;
   cfStub?: {
     line: number;
     pos?: { line: number; character: number };
@@ -1083,6 +1087,7 @@ export default function ProofTreeView({
   declHeader,
   renderDeclHeader,
   onRevealHeader,
+  onEditHeader,
   cfStub,
   headerExtra,
   height = "100vh",
@@ -3902,6 +3907,9 @@ export default function ProofTreeView({
   // number of drawn lines at any given width. Same shape as `useFrameOffset` —
   // a ResizeObserver plus an explicit mount read, because RO delivery rides
   // rendering steps and a hidden webview runs none.
+  // The statement's own editor: its own state rather than a branch of
+  // `editing`, which is keyed by NODE id — the header belongs to no node.
+  const [hdrEdit, setHdrEdit] = useState<string | null>(null);
   const hdrRef = useRef<HTMLDivElement | null>(null);
   const [hdrH, setHdrH] = useState(0);
   useLayoutEffect(() => {
@@ -5094,11 +5102,16 @@ export default function ProofTreeView({
       {declHeader ? (
         <div
           ref={hdrRef}
-          onClick={onRevealHeader}
+          onClick={hdrEdit === null ? onRevealHeader : undefined}
+          onDoubleClick={
+            onEditHeader ? () => setHdrEdit(declHeader) : undefined
+          }
           title={
-            onRevealHeader
-              ? "The statement this proof belongs to — click to put the caret on it"
-              : "The statement this proof belongs to"
+            hdrEdit !== null
+              ? undefined
+              : "The statement this proof belongs to" +
+                (onRevealHeader ? "\n· click to put the caret on it" : "") +
+                (onEditHeader ? "\n· double-click to edit it here" : "")
           }
           style={{
             position: "absolute",
@@ -5133,7 +5146,65 @@ export default function ProofTreeView({
             overflowY: "auto",
           }}
         >
-          {renderDeclHeader?.(declHeader.split("\n")) ?? declHeader}
+          {hdrEdit !== null ? (
+            <textarea
+              autoFocus
+              value={hdrEdit}
+              spellCheck={false}
+              onChange={(e) => setHdrEdit(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setHdrEdit(null);
+                } else if (
+                  e.key === "Enter" &&
+                  (e.metaKey || e.ctrlKey || !e.shiftKey)
+                ) {
+                  // Enter commits, ⇧Enter is a newline: a statement is often
+                  // several lines, but committing is the common act.
+                  e.preventDefault();
+                  const v = hdrEdit;
+                  setHdrEdit(null);
+                  // An EMPTY commit CANCELS — the tactic rule, not the comment
+                  // one. Blanking a statement is never what a slip meant, and
+                  // there is no "delete this theorem" gesture to route to.
+                  if (v.trim() !== "" && v !== declHeader) onEditHeader?.(v);
+                }
+              }}
+              onBlur={() => {
+                const v = hdrEdit;
+                setHdrEdit(null);
+                if (v !== null && v.trim() !== "" && v !== declHeader)
+                  onEditHeader?.(v);
+              }}
+              style={{
+                display: "block",
+                width: "100%",
+                boxSizing: "border-box",
+                resize: "none",
+                border: "none",
+                outline: "none",
+                padding: 0,
+                margin: 0,
+                background: "transparent",
+                // Pinned like every other editor here: a textarea IS insulated
+                // by the UA stylesheet, but its font is not inherited, and the
+                // text must land exactly where the painted statement was.
+                fontFamily: getCodeFontFamily(),
+                fontSize: NODE_FONT_PX,
+                lineHeight: `${LINE_H}px`,
+                letterSpacing: 0,
+                color: NODE_TEXT,
+                textAlign: "left",
+                whiteSpace: "pre-wrap",
+                overflow: "hidden",
+              }}
+              rows={hdrEdit.split("\n").length}
+            />
+          ) : (
+            (renderDeclHeader?.(declHeader.split("\n")) ?? declHeader)
+          )}
         </div>
       ) : null}
       {/* No top bar: the top edge stays empty so the eye falls straight from
