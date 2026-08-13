@@ -1617,6 +1617,52 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
       if ln == pos.line then cfServeCache.set none
     return r
   if real.openBlock.isSome then return ← serveReal real
+  -- A HEAD LINE WHOSE PROOF LIVES BELOW refuses cf, beside the open block and
+  -- for the same kind of reason: there is no tactic being written here, so
+  -- there is nothing to preview — and the preview COSTS the whole proof.
+  --
+  -- The `:= by` splice tier keeps everything through the last `:= by` and
+  -- writes `sorry` after it. On a calc link or a one-line `have` that replaces
+  -- the fragment being typed, which is the point. On a theorem's signature
+  -- line it replaces THE ENTIRE BODY: a proof whose tactics merely FAIL —
+  -- exactly the proof whose partial shape the author wants to look at — was
+  -- redrawn as a lone stub for as long as the cursor rested on its first line.
+  -- Reported as being unable to get at the meat of a failed proof from there.
+  --
+  -- BOTH conjuncts are load-bearing, and the second one alone is a disaster:
+  -- "slots below the cursor" is true of every line above the last tactic in
+  -- every proof, so on its own it would switch the counterfactual off for the
+  -- whole product. The line must ALSO be the declaration's own first line —
+  -- that is what makes it a header rather than a place a tactic is written.
+  --
+  -- The slot test reads the payload's own `deleteSlots` (the openBlock
+  -- refusal's discipline: read what the payload found, never re-derive it): a
+  -- slot starting on a LATER line means the body is elsewhere. A one-liner
+  -- keeps its counterfactual, because there every slot is on this very line;
+  -- and a broken body still reaches cf from the line being edited, which is
+  -- where `cfWanted` wants it.
+  --
+  -- Placed above the sticky serve for the open block's reason: a stale entry
+  -- for this line would otherwise keep serving what this refusal just decided
+  -- not to compute.
+  -- "Above the whole body", not "on the declaration's first line": a signature
+  -- routinely spans several lines, and the first version tested `declRange`'s
+  -- start against the cursor — measured on `sum_range_odd`, whose statement
+  -- runs 43-56, so resting on the `:= by` line at 55 failed the test and cf
+  -- fired exactly where the report came from. Every slot strictly below the
+  -- cursor says the same thing without needing to know where the header began.
+  -- And the payload must be ABOUT the cursor's declaration. Without this the
+  -- rule fires on the calc-SWALLOW shape and takes cf away from the very line
+  -- being typed: a broken `calc` makes the command holding the cursor the NEXT
+  -- theorem, whose slots are of course all below, so "above the whole body"
+  -- was accidentally true 30 lines away from the body it named (measured — cf
+  -- vanished on the edited line while the report was about a header line).
+  -- `declContainsPos` is `cfWanted`'s own coding, shared so the refusal and
+  -- the trigger cannot disagree about what "this declaration" means.
+  if declContainsPos real pos
+      && !real.deleteSlots.isEmpty
+      && real.deleteSlots.all (·.start.line > pos.line) then
+    return ← serveReal real
   let some splice := cfSplice fileMap pos.line pos.character
     | return ← serveReal real
   let draft := splice.draft
