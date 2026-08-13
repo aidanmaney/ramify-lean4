@@ -44,7 +44,8 @@ def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
     (calcRelations : Array ProofTree.CalcRelations)
     (deleteSlots : Array ProofTree.TacticSlot)
     (declRange : Option Lsp.Range)
-    (recovered : Array ProofTree.Recover.RecoveredStep) : Json :=
+    (recovered : Array ProofTree.Recover.RecoveredStep)
+    (openBlock : Option ProofTree.Recover.OpenBlock) : Json :=
   Json.mkObj [
     ("steps",    toJson r.steps),          -- List ProofStep  (ToJson derived upstream)
     ("allGoals", toJson r.allGoals.toList), -- flatten the goal set into an array
@@ -64,11 +65,23 @@ def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
     ("declRange", match declRange with
       | some r => Json.mkObj [("start", toJson r.start), ("stop", toJson r.end)]
       | none => Json.null)
-  ] |> fun base =>
-    -- Emitted only when nonempty: what keeps the complete-proof corpus
-    -- byte-identical through gen.sh (recovery fires 0 times on it).
-    if recovered.isEmpty then base
-    else base.setObjVal! "recovered" (toJson recovered)
+  ] |> fun base => Id.run do
+    -- Both optional fields are emitted only when they FIRED, which is what
+    -- keeps the complete-proof corpus byte-identical through gen.sh (verified:
+    -- recovery fires 0 times on it, and so does the open block).
+    --
+    -- A `do` block rather than a chain of `|>`: written as a second
+    -- `|> fun base => …` after the `if`, the pipe binds inside the `else`
+    -- branch, so the field was attached only for proofs that ALSO had
+    -- recovered steps — i.e. never, on this corpus. Caught by the fixture,
+    -- which showed `calcRelations` naming the open block's goal while the
+    -- block itself was absent from the same object.
+    let mut out := base
+    unless recovered.isEmpty do
+      out := out.setObjVal! "recovered" (toJson recovered)
+    if let some ob := openBlock then
+      out := out.setObjVal! "openBlock" (toJson ob)
+    return out
 
 /-- Run the (MetaM) parser from plain `IO`.
     Each node inside the InfoTree carries its own `ContextInfo` (env + mctx) which
@@ -139,7 +152,15 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
           goals := recovA.goals ++ recovB.goals
           grafts := recovA.grafts ++ recovB.grafts
           recovered := recovA.recovered ++ recovB.recovered }
+        -- Part C: an EMPTY `by` block — no step, just the goal it owes and
+        -- where a first tactic goes. Read before the empty guard below, which
+        -- it suspends: this payload has no steps by construction.
+        let openBlock ← ProofTree.Recover.recoverOpenBlock fileMap tree
+          (ProofTree.Recover.commandStx? tree) slots
         let r := recov.apply r1
+        let r := match openBlock with
+          | some ob => { r with allGoals := r.allGoals.insert ob.goal }
+          | none => r
         -- Drop trees that produced no proof (keeps output to real theorems only).
         if !(r.steps.isEmpty && r.allGoals.isEmpty) then
           -- The command's comments ride along; the InfoTree never holds them
@@ -164,10 +185,13 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
                   start := s.position.start
                   stop  := s.position.stop })
               calcChains
+              (match openBlock with
+                | some ob => #[ob.goal.id.name.toString]
+                | none => #[])
           out := out.push (Json.mkObj
             [("index", toJson idx),
              ("proof", resultToJson r comments holes calcChains calcRelations
-                          slots declRange recov.recovered)])
+                          slots declRange recov.recovered openBlock)])
     | none => pure ()
     idx := idx + 1
   return out

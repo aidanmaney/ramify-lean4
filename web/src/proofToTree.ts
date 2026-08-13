@@ -5,6 +5,7 @@ import type {
   CalcRelations,
   GoalInfo,
   Hypothesis,
+  OpenBlock,
   Proof,
   ProofStep,
   ProofStepPosition,
@@ -339,14 +340,24 @@ function goalIndex(proof: Proof): Map<string, GoalInfo> {
 
 // Root goal ids: consumed by some tactic but never produced by one — the
 // original theorem goal(s). Order follows first appearance in `steps`.
+//
+// An OPEN BLOCK (`:= by` with nothing written into it) is the one root that no
+// step consumes, so it cannot be derived from `steps` at all and is named by
+// the server instead (`Proof.openBlock`). It comes FIRST: the payload that
+// carries one has no steps, so there is nothing to come before it, and putting
+// it first keeps `proofTitle`/comment attribution reading the theorem's own
+// goal rather than a later one. A payload cannot carry both — the block is
+// empty exactly when no tactic exists — but the dedupe is kept anyway, since
+// this list feeds `visitGoal` and a repeated root would emit the node twice.
 export function rootIds(proof: Proof): string[] {
   const produced = new Set<string>();
   for (const step of proof.steps) {
     for (const g of stepGoalsAfter(step)) produced.add(g.id);
   }
-  return proof.steps
-    .map((s) => s.goalBefore.id)
-    .filter((id, i, arr) => arr.indexOf(id) === i && !produced.has(id));
+  const open = proof.openBlock ? [proof.openBlock.goal.id] : [];
+  return [...open, ...proof.steps.map((s) => s.goalBefore.id)].filter(
+    (id, i, arr) => arr.indexOf(id) === i && !produced.has(id),
+  );
 }
 
 // A short human label for a proof — its root goal's type — for the picker.
@@ -1355,6 +1366,22 @@ export function proofToTree(
     return { kind, anchors, comments: comments ?? [] };
   }
 
+  /** Where a FIRST tactic goes, in a `by` block with nothing in it.
+   *
+   * Everything an insertion needs is on `Proof.openBlock`, because the client
+   * cannot work any of it out: there is no producing step whose column to copy
+   * and no `TacticEdit` to resolve a tight end through. `kind: "seq"` — a plain
+   * next line — since nothing has split yet; `producer` and `after` are both
+   * the anchor (end of the `by`), which no `TacticEdit` starts at, so
+   * `addTactic`'s two lookups miss and fall back to exactly the shipped
+   * `indent` and to end-of-line on the anchor's line. That is the ordinary
+   * insertion rule, which is why a trailing comment on the `by` line keeps its
+   * place and the new tactic lands under it. */
+  function openBlockSpec(ob: OpenBlock): AddSpec {
+    const at = { start: ob.anchor, stop: ob.anchor };
+    return { kind: "seq", indent: ob.indent, producer: at, after: at };
+  }
+
   function addSpecFor(goalId: string, prod: ProofStep): AddSpec {
     // A pending goal that is a HOLE no sibling can serve is filled where it
     // sits. `inBlock` is the whole test, and it is narrower than "is a hole"
@@ -1487,8 +1514,20 @@ export function proofToTree(
     // the incomplete-proof corpora, every genuine frontier goal arrives via
     // goalsAfter and none via spawnedGoals. The three chip slots share the
     // test, so they can never disagree about whether a goal is pending.
+    //
+    // The OPEN BLOCK's root is the second clause, and it is a different shape
+    // rather than a widening of the first: it has no producer to be reached
+    // THROUGH, because nothing has been written yet. It is the frontier by the
+    // plain reading — a goal nothing consumes — and the spawned-goal exclusion
+    // above does not touch it (that rule is about restatements a branch already
+    // handled; there are no branches here). This is what puts the ordinary
+    // `+`/`sorry`/`calc` row under `theorem foo : P := by`, where the tree used
+    // to draw a dashed counterfactual stub labelled with the theorem line.
+    // Server-side `calcRelationGoals` carries the mirror clause.
+    const openRoot = !step && !producedBy && goalId === proof.openBlock?.goal.id;
     const pending =
-      !step && !!producedBy && producedBy.goalsAfter.some((g) => g.id === goalId);
+      openRoot ||
+      (!step && !!producedBy && producedBy.goalsAfter.some((g) => g.id === goalId));
     // A block that never parsed gets its repair chip whether or not the goal
     // is pending: when the block's first link WAS complete, a step stands for
     // it and the goal it consumes is an ordinary interior goal.
@@ -1507,9 +1546,11 @@ export function proofToTree(
         ? step
         : undefined;
     const addLink =
-      brokenChain || (!pending && !stub)
+      // `!producedBy` excludes exactly the OPEN BLOCK's root: no chain has
+      // been written above a goal nothing produced, so there is none to grow.
+      brokenChain || !producedBy || (!pending && !stub)
         ? undefined
-        : addLinkFor(goalId, producedBy!, stub);
+        : addLinkFor(goalId, producedBy, stub);
     const goalText = goal?.type ?? goalId;
     const elided =
       lhsElide && goalText.startsWith(lhsElide)
@@ -1579,7 +1620,9 @@ export function proofToTree(
       // even `sorry` cannot close a goal the parser never reached.
       addSpec:
         pending && !brokenChainByGoal.has(goalId)
-          ? addSpecFor(goalId, producedBy!)
+          ? producedBy
+            ? addSpecFor(goalId, producedBy)
+            : openBlockSpec(proof.openBlock!)
           : undefined,
       // Grow the chain — insert a link above this hole, or append one to close
       // the chain's residue (see addLinkFor).

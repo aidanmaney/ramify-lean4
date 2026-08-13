@@ -91,6 +91,42 @@ const TAGGED_CSS = [
     ".tooltip-code-content > .font-code.pre-wrap:not(:has(> *))," +
       " .tooltip-code-content > .font-code.pre-wrap:not(:has(> *)) + hr" +
       " { display: none; }",
+    // TACTIC DIFF. `InteractiveCode` already puts `inserted-text`/`removed-text`
+    // on a subterm whose SubexprInfo carries a `diffStatus` (the class map is
+    // in the infoview bundle), and the infoview's own stylesheet paints them —
+    // in the infoview. These rules exist for two things it does not do.
+    //
+    // GEOMETRY. Our boxes are sized by canvas `measureText` over the plain
+    // string, so a highlight may add background and NOTHING that advances the
+    // inline box. The infoview's base rule is safe (background + radius, no
+    // padding, no margin) but its high-contrast variant is `border: thin
+    // solid`, and a border on an inline span DOES add width — it would push
+    // text past the box it was measured for on exactly the themes that need
+    // the signal most. So the border is dropped and re-drawn as an INSET
+    // box-shadow, which paints in the same place and occupies no space.
+    //
+    // FALLBACK. `--vscode-diffEditor-*` exists only in a VS Code host. The
+    // `var(…, …)` chain keeps the editor's own colour wherever it is defined —
+    // so in the infoview this repaints exactly what the infoview would have —
+    // and falls through to a --ptw recipe otherwise. The recipe is mixed
+    // against --ptw-surface, not --ptw-bg: these land INSIDE a node box (the
+    // --ptw-prose lesson).
+    // `span.` and not `.` is deliberate: the high-contrast rule being undone
+    // is `.vscode-high-contrast .inserted-text`, the SAME specificity as
+    // `.ptw-tagged .inserted-text`, which would leave the winner decided by
+    // sheet order — ours is injected at mount and the infoview's is a static
+    // sheet, so we win today and would silently stop winning if that ever
+    // changed. The element is a `<span>` in both paths (InteractiveCode
+    // renders one; the hypothesis-name mark below is one), so naming it costs
+    // nothing and settles the tie.
+    ".ptw-tagged span.inserted-text, .ptw-tagged span.removed-text" +
+      " { border: 0; padding: 0; margin: 0; border-radius: 2pt; }",
+    ".ptw-tagged span.inserted-text {" +
+      " background-color: var(--vscode-diffEditor-insertedTextBackground, var(--ptw-diff-ins));" +
+      " box-shadow: inset 0 0 0 1px var(--vscode-diffEditor-insertedTextBorder, transparent); }",
+    ".ptw-tagged span.removed-text {" +
+      " background-color: var(--vscode-diffEditor-removedTextBackground, var(--ptw-diff-del));" +
+      " box-shadow: inset 0 0 0 1px var(--vscode-diffEditor-removedTextBorder, transparent); }",
 ].join("\n");
 
 export function ensureTaggedStyle() {
@@ -156,6 +192,18 @@ export function makeTaggedRenderers(
   for (const step of proof.steps) {
     goalById.set(step.goalBefore.id, step.goalBefore);
     for (const g of stepGoalsAfter(step)) goalById.set(g.id, g);
+  }
+
+  // The fvarIds a produced goal's PRODUCER already had in scope — what the
+  // inserted-hypothesis mark is refined against below. First producer wins,
+  // matching the tree's own producer rule (proofToTree emits
+  // goalBefore ──tactic──▶ goalsAfter ++ spawnedGoals).
+  const producerCtx = new Map<string, Set<string>>();
+  for (const step of proof.steps) {
+    for (const g of stepGoalsAfter(step)) {
+      if (!producerCtx.has(g.id))
+        producerCtx.set(g.id, new Set(step.goalBefore.hyps.map((h) => h.id)));
+    }
   }
 
   // The cache key needs no elision component: an elided label produces
@@ -233,15 +281,39 @@ export function makeTaggedRenderers(
     const byFvar = new Map<string, InteractiveHypothesisBundle>();
     for (const b of ig.hyps) for (const fv of b.fvarIds ?? []) byFvar.set(fv, b);
 
+    // Which lines the tactic that produced this goal INTRODUCED. The gate is
+    // core's own `isInserted?` — set by the same diff pass that tagged the
+    // type, so we never mark a name the editor would not — but core's flag is
+    // per BUNDLE, and the infoview draws a bundle as one line (`ih h : …`)
+    // where we draw one line per hypothesis. Taking the flag straight would
+    // therefore highlight `ih` because `h` was bundled with it, which is a
+    // claim about a line the editor never made. So the flag is REFINED by the
+    // producer's own context: a name is marked only when its fvarId was not
+    // already in scope. A bundle mutated in place (`rw … at h` — same name,
+    // new fvarId) is not `isInserted?` at all; core answers those with a type
+    // diff, which the tagged type carries free. With no producer on the wire
+    // there is nothing to refine against and the bundle flag stands, which is
+    // the editor's own answer.
+    const prev = producerCtx.get(goalId);
     return lines.map((line) => {
       const h = byLine.get(line);
       const b = h && byFvar.get(h.id);
       if (!h || !b || flattenTaggedText(b.type) !== h.type) return null;
       if (h.value != null && (!b.val || flattenTaggedText(b.val) !== h.value))
         return null;
+      const diffCls =
+        b.isInserted && !prev?.has(h.id)
+          ? "inserted-text"
+          : b.isRemoved && !prev?.has(h.id)
+            ? "removed-text"
+            : undefined;
       return (
         <span className="ptw-tagged">
-          {h.username} : <InteractiveCode fmt={b.type} />
+          {/* Background only — the text is byte-identical either way, so the
+              measured line is unchanged (see TAGGED_CSS). */}
+          {diffCls ? <span className={diffCls}>{h.username}</span> : h.username}
+          {" : "}
+          <InteractiveCode fmt={b.type} />
           {h.value != null && b.val ? (
             <>
               {" := "}

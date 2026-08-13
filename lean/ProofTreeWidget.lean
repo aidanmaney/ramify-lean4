@@ -203,6 +203,16 @@ structure ProofTreeData where
   keyed by `position.start` — `ProofStep` is upstream's type and cannot grow a
   field. The client styles these dashed and, for `failed`, in danger ink. -/
   recovered     : Array ProofTree.Recover.RecoveredStep := #[]
+  /-- The declaration's `by` block when the author has written NO tactic into
+  it (see `Recover.recoverOpenBlock`): the goal it owes and where a first
+  tactic goes. The client draws that goal as a PENDING root — the ordinary
+  frontier shape, chips and all — instead of nothing.
+
+  Plain data, so it rides the CLI wire too (`resultToJson`), which is what lets
+  a probe run the real `proofToTree` over it offline. It is also the signal
+  that DECLINES the counterfactual: with the goal already in hand there is
+  nothing for a re-elaboration to add. -/
+  openBlock     : Option ProofTree.Recover.OpenBlock := none
   /-- This DECLARATION's diagnostics (see `TreeDiag` for why they ride the
   payload rather than the publish notification). Scoped to the command
   snapshot's own `msgLog`, which is exactly the span the client filter keeps. -/
@@ -291,6 +301,61 @@ instance : FromJson GetProofTreeParams where
     let pos ← j.getObjValAs? Lsp.Position "pos"
     return { pos, cf := jsonField j "cf" true }
 
+/-- The goals a tactic PRODUCED, printed and then decorated with core's TACTIC
+DIFF: the subterm this tactic changed carries a `SubexprInfo.diffStatus?`, and a
+hypothesis it introduced carries `isInserted?`. Keyed by mvarId string, the same
+key `collectTaggedGoals` scores on.
+
+This is `Lean.Widget.diffInteractiveGoals`, which is exactly what
+`RequestHandling.getInteractiveGoals` calls for the infoview's own goal view —
+so a highlight here means what it means there, and the client needs no new
+rendering (`InteractiveCode` already maps `diffStatus` onto the infoview's
+`inserted-text`/`removed-text` classes). Its recipe is copied verbatim: print
+under the context, run the diff under `mctxAfter`, swallow failures. The finer
+`diffInteractiveGoal`/`exprDiff`/`addDiffTags` were considered and are NOT
+REACHABLE — `Lean/Widget/Diff.lean` is a `module` and marks only
+`diffInteractiveGoals` `public` (measured: `#check` on the other three is an
+unknown identifier on v4.32.2) — which settles what would otherwise be a
+judgement call in the same direction anyway: the whole-`TacticInfo` entry point
+owns the goal PAIRING (a `parentMap` built from `getMVars` over `goalsBefore`,
+so it knows which produced goal descends from which consumed one) and the
+`showTacticDiff` option gate, neither of which we could reproduce without
+guessing.
+
+`useAfter := true` throughout: our tree draws each goal ONCE, as a node, and the
+reading that node wants is "what did the tactic that produced me change" — the
+`goalsAfter` side. The `willChange`/`willDelete` half of the vocabulary is
+therefore never generated here.
+
+TWO FAILURE MODES, both silent by construction. A goal that fails to print is
+dropped from the batch rather than costing its siblings theirs (hence the
+per-goal `try`, not one around the `mapM`); and `diffInteractiveGoals` itself
+`throwError`s when it cannot find a goal's decl, so the whole diff falls back to
+the undiffed batch — same text, no tags.
+
+WHAT THIS DOES NOT COVER: a goal that reaches the tree without ever sitting in a
+`goalsAfter`. `induction`'s branches are the standing example (delayed
+assignment empties its `goalsAfter` — see the Metavariables section of
+CLAUDE.md), so a `case succ` ROOT goal ships untagged while every goal inside
+the branch is diffed normally. -/
+private def diffedGoalsAfter (printCtx : Elab.ContextInfo) (ti : Elab.TacticInfo)
+    : IO (Std.HashMap String Widget.InteractiveGoal) := do
+  -- `tryCatch` rather than do-notation `try`/`catch`: the latter is a
+  -- STATEMENT, so `let x ← try …` does not parse.
+  let igs : Widget.InteractiveGoals ←
+    tryCatch
+      (printCtx.runMetaM {} do
+        let mut goals : Array Widget.InteractiveGoal := #[]
+        for mvarId in ti.goalsAfter do
+          let ig? : Option Widget.InteractiveGoal ←
+            tryCatch (some <$> Widget.goalToInteractive mvarId) (fun _ => pure none)
+          if let some ig := ig? then goals := goals.push ig
+        let batch : Widget.InteractiveGoals := { goals }
+        tryCatch (Widget.diffInteractiveGoals true ti batch) (fun _ => pure batch))
+      (fun _ => pure { goals := #[] })
+  return igs.goals.foldl (init := {}) fun acc ig =>
+    acc.insert ig.mvarId.name.toString ig
+
 /-- Collect an `InteractiveGoal` for every goal mentioned by any tactic in the
 info tree, keyed by mvarId string (= `GoalInfo.id` on the wire).
 
@@ -316,7 +381,19 @@ nearly: this walk sees every `TacticInfo` while the wire carries only
 Paperproof's steps, so the minimum can be a print the client never had. A
 disagreement is not an error, it is silence — the text-equality guard drops the
 goal to plain SVG, losing its type tooltips exactly where a metavariable makes
-them worth most. -/
+them worth most.
+
+TACTIC DIFF. A goal a tactic PRODUCED is additionally decorated with core's own
+`Widget.diffInteractiveGoals` — the very call `getInteractiveGoals` makes for
+the infoview's goal view — so the subterm the tactic changed carries a
+`diffStatus` tag and a hypothesis it introduced carries `isInserted?`. See
+`diffedGoalsAfter`. The diff RIDES the existing candidate rather than competing
+with it: a diffed print is byte-identical to its undiffed twin under
+`stripTags`, so it scores the same and the metavariable rule above still decides
+WHAT text is shipped — the diff only decides whether that text carries tags.
+Where the producer's print loses the score to a consuming tactic's (the resolved
+-metavariable case), the goal simply ships untagged; silence, as everywhere
+here. -/
 def collectTaggedGoals (infoTree : InfoTree)
     (wanted : Std.HashMap String String := {}) : IO (Array TaggedGoalEntry) := do
   let tacticNodes := infoTree.foldInfo (init := #[]) fun ctx info acc =>
@@ -326,14 +403,27 @@ def collectTaggedGoals (infoTree : InfoTree)
   let mut best : Std.HashMap String (Nat × TaggedGoalEntry) := {}
   for (ctx, ti) in tacticNodes do
     let printCtx := { ctx with mctx := ti.mctxAfter }
+    -- Diff-tagged prints of the goals this tactic produced. Skipped when it
+    -- produced none, and when every one of them is already settled at score 0
+    -- — the same early-out the loop below makes, hoisted, because `exprDiff`
+    -- runs per goal and must not run for an answer that cannot be used.
+    let needDiff := ti.goalsAfter.any fun g =>
+      match best[g.name.toString]? with
+      | some (0, _) => false
+      | _ => true
+    let diffed ← if needDiff then diffedGoalsAfter printCtx ti else pure {}
     for mvarId in ti.goalsBefore ++ ti.goalsAfter do
       let key := mvarId.name.toString
       let cur := best[key]?
       -- Nothing beats an exact match, so stop looking for this goal.
       if let some (0, _) := cur then continue
-      let goal? ← try
-          some <$> printCtx.runMetaM {} (Widget.goalToInteractive mvarId)
-        catch _ => pure none
+      let goal? ← match diffed[key]? with
+        -- Already printed (and diffed) above, under this very `printCtx`.
+        | some ig => pure (some ig)
+        | none =>
+          try
+            some <$> printCtx.runMetaM {} (Widget.goalToInteractive mvarId)
+          catch _ => pure none
       if let some goal := goal? then
         let text := goal.type.stripTags
         let score :=
@@ -716,9 +806,21 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       goals := recovA.goals ++ recovB.goals
       grafts := recovA.grafts ++ recovB.grafts
       recovered := recovA.recovered ++ recovB.recovered }
+    -- Part C: an EMPTY `by` block. No step is synthesized — the whole point is
+    -- that there is no tactic to draw a box for — so this is read BEFORE the
+    -- empty early-out and suspends it: the payload it wants is one with no
+    -- steps at all and a goal on the side.
+    let openBlock ← Recover.recoverOpenBlock fileMap snap.infoTree (some snap.stx)
+      slots
     let parsedTree := recov.apply remapped
-    if parsedTree.steps.isEmpty then
+    if parsedTree.steps.isEmpty && openBlock.isNone then
       return { steps := [], allGoals := [] }
+    -- The open block's goal joins `allGoals` like any other, so `wanted` below
+    -- offers it to `collectTaggedGoals` and the one goal this payload draws
+    -- keeps its subterm tooltips.
+    let parsedTree := match openBlock with
+      | some ob => { parsedTree with allGoals := parsedTree.allGoals.insert ob.goal }
+      | none => parsedTree
     -- Which print of each goal the client will draw, by its own rule (see
     -- `goalIndex` in proofToTree.ts): fewest metavariables, ties keeping the
     -- first offered, and `allGoals` is offered first. Mirrored here so the
@@ -960,6 +1062,10 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
             start := s.position.start
             stop  := s.position.stop })
         calcChains
+        -- The open block's root is pending too — see `calcRelationGoals`.
+        (match openBlock with
+          | some ob => #[ob.goal.id.name.toString]
+          | none => #[])
     let proofId := match declName? snap.stx with
       | some n => n.toString
       | none   => s!"@{snapStart}"
@@ -984,6 +1090,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       tokenInfos,
       deleteSlots := slots
       recovered   := recov.recovered
+      openBlock
       holes       := collectHoles fileMap snap.infoTree slots (extra := some snap.stx)
       calcChains
       calcRelations
@@ -1092,7 +1199,10 @@ READING a broken proof with the cursor on some valid line, and what hands
 back the real tree the moment the typed tactic elaborates. A false fire
 (cursor resting on a blank line of a broken proof) costs one background
 elaboration, cached by spliced text; the splice's own declines (comment
-lines, blank at column 0) keep the browsing cases out. -/
+lines, blank at column 0) keep the browsing cases out.
+
+An OPEN BLOCK never reaches this test at all — `maybeCounterfactual` refuses
+above it, ahead of the sticky serve. See there for why. -/
 private def cfWanted (real : ProofTreeData) (pos : Lsp.Position)
     (stepStartsHere : Bool) : Bool :=
   -- INCLUSIVE at the stop (posLE both ways), like the client's `cursorInDecl`
@@ -1205,7 +1315,13 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
   let mut errPos : Array Lsp.Position := #[]
   for m in parseMsgs.toList ++ stFinal.messages.toList do
     let text ← m.data.toString
-    if m.severity == .warning && text.startsWith "declaration uses 'sorry'" then
+    -- The injected stub's own warning. Matched on the QUOTELESS prefix: the
+    -- literal was `declaration uses 'sorry'` and v4.32.2 says
+    -- ``declaration uses `sorry` `` — measured on the wire, one stray warning
+    -- riding every counterfactual payload, i.e. the filter was dead. Core has
+    -- now written this string with two different quotes; the words are the
+    -- stable part.
+    if m.severity == .warning && text.startsWith "declaration uses " then
       continue
     let s := cfMap.leanPosToLspPos m.pos
     let e := match m.endPos with
@@ -1267,11 +1383,42 @@ blob. A miss spawns the elaboration on a DETACHED task and returns the real
 payload marked `cfPending` — a request is never blocked on seconds of
 elaboration, the client re-polls, and the next request serves the cache. The
 pending answer is also served while a fresh marker is in flight, so a burst of
-keystrokes starts exactly one elaboration. -/
+keystrokes starts exactly one elaboration.
+
+An OPEN BLOCK (`:= by` with nothing written into it) refuses ALL of it, and
+the refusal sits at the very top — above the STICKY serve, not in `cfWanted`.
+Both halves of that placement are load-bearing:
+
+* **Above the sticky serve**, because sticky is keyed on (line, spliced text)
+  and `… := by rin` and `… := by` splice to the SAME `… := by sorry`. Deleting
+  the half-typed word therefore matches the sticky key exactly, and a gate in
+  `cfWanted` alone would have kept serving the stale counterfactual over a
+  payload that already had the goal.
+* **One coding**, testing the open block's PRESENCE on the payload rather than
+  re-deriving "is the block empty?", so the refusal cannot disagree with what
+  the payload actually drew.
+
+Why refuse: every brokenness signal fires on an open block (no steps, plus an
+honest `unsolved goals` on the `by`), and what cf bought there was ceremony.
+The spliced text `… := by sorry` re-derives, in ~830ms of background
+elaboration (measured, `tour_frontier`), exactly the goal `recoverOpenBlock`
+reads for free out of the info tree this request already walked — and then
+hangs it under a dashed stub whose label is the THEOREM LINE, the one node in
+the product that is neither a tactic nor a goal nor editable (the cf payload
+withdraws the editing seam on the spliced line by design, so it cannot be).
+The declining payload carries the same goal, PENDING, with the ordinary
+`+`/`sorry`/`calc` chips.
+
+This NARROWS cf; it does not remove it. A first tactic being typed occupies a
+tactic slot — `by c` and `by ri` each record one (measured; an `unknown
+tactic` still owns its slot) — so `recoverOpenBlock` declines and every
+mid-typing case, including both splice tiers cf exists for, reaches the
+counterfactual exactly as before. -/
 private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     (doc : FileWorker.EditableDocument) (fileMap : FileMap)
     (real : ProofTreeData) : RequestM ProofTreeData := do
   unless wantCf do return real
+  if real.openBlock.isSome then return real
   let some splice := cfSplice fileMap pos.line pos.character
     | return real
   let draft := splice.draft

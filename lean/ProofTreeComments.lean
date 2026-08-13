@@ -1194,14 +1194,19 @@ a drift shows up as chips silently vanishing, not as an error:
   contains the block's start. Containment is HALF-OPEN, the same fact the
   cursor accent rests on: the producer above a bare `calc` has a
   trivia-inflated range ending exactly AT the calc's start, and an inclusive
-  test would hand the chain that tactic's own goal instead. -/
-def calcRelationGoals (steps : Array CalcGoalStep) (chains : Array CalcChain) :
-    Array String := Id.run do
+  test would hand the chain that tactic's own goal instead;
+* plus `extra` — the root of an OPEN block (`:= by` with nothing written into
+  it, see `Recover.recoverOpenBlock`). It is pending for the same reason the
+  first bullet's goals are, and only reaches this rule separately because it is
+  reached through no step at all. The client's `pending` carries the mirror
+  clause; keep the two pointing at each other. -/
+def calcRelationGoals (steps : Array CalcGoalStep) (chains : Array CalcChain)
+    (extra : Array String := #[]) : Array String := Id.run do
   let consumed := steps.foldl (init := ({} : Std.HashSet String))
     fun acc s => acc.insert s.goalBefore
   let lt (a b : Lsp.Position) : Bool := !posLE b a
   let le := posLE
-  let mut out : Array String := #[]
+  let mut out : Array String := extra
   for s in steps do
     for g in s.goalsAfter do
       unless consumed.contains g || out.contains g do out := out.push g

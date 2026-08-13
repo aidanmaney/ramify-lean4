@@ -162,6 +162,21 @@ export default function App() {
               };
               w.__edits = [...(w.__edits ?? []), { pos, text }];
             },
+            // The FRONTIER chips (`+`/`sorry`/`calc`) are gated on this hook
+            // alone, and the lane is not even reserved without it — so until
+            // it was stubbed the harness could not draw a chip at all, however
+            // complete the record. The same blind spot as `deleteSlots` above,
+            // and it hid the whole open-block frontier (`proofs/openblock.lean`),
+            // which is a payload with exactly one node and nothing but chips
+            // on it. Returns no fill: nothing is written, so there is no stub
+            // to open the second half of a gesture on.
+            onAddTactic: (spec: unknown, text: string) => {
+              const w = window as unknown as {
+                __adds?: { spec: unknown; text: string }[];
+              };
+              w.__adds = [...(w.__adds ?? []), { spec, text }];
+              return { fill: null };
+            },
           }
         : {})}
       // Dev-only counterfactual stub, on `?cf-stub=<line>[:<draft>]`: the real

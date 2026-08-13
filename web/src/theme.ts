@@ -163,6 +163,19 @@ const PALETTE_CSS = `
   --ptw-hyp-mark: #b4763a;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
 
+  /* TACTIC DIFF backgrounds — what the producing tactic changed inside a goal
+     box. Only a FALLBACK: wherever --vscode-diffEditor-*TextBackground exists
+     (any VS Code host) taggedRender's rules take the editor's own colour, so
+     a highlight in the tree is the very colour the infoview paints. These are
+     for a host without those variables. Mixed against --ptw-surface, not
+     --ptw-bg, because they land inside a node box (the --ptw-prose lesson),
+     and kept WEAK — 22% — since the highlight sits under code that must stay
+     readable, unlike the ribbons, which sit beside it. */
+  --ptw-diff-ins: #dcf0e2;
+  --ptw-diff-ins: color-mix(in srgb, var(--ptw-hue-tactic) 22%, var(--ptw-surface));
+  --ptw-diff-del: #f6dede;
+  --ptw-diff-del: color-mix(in srgb, var(--ptw-danger) 22%, var(--ptw-surface));
+
   --ptw-comment: #8b949e;
   --ptw-case: #6b7f99;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));

@@ -549,4 +549,101 @@ def recoverTerm (fileMap : FileMap) (tree : InfoTree)
   if rec'.steps.isEmpty then return {}
   return { rec' with goals := rootGoal :: rec'.goals }
 
+/-! ## Part C — the OPEN block
+
+`theorem foo : P := by` with nothing written after the `by`. The state every
+proof starts in, and the one where the tree has most to say — yet it used to
+draw nothing at all, then (once the counterfactual existed) a dashed stub
+labelled with the THEOREM LINE, which is neither a tactic nor editable.
+
+Three facts, all measured (see the module doc for the house style):
+
+* **It PARSES.** The block is a well-formed `byTactic` whose
+  `tacticSeq1Indented` holds an EMPTY sepArray — not `Syntax.missing`, not a
+  parse error. Lean elaborates the declaration and reports one honest
+  `unsolved goals` on the `by`.
+* **The goal is already in the info tree**, as `goalsBefore` of the `byTactic`
+  node's own `TacticInfo` (`before=1 after=1`, measured on v4.32.2). So this
+  needs no re-elaboration of anything — it is a read of the tree the request
+  already walked, which is why the counterfactual is DECLINED here (see
+  `cfWanted`): the goal cost 0ms where the counterfactual cost ~830ms.
+* **`tacticSlots` is EMPTY for exactly this shape, and non-empty the moment a
+  character is typed** — `by c` and `by ri` both record one slot (an
+  `unknown tactic` still occupies its slot). That is the whole gate, and it is
+  what keeps the counterfactual alive for the case it exists for: a first
+  tactic being typed is NOT an open block.
+
+No STEP is synthesized, deliberately — a step is a box, and a box standing for
+the tactic nobody has written yet is the vestigial stub this replaces. What
+ships is the GOAL and where a first tactic goes, so the client draws one
+pending goal with its ordinary `+`/`sorry`/`calc` chips: the same frontier
+shape a `constructor`'s two branches get, which is the point.
+-/
+
+/-- An empty `by` block: the goal it owes, and where a first tactic is written.
+
+`anchor` is the END of the `by` token; the client inserts at the end of THAT
+line, which is the ordinary insertion rule (so a trailing comment on the `by`
+line stays glued to it, as everywhere else). It is shipped rather than derived
+from `declRange` because it drives a WRITE: `declRange.stop` happens to equal
+it while the block is empty, and a client re-deriving that coincidence would be
+guessing at the one place a guess edits the buffer — the `cfStubPos` rule. -/
+structure OpenBlock where
+  /-- The block's root goal — the real `GoalInfo`, printed by the vendored
+  `printGoalInfo` with a real mvarId, so it indexes and renders like any
+  other goal. -/
+  goal   : GoalInfo
+  /-- End of the `by` token. -/
+  anchor : Lsp.Position
+  /-- Column a first tactic takes: the declaration's own indent + 2. -/
+  indent : Nat
+  deriving ToJson, FromJson
+
+/-- Part C: the declaration's `by` block, when the author has written no tactic
+into it.
+
+Gated on a `theorem`/`example` whose body IS a `byTactic` (Part B owns the
+term-mode shape, disambiguated purely by syntax kind, and the two gates are
+complements so they cannot both fire) with NO tactic slot anywhere in the
+command. Slots rather than `steps.isEmpty`: a proof whose only tactic FAILED
+also harvests zero steps, and that is Part A's territory — it has a slot. -/
+def recoverOpenBlock (fileMap : FileMap) (tree : InfoTree)
+    (cmdStx? : Option Syntax) (slots : Array TacticSlot) :
+    IO (Option OpenBlock) := do
+  let some cmdStx := cmdStx? | return none
+  unless isTheoremLike cmdStx do return none
+  unless slots.isEmpty do return none
+  let some body := declBody? cmdStx | return none
+  unless body.getKind == ``Parser.Term.byTactic do return none
+  let some bodyRg := body.getRange? | return none
+  let some cmdRg := cmdStx.getRange? | return none
+  -- The `byTactic`'s own `TacticInfo` — the innermost one is the empty
+  -- sequence, but every one of the four in this shape carries the same single
+  -- `goalsBefore`, so the first with a goal is the answer.
+  let hit := tree.foldInfo (init := (none : Option (ContextInfo × TacticInfo)))
+    fun ctx info acc =>
+      match acc, info with
+      | none, .ofTacticInfo ti =>
+        match ti.stx.getRange? with
+        | some r =>
+          if r.start.byteIdx ≥ bodyRg.start.byteIdx
+              && r.stop.byteIdx ≤ bodyRg.stop.byteIdx
+              && !ti.goalsBefore.isEmpty then
+            some (ctx, ti)
+          else acc
+        | none => acc
+      | acc, _ => acc
+  let some (cctx, ti) := hit | return none
+  let some g := ti.goalsBefore.head? | return none
+  let printCtx := { cctx with mctx := ti.mctxAfter }
+  let goal? ← try
+      let gi ← printCtx.runMetaM {} do printGoalInfo printCtx g
+      pure (some gi)
+    catch _ => pure none
+  let some goal := goal? | return none
+  return some {
+    goal
+    anchor := fileMap.utf8PosToLspPos bodyRg.stop
+    indent := (fileMap.utf8PosToLspPos cmdRg.start).character + 2 }
+
 end ProofTree.Recover

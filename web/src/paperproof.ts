@@ -238,6 +238,30 @@ export interface Proof {
   the view falls back to the line rule. Moves exactly when `cfLine` does, so it
   rides the stable signature with it. */
   cfStubPos?: { line: number; character: number };
+  /** An empty `by` block — `theorem foo : P := by` with no tactic written into
+  it (see ProofTreeRecover.lean's `recoverOpenBlock`). Carries the goal the
+  block owes and where a first tactic goes, so the tree draws that goal as a
+  PENDING ROOT with its ordinary chips instead of drawing nothing.
+
+  This is the ONLY way a root goal reaches the tree unconsumed — every other
+  root is some step's `goalBefore` by construction — which is why `rootIds` and
+  the `pending` test each carry one clause for it. Plain data on both wires. */
+  openBlock?: OpenBlock;
+}
+
+/** An empty `by` block: the goal it owes and the seam a first tactic is
+written at. See ProofTreeRecover.lean's `OpenBlock`. */
+export interface OpenBlock {
+  /** The real root `GoalInfo`, printed by the vendored `printGoalInfo`. Its id
+  is a live mvarId, so it indexes with every other goal. */
+  goal: GoalInfo;
+  /** End of the `by` token — a first tactic is inserted at the END of that
+  line, the ordinary insertion rule. Shipped rather than derived from
+  `declRange` (which happens to coincide while the block is empty) because it
+  drives a WRITE: the `cfStubPos` rule, that the server names its own seam. */
+  anchor: { line: number; character: number };
+  /** Column a first tactic takes — the declaration's own indent + 2. */
+  indent: number;
 }
 
 /** Rebuild the STABLE `Proof` from a wire payload, field for field — the ONE
@@ -267,6 +291,7 @@ export function stableProofOf(p: Proof): Proof {
     declRange: p.declRange,
     cfLine: p.cfLine,
     cfStubPos: p.cfStubPos,
+    openBlock: p.openBlock,
   };
 }
 
