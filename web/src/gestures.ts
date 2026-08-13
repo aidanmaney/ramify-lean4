@@ -198,12 +198,12 @@ export const GESTURES: Gesture[] = [
     when: (g) => g.elidable && g.leafFold,
     // The substitution `leafFoldTargets` makes, said out loud. It is invisible
     // otherwise — there is no glyph on a bare modifier to explain it.
-    note: "a closing step has nothing below to elide, so this folds the goal above; that goal's + brings it back, and the hover bar's ◌ carries a small − inside it here",
+    note: "a closing step has nothing below to elide, so this folds the goal above; that goal's + brings it back, and the hover bar's ⬚ draws a SOLID rim here instead of a dashed one — no ghost is left",
   },
   {
     target: "tactic",
     input: "hover",
-    says: "for ⧉ lens, ◌ elide, ⊘ delete",
+    says: "for ⧉ lens, ⬚ elide, ⊘ delete",
     needs: "popout",
   },
   {
@@ -217,7 +217,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "ghost",
     input: "click",
-    says: "to bring back what a ◌ took",
+    says: "to bring back what a ⬚ took",
   },
   {
     target: "ghost",
@@ -296,7 +296,7 @@ export const GESTURES: Gesture[] = [
 export const GESTURE_SECTIONS: { target: GestureTarget; title: string }[] = [
   { target: "goal", title: "On a goal box" },
   { target: "tactic", title: "On a tactic box" },
-  { target: "ghost", title: "On a ghost (◌)" },
+  { target: "ghost", title: "On a ghost (⬚)" },
   { target: "chips", title: "On the chips under an unfinished goal" },
   { target: "strip", title: "On a comment strip" },
   { target: "background", title: "On the background" },
@@ -357,7 +357,7 @@ const UNDO = `${CMD}Z in the editor undoes it`;
 export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   elide: {
     label: "elide",
-    title: "Collapse the selection to one ◌ marker (click it to restore)",
+    title: "Collapse the selection to one ⬚ marker (click it to restore)",
     writes: false,
   },
   combine: {

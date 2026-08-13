@@ -44,7 +44,7 @@ marquee normalizes to its heads, one flag each, accepting subtree granularity
 (a flag governs a tactic's whole output; refusing ragged selections would be
 the worse trade). Returned in DFS preorder. Markers, combined nodes and
 synthetic/recovered tactics are excluded — they stand for no single as-written
-tactic (the ◌/⊘ declines).
+tactic (the ⬚/⊘ declines).
 
 A head is then normalized to the FIRST node of its SLOT. One as-written
 tactic can be several nodes — Paperproof splits `rw [a, b, c]` into one step
