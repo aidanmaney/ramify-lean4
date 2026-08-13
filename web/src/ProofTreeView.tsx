@@ -911,6 +911,20 @@ export interface ProofTreeViewProps {
     pos?: { line: number; character: number };
     draft: string;
     col?: number;
+    /** Colours and hover popups for `draft`, as a HOOK — the same shape as
+    `renderTaggedTactic`, and here for the same reason: the view stays
+    source-agnostic and only the widget knows how to resolve a token.
+    It cannot reuse `renderTaggedTactic` itself, because that one indexes the
+    payload the stub is drawn in — the SPLICED elaboration, whose bytes on this
+    line read `sorry`. The widget feeds this one from `cfDraftTokens`, taken
+    from the real document, so the stub reads as source rather than as the one
+    box in the tree painted in flat foreground. Absent (older server, no
+    tokens, or the harness's faked marker) ⇒ plain text, the old behaviour. */
+    render?: (
+      draft: string,
+      line: number,
+      col: number,
+    ) => ReactNode[] | null;
   } | null;
   /**
    * Extra controls placed at the left of the toolbar. The standalone app injects
@@ -3858,7 +3872,11 @@ export default function ProofTreeView({
   // them — you can pick, elide or fill a calc while focused.
   const hintUp =
     seq.mode !== "off" || !!elidePick || !!bandPick || !!editing?.calcStage;
-  const floaterRows = [!!headerExtra, focusId !== null, hintUp, !!cfStub];
+  // The counterfactual no longer takes a row (its banner is gone — see the
+  // render), so the slot is dropped rather than left reserved: a `false` here
+  // would still be right, but an entry nothing draws invites the next reader
+  // to "fix" the missing floater.
+  const floaterRows = [!!headerExtra, focusId !== null, hintUp];
   const floaterTop = (row: number) =>
     8 + FLOATER_H * floaterRows.slice(0, row).filter(Boolean).length;
 
@@ -4843,6 +4861,12 @@ export default function ProofTreeView({
     if (pn && editing?.id !== pn.data.id) {
       const empty = cfStub.draft.trim() === "";
       const label = empty ? "…" : cfStub.draft;
+      // Declined while the draft is blank — the `…` placeholder is ours, not
+      // source, so there is nothing for the real line's tokens to align onto.
+      const cfTagged =
+        !empty && cfStub.col !== undefined
+          ? (cfStub.render?.(label, cfStub.line, cfStub.col) ?? null)
+          : null;
       const boxTop = pn.y + (bandTopH(pn.data) - pn.data.h) / 2;
       const w = Math.max(
         pn.data.w,
@@ -4874,19 +4898,47 @@ export default function ProofTreeView({
                 (cfEditable ? "\n· double-click to edit that line here" : "")}
             </title>
           </rect>
-          <text
-            x={pn.x - pn.data.w / 2 + NODE_PAD}
-            y={boxTop + pn.data.h / 2}
-            dominantBaseline="central"
-            fontSize={NODE_FONT_PX}
-            fontFamily={getCodeFontFamily()}
-            fill="var(--ptw-fg)"
-            xmlSpace="preserve"
-            style={{ letterSpacing: 0 }}
-            opacity={empty ? 0.5 : 1}
-          >
-            {label}
-          </text>
+          {cfTagged ? (
+            // The tokenised draft, in the plain text's exact geometry: one
+            // LINE_H box, centred on the box like the `<text>` it replaces
+            // (`dominantBaseline="central"` there, so the block's top is half
+            // a line above the middle). `white-space: pre` because the label
+            // is measured, never re-wrapped — the node-label rule.
+            <foreignObject
+              x={pn.x - pn.data.w / 2 + NODE_PAD}
+              y={boxTop + pn.data.h / 2 - LINE_H / 2}
+              width={w - 2 * NODE_PAD}
+              height={LINE_H}
+              style={{ overflow: "visible" }}
+            >
+              <div
+                style={{
+                  fontFamily: getCodeFontFamily(),
+                  fontSize: NODE_FONT_PX,
+                  lineHeight: `${LINE_H}px`,
+                  letterSpacing: 0,
+                  whiteSpace: "pre",
+                  color: NODE_TEXT,
+                }}
+              >
+                {cfTagged}
+              </div>
+            </foreignObject>
+          ) : (
+            <text
+              x={pn.x - pn.data.w / 2 + NODE_PAD}
+              y={boxTop + pn.data.h / 2}
+              dominantBaseline="central"
+              fontSize={NODE_FONT_PX}
+              fontFamily={getCodeFontFamily()}
+              fill="var(--ptw-fg)"
+              xmlSpace="preserve"
+              style={{ letterSpacing: 0 }}
+              opacity={empty ? 0.5 : 1}
+            >
+              {label}
+            </text>
+          )}
         </g>
       );
     }
@@ -5119,27 +5171,12 @@ export default function ProofTreeView({
           onExit={layerOff("calcStage")}
         />
       )}
-      {/* The counterfactual banner: its own floater row (it COEXISTS with the
-          hints — you can be mid-pick while typing in the buffer), naming the
-          line so the dashed stub and the buffer read as one thing. */}
-      {cfStub && (
-        <div
-          style={{
-            position: "absolute",
-            top: floaterTop(3),
-            left: 8,
-            zIndex: 10,
-            fontFamily: "monospace",
-            fontSize: 12,
-            color: ACCENT_TEXT,
-            background: SEQ_STROKE,
-            padding: "3px 10px",
-            borderRadius: 999,
-          }}
-        >
-          {`✎ writing line ${cfStub.line + 1} — tree holds a sorry there`}
-        </div>
-      )}
+      {/* No counterfactual BANNER. There was one — `✎ writing line N — tree
+          holds a sorry there` — and it is gone by user directive: the dashed
+          accent-inked stub already says "this line is being written", and the
+          machinery behind it (that we re-elaborated the declaration with the
+          line spliced to `sorry`) is an implementation fact the reader has no
+          use for. The stub keeps its own `<title>` for anyone who asks. */}
       <ControlRail
         onExpandAll={() => {
           anchorRoot();

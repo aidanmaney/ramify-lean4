@@ -35,6 +35,7 @@ import { taggedSubterms } from "./taggedText";
 import { observeThemeChange } from "./theme";
 import {
   makeTacticRenderer,
+  renderTacticTokens,
   type TacticToken,
   type TacticTokenInfo,
 } from "./tacticTokens";
@@ -297,6 +298,16 @@ type ProofTreeData = Proof & {
   editable without touching counterfactual bytes — see `cfDraftCol` in
   ProofTreeWidget.lean. Out of the stable signature like `cfDraft`. */
   cfDraftCol?: number;
+  /** Syntax tokens for `cfDraft`, collected from the REAL document (see
+  `cfDraftTokens` in ProofTreeWidget.lean). Absolute real-document positions,
+  like `TacticEdit.tokens`, so the stub renders through the ordinary token
+  path. Out of the stable signature with the draft they describe. */
+  cfDraftTokens?: TacticToken[];
+  /** Hover popups for those tokens. Their own field, not an append to
+  `tokenInfos`: that array describes the SPLICED document and the draft starts
+  at the same position as the injected `sorry`, so appending would collide
+  exactly where the two disagree. */
+  cfDraftInfos?: TacticTokenInfo[];
   /** The server is elaborating a counterfactual in the background; re-poll
   shortly rather than waiting for the next document event. */
   cfPending?: boolean;
@@ -774,6 +785,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // the SAME response as the draft, so the two can never describe different
   // snapshots of the line.
   const cfDraftCol = st.state === "resolved" ? st.value.cfDraftCol : undefined;
+  // The draft's colouring and popups, from the same response for the same
+  // reason: they describe the draft, so a mismatch would paint one snapshot's
+  // tokens onto another's text and `alignInLabel` would simply decline.
+  const cfDraftTokens =
+    st.state === "resolved" ? st.value.cfDraftTokens : undefined;
+  const cfDraftInfos =
+    st.state === "resolved" ? st.value.cfDraftInfos : undefined;
   // cfPending: the counterfactual is elaborating in the background. Re-poll
   // shortly — without this, an author who stops typing before the elaboration
   // finishes would wait for the next document event to see the preview.
@@ -973,6 +991,34 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       ),
     [editByStart, infoAt, colorBrackets],
   );
+
+  // The counterfactual stub's own colouring. Same renderer as every tactic
+  // label, fed from a DIFFERENT source: the tokens describe the real
+  // document's line, not the spliced payload the stub is drawn in, so they
+  // cannot come through `editByStart`/`infoAt` (which index the counterfactual
+  // elaboration and, on this line, describe the injected `sorry`).
+  //
+  // A one-line label, so `lines` is `[draft]` and nothing wraps —
+  // `alignInLabel` is then an identity and any failure falls back to plain
+  // SVG text, exactly as it does for a tactic whose tokens do not line up.
+  const renderCfDraft = useMemo(() => {
+    const toks = cfDraftTokens;
+    if (!toks || toks.length === 0) return undefined;
+    const infos = new Map<string, TacticTokenInfo>();
+    for (const i of cfDraftInfos ?? [])
+      infos.set(`${i.start.line}:${i.start.character}`, i);
+    return (draft: string, line: number, col: number) =>
+      renderTacticTokens(
+        draft,
+        { line, character: col },
+        toks,
+        draft,
+        [draft],
+        infos,
+        undefined,
+        colorBrackets,
+      );
+  }, [cfDraftTokens, cfDraftInfos, colorBrackets]);
 
   // Every handler that writes the document stamps this before the write, so
   // the resulting re-elaboration bypasses the typing hold (see the hold
@@ -1305,6 +1351,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
                 // "not editable" rather than guessing a column — a guessed
                 // one would write the author's line at the wrong offset.
                 col: cfDraftCol,
+                render: renderCfDraft,
               }
             : null
         }

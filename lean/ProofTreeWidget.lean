@@ -259,6 +259,32 @@ structure ProofTreeData where
   edit — never a counterfactual byte. Refreshed per request beside `cfDraft`
   and out of the stable signature for the same reason. -/
   cfDraftCol    : Option Nat := none
+  /-- Syntax highlighting and hover popups for `cfDraft`, from the REAL
+  document — the pair that makes the stub read as a box of source rather than
+  as a caption.
+
+  They cannot come from the payload the stub is drawn in. That payload is the
+  SPLICED elaboration, whose tokens on this line describe the injected `sorry`;
+  aligning them onto the author's draft would colour the wrong bytes and hang
+  the wrong popups off them, which is why the colour mirror was declined
+  outright when the stub was first drawn. These are collected from the real
+  snapshot instead, restricted to the line, so a token means here exactly what
+  it means in the buffer — the same rule the rest of the tree's colouring
+  keeps.
+
+  Positions are REAL-document absolute, like `TacticEdit.tokens`, so the
+  client pairs them with `cfDraft` and `cfDraftCol` and re-uses
+  `renderTacticTokens` unchanged. Refreshed per request beside `cfDraft`, out
+  of the stable signature, and computed only on the branches that actually
+  serve a counterfactual — a healthy request pays nothing. -/
+  cfDraftTokens : Array TacticToken := #[]
+  /-- Hover popups for `cfDraftTokens`, decided by the shared `tokenInfoAt`.
+  Their own field rather than an append to `tokenInfos`: that array is keyed by
+  position and describes the SPLICED document, and the draft and the injected
+  `sorry` start at the very same position — so appending would collide exactly
+  where the two documents disagree, and which entry won would be an accident of
+  order. -/
+  cfDraftInfos  : Array TacticTokenInfo := #[]
   /-- A counterfactual is being elaborated in the background for this state;
   the client may re-poll shortly instead of waiting for the next document
   event. -/
@@ -762,6 +788,66 @@ initialize proofTreeCache :
     -- moves stay cached.
     IO.Ref (Option ((String × Nat × Nat × Nat) × ProofTreeData)) ← IO.mkRef none
 
+/-- What the EDITOR's hover would show at ONE token, decided the way
+`handleHover` decides it — the info node's tag, or the parser docstring, or
+nothing. Factored out because there are now two callers that must agree: the
+per-tactic pass inside `mkTreePayload`, and `cfDraftHighlight`, which runs the
+same decision over the REAL line while the tree on screen is a counterfactual.
+A second coding would drift silently — a token would carry a different popup
+depending on whether the author happened to be mid-word.
+
+`refCache` is threaded rather than owned here: one RPC reference per distinct
+info NODE is the caller's invariant (a tactic's keyword and its punctuation
+resolve to the same `TacticInfo`), and the caller also owns the position
+dedupe. -/
+private def tokenInfoAt (env : Environment) (stx : Syntax) (hoverIdx : HoverIndex)
+    (src : String) (fileMap : FileMap)
+    (refCache : Std.HashMap (Nat × Nat) (Server.WithRpcRef Elab.InfoWithCtx))
+    (t : TacticToken) :
+    RequestM (Option TacticTokenInfo ×
+      Std.HashMap (Nat × Nat) (Server.WithRpcRef Elab.InfoWithCtx)) := do
+  let tb := fileMap.lspPosToUtf8Pos t.start
+  let tend := fileMap.lspPosToUtf8Pos t.stop
+  -- The buffer post-processes docstrings once, at hover time; the same rewrite
+  -- runs at the emit sites below so the shipped text is byte-identical to what
+  -- the editor renders — not here, because most tokens' info popup wins and
+  -- rewriting a multi-KB docstring to throw it away was the loop's one
+  -- avoidable cost.
+  let stxDoc? ← parserDocAt env stx tb
+  match hoverIdx.innermost tb.byteIdx with
+  | some (rs, re, ictx) =>
+    let docWins ← match stxDoc? with
+      | none => pure false
+      | some (_, stxRange) =>
+        if !stxRange.includes ⟨⟨rs⟩, ⟨re⟩⟩ then pure true
+        else do pure !(← popupNonempty env ictx.info)
+    if docWins then
+      return (some
+        { start := t.start
+          doc := stxDoc?.map (FileWorker.Hover.rewriteExamples ·.1) }, refCache)
+    -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates the
+    -- session-scoped id the client hands back to `infoToInteractive` when the
+    -- popup opens. Keyed by the info node's range, so tokens resolving to the
+    -- same node share one store entry.
+    let (ref, refCache) ← match refCache[(rs, re)]? with
+      | some r => pure (r, refCache)
+      | none   => do
+        let r ← Server.WithRpcRef.mk ictx
+        pure (r, refCache.insert (rs, re) r)
+    return (some {
+      start := t.start
+      code  := some <| .tag
+        { info := ref, subexprPos := SubExpr.Pos.root }
+        (.text (String.Pos.Raw.extract src tb tend)) }, refCache)
+  | none =>
+    -- No info node at all (an unparsed calc block's tokens, mostly). The
+    -- buffer would still show the parser docstring; so do we.
+    if let some (doc, _) := stxDoc? then
+      return (some
+        { start := t.start
+          doc := some (FileWorker.Hover.rewriteExamples doc) }, refCache)
+    return (none, refCache)
+
 /-- The whole enrichment pipeline, from a parsed `Result` to the wire payload:
 label fix-ups, slots, calc chains, recovery merge, tagged goals, comments,
 semantic tokens, the editing seam, hover refs, relations, holes.
@@ -1025,50 +1111,14 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
         if seenTok.contains (tb.byteIdx, tend.byteIdx) then
           continue
         seenTok := seenTok.insert (tb.byteIdx, tend.byteIdx)
-        -- The buffer post-processes docstrings once, at hover time
-        -- (`rewriteExamples` turns ```` ```lean ```` example blocks into plain
-        -- ones); the same rewrite runs at the two emit sites below so the
-        -- shipped text is byte-identical to what the editor renders — NOT
-        -- here: most tokens' info popup wins and the doc is discarded, and
-        -- rewriting a multi-KB docstring per token to throw it away was the
-        -- loop's one avoidable cost.
-        let stxDoc? ← parserDocAt snap.env snap.stx tb
-        match hoverIdx.innermost tb.byteIdx with
-        | some (rs, re, ictx) =>
-          let docWins ← match stxDoc? with
-            | none => pure false
-            | some (_, stxRange) =>
-              if !stxRange.includes ⟨⟨rs⟩, ⟨re⟩⟩ then pure true
-              else do pure !(← popupNonempty snap.env ictx.info)
-          if docWins then
-            tokenInfos := tokenInfos.push
-              { start := t.start
-                doc := stxDoc?.map (FileWorker.Hover.rewriteExamples ·.1) }
-          else
-            -- WithRpcRef.mk (not ⟨_⟩ — the constructor is private): allocates
-            -- the session-scoped id the client hands back to
-            -- `infoToInteractive` when the popup opens. Keyed by the info
-            -- node's range, so a tactic's keyword and its punctuation — which
-            -- resolve to the same `TacticInfo` — share one store entry.
-            let ref ← match refCache[(rs, re)]? with
-              | some r => pure r
-              | none   => do
-                let r ← Server.WithRpcRef.mk ictx
-                refCache := refCache.insert (rs, re) r
-                pure r
-            tokenInfos := tokenInfos.push {
-              start := t.start
-              code  := some <| .tag
-                { info := ref, subexprPos := SubExpr.Pos.root }
-                (.text (String.Pos.Raw.extract src tb tend))
-            }
-        | none =>
-          -- No info node at all (an unparsed calc block's tokens, mostly).
-          -- The buffer would still show the parser docstring; so do we.
-          if let some (doc, _) := stxDoc? then
-            tokenInfos := tokenInfos.push
-              { start := t.start
-                doc := some (FileWorker.Hover.rewriteExamples doc) }
+        -- The decision itself is `tokenInfoAt`, shared with the counterfactual
+        -- draft's own pass. This loop owns only the two pieces of state that
+        -- must span every edit: the position dedupe above and the ref cache.
+        let (info?, rc) ←
+          tokenInfoAt snap.env snap.stx hoverIdx src fileMap refCache t
+        refCache := rc
+        if let some info := info? then
+          tokenInfos := tokenInfos.push info
     let calcRelations ← collectCalcRelations snap.infoTree <|
       calcRelationGoals
         (parsedTree.steps.toArray.map fun s =>
@@ -1302,6 +1352,70 @@ initialize cfServeCache :
     IO.Ref (Option (UInt64 × Nat × Nat × UInt64 × ProofTreeData)) ←
   IO.mkRef none
 
+/-- Syntax tokens and hover popups for the counterfactual stub's label, taken
+from the REAL document and restricted to the draft's line.
+
+The stub paints the author's live draft, so its colouring has to come from the
+document they are typing in — not from the payload it is drawn in, which is
+the spliced elaboration whose bytes on this line read `sorry`. That is the same
+rule the rest of the tree keeps (a token means what the editor means by it),
+applied to the one node whose text the payload does not contain.
+
+**The source is the SPLICED snapshot, not the real one, and that is the whole
+design.** The obvious reading — the draft is the author's text, so collect from
+the author's document — was implemented and MEASURED WRONG: when a
+counterfactual fires, the real snapshot routinely does not contain the cursor's
+line at all. A broken `calc` swallows what follows it, so the command holding
+the cursor is named after the NEXT theorem (that is `cfWanted`'s own
+declRange-does-not-contain-the-cursor disjunct), and the collector duly
+returned 100 tokens from twenty lines further down the file.
+
+What makes the spliced snapshot right is that the splice replaces a SUFFIX: it
+keeps everything through the last `:= by` (or the `·` / `| c =>` marker) and
+writes `sorry` after it, adding no newline. So from the draft's first column up
+to the injected stub the two documents are byte-identical, and the spliced
+elaboration's tokens over that span describe the author's text exactly. That
+span is also the part worth colouring — the keywords, the binders, the
+statement — while the tail it excludes is the word being typed, which carries
+no token in the buffer either (an incomplete identifier is unpainted there
+too).
+
+`lo` is the draft's own column (anything earlier would align onto text the stub
+does not draw); `hi` is the stub's column, where the two documents stop
+agreeing.
+
+The cost question answers itself here: this rides the cf blob, and
+`cfElabCache` keys that on the SPLICED text — invariant across keystrokes on
+the line — so the collection happens once per counterfactual rather than once
+per keystroke, and never at all on the healthy path. -/
+private def cfDraftHighlight (snap : Snapshots.Snapshot) (fileMap : FileMap)
+    (line lo hi : Nat) : RequestM (Array TacticToken × Array TacticTokenInfo) := do
+  let onDraft (p : Lsp.Position) : Bool :=
+    p.line == line && p.character ≥ lo && p.character < hi
+  let all := semanticTokensFor fileMap snap.stx snap.infoTree
+  let constStarts : Std.HashSet (Nat × Nat) :=
+    (FileWorker.computeAbsoluteLspSemanticTokens fileMap ⟨0⟩ none
+        (collectConstIdentTokens snap.infoTree)).foldl (init := {}) fun acc t =>
+      acc.insert (t.pos.line, t.pos.character)
+  let mut toks : Array TacticToken := #[]
+  for t in all do
+    unless onDraft t.pos do continue
+    let type :=
+      if t.type matches .function
+          && constStarts.contains (t.pos.line, t.pos.character) then "const"
+      else Lsp.SemanticTokenType.names[t.type.toNat]!
+    toks := toks.push { start := t.pos, stop := t.tailPos, type }
+  if toks.isEmpty then return (#[], #[])
+  let hoverIdx := mkHoverIndex snap.infoTree
+  let src := fileMap.source
+  let mut refCache : Std.HashMap (Nat × Nat) (Server.WithRpcRef Elab.InfoWithCtx) := {}
+  let mut infos : Array TacticTokenInfo := #[]
+  for t in toks do
+    let (info?, rc) ← tokenInfoAt snap.env snap.stx hoverIdx src fileMap refCache t
+    refCache := rc
+    if let some info := info? then infos := infos.push info
+  return (toks, infos)
+
 /-- Elaborate the counterfactual: parse ONE command of the spliced text from
 the state the document's own elaboration reached just before it, run the
 elaborator over it, and push the result through the same `mkTreePayload`
@@ -1327,6 +1441,7 @@ are load-bearing:
   elaboration). The injected stub's `declaration uses 'sorry'` warning is our
   own noise and is dropped; everything else is honest and ribbons as usual. -/
 private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
+    (draftCol : Nat)
     (cfText : String) (stubByte : Nat) : RequestM (Option ProofTreeData) := do
   let fileMap := doc.meta.text
   let lineStart := fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩
@@ -1398,6 +1513,12 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
   -- Where the stub landed, in the SPLICED text's own coordinates — the very
   -- space the payload's step positions are in, since both come from `cfMap`.
   let stubPos := cfMap.utf8PosToLspPos ⟨stubByte⟩
+  -- The stub's label is the author's draft, and this is what paints it. Taken
+  -- from THIS elaboration (see `cfDraftHighlight`): the splice replaced a
+  -- suffix, so everything from the draft's column up to the stub is
+  -- byte-identical to the real line, and these tokens describe it exactly.
+  let (draftToks, draftInfos) ←
+    cfDraftHighlight synth cfMap pos.line draftCol stubPos.character
   -- The EDITING SEAM is withdrawn wherever it would describe the spliced line
   -- rather than the buffer. Everything outside that one line is byte-identical
   -- (the splice adds no newline), so this is the whole exposure — but it is a
@@ -1425,6 +1546,7 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
     !(onLine s.start || onLine s.stop)
   return some { payload with
     cfLine := some pos.line, cfStubPos := some stubPos
+    cfDraftTokens := draftToks, cfDraftInfos := draftInfos
     tacticEdits := edits, deleteSlots := slots }
 
 /-- Decide the payload: the real one, or the counterfactual preview.
@@ -1473,6 +1595,15 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
     (doc : FileWorker.EditableDocument) (fileMap : FileMap)
     (real : ProofTreeData) : RequestM ProofTreeData := do
   unless wantCf do return real
+  -- What a served counterfactual refreshes PER REQUEST: the draft line's text
+  -- and the column it starts at. Both change per keystroke while the blob does
+  -- not, which is the whole reason they are attached here rather than inside
+  -- it. The draft's COLOURING is the opposite case and rides the blob — see
+  -- `cfDraftHighlight`, which collects it from the spliced elaboration whose
+  -- text is invariant across the burst.
+  let withDraft (blob : ProofTreeData) (draft : String) (col : Nat) :
+      ProofTreeData :=
+    { blob with cfDraft := some draft, cfDraftCol := some col }
   -- EVICTION. Serving the truth erases the lie: every exit that hands back the
   -- REAL tree for a line holding a serve entry clears that entry first, so a
   -- latch cannot outlive the condition that made it. The cache used to be
@@ -1563,11 +1694,11 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
           return real
         -- Same hash: `seen` must NOT be refreshed, or the clock never runs out.
         cfServeCache.set (some (srcHash, seen, ln, ck, blob))
-        return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
+        return withDraft blob draft splice.draftCol
       if ck == hash (splice.text ()) then
         -- A DIFFERENT hash: the source just moved, so the settle clock restarts.
         cfServeCache.set (some (srcHash, now, ln, ck, blob))
-        return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
+        return withDraft blob draft splice.draftCol
   unless cfWanted real pos stepStartsHere do return ← serveReal real
   -- Only past the WANTED gate is the whole-file work paid: the spliced text
   -- (O(file)) and the two hashes run once per request while the document is
@@ -1581,7 +1712,7 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
       match entry with
       | .done (some blob) =>
         cfServeCache.set (some (srcHash, now, pos.line, cfKey, blob))
-        return { blob with cfDraft := some draft, cfDraftCol := some splice.draftCol }
+        return withDraft blob draft splice.draftCol
       | .done none => return ← serveReal real
       | .pending t0 =>
         -- In flight: a burst of keystrokes starts exactly one elaboration.
@@ -1591,7 +1722,7 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
   cfElabCache.set (some (cfKey, .pending now))
   let rc ← read
   let _ ← IO.asTask (prio := .default) do
-    let res ← match ← ((computeCf doc pos cfText splice.stubByte).run rc).toBaseIO with
+    let res ← match ← ((computeCf doc pos splice.draftCol cfText splice.stubByte).run rc).toBaseIO with
       | .ok res => pure res
       | .error _ => pure none
     -- Completion IS the in-flight marker's clearing: `done` overwrites
