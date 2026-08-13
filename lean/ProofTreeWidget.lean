@@ -259,6 +259,20 @@ structure ProofTreeData where
   edit — never a counterfactual byte. Refreshed per request beside `cfDraft`
   and out of the stable signature for the same reason. -/
   cfDraftCol    : Option Nat := none
+  /-- The declaration's SIGNATURE, verbatim: everything from the declaration's
+  start up to where its body begins (`theorem foo (n : Nat) : P := by`), with
+  trailing whitespace trimmed. The client draws it as a fixed header above the
+  tree, so the reader always knows which theorem they are looking at and a
+  proof that is only partly written still reads as one document.
+
+  It is not derivable client-side: the client never holds document text, and
+  the payload's own labels are prettified tactic strings. Multi-line by nature
+  — a statement routinely wraps — so the client splits it and the header wraps
+  rather than widening the tree. `declHeaderTokens` colours it; its hover
+  popups ride the ordinary `tokenInfos`, which is keyed by absolute position
+  and so already covers them. -/
+  declHeader    : String := ""
+  declHeaderTokens : Array TacticToken := #[]
   /-- Syntax highlighting and hover popups for `cfDraft`, from the REAL
   document — the pair that makes the stub read as a box of source rather than
   as a caption.
@@ -1119,6 +1133,81 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
         refCache := rc
         if let some info := info? then
           tokenInfos := tokenInfos.push info
+    -- THE SIGNATURE, for the client's header. Its span runs from the
+    -- declaration's start to where the body begins — the first tactic slot,
+    -- or the end of the first line when there is none (a term-mode proof) —
+    -- so it is exactly `theorem foo … := by` and never a line of the proof.
+    -- Tokens are FILTERED out of `allTokens`, and their popups are pushed
+    -- through the same `refCache`/`seenTok` as every other token: this must
+    -- not become a second collection pass, which is the recorded O(steps ×
+    -- tree) trap in a different costume.
+    -- The header starts at the `theorem` KEYWORD, not at `declRange.start`:
+    -- a command's range opens at its `declModifiers`, so a documented
+    -- declaration's range begins at the `/-- … -/`. Measured — the first
+    -- version shipped `sum_range_odd`'s fourteen-line docstring as the
+    -- signature. `Command.declaration` is (modifiers, the declaration
+    -- proper), so the second child is the part a reader calls the signature.
+    let declStart? : Option Lsp.Position :=
+      let hdrStx := match snap.stx with
+        | .node _ k args =>
+          if k == ``Lean.Parser.Command.declaration && args.size ≥ 2 then
+            args[1]!
+          else snap.stx
+        | _ => snap.stx
+      match hdrStx.getRange? with
+      | some r => some (fileMap.utf8PosToLspPos r.start)
+      | none   => none
+    let mut headerToks : Array TacticToken := #[]
+    let mut declHeader : String := ""
+    if let some dStart := declStart? then
+      -- The header ENDS at the `by`, not at the first tactic slot. Slots skip
+      -- the proof's leading comments, so bounding on them swept `-- Step 1: …`
+      -- into the signature (measured: 7 header lines where the statement is
+      -- 4). The `byTactic` node's own start is the `by` atom, and `+2` is that
+      -- atom — the one place the two documents' notion of "where the statement
+      -- stops" agrees. A term-mode proof has no `byTactic`, and falls back to
+      -- the first slot, then to end-of-line.
+      let byStop? : Option Lsp.Position :=
+        -- The EARLIEST `by`, not the first one the walk happens to return:
+        -- a proof full of `have … := by` has many, and traversal order is not
+        -- a promise. The outermost is by construction the leftmost.
+        match (ProofTree.nodesOfKind [``Lean.Parser.Term.byTactic] snap.stx).foldl
+            (init := none) (fun acc st =>
+              match st.getRange?, acc with
+              | some r, none => some r.start.byteIdx
+              | some r, some b => some (min r.start.byteIdx b)
+              | none, _ => acc) with
+        | some b => some (fileMap.utf8PosToLspPos ⟨b + 2⟩)
+        | none   => none
+      let bodyStart : Lsp.Position :=
+        match byStop? with
+        | some b => b
+        | none =>
+          match slots.foldl (init := none) (fun acc sl =>
+              match acc with
+              | none => some sl.start
+              | some b => if posLE sl.start b then some sl.start else acc) with
+          | some b => b
+          | none   => ⟨dStart.line, 100000⟩
+      let hb := fileMap.lspPosToUtf8Pos dStart
+      let he := fileMap.lspPosToUtf8Pos bodyStart
+      if hb.byteIdx < he.byteIdx then
+        declHeader := (String.Pos.Raw.extract src hb he).trimRight
+        let hEnd := fileMap.utf8PosToLspPos ⟨hb.byteIdx + declHeader.utf8ByteSize⟩
+        headerToks := allTokens.filterMap fun t =>
+          if posLE dStart t.pos && posLE t.tailPos hEnd then
+            some { start := t.pos, stop := t.tailPos,
+                   type := wireTokenType t : TacticToken }
+          else none
+        for t in headerToks do
+          let tb := fileMap.lspPosToUtf8Pos t.start
+          let tend := fileMap.lspPosToUtf8Pos t.stop
+          if seenTok.contains (tb.byteIdx, tend.byteIdx) then continue
+          seenTok := seenTok.insert (tb.byteIdx, tend.byteIdx)
+          let (info?, rc) ←
+            tokenInfoAt snap.env snap.stx hoverIdx src fileMap refCache t
+          refCache := rc
+          if let some info := info? then tokenInfos := tokenInfos.push info
     let calcRelations ← collectCalcRelations snap.infoTree <|
       calcRelationGoals
         (parsedTree.steps.toArray.map fun s =>
@@ -1146,6 +1235,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       tacticNames,
       declRange := snap.stx.getRange?.map fun r =>
         ⟨fileMap.utf8PosToLspPos r.start, fileMap.utf8PosToLspPos r.stop⟩,
+      declHeader, declHeaderTokens := headerToks,
       diagnostics := treeDiags,
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
@@ -1388,10 +1478,10 @@ The cost question answers itself here: this rides the cf blob, and
 `cfElabCache` keys that on the SPLICED text — invariant across keystrokes on
 the line — so the collection happens once per counterfactual rather than once
 per keystroke, and never at all on the healthy path. -/
-private def cfDraftHighlight (snap : Snapshots.Snapshot) (fileMap : FileMap)
-    (line lo hi : Nat) : RequestM (Array TacticToken × Array TacticTokenInfo) := do
-  let onDraft (p : Lsp.Position) : Bool :=
-    p.line == line && p.character ≥ lo && p.character < hi
+private def tokensInSpan (snap : Snapshots.Snapshot) (fileMap : FileMap)
+    (inSpan : Lsp.Position → Bool) :
+    RequestM (Array TacticToken × Array TacticTokenInfo) := do
+  let onDraft := inSpan
   let all := semanticTokensFor fileMap snap.stx snap.infoTree
   let constStarts : Std.HashSet (Nat × Nat) :=
     (FileWorker.computeAbsoluteLspSemanticTokens fileMap ⟨0⟩ none
@@ -1518,7 +1608,9 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
   -- suffix, so everything from the draft's column up to the stub is
   -- byte-identical to the real line, and these tokens describe it exactly.
   let (draftToks, draftInfos) ←
-    cfDraftHighlight synth cfMap pos.line draftCol stubPos.character
+    tokensInSpan synth cfMap fun p =>
+      p.line == pos.line && p.character ≥ draftCol
+        && p.character < stubPos.character
   -- The EDITING SEAM is withdrawn wherever it would describe the spliced line
   -- rather than the buffer. Everything outside that one line is byte-identical
   -- (the splice adds no newline), so this is the whole exposure — but it is a
