@@ -220,6 +220,17 @@ export default function App() {
       // the preview harness. Paint verification only — the underlying proof
       // is whatever the NDJSON holds.
       {...(CF_STUB ? { cfStub: CF_STUB } : {})}
+      // Dev-only signature header, on `?hdr=<text>` (use `\n` for line
+      // breaks): `declHeader` is widget-only — the CLI wire ships no source
+      // text — so this fakes it to make the bar, its wrapping and the floater
+      // offset drawable in the preview harness. Paint verification only; there
+      // is no colouring here, which is the widget's `renderDeclHeader`.
+      {...(QUERY.get("hdr")
+        ? {
+            declHeader: QUERY.get("hdr")!.replace(/\\n/g, "\n"),
+            onRevealHeader: () => {},
+          }
+        : {})}
       headerExtra={
         <ProofPicker
           records={records}

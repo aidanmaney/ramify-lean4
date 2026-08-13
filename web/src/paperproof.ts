@@ -215,6 +215,16 @@ export interface Proof {
   the steps will not do, since `declaration uses 'sorry'` is reported on the
   declaration NAME, above every tactic in the proof. */
   declRange?: ProofStepPosition;
+  /** The declaration's signature as SOURCE text, its tokens, and where it
+  starts — the persistent header (see `declHeader` in ProofTreeWidget.lean).
+  Widget-only in practice: the CLI wire ships none of it. */
+  declHeader?: string;
+  declHeaderTokens?: {
+    start: { line: number; character: number };
+    stop: { line: number; character: number };
+    type: string;
+  }[];
+  declHeaderStart?: { line: number; character: number };
   /** Stable identity of the proof — the declaration's name (see
   ProofTreeWidget.lean's `declName?`). The view keys "is this a different
   proof?" on this rather than on a root mvarId, which re-elaboration renumbers.
@@ -289,6 +299,13 @@ export function stableProofOf(p: Proof): Proof {
     calcRelations: p.calcRelations,
     proofId: p.proofId,
     declRange: p.declRange,
+    // The header travels on the STABLE projection deliberately: it names the
+    // proof being DRAWN, and during a typing hold that is not the latest
+    // response. It also belongs in the signature — a changed statement is a
+    // changed proof.
+    declHeader: p.declHeader,
+    declHeaderTokens: p.declHeaderTokens,
+    declHeaderStart: p.declHeaderStart,
     cfLine: p.cfLine,
     cfStubPos: p.cfStubPos,
     openBlock: p.openBlock,

@@ -288,6 +288,13 @@ type ProofTreeData = Proof & {
   webview that loads after elaboration finishes never hears it — measured, a
   restart on the demo file reliably drew no ribbons until the next edit. */
   diagnostics?: RawDiagnostic[];
+  /** The declaration's signature as SOURCE text, its colouring, and where it
+  starts — the persistent header above the tree (see `declHeader` in
+  ProofTreeWidget.lean). The header's hover popups ride the ordinary
+  `tokenInfos`, which is position-keyed and so already covers them. */
+  declHeader?: string;
+  declHeaderTokens?: TacticToken[];
+  declHeaderStart?: { line: number; character: number };
   /** The real document's current content on `cfLine` (indent stripped),
   refreshed per request even when the tree comes from the server's cache.
   NEVER in the stable signature — it changes per keystroke, which is exactly
@@ -1020,6 +1027,30 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       );
   }, [cfDraftTokens, cfDraftInfos, colorBrackets]);
 
+  // The persistent signature header. It reads off `stable`, not the latest
+  // response: it names the proof the tree is DRAWING, and during a typing hold
+  // those are deliberately different — a header that ran ahead of the tree
+  // would label it with a theorem it is not showing.
+  const declHeader = stable?.proof.declHeader ?? "";
+  const declHeaderStart = stable?.proof.declHeaderStart;
+  const renderDeclHeader = useMemo(() => {
+    const toks = stable?.proof.declHeaderTokens;
+    const start = stable?.proof.declHeaderStart;
+    const text = stable?.proof.declHeader ?? "";
+    if (!toks || toks.length === 0 || !start || text === "") return undefined;
+    return (lines: string[]) =>
+      renderTacticTokens(
+        text,
+        start,
+        toks,
+        text,
+        lines,
+        infoAt,
+        undefined,
+        colorBrackets,
+      );
+  }, [stable, infoAt, colorBrackets]);
+
   // Every handler that writes the document stamps this before the write, so
   // the resulting re-elaboration bypasses the typing hold (see the hold
   // effect above): the user asked for this redraw, so it should be prompt.
@@ -1339,6 +1370,17 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         abbrev={abbrev}
         onPopoutEdit={popoutEdit}
         highlightPos={{ line: pos.line, character: pos.character }}
+        declHeader={declHeader}
+        renderDeclHeader={renderDeclHeader}
+        onRevealHeader={
+          declHeaderStart
+            ? () =>
+                reveal({
+                  start: declHeaderStart,
+                  stop: declHeaderStart,
+                })
+            : undefined
+        }
         cfStub={
           stable?.proof.cfLine != null
             ? {

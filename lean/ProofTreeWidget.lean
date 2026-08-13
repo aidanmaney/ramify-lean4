@@ -273,6 +273,11 @@ structure ProofTreeData where
   and so already covers them. -/
   declHeader    : String := ""
   declHeaderTokens : Array TacticToken := #[]
+  /-- Where `declHeader` STARTS in the document — the `theorem` keyword, not
+  `declRange.start` (which opens at the docstring). The client needs it for two
+  things that must both point at source: aligning the tokens above, and
+  revealing the statement in the buffer when the header is clicked. -/
+  declHeaderStart : Option Lsp.Position := none
   /-- Syntax highlighting and hover popups for `cfDraft`, from the REAL
   document — the pair that makes the stub read as a box of source rather than
   as a caption.
@@ -1236,6 +1241,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       declRange := snap.stx.getRange?.map fun r =>
         ⟨fileMap.utf8PosToLspPos r.start, fileMap.utf8PosToLspPos r.stop⟩,
       declHeader, declHeaderTokens := headerToks,
+      declHeaderStart := declStart?,
       diagnostics := treeDiags,
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,

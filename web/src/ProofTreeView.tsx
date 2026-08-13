@@ -906,6 +906,23 @@ export interface ProofTreeViewProps {
    * overlay is inert, which is the old behaviour and what an older server
    * still gets.
    */
+  /** The declaration's signature, drawn as a fixed header above the canvas so
+  the reader always knows which theorem the tree belongs to — and so a proof
+  that is only partly written still reads as one document rather than as a
+  fragment. CHROME, deliberately, not a tree node: as a node it would set the
+  tree's width (a statement is routinely wider than the whole proof) and would
+  have to be threaded through rootIds, folding, eliding and anchoring, all to
+  restate what the root goal already says. As chrome it wraps, costs no layout,
+  and cannot move the tree. */
+  declHeader?: string;
+  /** Colour + popups for it, as a hook (the `renderTaggedTactic` shape, and
+  source-agnostic for the same reason). Absent ⇒ plain text. */
+  renderDeclHeader?: (lines: string[]) => ReactNode[] | null;
+  /** Put the buffer's caret on the statement. This is how the signature is
+  EDITED: it is the one piece of source the tree shows that the tree has no
+  business rewriting in place — a statement change re-types the whole proof —
+  so the header hands you to the editor rather than opening a box over it. */
+  onRevealHeader?: () => void;
   cfStub?: {
     line: number;
     pos?: { line: number; character: number };
@@ -1063,6 +1080,9 @@ export default function ProofTreeView({
   linkTint = false,
   onPopoutEdit,
   highlightPos,
+  declHeader,
+  renderDeclHeader,
+  onRevealHeader,
   cfStub,
   headerExtra,
   height = "100vh",
@@ -3877,8 +3897,32 @@ export default function ProofTreeView({
   // would still be right, but an entry nothing draws invites the next reader
   // to "fix" the missing floater.
   const floaterRows = [!!headerExtra, focusId !== null, hintUp];
+  // The signature header sits above every floater, and its height is MEASURED
+  // rather than derived from its line count: it wraps, so the count is not the
+  // number of drawn lines at any given width. Same shape as `useFrameOffset` —
+  // a ResizeObserver plus an explicit mount read, because RO delivery rides
+  // rendering steps and a hidden webview runs none.
+  const hdrRef = useRef<HTMLDivElement | null>(null);
+  const [hdrH, setHdrH] = useState(0);
+  useLayoutEffect(() => {
+    const el = hdrRef.current;
+    if (!el) {
+      setHdrH(0);
+      return;
+    }
+    const read = () => {
+      const h = el.getBoundingClientRect().height;
+      // 1px hysteresis, the frame-offset rule: sub-pixel reflow must not
+      // re-render the whole view.
+      setHdrH((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [declHeader]);
   const floaterTop = (row: number) =>
-    8 + FLOATER_H * floaterRows.slice(0, row).filter(Boolean).length;
+    8 + hdrH + FLOATER_H * floaterRows.slice(0, row).filter(Boolean).length;
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -5042,6 +5086,56 @@ export default function ProofTreeView({
         ...tokenColorVars,
       }}
     >
+      {/* THE SIGNATURE HEADER. Above every floater (they offset by its
+          measured height) and above the canvas, so it never scrolls away from
+          the proof it names. Prose-wrapped, not measured like a node label:
+          nothing aligns to it, so it may wrap freely and a long statement
+          costs height instead of width. */}
+      {declHeader ? (
+        <div
+          ref={hdrRef}
+          onClick={onRevealHeader}
+          title={
+            onRevealHeader
+              ? "The statement this proof belongs to — click to put the caret on it"
+              : "The statement this proof belongs to"
+          }
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            // BELOW the rail (z 10), which floats over everything by design —
+            // and padded clear of it so the text never runs under a button.
+            // The alternative, ending the bar before the rail, leaves a notch
+            // of tree showing above the header on the right.
+            zIndex: 9,
+            padding: "6px 46px 6px 10px",
+            boxSizing: "border-box",
+            fontFamily: getCodeFontFamily(),
+            fontSize: NODE_FONT_PX,
+            lineHeight: `${LINE_H}px`,
+            letterSpacing: 0,
+            whiteSpace: "pre-wrap",
+            // PINNED, not inherited: a div is not insulated by the UA
+            // stylesheet the way a textarea is, and the standalone app root
+            // sets `text-align: center` — the same trap the edit mirror hit,
+            // which put its glyphs 68.5px off the caret. Measured here as a
+            // centred statement.
+            textAlign: "left",
+            color: NODE_TEXT,
+            background: "var(--ptw-bg)",
+            borderBottom: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+            cursor: onRevealHeader ? "pointer" : "default",
+            // A statement can be long; cap it rather than let it eat the panel,
+            // and let the rest scroll inside its own box.
+            maxHeight: "30%",
+            overflowY: "auto",
+          }}
+        >
+          {renderDeclHeader?.(declHeader.split("\n")) ?? declHeader}
+        </div>
+      ) : null}
       {/* No top bar: the top edge stays empty so the eye falls straight from
           the infoview's expected-type block onto the tree's root. Everything
           lives on the floating icon rail at the right; the only top-left
@@ -5051,7 +5145,11 @@ export default function ProofTreeView({
         <div
           style={{
             position: "absolute",
-            top: 8,
+            // Row 0 of the floater stack — through `floaterTop`, not a
+            // hardcoded 8, or the signature header (which the stack offsets
+            // for) draws straight over it. Measured: picker at 8 under a 29px
+            // header before this.
+            top: floaterTop(0),
             left: 8,
             zIndex: 10,
             display: "flex",
@@ -5380,7 +5478,11 @@ export default function ProofTreeView({
         className="no-scrollbar"
         style={{
           width: "100%",
-          height: "100%",
+          // The signature header is chrome ABOVE the canvas, not over it: the
+          // scroll box starts below it, so the root node is never hidden
+          // behind the bar and scrolling never runs the tree under it.
+          height: hdrH ? `calc(100% - ${hdrH}px)` : "100%",
+          marginTop: hdrH,
           overflow: "auto",
           // The tree is a DIAGRAM driven by click / double-click / drag, and a
           // stray text selection fights all three: a ⇧-click gets eaten as a
