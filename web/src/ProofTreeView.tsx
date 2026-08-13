@@ -3899,7 +3899,9 @@ export default function ProofTreeView({
   // render), so the slot is dropped rather than left reserved: a `false` here
   // would still be right, but an entry nothing draws invites the next reader
   // to "fix" the missing floater.
-  const floaterRows = [!!headerExtra, focusId !== null, hintUp];
+  // Focus is no longer a row: it rides the signature header as the trail's
+  // second segment. The rows left are the caller's slot and the hints.
+  const floaterRows = [!!headerExtra, hintUp];
   // The signature header sits above every floater, and its height is MEASURED
   // rather than derived from its line count: it wraps, so the count is not the
   // number of drawn lines at any given width. Same shape as `useFrameOffset` —
@@ -5135,7 +5137,76 @@ export default function ProofTreeView({
             overflowY: "auto",
           }}
         >
-          {renderDeclHeader?.(declHeader.split("\n")) ?? declHeader}
+          {/* THE TRAIL. Two segments, one verb each — the statement reveals,
+              the focus segment exits — which is why focus APPENDS here rather
+              than replacing the statement: the two answer different questions
+              (which theorem / which subtree) and both stay true at once, so a
+              swap would hide the theorem's identity exactly when you are
+              deepest inside it, and would make the same pixels mean two
+              different clicks with nothing visible to say which. The focus
+              segment is inked in the goal colour so the trail reads as
+              "statement › the goal you scoped to" in both directions. */}
+          <span
+            style={
+              focusId
+                ? {
+                    // With a segment beside it the statement yields: it is the
+                    // stable half, and the focus is the transient one you are
+                    // actually navigating by. Full text stays in the title.
+                    display: "inline-block",
+                    maxWidth: "55%",
+                    verticalAlign: "bottom",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }
+                : undefined
+            }
+          >
+            {renderDeclHeader?.(declHeader.split("\n")) ?? declHeader}
+          </span>
+          {focusId && (
+            <>
+              <span style={{ opacity: 0.5, padding: "0 6px" }}>›</span>
+              <button
+                type="button"
+                title="Back to the whole proof (Esc, or ◎ / ⌥-click on the focused goal)"
+                onClick={(e) => {
+                  // The statement's own click is REVEAL; this segment's is
+                  // EXIT. Stopping here is what keeps one verb per segment.
+                  e.stopPropagation();
+                  exitFocus();
+                }}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  maxWidth: "40%",
+                  verticalAlign: "bottom",
+                  fontFamily: "inherit",
+                  fontSize: "inherit",
+                  color: ACCENT_TEXT,
+                  background: NODE_STYLES.goal.stroke,
+                  border: "none",
+                  padding: "1px 8px",
+                  borderRadius: 999,
+                  cursor: "pointer",
+                }}
+              >
+                <span>◎</span>
+                <span
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {focusNode?.label ?? "focused"}
+                </span>
+                <span style={{ opacity: 0.8 }}>✕</span>
+              </button>
+            </>
+          )}
         </div>
       ) : null}
       {/* No top bar: the top edge stays empty so the eye falls straight from
@@ -5164,58 +5235,16 @@ export default function ProofTreeView({
           {headerExtra}
         </div>
       )}
-      {/* Focus breadcrumb: what you are scoped to, and the way out. It lives
-          here rather than on the rail because leaving a focus is not a view
-          SETTING you reach for — it is a mode you need out of, and a glyph on
-          the far right of a wide tree is both invisible and a long way from
-          where the eye rests. Being the label of the goal you focused, it
-          doubles as a "you are here"; Esc and ◎/⌥-click on the root do the
-          same thing (three ways out, since focus is easy to enter by accident
-          — ⌥-click is one modifier away from ⌘-click's reveal). */}
-      {focusId && (
-        <button
-          type="button"
-          title="Back to the whole proof (Esc, or ◎ / ⌥-click on the focused goal)"
-          onClick={exitFocus}
-          style={{
-            position: "absolute",
-            top: floaterTop(1),
-            left: 8,
-            zIndex: 10,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            maxWidth: "min(60%, 420px)",
-            fontFamily: "monospace",
-            fontSize: 12,
-            color: ACCENT_TEXT,
-            background: NODE_STYLES.goal.stroke,
-            border: "none",
-            padding: "3px 10px",
-            borderRadius: 999,
-            cursor: "pointer",
-          }}
-        >
-          <span>◎</span>
-          <span
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {focusNode?.label ?? "focused"}
-          </span>
-          <span style={{ opacity: 0.8 }}>✕</span>
-        </button>
-      )}
+      {/* The focus breadcrumb is NOT here any more — it is the second
+          segment of the signature header (a trail), where the space was
+          already reserved and where "where am I" belongs. See the header. */}
       {/* The mode hints, all four through one HintPill — they were four
           near-identical divs, which is how three of them ended up being the
           only modes on the tree with no way out you could see. The ✕ runs the
           layer's own `off`, so the pill and Esc cannot drift apart. */}
       {seq.mode !== "off" && (
         <HintPill
-          top={floaterTop(2)}
+          top={floaterTop(1)}
           text={
             seq.mode === "view"
               ? "linear path · click a node to start over"
@@ -5229,7 +5258,7 @@ export default function ProofTreeView({
       )}
       {elidePick && (
         <HintPill
-          top={floaterTop(2)}
+          top={floaterTop(1)}
           text={
             elidePick.from !== null
               ? "elide · click the end node"
@@ -5241,7 +5270,7 @@ export default function ProofTreeView({
       )}
       {bandPick && (
         <HintPill
-          top={floaterTop(2)}
+          top={floaterTop(1)}
           text={
             bandPick.from !== null
               ? "cut · click the bottom node"
@@ -5259,7 +5288,7 @@ export default function ProofTreeView({
           click, neither of which the overlay says anything about. */}
       {editing?.calcStage && (
         <HintPill
-          top={floaterTop(2)}
+          top={floaterTop(1)}
           text={
             editing.calcStage.stage === "lhs"
               ? "calc · left-hand side · Enter keeps _"
@@ -5436,7 +5465,7 @@ export default function ProofTreeView({
           // FLOATER_H apart — they are all one line of 12px text in the same
           // pill chrome, so one constant covers them rather than a per-row
           // measurement.
-          top={floaterTop(4)}
+          top={floaterTop(2)}
           onStep={stepDiag}
           // "Take me to it" means BOTH surfaces: the tree (unfold, page,
           // scroll — revealNode) and the SOURCE (the editor's cursor onto
