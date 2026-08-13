@@ -1751,7 +1751,13 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
   -- vanished on the edited line while the report was about a header line).
   -- `declContainsPos` is `cfWanted`'s own coding, shared so the refusal and
   -- the trigger cannot disagree about what "this declaration" means.
-  if declContainsPos real pos
+  -- `!steps.isEmpty` is the point of the rule, not a guard on it: what the
+  -- refusal buys is the PARTIAL PROOF, so where there is no partial proof it
+  -- buys nothing and takes away the counterfactual, which was the best answer
+  -- available. Without it, a body whose every tactic fails to elaborate — no
+  -- steps harvested — showed an empty tree from its own header line.
+  if !real.steps.isEmpty
+      && declContainsPos real pos
       && !real.deleteSlots.isEmpty
       && real.deleteSlots.all (·.start.line > pos.line) then
     return ← serveReal real
@@ -2039,7 +2045,18 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
       (notFoundX := atCursor)
       (x := fun snap => do
         let real ← realPayloadFor doc fileMap snap
-        if real.steps.isEmpty then atCursor else withCf real)
+        -- "Empty" must mean the snapshot had NOTHING to say, and `steps` alone
+        -- does not: an OPEN BLOCK (`:= by` with nothing written) carries zero
+        -- steps and a complete answer — the goal it owes, plus its chips. The
+        -- first version tested `steps` only, so at column 0 of such a
+        -- declaration the nudge discarded the good payload and fell back to
+        -- the trivia snapshot, which is empty: the tree read "no proof tree
+        -- here" for a theorem whose body had just been deleted, and the client
+        -- held the PREVIOUS proof on screen while it polled. Reported as both
+        -- at once (a stale tree, then nothing) — and it is column 0, so vim
+        -- navigation lands on it constantly.
+        if real.steps.isEmpty && real.openBlock.isNone then atCursor
+        else withCf real)
 
 /-- Case-insensitive prefix test, allocation-free — the client's own matcher
 (`matches` in completion.ts) lowercases both sides, so the server must agree or
