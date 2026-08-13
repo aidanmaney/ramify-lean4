@@ -87,7 +87,7 @@ import {
   posLE,
   cmpPos,
 } from "./proofToTree";
-import type { HypMode } from "./proofToTree";
+import { TURNSTILE, type HypMode } from "./proofToTree";
 import {
   type ElideCut,
   applyElisions,
@@ -3879,11 +3879,31 @@ export default function ProofTreeView({
   // The focus root, for the breadcrumb pill's label. Read from `allNodes()`
   // rather than the drawn `nodes` because folding the root itself must not
   // make the way OUT of focus disappear — the whole point of the pill.
+  // What the focus pill SAYS. A case tag first — `succ`, `refine_1`, `left`
+  // is what the tree already badges the branch with, it is short, it is stable
+  // across re-elaboration, and it is what actually tells sibling goals apart.
+  // A goal's own text does not: siblings share a prefix and diverge late,
+  // which is exactly why a head-truncated formula read as "⊢ ∑ i ∈ Finset.ra…"
+  // for every branch of the same proof. Unnamed goals therefore fall back to
+  // the goal text truncated from the TAIL, keeping the turnstile and the end.
   const focusNode = useMemo(
     () =>
       focusId ? (engine.allNodes().find((n) => n.id === focusId) ?? null) : null,
     [engine, focusId],
   );
+  const focusLabel = useMemo(() => {
+    if (!focusNode) return "focused";
+    if (focusNode.caseLabel) return focusNode.caseLabel;
+    const raw = focusNode.label ?? "focused";
+    // Tail truncation: keep the turnstile, then the END. Sibling goals share a
+    // prefix, so cutting the head throws away the only distinguishing part —
+    // the whole reason the head-cut version read the same for every branch.
+    const body = raw.startsWith(TURNSTILE) ? raw.slice(TURNSTILE.length) : raw;
+    const MAX = 34;
+    return body.length <= MAX
+      ? raw
+      : `${TURNSTILE}…${body.slice(body.length - (MAX - 1))}`;
+  }, [focusNode]);
 
   // The top-left floaters stack in a fixed order, each row FLOATER_H apart:
   // the caller's slot (standalone only), the focus breadcrumb, whichever hint
@@ -5150,20 +5170,27 @@ export default function ProofTreeView({
             style={
               focusId
                 ? {
-                    // With a segment beside it the statement yields: it is the
-                    // stable half, and the focus is the transient one you are
-                    // actually navigating by. Full text stays in the title.
                     display: "inline-block",
-                    maxWidth: "55%",
                     verticalAlign: "bottom",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                   }
                 : undefined
             }
           >
             {(() => {
+              // FOCUSED: the statement collapses to its keyword and NAME, and
+              // the ellipsis sits right after them. A CSS clip cannot promise
+              // that much — it cuts at whatever width is left, which on a long
+              // binder list ate the name itself — and the name is the only
+              // part that identifies the theorem. Everything else is one hover
+              // away in the title, and the room it frees goes to the pill,
+              // which is the half you are actually navigating by. Plain ink
+              // here: two tokens are not worth re-aligning the colouring for,
+              // and the full statement is coloured whenever it is shown whole.
+              if (focusId) {
+                const head = declHeader.trimStart().split(/\s+/).slice(0, 2);
+                return <span>{head.join(" ") + " …"}</span>;
+              }
               const src = declHeader.split("\n");
               const tagged = renderDeclHeader?.(src);
               // ONE BLOCK PER SOURCE LINE. `renderTacticTokens` returns a node
@@ -5213,14 +5240,8 @@ export default function ProofTreeView({
                 }}
               >
                 <span>◎</span>
-                <span
-                  style={{
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {focusNode?.label ?? "focused"}
+                <span style={{ whiteSpace: "nowrap" }}>
+                  {focusLabel}
                 </span>
                 <span style={{ opacity: 0.8 }}>✕</span>
               </button>
