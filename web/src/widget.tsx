@@ -1398,27 +1398,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
                 })
             : undefined
         }
-        // The statement's own range, computed from what the header IS: it
-        // starts at `declHeaderStart` and runs the length of the text we
-        // drew, so a multi-line statement ends on its own last line. No
-        // clamped-huge column here (unlike the cf stub's line replace): the
-        // extent is known exactly, and overshooting would eat the `by`.
-        onEditHeader={
-          declHeaderStart && declHeader
-            ? (text: string) => {
-                const lines = declHeader.split("\n");
-                const last = lines[lines.length - 1];
-                const end = {
-                  line: declHeaderStart.line + lines.length - 1,
-                  character:
-                    lines.length === 1
-                      ? declHeaderStart.character + last.length
-                      : last.length,
-                };
-                applyDocEdit(declHeaderStart, end, text);
-              }
-            : undefined
-        }
         cfStub={
           stable?.proof.cfLine != null
             ? {

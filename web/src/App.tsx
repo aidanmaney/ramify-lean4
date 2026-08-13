@@ -229,12 +229,6 @@ export default function App() {
         ? {
             declHeader: QUERY.get("hdr")!.replace(/\\n/g, "\n"),
             onRevealHeader: () => {},
-            // Harness stub: records the committed statement so a probe can
-            // read back what the editor would have written.
-            onEditHeader: (t: string) => {
-              (window as unknown as { __hdrEdits?: string[] }).__hdrEdits ??= [];
-              (window as unknown as { __hdrEdits: string[] }).__hdrEdits.push(t);
-            },
           }
         : {})}
       headerExtra={

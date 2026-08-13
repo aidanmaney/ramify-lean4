@@ -918,15 +918,14 @@ export interface ProofTreeViewProps {
   /** Colour + popups for it, as a hook (the `renderTaggedTactic` shape, and
   source-agnostic for the same reason). Absent ⇒ plain text. */
   renderDeclHeader?: (lines: string[]) => ReactNode[] | null;
-  /** Single click: put the buffer's caret on the statement. */
+  /** Click: put the buffer's caret on the statement. Reveal is the ONLY
+  gesture here, and deliberately so — it was briefly editable in place and the
+  author reverted it after using it. An in-place statement editor immediately
+  wants completion, abbreviation expansion and live colouring to be worth
+  having, and the one thing the tree genuinely cannot do is START a proof: a
+  new theorem has no tree to draw. So the header hands you to the editor, where
+  the full IDE is, rather than growing a second-rate copy of it. */
   onRevealHeader?: () => void;
-  /** Double click commits an edited statement over its own real range. The
-  statement IS editable here, by user directive — I had made it reveal-only on
-  the reasoning that changing a statement re-types the whole proof, and that is
-  a reason to be CAREFUL, not a reason to refuse: the header shows source, and
-  a surface in this tree that shows source and cannot be edited is the exact
-  complaint the theorem-line stub earned. Absent ⇒ reveal only. */
-  onEditHeader?: (text: string) => void;
   cfStub?: {
     line: number;
     pos?: { line: number; character: number };
@@ -1087,7 +1086,6 @@ export default function ProofTreeView({
   declHeader,
   renderDeclHeader,
   onRevealHeader,
-  onEditHeader,
   cfStub,
   headerExtra,
   height = "100vh",
@@ -3907,9 +3905,6 @@ export default function ProofTreeView({
   // number of drawn lines at any given width. Same shape as `useFrameOffset` —
   // a ResizeObserver plus an explicit mount read, because RO delivery rides
   // rendering steps and a hidden webview runs none.
-  // The statement's own editor: its own state rather than a branch of
-  // `editing`, which is keyed by NODE id — the header belongs to no node.
-  const [hdrEdit, setHdrEdit] = useState<string | null>(null);
   const hdrRef = useRef<HTMLDivElement | null>(null);
   const [hdrH, setHdrH] = useState(0);
   useLayoutEffect(() => {
@@ -5102,16 +5097,10 @@ export default function ProofTreeView({
       {declHeader ? (
         <div
           ref={hdrRef}
-          onClick={hdrEdit === null ? onRevealHeader : undefined}
-          onDoubleClick={
-            onEditHeader ? () => setHdrEdit(declHeader) : undefined
-          }
+          onClick={onRevealHeader}
           title={
-            hdrEdit !== null
-              ? undefined
-              : "The statement this proof belongs to" +
-                (onRevealHeader ? "\n· click to put the caret on it" : "") +
-                (onEditHeader ? "\n· double-click to edit it here" : "")
+            "The statement this proof belongs to" +
+            (onRevealHeader ? "\n· click to put the caret on it" : "")
           }
           style={{
             position: "absolute",
@@ -5146,65 +5135,7 @@ export default function ProofTreeView({
             overflowY: "auto",
           }}
         >
-          {hdrEdit !== null ? (
-            <textarea
-              autoFocus
-              value={hdrEdit}
-              spellCheck={false}
-              onChange={(e) => setHdrEdit(e.target.value)}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  setHdrEdit(null);
-                } else if (
-                  e.key === "Enter" &&
-                  (e.metaKey || e.ctrlKey || !e.shiftKey)
-                ) {
-                  // Enter commits, ⇧Enter is a newline: a statement is often
-                  // several lines, but committing is the common act.
-                  e.preventDefault();
-                  const v = hdrEdit;
-                  setHdrEdit(null);
-                  // An EMPTY commit CANCELS — the tactic rule, not the comment
-                  // one. Blanking a statement is never what a slip meant, and
-                  // there is no "delete this theorem" gesture to route to.
-                  if (v.trim() !== "" && v !== declHeader) onEditHeader?.(v);
-                }
-              }}
-              onBlur={() => {
-                const v = hdrEdit;
-                setHdrEdit(null);
-                if (v !== null && v.trim() !== "" && v !== declHeader)
-                  onEditHeader?.(v);
-              }}
-              style={{
-                display: "block",
-                width: "100%",
-                boxSizing: "border-box",
-                resize: "none",
-                border: "none",
-                outline: "none",
-                padding: 0,
-                margin: 0,
-                background: "transparent",
-                // Pinned like every other editor here: a textarea IS insulated
-                // by the UA stylesheet, but its font is not inherited, and the
-                // text must land exactly where the painted statement was.
-                fontFamily: getCodeFontFamily(),
-                fontSize: NODE_FONT_PX,
-                lineHeight: `${LINE_H}px`,
-                letterSpacing: 0,
-                color: NODE_TEXT,
-                textAlign: "left",
-                whiteSpace: "pre-wrap",
-                overflow: "hidden",
-              }}
-              rows={hdrEdit.split("\n").length}
-            />
-          ) : (
-            (renderDeclHeader?.(declHeader.split("\n")) ?? declHeader)
-          )}
+          {renderDeclHeader?.(declHeader.split("\n")) ?? declHeader}
         </div>
       ) : null}
       {/* No top bar: the top edge stays empty so the eye falls straight from
@@ -5525,32 +5456,12 @@ export default function ProofTreeView({
           }}
         />
       )}
-      {/* Headroom veil: a short strip the content scrolls UNDER, fading it
-          out before it reaches the top edge — so the floating overlays (the
-          sequence hint, the standalone picker) sit on calm ground instead of
-          on top of node text. Theme-correct by construction: it fades from
-          the page's own background (the editor's in the webview, the app's
-          standalone). Non-interactive; sits under the controls (zIndex). */}
-      <div
-        style={{
-          position: "absolute",
-          // BELOW the signature header, not at the container's top edge. The
-          // veil fades content that scrolls under the FLOATERS, and those now
-          // start under the header — while the header itself is opaque chrome
-          // with text of its own, which the gradient was washing out (reported
-          // as a blur across the statement). Moving it keeps the calm ground
-          // the floaters need; deleting it would put node text straight under
-          // them again.
-          top: hdrH,
-          left: 0,
-          right: 0,
-          height: 26,
-          zIndex: 9,
-          pointerEvents: "none",
-          background:
-            "linear-gradient(to bottom, var(--vscode-editor-background, var(--bg, #fff)) 25%, transparent)",
-        }}
-      />
+      {/* No headroom veil. There WAS one — a short gradient the content
+          scrolled under, so the floaters sat on calm ground — and it is gone
+          by user directive, with the better reason: what it really bought was
+          a hint about where nodes leave the frame, and the signature header's
+          own bottom border now says that outright. It also washed out the
+          header's text once the two shared the top edge. */}
       <div
         ref={scrollRef}
         className="no-scrollbar"
