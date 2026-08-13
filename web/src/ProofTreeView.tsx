@@ -5163,7 +5163,26 @@ export default function ProofTreeView({
                 : undefined
             }
           >
-            {renderDeclHeader?.(declHeader.split("\n")) ?? declHeader}
+            {(() => {
+              const src = declHeader.split("\n");
+              const tagged = renderDeclHeader?.(src);
+              // ONE BLOCK PER SOURCE LINE. `renderTacticTokens` returns a node
+              // per line and they were rendered inline into a `pre-wrap` box,
+              // so the statement's own line breaks disappeared and its source
+              // INDENTATION reappeared as gaps in the middle of running text
+              // (reported as "whitespace is all weird"). Same shape the node
+              // labels use for exactly the same reason.
+              //
+              // Continuation lines keep their indent — it is how the author
+              // laid the statement out, and it is what makes a long `∧` chain
+              // readable — while `pre-wrap` still lets a line too wide for the
+              // panel wrap instead of scrolling.
+              return (tagged ?? src).map((ln, i) => (
+                <span key={i} style={{ display: "block" }}>
+                  {ln}
+                </span>
+              ));
+            })()}
           </span>
           {focusId && (
             <>
