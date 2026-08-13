@@ -1295,14 +1295,14 @@ export default function ProofTreeView({
   // focus-subtree buttons). The bar renders inside the node's own <g>, so
   // pointer travel from box to bar never leaves the hover region (no flicker).
   const [hoverId, setHoverId] = useState<string | null>(null);
-  // What a ⬚ would take, faded while the pointer is on the button (or ⌥ is
+  // What a ◌ would take, faded while the pointer is on the button (or ⌥ is
   // held over the tactic). Hover state like `hoverId`, and reset like it —
   // nothing but ids, so a stale set can only fail to match. `anchor` is the
   // node the gesture acts on; it deliberately does NOT fade, because the
-  // action bar rides inside the node's own <g> and a faded ⬚ under the
+  // action bar rides inside the node's own <g> and a faded ◌ under the
   // pointer reads as a disabled button (the armed delete's rule, same reason).
   // `from` names which surface put the preview up — the ⌥ gestures or the
-  // bar's ⬚ button — because their CLEARS must not cross: the bar rides
+  // bar's ◌ button — because their CLEARS must not cross: the bar rides
   // inside the node's <g>, so every pointer jiggle over the button fires the
   // g's onMouseMove with altKey false, and an untagged clear there killed the
   // button's own preview the instant it appeared (the reported "flashes but
@@ -2183,11 +2183,11 @@ export default function ProofTreeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [proof, hypMode, hypGroup, brief, codeFont, deleteSlots],
   );
-  // Every tactic the step cut (hover-bar ⬚) is offered on. Computed in one
+  // Every tactic the step cut (hover-bar ◌) is offered on. Computed in one
   // pass per base tree: the test walks a subtree, so asking it per drawn node
   // per render would be cubic.
   const elidableIds = useMemo(() => stepElidable(baseNodes), [baseNodes]);
-  // Its complement on CLOSING tactics: the same ⬚, folding the consumed goal
+  // Its complement on CLOSING tactics: the same ◌, folding the consumed goal
   // instead of cutting (see leafFoldTargets — one box for one ghost buys
   // nothing, but "put the finished step away" is still the gesture wanted).
   const leafFoldIds = useMemo(() => leafFoldTargets(baseNodes), [baseNodes]);
@@ -2512,7 +2512,7 @@ export default function ProofTreeView({
   // what survives.
   //
   // `.fold` seeds the collapsed set. `.none` seeds a `step` ElideCut — the
-  // hover bar's ⬚, written into the proof instead of clicked: the tactic and
+  // hover bar's ◌, written into the proof instead of clicked: the tactic and
   // the blocks it opened leave the tree and the trunk closes up over a ghost,
   // which restores them on a click. What each flag asks for is `sourceView`'s
   // business (elide.ts), shared with the ⌥-⊞ reset so the two cannot drift.
@@ -3257,14 +3257,14 @@ export default function ProofTreeView({
   // Commit one step cut with its anchor: hold the incoming ghost at the
   // tactic's y (the marker takes the tactic's own DFS slot, so the pair is
   // exact — and the pointer stays on the ghost, where the restore click is).
-  // Shared by the hover bar's ⬚ and the ⌥-click fast path.
+  // Shared by the hover bar's ◌ and the ⌥-click fast path.
   const elideStep = (id: string) => {
     setElidePreview(null);
     anchorAs(id, cutId({ kind: "step", id }));
     setElideCuts((cs) => [...cs, { kind: "step", id }]);
   };
 
-  /** What a ⬚ on `id` would take away, for the hover preview.
+  /** What a ◌ on `id` would take away, for the hover preview.
    *
    * Resolved against `treeNodes` (post-elision) rather than `baseNodes`, even
    * though the COMMIT works on base ids: a cut nested inside this one is a
@@ -3274,7 +3274,7 @@ export default function ProofTreeView({
    * drops the inner cut when the bigger one lands.
    *
    * Two gestures take exactly the box you are pointing at and nothing else —
-   * a LEAF's ⬚ folds its goal (see leafFoldTargets), a COMBINED run's swaps
+   * a LEAF's ◌ folds its goal (see leafFoldTargets), a COMBINED run's swaps
    * one marker for another — so both are the anchor alone. Since the anchor
    * never dims, the preview shows nothing fading, which is the truth: the
    * absence IS the answer, not a missing feature. (A combined run's own
@@ -3290,7 +3290,7 @@ export default function ProofTreeView({
     return new Set(resolveCut({ kind: "step", id }, byId));
   };
 
-  /** The ⬚/⌥-elide GATE for a drawn node — null where the gesture is not
+  /** The ◌/⌥-elide GATE for a drawn node — null where the gesture is not
    * offered. ONE coding, read directly by the render loop (whose button,
    * click routing and titles also need `combined`/`leafFold`, hence the
    * shape) and, through `elidePreviewFor` below, by every fade surface — so
@@ -3310,7 +3310,7 @@ export default function ProofTreeView({
 
   /** The elide-preview for `id`, or null where the gesture is not offered —
    * the one door to the fade for EVERY surface that shows it: the
-   * Alt-keydown listener below, and the ⌥-mousemove branch and the bar's ⬚
+   * Alt-keydown listener below, and the ⌥-mousemove branch and the bar's ◌
    * hover in the render loop. (The loop's own `elidable` reads `elideGateOf`
    * directly — it runs per node per render, and this helper pays a find per
    * event.) */
@@ -3329,7 +3329,7 @@ export default function ProofTreeView({
       // corpus's 204 tactics previewed as doing nothing at all — and there is
       // no glyph on a bare modifier to explain the substitution.
       //
-      // Only the ⌥ path may act on it (see the render's opacity): the bar's ⬚
+      // Only the ⌥ path may act on it (see the render's opacity): the bar's ◌
       // lives INSIDE the node's own <g>, so fading the anchor there would fade
       // the button under the pointer, which reads as disabled. That is the
       // whole reason for the anchor-never-fades rule, and it does not apply
@@ -3381,8 +3381,8 @@ export default function ProofTreeView({
   }, []);
 
   // The combined-run analogue: a COMBINED node stands for several base
-  // tactics, so its ⬚ commits a BAND cut over exactly the member ids its own
-  // id encodes (boundary goals stay; the run collapses to one ⬚ marker).
+  // tactics, so its ◌ commits a BAND cut over exactly the member ids its own
+  // id encodes (boundary goals stay; the run collapses to one ◌ marker).
   // Exactly what `elideSelection` does for a swept combined node — dissolve
   // to members, absorb a same-id manual cut, anchor at the marker — so it IS
   // that, with a one-node selection.
@@ -5485,7 +5485,7 @@ export default function ProofTreeView({
           // gone, not remembered — ⊞ has always been the button that throws
           // your view away.
           //
-          // Only MANUAL cuts (⬚ step, ⇥ path, ⇳ band) live in this state;
+          // Only MANUAL cuts (◌ step, ⇥ path, ⇳ band) live in this state;
           // ⇉ combine's runs are recomputed in the engine memo from the
           // toggle, so a merged run stays merged — it is a display mode, not
           // something hidden.
@@ -6014,7 +6014,7 @@ export default function ProofTreeView({
               const accent = isEndpoint || isCursor || !!selection?.has(id);
               // A COMBINED node is a real (if synthetic) tactic node — the run's
               // tactics stacked — so it draws and behaves like one: normal box,
-              // never folded, no dashed chip. Only an ELIDE marker gets the `⬚`
+              // never folded, no dashed chip. Only an ELIDE marker gets the `◌`
               // chip treatment and the click-to-restore. It has no position of
               // its own (a marker spans several tactics), so the position its
               // GESTURES act through is the FIRST part's — reveal and the lens
@@ -6165,7 +6165,7 @@ export default function ProofTreeView({
                   ? (delExtents.get(id) ?? null)
                   : null;
               const deletable = !!delExtent;
-              // Elide this tactic INTO the trunk (its hover-bar ⬚): the tactic
+              // Elide this tactic INTO the trunk (its hover-bar ◌): the tactic
               // and any block it opened are lifted out, leaving a small dashed
               // ghost — the trunk closing up over it where something follows,
               // the subtree simply gone where nothing does. The complement of
@@ -6315,7 +6315,7 @@ export default function ProofTreeView({
                   return;
                 }
                 // Tactic fast path — ⌥-click elides it into the trunk (the
-                // hover bar's ⬚ without the hover-and-aim; the goals' ⌥-focus
+                // hover bar's ◌ without the hover-and-aim; the goals' ⌥-focus
                 // precedent). Checked BEFORE reveal, which otherwise consumes
                 // every tactic click in the widget, modified or not.
                 if (elidable && e.altKey) {
@@ -6381,7 +6381,7 @@ export default function ProofTreeView({
                   // only — nothing moves, and the fade is on the group so the
                   // node's action bar dims with it.
                   //
-                  // A hovered ⬚ fades its extent the same way, at the same
+                  // A hovered ◌ fades its extent the same way, at the same
                   // value, for the same reason — the difference being that
                   // nothing is written, so it needs no arming step. Both
                   // spare the node being acted ON: it is the one under the
@@ -6392,7 +6392,7 @@ export default function ProofTreeView({
                   // so the box that goes is this one and nothing else fades —
                   // the gesture previewed as doing nothing. The ⌥ path has no
                   // button under the pointer to protect, so there the anchor
-                  // fades itself; the bar's ⬚ still spares it.
+                  // fades itself; the bar's ◌ still spares it.
                   opacity={
                     (arming && armedIds.has(id) && id !== arming.id) ||
                     (elidePreview &&
@@ -6498,7 +6498,7 @@ export default function ProofTreeView({
                               if (p) setElidePreview({ ...p, from: "alt" });
                             }
                           } else if (
-                            // Only the ⌥ path's own preview: the bar's ⬚ sets
+                            // Only the ⌥ path's own preview: the bar's ◌ sets
                             // one too, and this handler fires for every
                             // pointer jiggle OVER that button (the bar lives
                             // inside this <g>) with altKey false — an
@@ -6864,7 +6864,7 @@ export default function ProofTreeView({
                       fontStyle={
                         node.data.proseLabel ? "italic" : undefined
                       }
-                      // A run marker's `⬚ N tactics` reads as an absence, so it
+                      // A run marker's `◌ N tactics` reads as an absence, so it
                       // takes the muted comment ink, not full node text.
                       fill={
                         node.data.proseLabel
@@ -7190,33 +7190,36 @@ export default function ProofTreeView({
                         ...(elidable
                           ? [
                               {
-                                // A box with a minus in it — "put this away",
-                                // DRAWN rather than typed (see ElideGlyph for
-                                // why no character will do). NOT `⋯`, which is
-                                // the rail's BRIEF mode: the two are different
-                                // elisions (one cuts nodes out of the tree, the
-                                // other shortens a label) and sharing a glyph
-                                // made them genuinely hard to tell apart.
+                                // THE GLYPH IS THE RESIDUE, which is what makes
+                                // one button with two actions honest: `◌` is
+                                // the dashed ghost the cut leaves in the
+                                // trunk, and at a LEAF there is no ghost — the
+                                // goal above simply shuts — so the face is the
+                                // fold indicator's own `−`, the very mark that
+                                // will be standing on that goal afterwards.
+                                // (An earlier pass overlaid the `−` INSIDE the
+                                // ring, which said both things at once and so
+                                // said neither.)
                                 //
-                                // The rim carries the residue, so the button
-                                // says which of this one button's two actions
-                                // it is about to perform: DASHED for the cut
-                                // (a dashed ghost stands where the tactic was),
-                                // SOLID for the leaf's fold (the goal above
-                                // simply shuts). Until this was drawn, only the
-                                // tooltip below distinguished them.
-                                mark: (!isCombined && leafFold !== undefined
-                                  ? "fold"
-                                  : "cut") as ElideMark,
+                                // `◌` is NOT `⋯`, the rail's BRIEF mode: the
+                                // two are different elisions — one cuts nodes
+                                // out of the tree, the other shortens a label —
+                                // and sharing a glyph made them genuinely hard
+                                // to tell apart.
+                                glyph:
+                                  !isCombined && leafFold !== undefined
+                                    ? "−"
+                                    : "◌",
                                 title: isCombined
-                                  ? "Elide into the trunk (⌥-click) — the whole run collapses to one ghost (click it to restore)"
+                                  ? "Elide into the trunk (⌥-click) — the whole run collapses to a ◌ marker (click it to restore)"
                                   : leafFold !== undefined
                                     ? // No ghost here: this tactic closes its
                                       // goal, so the cut would be one box for
                                       // one ghost. Folding the goal hides the
                                       // same one box and leaves the goal's own
-                                      // + as the way back — hence the solid rim
-                                      // and a title naming a different restore.
+                                      // + as the way back — which is why the
+                                      // face is `−` and the title names a
+                                      // different restore.
                                       "Put this step away (⌥-click) — folds the goal above; click its + to bring it back"
                                     : "Elide into the trunk (⌥-click) — this tactic and anything it opened, leaving a ghost to click back open",
                                 onClick: () =>
@@ -7233,7 +7236,7 @@ export default function ProofTreeView({
                                   } else {
                                     // Leaving the button clears only the
                                     // bar's own preview — an ⌥-hover fade
-                                    // must survive the pointer crossing ⬚.
+                                    // must survive the pointer crossing ◌.
                                     setElidePreview((p) =>
                                       p?.anchor === id && p.from === "bar"
                                         ? null
@@ -9339,13 +9342,10 @@ const BAR_PAD = 3; // bar padding around the buttons
 const BAR_GAP = 2; // between buttons
 const BAR_OVERLAP = 5; // how far the bar dips onto the box's top edge
 interface NodeAction {
-  /** The button's face, and its React key. Exactly one of `glyph`/`mark`. */
-  glyph?: string;
-  /** A DRAWN face instead of a character — see ElideMark. */
-  mark?: ElideMark;
+  glyph: string;
   title: string;
   onClick: () => void;
-  /** Pointer entered/left this button. The one caller is ⬚, which uses it to
+  /** Pointer entered/left this button. The one caller is ◌, which uses it to
   fade what the cut would take — an action whose EXTENT isn't obvious from the
   button deserves to show it before you commit, the armed delete's preview
   without the arming step (nothing is written here, so nothing needs confirming). */
@@ -9390,7 +9390,7 @@ function NodeActionBar({
         const bx = x0 + BAR_PAD + i * (BAR_BTN + BAR_GAP);
         return (
           <g
-            key={a.glyph ?? a.mark}
+            key={a.glyph}
             onClick={(e) => {
               // Action, not fold: stop the click from reaching the box's own
               // onClick (toggle).
@@ -9411,117 +9411,22 @@ function NodeActionBar({
               fill="var(--vscode-toolbar-hoverBackground, #f7fafc)"
               stroke="var(--vscode-editorWidget-border, #e2e8f0)"
             />
-            {a.mark ? (
-              <ElideGlyph
-                mark={a.mark}
-                cx={bx + BAR_BTN / 2}
-                cy={y0 + BAR_PAD + BAR_BTN / 2}
-              />
-            ) : (
-              <text
-                x={bx + BAR_BTN / 2}
-                y={y0 + BAR_PAD + BAR_BTN / 2}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fontSize={13}
-                fontFamily="monospace"
-                fill={
-                  a.danger
-                    ? DANGER_FILL
-                    : "var(--vscode-icon-foreground, #2d3748)"
-                }
-              >
-                {a.glyph}
-              </text>
-            )}
+            <text
+              x={bx + BAR_BTN / 2}
+              y={y0 + BAR_PAD + BAR_BTN / 2}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={13}
+              fontFamily="monospace"
+              fill={
+                a.danger ? DANGER_FILL : "var(--vscode-icon-foreground, #2d3748)"
+              }
+            >
+              {a.glyph}
+            </text>
           </g>
         );
       })}
-    </g>
-  );
-}
-
-/** Which residue the elide button's press leaves: a dashed GHOST in the trunk
-("cut"), or the goal above shut ("fold", the leaf substitution). */
-type ElideMark = "cut" | "fold";
-
-// The elide button's face: a box with a minus in it — "put this away", which is
-// what a general audience reads and what `⬚` (the dotted CIRCLE this replaced)
-// did not.
-//
-// DRAWN, not a character, and every part of that is measured rather than
-// preferred:
-//
-//  · The only box-with-a-minus in Unicode is `⊟` U+229F, and the rail spends it
-//    on collapse-all. Two identical glyphs with different meanings on one
-//    screen is the `⬚`/`⋯` confusion this project has already had once; the
-//    rail is long settled, so the node's mark is what moves.
-//  · The obvious way to keep the shape and dodge the character — a DOTTED box
-//    `⬚` U+2B1A against a solid `□` — does not survive the font. At the button's
-//    own 13px, `⬚` and `□` differ by 50 device pixels (mean |Δα| 2.55) where
-//    genuinely distinct pairs differ by ~195 (mean ~9). And `⬚` is in no code
-//    font probed, so it resolves through per-stack fallbacks that ink it 16x16
-//    (Menlo, Monaco, Courier, JetBrains Mono) or 24x24 (the SF Mono / Consolas
-//    / DejaVu / Fira stacks) — a 50% swing no fixed fontSize corrects, against
-//    the rail's own equal-INK-height rule.
-//
-// Geometry answers all of it: the dash is as legible as we draw it, and the ink
-// is exactly MARK_H px tall — the height the `◌` it replaces inked, so the bar
-// is unchanged in height (measured at the bar's own 13px monospace: » 6.0,
-// ⊘ 7.0, ◎ 8.0, ◌ 8.0, ⧉ 8.75).
-//
-// It is a WIDE rounded rectangle, not a square, and that is the part that keeps
-// it off the rail: `⊟` is a 1:1 square inking 7.5x7.5 in the rail's 14px, this
-// is a 3:2 card (50% wider than tall) with a 2px radius and a lighter rim — and
-// it is a miniature of the thing the button acts on, since a node in this tree
-// IS a wide rounded box. "Put this box away."
-//
-// The RIM then carries which of the button's two actions this press is: DASHED
-// for the cut, because what stands where the tactic was is a dashed ghost, drawn
-// exactly like this; SOLID for the leaf's fold, because nothing is substituted —
-// the goal above simply shuts and its own `+` brings it back. Same shape, so it
-// is one button; different rim, so it is honest about the two residues.
-const MARK_W = 12; // ink width, stroke included
-const MARK_H = 8; // ink height, stroke included — `◌`'s, so the bar is unmoved
-const MARK_SW = 1.1;
-function ElideGlyph({
-  mark,
-  cx,
-  cy,
-}: {
-  mark: ElideMark;
-  cx: number;
-  cy: number;
-}) {
-  const w = MARK_W - MARK_SW; // the stroke straddles the rect, so inset by it
-  const h = MARK_H - MARK_SW;
-  return (
-    <g
-      stroke="var(--vscode-icon-foreground, #2d3748)"
-      strokeWidth={MARK_SW}
-      fill="none"
-    >
-      <rect
-        x={cx - w / 2}
-        y={cy - h / 2}
-        width={w}
-        height={h}
-        rx={2}
-        // Perimeter ~36: 2/1.6 lands ~10 dashes, 4 device px on and 3.2 off at
-        // dpr 2 — the separation the font could not give us.
-        strokeDasharray={mark === "cut" ? "2 1.6" : undefined}
-      />
-      {/* The verb, solid in both: the rim says what is left behind, the minus
-          says what the press does. Inset 2.4 so it reads as contained rather
-          than as a line struck through the box (that is ⊘'s language, and ⊘ is
-          two buttons along). */}
-      <line
-        x1={cx - w / 2 + 2.4}
-        y1={cy}
-        x2={cx + w / 2 - 2.4}
-        y2={cy}
-        strokeLinecap="butt"
-      />
     </g>
   );
 }

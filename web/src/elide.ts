@@ -149,7 +149,7 @@ drops through the identical path.
 the cut carries a NOTE. A bare cut on a closing tactic really is one box for
 one ghost, but `.none <prose>` puts the author's sentence where the tactic
 was, which is strictly more than the label it replaces — "the last step is
-`grind`, here is why you need not read it". So the ⬚ button (no prose, gated
+`grind`, here is why you need not read it". So the ◌ button (no prose, gated
 on `stepElidable` below) still declines a leaf while a written `.none why`
 does not. */
 function stepIds(
@@ -184,7 +184,7 @@ function stepIds(
   return [...ids];
 }
 
-/** Every tactic the note-less STEP cut (the hover bar's ⬚ and its ⌥-click) is
+/** Every tactic the note-less STEP cut (the hover bar's ◌ and its ⌥-click) is
 offered on, evaluated in ONE pass so the view can memoize it per base tree —
 the offer test walks a subtree, and running it per drawn node per render would
 be cubic. Leaves are absent by construction (`allowLeaf` is not passed); a
@@ -198,15 +198,15 @@ export function stepElidable(nodes: TreeNode[]): Set<string> {
   return out;
 }
 
-/** The CLOSING tactics ⬚ is offered on anyway, mapped to the goal it folds.
+/** The CLOSING tactics ◌ is offered on anyway, mapped to the goal it folds.
 
 `stepElidable` declines a leaf because the cut would be one box for one ghost
-(see `stepIds`) — sound as far as it goes, but it leaves ⬚ missing from 38% of
+(see `stepIds`) — sound as far as it goes, but it leaves ◌ missing from 38% of
 the tactics in the corpus (78 of 204 measured), and a button that is present on
 most boxes and absent on the rest reads as broken rather than as declined. The
 gesture people want there is the same one: put the finished step away.
 
-So a leaf gets ⬚ with a different ACTION — fold its consumed goal. At a leaf
+So a leaf gets ◌ with a different ACTION — fold its consumed goal. At a leaf
 that hides exactly the tactic and nothing else, which is why the shape is
 checked rather than assumed: one parent, that parent a goal, and that goal with
 no other child. All 78 pass, so the gate never fires on the corpus; it is here
@@ -260,7 +260,7 @@ export function resolveCut(
 ): string[] {
   if (cut.kind === "path") return pathIds(byId, cut.from, cut.to) ?? [];
   // `!!cut.note` is the leaf licence (see stepIds): a written `.none <prose>`
-  // may cut a closing tactic, a note-less ⬚ may not. Routed through here so
+  // may cut a closing tactic, a note-less ◌ may not. Routed through here so
   // `pruneCuts` and `applyElisions` cannot disagree about it.
   if (cut.kind === "step")
     return stepIds(byId, cut.id, childIndex(byId), !!cut.note);
@@ -392,15 +392,8 @@ const GHOST_NOTE_PREVIEW = 60;
 
 /** A step marker's label: a truncated preview of the tactic itself, not a
 count. A ghost stands for ONE named tactic (plus whatever blocks it opened, as
-a `+N` tail), and its whole job is to say which one — `⬚ 4 tactics` would be
+a `+N` tail), and its whole job is to say which one — `◌ 4 tactics` would be
 the same shadow whatever you cut.
-
-The `⬚` leading it is the character form of the mark the hover-bar button DRAWS
-(see ElideGlyph): a dashed box, which is also how this very marker is stroked.
-The button adds the minus, because the minus is the verb; the box is the noun,
-and the noun is what a label names. Keep the two pointing at each other — the
-label used to read `⋯ N tactics`, and matching the button is the whole reason
-it stopped.
 
 The label is the node's own, so with the rail's brief mode ON it is already
 the collapsed one and the two compose for free — reshaping it a second time
@@ -417,7 +410,7 @@ function ghostLabel(tactics: string[], note?: string): string {
   const text =
     head.length > cap ? head.slice(0, cap - 1).trimEnd() + "…" : head;
   const more = note ? 0 : tactics.length - 1;
-  return `⬚ ${text}${more > 0 ? `  +${more}` : ""}`;
+  return `◌ ${text}${more > 0 ? `  +${more}` : ""}`;
 }
 
 /** Translate a cut's member ids through a re-parse (see `remapIds`).
@@ -534,15 +527,15 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
     // here is why" — so it should label the cut whenever that step is cut,
     // not only when the seed block made the cut. Without this, expanding a
     // seeded ghost and eliding it again by hand (⊞ clears cuts; the source
-    // still says `.none why`) replaced the author's sentence with `⬚ 1
+    // still says `.none why`) replaced the author's sentence with `◌ 1
     // tactic`, and the same node read differently depending on which gesture
     // had put it away.
     //
     // "About" is deliberately narrow: a STEP cut is about its own tactic
-    // (this is the very member set the seed builds, so ⬚ on a flagged tactic
+    // (this is the very member set the seed builds, so ◌ on a flagged tactic
     // and the flag itself now agree), and any other cut only when it
     // collapses EXACTLY ONE tactic. A band sweeping five steps, one of them
-    // flagged, keeps `⬚ 5 tactics` — that note describes one step and would
+    // flagged, keeps `◌ 5 tactics` — that note describes one step and would
     // overstate itself as the label for the rest.
     const about =
       cut.kind === "step"
@@ -612,14 +605,14 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
           id: mid,
           type: "tactic",
           // A `combine` marker IS the run's tactics, stacked (the view draws it
-          // as a normal tactic box); an elide marker is the `⬚ N tactics` chip
+          // as a normal tactic box); an elide marker is the `◌ N tactics` chip
           // — unless a NOTE stands for it, which is the whole point of the
           // author's sentence and reads the same however the cut was made.
           label: combine
             ? tactics.join("\n")
             : ghost || note
               ? ghostLabel(tactics, note)
-              : `⬚ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
+              : `◌ ${tactics.length} ${tactics.length === 1 ? "tactic" : "tactics"}`,
           parents,
           chain,
           // `parts` rides EVERY marker, not just a combined one. The renderer

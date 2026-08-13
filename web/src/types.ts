@@ -336,7 +336,7 @@ export interface NodeFlags {
   what was folded away. */
   fold?: boolean;
   /** `.none`: the flagged tactic and everything it opened are ELIDED INTO THE
-  TRUNK, exactly as the hover bar's ⬚ does — one dashed ghost between the goal
+  TRUNK, exactly as the hover bar's ◌ does — one dashed ghost between the goal
   above and the goal below, clickable to restore. It is a starting view, like
   `.fold`, not a lock: what separates the two is how much they put away (a
   fold hides one subtree and leaves its box; this takes the tactic with it and
