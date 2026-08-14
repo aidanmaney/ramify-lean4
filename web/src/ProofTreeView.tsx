@@ -235,6 +235,9 @@ type LayoutMode = "stacked" | "spine" | "tracks" | "wide";
 //     same ~10px — at 17.5 it drew 17.5px of ink, near twice its neighbours.
 const RAIL_GLYPH_BIG = 17.5;
 const RAIL_GLYPH_FULL = 10;
+// § is tall and narrow — it inks about 0.72em, between the half-height math
+// glyphs and the full-em ASCII ones, so it lands in the ~10px band at 11.5.
+const RAIL_GLYPH_PROSE = 11.5;
 
 // The default is right for ☰, whose three bars fill the em box; ⊦ ⋔ are thin
 // and sparse and || is full-height, so all three carry an explicit `px`.
@@ -8680,10 +8683,19 @@ function RailFlyout({
             top: 0,
             display: "flex",
             gap: 4,
-            padding: 3,
+            // NO padding and NO border of its own, so the row is exactly one
+            // rail button tall and its members line up with the rail's own
+            // buttons to the pixel. The members were always 26px — it was this
+            // card's 3px padding and 1px border that made the row 34 against a
+            // 26px neighbour, which reads as "the popout buttons are bigger".
+            // The background still earns its place: it fills the 4px gaps,
+            // which would otherwise show tree ink between the buttons (the
+            // selection-pill lesson). A shadow separates it from the canvas in
+            // place of the border, which flush against the members' own edges
+            // would have drawn a doubled 2px line down each end.
             background: "var(--vscode-editorWidget-background, #fff)",
-            border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
             borderRadius: 3,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
           }}
         >
           {members.map((m) => (
@@ -9049,12 +9061,15 @@ function ControlRail({
           convention. Full-em ink like `||`, hence RAIL_GLYPH_FULL — at the
           shared 14px two hyphens draw a thin dash the eye slides off.
 
-          ▤ — a box filled with lines — is narration exactly: the prose moves
-          INSIDE the tactic's box. It inks 8.3px at the default 14px (◫'s
-          figure), so it drops the `--`-only override.
+          § — the section mark — stands for PROSE, which is what narration puts
+          in the box. It replaced ▤, a box filled with lines, which was the
+          right idea and the wrong family: ▤ ▥ ◫ ▣ are all boxes-with-fill, and
+          ◫ (side-by-side) is one flyout away. Leaving the box family is the
+          whole point, so the sign is the text rather than the container. Inks
+          10px at 11.5 (measured), the band the rest of the rail sits in.
 
           The RESTING glyph tracks the mode (the LAYOUT_MODES/HYP_MODES
-          precedent): `--` while comments are shown or hidden, ▤ while they are
+          precedent): `--` while comments are shown or hidden, § while they are
           narrating. Without that, "hidden" and "narrating" were the same glyph
           in the same pressed state — indistinguishable on a control whose mode
           silently changes what double-click edits. ⌥ then shows the OTHER end
@@ -9062,9 +9077,11 @@ function ControlRail({
           that no glyph could name a destination dissolves once the two
           destinations have distinct resting glyphs. */}
       <RailButton
-        glyph={(commentMode === "instead") !== alt ? "▤" : "--"}
+        glyph={(commentMode === "instead") !== alt ? "§" : "--"}
         glyphPx={
-          (commentMode === "instead") !== alt ? undefined : RAIL_GLYPH_FULL
+          (commentMode === "instead") !== alt
+            ? RAIL_GLYPH_PROSE
+            : RAIL_GLYPH_FULL
         }
         title={
           commentMode === "instead"
@@ -9133,7 +9150,14 @@ function ControlRail({
           must not do. */}
       <RailFlyout
         id="structure"
-        glyph="⫴"
+        // A FORK — the shape of the thing all three members are about: a
+        // tactic that splits. It replaces ⫴, three vertical bars, which sat
+        // four buttons from `||` aligned-tracks and read as the same sign.
+        // Inks 10px at RAIL_GLYPH_BIG (measured), so it reuses that constant
+        // rather than minting a number; resolves in every code-font stack
+        // tested, none falling back to ⬚.
+        glyph="⑂"
+        glyphPx={RAIL_GLYPH_BIG}
         label="Branch views"
         open={flyout === "structure"}
         onOpenChange={onFlyoutChange}
