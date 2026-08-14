@@ -8707,7 +8707,6 @@ function RailButton({
   glyph,
   glyphPx,
   glyphDy,
-  glyphWeight,
   title,
   onClick,
   pressed,
@@ -8725,14 +8724,6 @@ function RailButton({
   (measured — every other rail glyph sits within 1px of centre). Paint only;
   the 26px box is untouched, so the rail's grid still governs. */
   glyphDy?: number;
-  /** Draw the glyph with heavier strokes. The rail sizes glyphs to equal INK
-  HEIGHT, which says nothing about how much ink is inside that height: ⌖ fills
-  17% of its own bbox against ⊟'s 63%, and shrinking it to 12 to meet the band
-  thinned its strokes further, so it read as skinny beside its neighbours.
-  Weight is the right lever because the wrong one is size — going back up to
-  14 would break the band it was brought into. Measured: bold takes ⌖ from 17
-  to 24.8 units of ink at an unchanged 10px height. */
-  glyphWeight?: string;
   title: string;
   // The event is passed through so a button can carry a second gesture on a
   // modifier (⌥ on the context-breadth button); callers that don't care stay
@@ -8743,14 +8734,7 @@ function RailButton({
   disabled?: boolean;
 }) {
   const color = pressedColor ?? RAIL_PRESSED;
-  const base =
-    glyphPx || glyphWeight
-      ? {
-          ...RAIL_BTN,
-          ...(glyphPx ? { fontSize: glyphPx } : {}),
-          ...(glyphWeight ? { fontWeight: glyphWeight } : {}),
-        }
-      : RAIL_BTN;
+  const base = glyphPx ? { ...RAIL_BTN, fontSize: glyphPx } : RAIL_BTN;
   return (
     <button
       type="button"
@@ -8796,14 +8780,6 @@ interface FlyMember {
   (measured — every other rail glyph sits within 1px of centre). Paint only;
   the 26px box is untouched, so the rail's grid still governs. */
   glyphDy?: number;
-  /** Draw the glyph with heavier strokes. The rail sizes glyphs to equal INK
-  HEIGHT, which says nothing about how much ink is inside that height: ⌖ fills
-  17% of its own bbox against ⊟'s 63%, and shrinking it to 12 to meet the band
-  thinned its strokes further, so it read as skinny beside its neighbours.
-  Weight is the right lever because the wrong one is size — going back up to
-  14 would break the band it was brought into. Measured: bold takes ⌖ from 17
-  to 24.8 units of ink at an unchanged 10px height. */
-  glyphWeight?: string;
   title: string;
   pressedColor?: string;
   disabled?: boolean;
@@ -8841,7 +8817,6 @@ function RailFlyout({
   id,
   glyph,
   glyphPx,
-  glyphWeight,
   label,
   members,
   open,
@@ -8851,11 +8826,6 @@ function RailFlyout({
   /** The group's resting face, worn while no single member is away. */
   glyph: string;
   glyphPx?: number;
-  /** Weight for the GROUP glyph only — see RailButton. Deliberately not
-  applied when a MEMBER's glyph is on the face: that is a different glyph with
-  its own measured weight, and thickening it would make the head disagree with
-  the very button it stands in for. */
-  glyphWeight?: string;
   /** Short group name for the head's title. */
   label: string;
   members: FlyMember[];
@@ -8869,7 +8839,6 @@ function RailFlyout({
       <RailButton
         glyph={face ? face.glyph : glyph}
         glyphPx={face ? face.glyphPx : glyphPx}
-        glyphWeight={face ? undefined : glyphWeight}
         title={`${label}: ${members.map((m) => m.glyph).join(" · ")} — click to choose`}
         pressed={away.length > 0}
         pressedColor={face?.pressedColor}
@@ -9426,12 +9395,14 @@ function ControlRail({
       />
       <RailFlyout
         id="picking"
-        glyph="⌖"
-        // The equal-INK rule: ⌖ inks 13px at the shared 14 (¶'s figure, but ¶
-        // is a grandfathered outlier) — 12 brings it to 10, the band ⫴ (9) and
-        // ⋮ (10) already sit in. Measured, like every override here.
-        glyphPx={12}
-        glyphWeight="bold"
+        glyph="✛"
+        // Reuses RAIL_GLYPH_BIG, so it mints no new number: at 17.5 ✛ inks
+        // 9.6px, the band ⑃ (9.3) and ⋮ (9.2) already sit in. It replaced ⌖,
+        // which read skinny at every size the band allows — ⌖ is a hairline
+        // circle with crosshairs and carries 14.5 units of ink where ✛ carries
+        // 28.6, so the weight comes from the GLYPH here, not from a font
+        // weight (see below).
+        glyphPx={RAIL_GLYPH_BIG}
         label="Pick on the tree"
         open={flyout === "picking"}
         onOpenChange={onFlyoutChange}
