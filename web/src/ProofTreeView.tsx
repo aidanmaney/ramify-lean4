@@ -5493,6 +5493,12 @@ export default function ProofTreeView({
           line spliced to `sorry`) is an implementation fact the reader has no
           use for. The stub keeps its own `<title>` for anyone who asks. */}
       <ControlRail
+        // Clear of the signature header — through `floaterTop(0)`, which IS
+        // the coding of "below the header" (row 0 adds no floater rows), so
+        // the measured height has one reader and the rail cannot drift from
+        // the top-left stack. At a hardcoded 8 the header's hairline ran
+        // straight through the first button.
+        top={floaterTop(0)}
         onExpandAll={() => {
           anchorRoot();
           setCollapsed(new Set());
@@ -8903,6 +8909,7 @@ function useAltHeld() {
  * Disabling never clears the underlying state: a rail toggle is how this
  * reader reads, so leaving and returning to a layout must restore it. */
 function ControlRail({
+  top,
   onExpandAll,
   onResetView,
   onCollapseAll,
@@ -8948,6 +8955,9 @@ function ControlRail({
   caps,
   fontFamily,
 }: {
+  /** Where the rail starts, measured clear of the signature header by the
+  caller (see the call site) rather than assumed. */
+  top: number;
   onExpandAll: () => void;
   /** ⌥-⊞: the source's own reading, restored (see resetToSource). */
   onResetView: () => void;
@@ -9008,7 +9018,7 @@ function ControlRail({
       onMouseMove={syncAlt}
       style={{
         position: "absolute",
-        top: 8,
+        top,
         right: 8,
         zIndex: 10,
         display: "flex",
