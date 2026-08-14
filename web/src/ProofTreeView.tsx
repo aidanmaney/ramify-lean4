@@ -99,6 +99,7 @@ import {
   combineMemberIds,
   combineRuns,
   cutId,
+  foldHidden,
   pathIds,
   pruneCuts,
   leafFoldTargets,
@@ -316,7 +317,7 @@ const CHIP_GAP = 6;
 // Breathing room between the selection pill's chips and the edge of the
 // opaque card behind them.
 const CARD_PAD = 4;
-// The gap that carries the selection pill's safety seam: a hairline and a ✎
+// The gap that carries the selection pill's safety seam: a hairline and a ❯
 // between the verbs that change the VIEW and the verbs that change your FILE.
 const SEP_W = 26;
 const CHIP_W_ADD = 20;
@@ -3229,6 +3230,56 @@ export default function ProofTreeView({
     });
   };
 
+  /** The base ids ONE REGION CUT claims, given the DRAWN-tree nodes the
+   * reader picked out of it — the shared body of the marquee's `elide`, the
+   * ⇳ band and the ⇥ path, so no two of them can disagree about what a
+   * picked region contains.
+   *
+   * Two things happen here that a pick over drawn geometry cannot do for
+   * itself. A picked MARKER dissolves to the base nodes standing behind it —
+   * an elide ghost through its own cut (which is then `absorbed`, i.e.
+   * dropped, keeping cuts pairwise disjoint), a combined run through the
+   * member ids its id encodes (`combineMemberIds`, the only place a ⇉-made
+   * run's membership survives, since those are recomputed per render rather
+   * than stored). And the region is extended down through everything the FOLD
+   * is hiding under it — see `foldHidden` for why that is the cut's business
+   * and the gallery's/focus's is not.
+   *
+   * The dissolve was two hand-written copies before (band and marquee), and
+   * they had already drifted: the band's tested `elideCuts` for every marker,
+   * so an AUTO-combined run swept into a band matched no stored cut and was
+   * dropped from the cut whole — the marquee's `combineMemberIds` branch is
+   * the one that gets it right, and sharing the body is what carries it
+   * across. */
+  const cutMembers = (
+    picked: ReadonlySet<string>,
+  ): { ids: Set<string>; absorbed: Set<string> } => {
+    const byId = new Map(baseNodes.map((n) => [n.id, n]));
+    const treeById = new Map(treeNodes.map((n) => [n.id, n]));
+    const ids = new Set<string>();
+    const absorbed = new Set<string>();
+    const claim = (id: string) => {
+      const d = treeById.get(id);
+      const members = combineMemberIds(id);
+      if (d?.elidedCut && !d.elidedCut.combined) {
+        // id === the marker's cutId; pull its base nodes back in.
+        absorbed.add(id);
+        const cut = elideCuts.find((c) => cutId(c) === id);
+        if (cut) for (const pid of resolveCut(cut, byId)) ids.add(pid);
+      } else if (members) {
+        // A combined run: the auto pass dissolves into the cut. (A MANUAL
+        // combine cut shares the id format, so absorb its cut too.)
+        absorbed.add(id);
+        for (const pid of members) if (byId.has(pid)) ids.add(pid);
+      } else if (byId.has(id)) {
+        ids.add(id);
+      }
+    };
+    for (const id of picked) claim(id);
+    for (const id of foldHidden(treeNodes, picked, collapsed)) claim(id);
+    return { ids, absorbed };
+  };
+
   // Path-elide picking (⇥): like sequence picking but the chosen path is HIDDEN
   // (collapsed to a marker) instead of shown. Validated over the base tree, so
   // a cut always keys on original ids; overlapping an existing cut is rejected
@@ -3242,13 +3293,23 @@ export default function ProofTreeView({
     for (const c of elideCuts)
       for (const pid of resolveCut(c, byId)) used.add(pid);
     if (path.some((pid) => used.has(pid))) return false;
-    const cut: ElideCut = fwd
-      ? { kind: "path", from: a, to: b }
-      : { kind: "path", from: b, to: a };
+    // The chain stays DERIVED (`resolveCut` re-runs `pathIds`, so it re-forms
+    // across a re-parse); only the fold extent is frozen, being a fact about
+    // the view at pick time exactly as the band's y-interval is. Nothing but
+    // the BOTTOM endpoint can contribute any — a collapsed intermediate would
+    // have hidden the endpoint the reader just clicked.
+    const { ids, absorbed } = cutMembers(new Set(path));
+    for (const pid of path) ids.delete(pid);
+    const cut: ElideCut = {
+      kind: "path",
+      from: fwd ? a : b,
+      to: fwd ? b : a,
+      ...(ids.size > 0 ? { hidden: [...ids] } : {}),
+    };
     // The marker takes `from`'s slot (the path's ancestor is its topmost
     // member), so hold it at `from`'s y — see anchorAs.
     anchorAs(cut.from, cutId(cut));
-    setElideCuts((cs) => [...cs, cut]);
+    setElideCuts((cs) => [...cs.filter((c) => !absorbed.has(cutId(c))), cut]);
     return true;
   };
 
@@ -3258,27 +3319,19 @@ export default function ProofTreeView({
   // marker). The band is read from post-layout `.y` (stable between the two
   // clicks, since the first pick triggers no relayout) and frozen as base ids.
   // A marker caught in the band is ABSORBED: its underlying nodes join the new
-  // band and its own cut is dropped, so the result stays one cut per region.
+  // band and its own cut is dropped, so the result stays one cut per region
+  // (`cutMembers`, which also carries the band down through folded-away
+  // subtrees — the band has no y for what the fold is not drawing).
   const commitBand = (a: string, b: string): boolean => {
     const pa = nodes.find((n) => n.data.id === a);
     const pb = nodes.find((n) => n.data.id === b);
     if (!pa || !pb) return false;
     const lo = Math.min(pa.y, pb.y);
     const hi = Math.max(pa.y, pb.y);
-    const byId = new Map(baseNodes.map((n) => [n.id, n]));
-    const ids = new Set<string>();
-    const absorbed = new Set<string>(); // cutIds of markers inside the band
-    for (const pn of nodes) {
-      if (pn.y < lo || pn.y > hi) continue;
-      if (pn.data.elidedCut) {
-        // pn.data.id === the marker's cutId; pull its base nodes back in.
-        absorbed.add(pn.data.id);
-        const cut = elideCuts.find((c) => cutId(c) === pn.data.id);
-        if (cut) for (const pid of resolveCut(cut, byId)) ids.add(pid);
-      } else if (byId.has(pn.data.id)) {
-        ids.add(pn.data.id);
-      }
-    }
+    const inBand = new Set(
+      nodes.filter((pn) => pn.y >= lo && pn.y <= hi).map((pn) => pn.data.id),
+    );
+    const { ids, absorbed } = cutMembers(inBand);
     if (ids.size === 0) return false;
     const cut: ElideCut = { kind: "band", ids: [...ids] };
     // Hold the marker at the band's topmost visible element — the min-y pick.
@@ -3456,29 +3509,20 @@ export default function ProofTreeView({
 
   /** Elide the selection to one marker — the ⇳ band cut with the marquee as
    * its picker, which is what frees it from the y-interval definition and
-   * lets it work in every layout. Markers caught in the selection are
-   * absorbed exactly as commitBand absorbs them; a swept-up COMBINED node
-   * dissolves to the member ids its own id encodes. */
+   * lets it work in every layout. The member set is `cutMembers`': markers
+   * caught in the sweep dissolve, and the region reaches down through
+   * whatever the fold is hiding under it.
+   *
+   * The SELECTION itself is deliberately not widened to match — it stays
+   * exactly what the rectangle touched. It is what the pill's other verbs
+   * reason about (`.fold` per head, `combine`'s run test, `¬note`), and those
+   * are about the boxes the reader pointed at; only the cut is about the
+   * region. */
   const elideSelection = (sel: Set<string>): boolean => {
-    const byId = new Map(baseNodes.map((n) => [n.id, n]));
-    const ids = new Set<string>();
-    const absorbed = new Set<string>();
-    for (const pn of nodes) {
-      if (!sel.has(pn.data.id)) continue;
-      const members = combineMemberIds(pn.data.id);
-      if (pn.data.elidedCut && !pn.data.elidedCut.combined) {
-        absorbed.add(pn.data.id);
-        const cut = elideCuts.find((c) => cutId(c) === pn.data.id);
-        if (cut) for (const pid of resolveCut(cut, byId)) ids.add(pid);
-      } else if (members) {
-        // A ⇉-made combined node: the auto run dissolves into the cut. (A
-        // MANUAL combine cut shares the id format, so absorb its cut too.)
-        absorbed.add(pn.data.id);
-        for (const pid of members) if (byId.has(pid)) ids.add(pid);
-      } else if (byId.has(pn.data.id)) {
-        ids.add(pn.data.id);
-      }
-    }
+    const picked = new Set(
+      nodes.map((pn) => pn.data.id).filter((id) => sel.has(id)),
+    );
+    const { ids, absorbed } = cutMembers(picked);
     if (ids.size === 0) return false;
     const cut: ElideCut = { kind: "band", ids: [...ids] };
     // Hold the marker at its slot: topmost member in base preorder, anchored
@@ -4487,7 +4531,7 @@ export default function ProofTreeView({
     label: string;
     title: string;
     color: string;
-    /** Writes to the document ⇒ sits after the ✎ seam. */
+    /** Writes to the document ⇒ sits after the ❯ seam. */
     writes: boolean;
     act: PillAct;
   };
@@ -4834,18 +4878,6 @@ export default function ProofTreeView({
       const sepW = firstWriter > 0 ? SEP_W : 0;
       const rowW =
         chipWs.reduce((a, b) => a + b, 0) + CHIP_GAP * (row.length - 1) + sepW;
-      // Where the writing half begins: the same running sum the chip loop
-      // walks, done once up front because the TINT has to be painted UNDER
-      // the chips and the loop that positions them runs after it. The +7 puts
-      // its edge exactly on the seam's hairline, so the rule reads as the
-      // boundary of the band rather than a second mark floating inside it.
-      const seamX =
-        firstWriter > 0
-          ? minX +
-            chipWs.slice(0, firstWriter).reduce((a, b) => a + b, 0) +
-            CHIP_GAP * firstWriter +
-            7
-          : 0;
       selectionPillEl = (
         <g
           // data-node: a mousedown on the pill must not start a new marquee
@@ -4872,40 +4904,36 @@ export default function ProofTreeView({
             strokeWidth={1}
             style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))" }}
           />
-          {/* The WRITING ZONE, tinted. Reinforcement only — the solid outlines
-              carry it — but it groups the five verbs that change your file
-              into one region, which no per-chip mark can do. CLIPPED to the
-              card's own rounded rect, the diagnostic ribbon's trick: the band
-              runs to the card's right edge, and clipping is what makes it
-              inherit that corner radius exactly instead of showing square
-              corners against a rounded card. A fixed clip id is safe here
-              where a node's is not — there is only ever one pill. */}
-          {firstWriter > 0 && (
-            <>
-              <clipPath id="ptw-pill-card">
-                <rect
-                  x={minX - CARD_PAD}
-                  y={-CARD_PAD}
-                  width={rowW + 2 * CARD_PAD}
-                  height={CHIP_H + 2 * CARD_PAD}
-                  rx={4}
-                />
-              </clipPath>
-              <rect
-                clipPath="url(#ptw-pill-card)"
-                x={seamX}
-                y={-CARD_PAD}
-                width={minX + rowW + CARD_PAD - seamX}
-                height={CHIP_H + 2 * CARD_PAD}
-                fill="var(--ptw-pill-writes)"
-                pointerEvents="none"
-              />
-            </>
-          )}
           {row.map((c, vi) => {
-            // The seam: a hairline and a ✎ before the first chip that writes,
+            // The seam: a hairline and a ❯ before the first chip that writes,
             // so "changes the view" and "changes your file" are two visible
-            // groups rather than one undifferentiated row.
+            // groups rather than one undifferentiated row. A shell prompt's
+            // caret, which says "what follows is entered" where a pencil only
+            // said "writing" in the abstract — and it needs no size override,
+            // unlike the rail's glyphs: at PILL_FONT_PX it inks 8.13px tall
+            // against the chip labels' own 7.9–8.6 band, so the equal-INK
+            // rule comes out for free. Its stem runs 1.56px to the labels'
+            // 1.0, deliberately rather than by slack: the ✎ it replaces
+            // carried 0.60 and read as thin at exactly the density of the
+            // words beside it (2.18 ink per px of width against .fold's
+            // 2.17), so a lone mark matching a word's density IS the failure
+            // mode, not the target. It is drawn centred on the em rather than
+            // at cap height, so unlike the rail's ❞ it wants no dy nudge —
+            // 0.27px below the row's centre, against the pencil's 0.17 above.
+            // The FAMILY is the chips' own for the reason FrontierChip takes
+            // one: the band it is being matched into is measured in the code
+            // font, and inherited it painted in the page's sans, where it
+            // inks 7.75 at a 1.75 stem — outside the band on both counts (and
+            // where the pencil's stem was 0.46, under half the labels', which
+            // is the whole of the complaint). Rejected, all measured at 11px
+            // against the labels' 8.6/1.0: › (5.0 ink, the pencil's thinness
+            // again), » and > (5.0/5.5, short, and > reads as Lean source in
+            // a row of code-font chips), ▸ (4.25, and it is already this
+            // tree's used-hypothesis gutter mark and the context-breadth rail
+            // glyph), ⟩ (9.9 — taller than the labels, and a bracket), ❭
+            // (8.13 at a 1.12 stem, the closest weight match by some way, but
+            // half a bracket pair is not what a prompt is written with). ❯
+            // resolves with no fallback on all eight code-font stacks (⬚).
             const sep =
               vi === firstWriter && firstWriter > 0 ? (
                 <g pointerEvents="none">
@@ -4923,10 +4951,11 @@ export default function ProofTreeView({
                     dy="0.32em"
                     textAnchor="middle"
                     fontSize={PILL_FONT_PX}
+                    fontFamily={getCodeFontFamily()}
                     fill={SEQ_STROKE}
                     style={{ userSelect: "none" }}
                   >
-                    ✎
+                    ❯
                   </text>
                 </g>
               ) : null;

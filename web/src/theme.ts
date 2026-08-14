@@ -176,17 +176,6 @@ const PALETTE_CSS = `
   --ptw-diff-del: #f6dede;
   --ptw-diff-del: color-mix(in srgb, var(--ptw-danger) 22%, var(--ptw-surface));
 
-  /* The selection pill's WRITING half — the zone past the seam, where every
-     chip changes your file. A band rather than a per-chip fill: the gaps
-     between chips would show the card through and split the zone into five,
-     which is the same argument that made the card one rect instead of N. It
-     is mixed against --ptw-surface because it lands ON the card, not on the
-     page (the --ptw-prose lesson), and kept at 9% — the shape channel (a
-     solid outline against the view chips' dashed one) is what carries this,
-     and the tint only has to say "these belong together". */
-  --ptw-pill-writes: #ececef;
-  --ptw-pill-writes: color-mix(in srgb, var(--ptw-fg) 9%, var(--ptw-surface));
-
   --ptw-comment: #8b949e;
   --ptw-case: #6b7f99;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));

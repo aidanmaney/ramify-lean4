@@ -17,7 +17,12 @@
 import type { CombinedPart, ParentEdge, TreeNode } from "./types";
 
 export type ElideCut =
-  | { kind: "path"; from: string; to: string } // ancestor→descendant path
+  // ancestor→descendant path. Its members are DERIVED (`pathIds` at resolve
+  // time, so the chain re-forms across a re-parse); `hidden` is the one part
+  // frozen at pick time — see `foldHidden`, and note that only the path's
+  // BOTTOM endpoint can carry any, since a collapsed intermediate would have
+  // hidden the endpoint the reader clicked.
+  | { kind: "path"; from: string; to: string; hidden?: string[] }
   | { kind: "band"; ids: string[] } // explicit id set (a vertical band)
   // One tactic + the blocks it opened. `note` is the prose a `.none` source
   // flag wrote after its directive (see NodeFlags): a `.none` seeds exactly
@@ -232,6 +237,81 @@ export function leafFoldTargets(nodes: TreeNode[]): Map<string, string> {
   return out;
 }
 
+/** What a cut must take BEYOND the nodes the reader could point at: every
+ * node below `claimed` that the FOLD is currently hiding.
+ *
+ * The three region cuts (the marquee's `elide`, the ⇳ band, the ⇥ path) are
+ * picked over DRAWN geometry, so a folded-away subtree is not in the picture
+ * and never enters the pick. Without this it is then dropped from the cut —
+ * and worse than dropped: the fold that was hiding it hangs on a node the cut
+ * REMOVES, so `collapsed` stops resolving and every one of those nodes
+ * re-parents onto the fresh marker and is DRAWN. Measured on
+ * `commented.lean`'s `#5` with its last goal folded: sweeping the whole
+ * visible proof gave `◌ 2 tactics` with the hidden `omega` standing below it,
+ * i.e. the ghost under-reported the region by exactly what the reader had
+ * already put away, and the one thing the gesture promised — this region goes
+ * — was the one thing that did not happen.
+ *
+ * So a cut swallows what the fold is hiding under its members. The two are
+ * the same KIND of statement — "I am done with this subtree" — and the cut is
+ * the stronger of them, so the fold yields to it. Nothing else is swept in:
+ * the gallery's `hide`, sequence's `only` and `focus` also stop a node being
+ * drawn, and they are deliberately NOT counted here. Those are statements
+ * about the VIEWPORT rather than about a subtree, and the gallery makes the
+ * asymmetry plain — it hides all branches but one, so a cut that swallowed
+ * the hidden ones and left the shown one hanging off the ghost would be
+ * arbitrary. Nor is it the same defect: the pager keys on the SPLITTING node,
+ * so cutting that node hands the split to the marker with a fresh pick, and
+ * measured on `flag_closing` with the gallery paged to 2/2, cutting the
+ * `constructor` drew the ghost at `‹ 1/2 ›` with one branch — a pager reset,
+ * never an exposure.
+ *
+ * The eligibility test MIRRORS `computeLayout`'s own fold sweep (a node is
+ * hidden iff all parents are collapsed or hidden), narrowed by "and every one
+ * of those parents is leaving": a node still reachable through a fold the cut
+ * does not touch stays where it is, so the cut can never claim material that
+ * would have remained hidden anyway. That narrowing is only observable on a
+ * multi-parent node, which a proof tree does not produce today — it is here
+ * so the rule reads as the invariant it is rather than as an accident of
+ * single parents. Run as a fixpoint for the same reason (a second parent may
+ * be decided later in the list); over corpus-sized trees the passes are
+ * nothing next to one relayout.
+ *
+ * `nodes` is the DRAWN tree (post-elision), so a hidden nested GHOST comes
+ * back as its marker id and the caller dissolves it exactly as it dissolves a
+ * swept one. Returns the extra ids only — never the seeds.
+ *
+ * Swept over the corpus (every proof × one folded goal × every contiguous
+ * window of the DRAWN nodes, which in compact stacked is what a rectangle
+ * takes): **65,136 of 194,796 (fold, region) pairs exposed something, 417,986
+ * node exposures — 0 and 0 after**, and with a ◌ step cut already standing,
+ * 1,497,909 of 4,500,302 and 9,730,722 → 0 and 0. The structural sweep ran on
+ * every one of those: 0 cycles, 0 back edges (no link's target above its
+ * source), 0 nodes emitted twice (disjointness), 0 round-trip failures and 0
+ * ghosts whose `+N` disagreed with what they swallowed — before AND after, so
+ * the extension costs none of them. */
+export function foldHidden(
+  nodes: TreeNode[],
+  claimed: ReadonlySet<string>,
+  collapsed: ReadonlySet<string>,
+): string[] {
+  const hidden = new Set<string>();
+  const gone = (id: string) =>
+    hidden.has(id) || (claimed.has(id) && collapsed.has(id));
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const n of nodes) {
+      if (hidden.has(n.id) || claimed.has(n.id) || n.parents.length === 0)
+        continue;
+      if (n.parents.every((p) => gone(p.id))) {
+        hidden.add(n.id);
+        changed = true;
+      }
+    }
+  }
+  return [...hidden];
+}
+
 /** The node path from ancestor `from` down to descendant `to` (inclusive), or
 null if `from` is not an ancestor of `to`. Proof trees are trees, so we walk
 single parents up from `to`. Mirrors the engine's own `pathBetween`. */
@@ -258,7 +338,13 @@ export function resolveCut(
   cut: ElideCut,
   byId: Map<string, TreeNode>,
 ): string[] {
-  if (cut.kind === "path") return pathIds(byId, cut.from, cut.to) ?? [];
+  if (cut.kind === "path") {
+    const path = pathIds(byId, cut.from, cut.to);
+    if (!path) return [];
+    // The frozen fold extent joins the derived chain (see `foldHidden`).
+    // Filtered like a band's ids: an edit may have taken any of them.
+    return [...path, ...(cut.hidden ?? []).filter((id) => byId.has(id))];
+  }
   // `!!cut.note` is the leaf licence (see stepIds): a written `.none <prose>`
   // may cut a closing tactic, a note-less ◌ may not. Routed through here so
   // `pruneCuts` and `applyElisions` cannot disagree about it.
@@ -422,7 +508,12 @@ function ghostLabel(tactics: string[], note?: string): string {
 export function remapCut(cut: ElideCut, to: (id: string) => string): ElideCut {
   switch (cut.kind) {
     case "path":
-      return { ...cut, from: to(cut.from), to: to(cut.to) };
+      return {
+        ...cut,
+        from: to(cut.from),
+        to: to(cut.to),
+        hidden: cut.hidden?.map(to),
+      };
     case "step":
       return { ...cut, id: to(cut.id) };
     default:
