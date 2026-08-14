@@ -4823,6 +4823,18 @@ export default function ProofTreeView({
       const sepW = firstWriter > 0 ? SEP_W : 0;
       const rowW =
         chipWs.reduce((a, b) => a + b, 0) + CHIP_GAP * (row.length - 1) + sepW;
+      // Where the writing half begins: the same running sum the chip loop
+      // walks, done once up front because the TINT has to be painted UNDER
+      // the chips and the loop that positions them runs after it. The +7 puts
+      // its edge exactly on the seam's hairline, so the rule reads as the
+      // boundary of the band rather than a second mark floating inside it.
+      const seamX =
+        firstWriter > 0
+          ? minX +
+            chipWs.slice(0, firstWriter).reduce((a, b) => a + b, 0) +
+            CHIP_GAP * firstWriter +
+            7
+          : 0;
       selectionPillEl = (
         <g
           // data-node: a mousedown on the pill must not start a new marquee
@@ -4849,6 +4861,36 @@ export default function ProofTreeView({
             strokeWidth={1}
             style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))" }}
           />
+          {/* The WRITING ZONE, tinted. Reinforcement only — the solid outlines
+              carry it — but it groups the five verbs that change your file
+              into one region, which no per-chip mark can do. CLIPPED to the
+              card's own rounded rect, the diagnostic ribbon's trick: the band
+              runs to the card's right edge, and clipping is what makes it
+              inherit that corner radius exactly instead of showing square
+              corners against a rounded card. A fixed clip id is safe here
+              where a node's is not — there is only ever one pill. */}
+          {firstWriter > 0 && (
+            <>
+              <clipPath id="ptw-pill-card">
+                <rect
+                  x={minX - CARD_PAD}
+                  y={-CARD_PAD}
+                  width={rowW + 2 * CARD_PAD}
+                  height={CHIP_H + 2 * CARD_PAD}
+                  rx={4}
+                />
+              </clipPath>
+              <rect
+                clipPath="url(#ptw-pill-card)"
+                x={seamX}
+                y={-CARD_PAD}
+                width={minX + rowW + CARD_PAD - seamX}
+                height={CHIP_H + 2 * CARD_PAD}
+                fill="var(--ptw-pill-writes)"
+                pointerEvents="none"
+              />
+            </>
+          )}
           {row.map((c, vi) => {
             // The seam: a hairline and a ✎ before the first chip that writes,
             // so "changes the view" and "changes your file" are two visible
@@ -4898,6 +4940,7 @@ export default function ProofTreeView({
                   // its own outline (and overflows the backing card, whose
                   // width is summed from the same measurements).
                   fontFamily={getCodeFontFamily()}
+                  solid={c.writes}
                   onPick={() => runPillChip(c.act)}
                 />
               </Fragment>
@@ -7368,7 +7411,20 @@ export default function ProofTreeView({
                 the node's own <g> every later sibling would paint over it —
                 out here it paints over everything, which for a transient
                 confirmation is right. The picker-row idiom otherwise: SVG
-                chips, no portal, no focus to manage. */}
+                chips, no portal, no focus to manage.
+
+                Unreserved is the RIGHT answer here and must stay that way:
+                arming is transient, and a row that reserved space would shift
+                the tree at the instant the reader is aiming at a destructive
+                confirm. It costs nothing — the row wants CHIP_TOP_GAP + CHIP_H
+                = 23px and a tactic is followed by TRUNK_GAP_BRANCH = 24, so it
+                lands in the gap the layout already leaves (measured: 0 of 186
+                armed rows overlap any node box in ☰, and none in ⊦). The one
+                exception found and NOT fixed is || tracks, where a single row
+                of 24 clipped 4px off the box below it in the shared track:
+                that track's floor reserves nothing for a lane it cannot know
+                about, and buying those 4px means reserving space, which is the
+                thing this row must not do. */}
             {arming &&
               (() => {
                 const an = nodes.find((n) => n.data.id === arming.id);
@@ -7387,19 +7443,72 @@ export default function ProofTreeView({
                   ? `replace ${ext.lines} with sorry`
                   : `delete ${ext.lines} line${ext.lines === 1 ? "" : "s"}`;
                 const wide = chipWidth(label, CHIP_FONT_PX);
+                const x0 = -CHIP_W_ADD / 2;
+                const rowW = wide + CHIP_GAP + CHIP_W_ADD;
+                // Shifted clear of the DESCENDING LANE, exactly as the chip
+                // lane is (see the lane transform) and as the gallery pager
+                // is: `an.x - w/2 + TRUNK_INSET` IS the x a connector drops
+                // at, and the confirm chip is centred on it at the `+` chip's
+                // width — so the trunk ran 10px inside the chip's left edge
+                // and straight through the label, which is unreadable on a
+                // dashed unfilled chip. Measured over the whole corpus in ☰:
+                // 116 of 186 armable tactics crossed, EVERY one of them at
+                // that single offset of 10 and nowhere else (the `×` chip,
+                // further right, was never crossed). The offset is measured
+                // from the CARD's edge rather than the chip's — the card is
+                // what would cover the lane — so the air beside the trunk is
+                // the lane's own 6px either way.
+                //
+                // Gated on having a visible child for the lane's own reason:
+                // with nothing dropping there the row belongs centred on the
+                // trunk it hangs under.
+                const shift = drawnParentIds.has(arming.id)
+                  ? CHIP_W_ADD / 2 + 6 + CARD_PAD
+                  : 0;
                 return (
                   <g
-                    transform={`translate(${an.x - w / 2 + TRUNK_INSET}, ${
-                      an.y + boxTop + h + CHIP_TOP_GAP
-                    })`}
+                    transform={`translate(${
+                      an.x - w / 2 + TRUNK_INSET + shift
+                    }, ${an.y + boxTop + h + CHIP_TOP_GAP})`}
                   >
+                    {/* An OPAQUE card under the row, the selection pill's, for
+                        the half of the problem no shift can reach: the ⋔ wide
+                        layout draws SPLAYED BÉZIERS, which cross the row at
+                        every offset across its whole width rather than at one
+                        lane — measured on the same corpus, 9 of 24 confirm
+                        chips and 8 of 24 `×` chips crossed, one of them at 99
+                        sampled points spanning 566→704 of a 566→730 chip. A
+                        shift is defined against a lane that mode does not
+                        have. The card is also what makes the row legible over
+                        a comment strip or a case badge, which it hangs across
+                        wherever the tactic sits. One card, not two opaque
+                        chips: the gap between them shows the same ink.
+                        Neutral chrome with the danger ink left to the chips —
+                        the card says "floating above", the chips say what the
+                        click does. */}
+                    <rect
+                      x={x0 - CARD_PAD}
+                      y={-CARD_PAD}
+                      width={rowW + 2 * CARD_PAD}
+                      height={CHIP_H + 2 * CARD_PAD}
+                      rx={4}
+                      fill="var(--ptw-surface)"
+                      stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
+                      strokeWidth={1}
+                      style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))" }}
+                    />
                     <FrontierChip
                       glyph={label}
                       title={`Confirm — ${CMD}Z in the editor undoes it`}
-                      x={-CHIP_W_ADD / 2}
+                      x={x0}
                       width={wide}
                       color={DANGER_FILL}
                       fontSize={CHIP_FONT_PX}
+                      // Solid for the same reason the pill's writing verbs
+                      // are: this is the click that changes the file. Its `×`
+                      // stays dashed — backing out writes nothing — so the
+                      // pair reads the way the pill's two halves do.
+                      solid
                       fontFamily={getCodeFontFamily()}
                       // Pinning the node being removed: the compact layout
                       // walks one y-cursor in DFS order, so everything above
@@ -7411,7 +7520,7 @@ export default function ProofTreeView({
                     <FrontierChip
                       glyph="×"
                       title="Cancel"
-                      x={-CHIP_W_ADD / 2 + wide + CHIP_GAP}
+                      x={x0 + wide + CHIP_GAP}
                       width={CHIP_W_ADD}
                       color="var(--ptw-comment)"
                       fontFamily={getCodeFontFamily()}
@@ -8558,6 +8667,7 @@ function RailButton({
   glyph,
   glyphPx,
   glyphDy,
+  glyphWeight,
   title,
   onClick,
   pressed,
@@ -8575,6 +8685,14 @@ function RailButton({
   (measured — every other rail glyph sits within 1px of centre). Paint only;
   the 26px box is untouched, so the rail's grid still governs. */
   glyphDy?: number;
+  /** Draw the glyph with heavier strokes. The rail sizes glyphs to equal INK
+  HEIGHT, which says nothing about how much ink is inside that height: ⌖ fills
+  17% of its own bbox against ⊟'s 63%, and shrinking it to 12 to meet the band
+  thinned its strokes further, so it read as skinny beside its neighbours.
+  Weight is the right lever because the wrong one is size — going back up to
+  14 would break the band it was brought into. Measured: bold takes ⌖ from 17
+  to 24.8 units of ink at an unchanged 10px height. */
+  glyphWeight?: string;
   title: string;
   // The event is passed through so a button can carry a second gesture on a
   // modifier (⌥ on the context-breadth button); callers that don't care stay
@@ -8585,7 +8703,14 @@ function RailButton({
   disabled?: boolean;
 }) {
   const color = pressedColor ?? RAIL_PRESSED;
-  const base = glyphPx ? { ...RAIL_BTN, fontSize: glyphPx } : RAIL_BTN;
+  const base =
+    glyphPx || glyphWeight
+      ? {
+          ...RAIL_BTN,
+          ...(glyphPx ? { fontSize: glyphPx } : {}),
+          ...(glyphWeight ? { fontWeight: glyphWeight } : {}),
+        }
+      : RAIL_BTN;
   return (
     <button
       type="button"
@@ -8631,6 +8756,14 @@ interface FlyMember {
   (measured — every other rail glyph sits within 1px of centre). Paint only;
   the 26px box is untouched, so the rail's grid still governs. */
   glyphDy?: number;
+  /** Draw the glyph with heavier strokes. The rail sizes glyphs to equal INK
+  HEIGHT, which says nothing about how much ink is inside that height: ⌖ fills
+  17% of its own bbox against ⊟'s 63%, and shrinking it to 12 to meet the band
+  thinned its strokes further, so it read as skinny beside its neighbours.
+  Weight is the right lever because the wrong one is size — going back up to
+  14 would break the band it was brought into. Measured: bold takes ⌖ from 17
+  to 24.8 units of ink at an unchanged 10px height. */
+  glyphWeight?: string;
   title: string;
   pressedColor?: string;
   disabled?: boolean;
@@ -8668,6 +8801,7 @@ function RailFlyout({
   id,
   glyph,
   glyphPx,
+  glyphWeight,
   label,
   members,
   open,
@@ -8677,6 +8811,11 @@ function RailFlyout({
   /** The group's resting face, worn while no single member is away. */
   glyph: string;
   glyphPx?: number;
+  /** Weight for the GROUP glyph only — see RailButton. Deliberately not
+  applied when a MEMBER's glyph is on the face: that is a different glyph with
+  its own measured weight, and thickening it would make the head disagree with
+  the very button it stands in for. */
+  glyphWeight?: string;
   /** Short group name for the head's title. */
   label: string;
   members: FlyMember[];
@@ -8690,6 +8829,7 @@ function RailFlyout({
       <RailButton
         glyph={face ? face.glyph : glyph}
         glyphPx={face ? face.glyphPx : glyphPx}
+        glyphWeight={face ? undefined : glyphWeight}
         title={`${label}: ${members.map((m) => m.glyph).join(" · ")} — click to choose`}
         pressed={away.length > 0}
         pressedColor={face?.pressedColor}
@@ -9251,6 +9391,7 @@ function ControlRail({
         // is a grandfathered outlier) — 12 brings it to 10, the band ⫴ (9) and
         // ⋮ (10) already sit in. Measured, like every override here.
         glyphPx={12}
+        glyphWeight="bold"
         label="Pick on the tree"
         open={flyout === "picking"}
         onOpenChange={onFlyoutChange}
@@ -9406,6 +9547,7 @@ function FrontierChip({
   // paint in it too, or the width and the glyph disagree. Everything else
   // stays UI chrome.
   fontFamily = "monospace",
+  solid,
   onPick,
 }: {
   glyph: string;
@@ -9415,6 +9557,15 @@ function FrontierChip({
   color: string;
   fontSize?: number;
   fontFamily?: string;
+  /** Draw the outline UNBROKEN instead of dashed. Dashed is the resting state
+  and means what it means everywhere else in this tree — a thing that is not
+  in the proof yet (a ghost, a marker, a recovered node, a chip offering to
+  write a tactic that does not exist). So an unbroken outline is available to
+  say the opposite, and the selection pill spends it on the verbs that CHANGE
+  YOUR FILE: solid past the seam, dashed before it. A shape, deliberately, not
+  a colour — it is the channel that survives without hue, the same reason the
+  connectors' target marks are the baseline and their tint is reinforcement. */
+  solid?: boolean;
   onPick: () => void;
 }) {
   return (
@@ -9439,7 +9590,7 @@ function FrontierChip({
         fill="transparent"
         stroke={color}
         strokeWidth={1.2}
-        strokeDasharray="3 2"
+        strokeDasharray={solid ? undefined : "3 2"}
       />
       <text
         x={width / 2}

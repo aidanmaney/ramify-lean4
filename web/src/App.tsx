@@ -197,6 +197,17 @@ export default function App() {
               };
               w.__edits = [...(w.__edits ?? []), { pos, text }];
             },
+            // `⊘` and its ARMED confirm row are gated on this hook as well as
+            // on `deleteSlots` (`caps.del` is the conjunction), so passing the
+            // slots alone left the whole delete gesture undrawable here — the
+            // third instance of exactly the blind spot the two comments around
+            // this one record, and the one that hid the armed row's confirm
+            // chips crossing a connector. Writes land in `window.__deletes`;
+            // the document behind the NDJSON never changes, so nothing redraws.
+            onDeleteTactic: (spec: unknown) => {
+              const w = window as unknown as { __deletes?: unknown[] };
+              w.__deletes = [...(w.__deletes ?? []), spec];
+            },
             // The FRONTIER chips (`+`/`sorry`/`calc`) are gated on this hook
             // alone, and the lane is not even reserved without it — so until
             // it was stubbed the harness could not draw a chip at all, however
