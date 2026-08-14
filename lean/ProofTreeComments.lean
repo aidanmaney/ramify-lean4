@@ -126,6 +126,31 @@ structure TacticToken where
   type  : String
   deriving ToJson, FromJson
 
+/-- A span of the step's DISPLAY LABEL that the SOURCE does not contain, with
+what the editor would show for the thing it names.
+
+`TacticToken`s are absolute document positions, aligned into label space by
+`alignInLabel`, which claims only the runs where label and source agree
+character for character. That is exactly right and it is why a word the
+prettifier MINTED can never be reached: it indexes into no source at all. The
+one such word in the corpus is the `rfl` of a `rw [rfl]` node — the closing
+`rfl` `rw`'s macro appends, whose step Paperproof harvests at the bare `]`.
+
+So this is the other coordinate space, stated by the server because only the
+server can: `labelAt` is an offset into the step's label (UTF-16 code units,
+what a JS string index is), and `text` is the label slice it claims, which the
+client checks before drawing — the same equality guard the tagged goal labels
+use, and the only thing standing between a label fix-up and a span that
+colours someone else's characters. `doc` is plain markdown (the
+`TacticTokenInfo.doc` path), never a `WithRpcRef`: there is no info node to
+reference, which is the whole reason this field exists. -/
+structure LabelToken where
+  labelAt : Nat
+  text    : String
+  type    : String
+  doc     : String
+  deriving ToJson, FromJson
+
 /-- The in-place editing seam for one tactic: the TIGHT source range of the
 tactic text proper and that text, verbatim. Paperproof's `ProofStep.position`
 includes trailing trivia (comments, the newline + indentation up to the next
@@ -151,6 +176,9 @@ structure TacticEdit where
   text  : String
   /-- Syntax highlighting for `text`, from the server's own semantic tokens. -/
   tokens : Array TacticToken := #[]
+  /-- Spans of the LABEL that no source token can reach (see `LabelToken`).
+  Empty for every tactic anyone actually wrote. -/
+  labelTokens : Array LabelToken := #[]
   /-- Column where this step's LINE begins its tactic text — past the indent
   and past a bullet marker (see `tacticIndentAt`). The widget's (+) insertion
   indents new sibling tactics to it, because a step's own `start.character` is

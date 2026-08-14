@@ -127,6 +127,23 @@ function tokenSpans(
   return out;
 }
 
+/** A span of the LABEL that the source does not contain (ProofTreeComments.lean
+`LabelToken`). Its offset is already in label space — the coordinate space
+everything here resolves into — so it needs no alignment; what it needs instead
+is the equality guard below, since a label fix-up applied after the server
+measured would otherwise shift it onto someone else's characters.
+
+There is exactly one producer today: the `rfl` of a `rw [rfl]` node, the closing
+`rfl` `rw`'s macro appends, whose step is harvested at the bare `]` and whose
+word therefore indexes into no source at all (see the Lean-side
+`rwClosingRflLabel` for the measurements). */
+export interface LabelToken {
+  labelAt: number;
+  text: string;
+  type: string;
+  doc: string;
+}
+
 /** A region where the source and the label are known to agree character for
 character: `len` chars from `srcAt` in the source are `len` chars from
 `labelAt` in the label. Tokens are shifted through whichever segment holds
@@ -263,6 +280,7 @@ export interface TacticTokenSource {
   start: LspPos;
   text: string;
   tokens?: TacticToken[];
+  labelTokens?: LabelToken[];
 }
 
 /**
@@ -312,6 +330,7 @@ export function makeTacticRenderer(
         infoAt,
         elision,
         colorBrackets,
+        e.labelTokens,
       );
       cache.set(key, out);
     }
@@ -342,8 +361,13 @@ export function renderTacticTokens(
   // label through the KEEP map — a span landing in an elided gap drops.
   elision?: Elision,
   colorBrackets = false,
+  // Spans stated in LABEL space rather than source space — see `LabelToken`.
+  // They need no alignment (they are already in the coordinate space
+  // everything else is being mapped INTO) but they do need the equality guard,
+  // which is applied below.
+  labelTokens: LabelToken[] = [],
 ): ReactNode[] | null {
-  if (tokens.length === 0) return null;
+  if (tokens.length === 0 && labelTokens.length === 0) return null;
   ensureTaggedStyle(); // the .ptw-tagged font normalisation, shared with goals
   // Exact: `lines` is `wrapText(label)`, so the (collapsed) label reconstructs
   // them by construction (the same contract goal labels rely on).
@@ -377,6 +401,26 @@ export function renderTacticTokens(
     }
     return [{ start, end, type: s.type, info: s.info, doc: s.doc }];
   });
+  // Label-space spans join here, past the alignment that has nothing to say
+  // about them. The guard is text equality against the label the offsets were
+  // measured in — the same discipline the tagged goal labels use, and the only
+  // thing standing between a label fix-up the server did not see and a span
+  // that colours the wrong characters. In brief mode they take the same shift
+  // through the KEEP map as everything else, so a collapsed `rw …` simply
+  // drops the span with the word it hid.
+  for (const lt of labelTokens) {
+    if (alignLabel.slice(lt.labelAt, lt.labelAt + lt.text.length) !== lt.text)
+      continue;
+    let start = lt.labelAt;
+    let end = lt.labelAt + lt.text.length;
+    if (elision) {
+      const m = mapRange(elision.keep, start, end);
+      if (!m) continue;
+      start = m.start;
+      end = m.end;
+    }
+    spans.push({ start, end, type: lt.type, doc: lt.doc });
+  }
   // Each `…` in the collapsed label is a titled pseudo-span, so the emit loop
   // draws it muted with the elided source as a hover tooltip.
   if (elision)

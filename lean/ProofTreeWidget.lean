@@ -619,6 +619,54 @@ def surfaceTacticRange (fileMap : FileMap) (src : String) (ranges : Array (Nat �
           best := some (rb, re)
   return best
 
+/-- The label span for the `rfl` `rw` appends — the one word in the corpus that
+the display string MINTS and no source token can reach.
+
+`rw` is a macro (`Init/Tactics.lean`):
+`(rewrite $c [$rs,*] $(l)?; with_annotate_state $rbrak (try (with_reducible rfl)))`,
+where `$rbrak` is the closing `]`. Paperproof harvests that annotated state as
+a step, sees its source slice is `"]"`, and re-synthesizes the label as
+`rw [rfl]` (`prettifySteps` — "rw puts final rfl on the `]` token"). So the
+node draws a word that appears nowhere in the buffer, and every mechanism the
+tooltips ride is keyed on source: `semanticTokensFor` has nothing to collect,
+`alignInLabel` claims only the shared `rw [` head, and `tokenInfos` is keyed by
+absolute position.
+
+MEASURED, and this is why nothing cheaper works. At the `]` byte the only info
+node of that width is a `TacticInfo` whose elaborator is
+`evalWithAnnotateState` — the one node `hoverEligible` excludes, mirroring
+core's `hoverableInfoAt?` — and the macro's expansion contributes NO canonical
+range at all, so there is no `rfl` info node anywhere to reference. The buffer
+agrees: `textDocument/hover` on that `]` answers with the `rwRuleSeq` parser
+docstring ("A `rwRuleSeq` is a list of `rwRule` in brackets"), which is about
+the brackets and not about the tactic the label names. Pointing the label's
+`rfl` at the `]`'s own hover would therefore have been worse than silence.
+
+What ships instead is the environment's docstring for the `rfl` TACTIC — the
+declaration the macro actually runs, and byte-identical to what the buffer
+shows when you hover a `rfl` you wrote yourself (measured over LSP against
+`findDocString?` here). It is a lookup, not a fabrication: if the kind ever
+stops carrying a docstring the array is empty and the label falls back to the
+plain text it draws today.
+
+The gate is the SOURCE SLICE, not the label: a step whose own tight text is a
+lone `]` is the annotated-state step by construction, and requiring the
+prettifier's exact output on top of it keeps a hand-written `rw [rfl]` (whose
+`rfl` is a real rule with a real token) from ever matching — its slice is
+`rfl`. `startsWith` rather than `==` because the location clause is put back
+before anything reads a label, so a `rw … at h` node arrives as
+`rw [rfl] at h`. The offset is 4 by that same test, and the client re-checks
+the slice before drawing. -/
+def rwClosingRflLabel (env : Environment) (srcSlice label : String)
+    : IO (Array ProofTree.LabelToken) := do
+  unless srcSlice == "]" && label.startsWith "rw [rfl]" do return #[]
+  let some doc ← findDocString? env ``Lean.Parser.Tactic.tacticRfl | return #[]
+  -- `rewriteExamples` is the buffer's own docstring post-process, applied here
+  -- for the same reason `tokenInfoAt` applies it: the shipped text must be
+  -- what the editor renders, not a near miss.
+  return #[{ labelAt := 4, text := "rfl", type := "keyword",
+             doc := FileWorker.Hover.rewriteExamples doc }]
+
 /-- Would the editor's own hover consider this info node? Mirrors the
 eligibility test inside `InfoTree.hoverableInfoAt?`: anything carrying
 elaborator info, plus field/option/error-name nodes, minus the `nullKind` and
@@ -1071,12 +1119,18 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
             some { start := t.pos, stop := t.tailPos,
                    type := wireTokenType t : TacticToken }
           else none
+        -- The step's OWN tight slice, before the widening above: for the
+        -- closing `rfl` of an `rw` that is the bare `]`, which is what
+        -- `rwClosingRflLabel` gates on.
+        let ownSlice := String.Pos.Raw.extract src b0 e0t
+        let labelTokens ← rwClosingRflLabel snap.env ownSlice s.tacticString
         tacticEdits := tacticEdits.push {
           stepStart := s.position.start
           start
           stop
           text  := String.Pos.Raw.extract raw ⟨0⟩ tight
           tokens
+          labelTokens
           -- Where this line's tactic text starts, which is neither the step's
           -- column nor the bare line indent (see tacticIndentAt).
           tacticIndent := indent

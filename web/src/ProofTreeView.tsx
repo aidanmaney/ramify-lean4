@@ -27,6 +27,8 @@ import {
   COMMENT_FONT_PX,
   COMMENT_LINE_H,
   COMMENT_INDENT,
+  COMMENT_MORE_PAD,
+  COMMENT_RULE_INDENT,
   CASE_FONT_PX,
   CASE_LINE_H,
   bandTopH,
@@ -317,9 +319,23 @@ const CHIP_GAP = 6;
 // Breathing room between the selection pill's chips and the edge of the
 // opaque card behind them.
 const CARD_PAD = 4;
-// The gap that carries the selection pill's safety seam: a hairline and a ❯
-// between the verbs that change the VIEW and the verbs that change your FILE.
-const SEP_W = 26;
+// The selection pill's safety seam: a ❯ prompt caret between the verbs that
+// change the VIEW and the verbs that change your FILE. AIR is what makes it
+// read as structure rather than as one more chip's label, so the caret is
+// given a clear `SEAM_GAP` either side against the chips' own `CHIP_GAP`. A
+// hairline rule used to stand beside it and is gone: it said what the caret
+// already said, and this row is drawn OVER the tree, where every px of width
+// is reading room taken from the proof.
+const SEAM_GLYPH = "❯";
+const SEAM_GAP = 10;
+/** The seam's reserved width: what the row's x-cursor advances by where the
+ * writing verbs begin. Sized so the caret keeps `SEAM_GAP` of clear space on
+ * BOTH sides — the cursor already stands `CHIP_GAP` past the previous chip,
+ * so that much comes back off. ONE home for it, since the backing card's width
+ * is summed before the row is drawn: measurer and renderer read the same
+ * number or the card and the chips disagree. */
+const seamWidth = () =>
+  2 * SEAM_GAP + measureText(SEAM_GLYPH, PILL_FONT_PX) - CHIP_GAP;
 const CHIP_W_ADD = 20;
 const CHIP_W_SORRY = 36;
 // The fill-in-place chip names the hole rather than reading `+`. "Add a tactic
@@ -1245,6 +1261,14 @@ export default function ProofTreeView({
   // global toggle flips, so turning comments back on doesn't silently undo
   // the ones you asked to hide.
   const [commentsOff, setCommentsOff] = useState<Set<string>>(new Set());
+  // Ids whose BIG comment strip (COMMENT_CLAMP_MIN+ wrapped lines — a
+  // docstring, not an aside) is expanded past the default clamp. Same
+  // lifecycle as `commentsOff`: remapped across re-parses, cleared on a proof
+  // change. Expansion is a click on the strip's own "⋯ N more lines"
+  // affordance — a relayout, anchored on the node, never a hover.
+  const [commentsExpanded, setCommentsExpanded] = useState<Set<string>>(
+    new Set(),
+  );
   // Side-by-side branches (compact mode): a branching tactic's subtrees lay
   // out as columns sharing one vertical span instead of stacking down the
   // page. A computeLayout parameter, not an engine rebuild: geometry per
@@ -1317,6 +1341,10 @@ export default function ProofTreeView({
   // focus-subtree buttons). The bar renders inside the node's own <g>, so
   // pointer travel from box to bar never leaves the hover region (no flicker).
   const [hoverId, setHoverId] = useState<string | null>(null);
+  /** The big-comment affordance under the pointer. Its own state and not
+  `hoverId`: that one is the node's, and the whole point of this line is that
+  it is a CONTROL sitting inside a strip whose other ink is prose. */
+  const [moreHover, setMoreHover] = useState<string | null>(null);
   // What a ◌ would take, faded while the pointer is on the button (or ⌥ is
   // held over the tactic). Hover state like `hoverId`, and reset like it —
   // nothing but ids, so a stale set can only fail to match. `anchor` is the
@@ -2307,6 +2335,7 @@ export default function ProofTreeView({
               ? "instead"
               : true,
         commentsHidden: commentsOff,
+        commentsExpanded,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -2318,6 +2347,7 @@ export default function ProofTreeView({
       overviewKeep,
       commentMode,
       commentsOff,
+      commentsExpanded,
     ],
   );
 
@@ -2382,6 +2412,7 @@ export default function ProofTreeView({
     setClickAccent(null);
     setCombineOff(new Set());
     setCommentsOff(new Set());
+    setCommentsExpanded(new Set());
     // A different proof's splits are different nodes entirely. (A same-proof
     // EDIT remaps the keys instead — see the shape branch; no pruning either
     // way: `pick` is read modulo the live child count, and keys naming a
@@ -2500,6 +2531,7 @@ export default function ProofTreeView({
     // remapIds lesson, measured at 0/10 surviving by id).
     setCombineOff(remapSet);
     setCommentsOff(remapSet);
+    setCommentsExpanded(remapSet);
     // The prose prompt anchors on a head tactic by id; follow it or drop it.
     if (flagPrompt) {
       const moved = to(flagPrompt.headId);
@@ -3186,6 +3218,7 @@ export default function ProofTreeView({
     setSeq({ mode: "off" });
     setCombineOff(new Set());
     setCommentsOff(new Set());
+    setCommentsExpanded(new Set());
     setPick({});
     setSelection(null);
     setElidePick(null);
@@ -4875,7 +4908,7 @@ export default function ProofTreeView({
       // Verbs are pushed view-first already; this only finds the seam.
       const firstWriter = row.findIndex((c) => c.writes);
       const chipWs = row.map((c) => chipWidth(c.label, PILL_FONT_PX));
-      const sepW = firstWriter > 0 ? SEP_W : 0;
+      const sepW = firstWriter > 0 ? seamWidth() : 0;
       const rowW =
         chipWs.reduce((a, b) => a + b, 0) + CHIP_GAP * (row.length - 1) + sepW;
       selectionPillEl = (
@@ -4905,10 +4938,18 @@ export default function ProofTreeView({
             style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))" }}
           />
           {row.map((c, vi) => {
-            // The seam: a hairline and a ❯ before the first chip that writes,
-            // so "changes the view" and "changes your file" are two visible
-            // groups rather than one undifferentiated row. A shell prompt's
-            // caret, which says "what follows is entered" where a pencil only
+            // The seam: a ❯ before the first chip that writes, so "changes the
+            // view" and "changes your file" are two visible groups rather than
+            // one undifferentiated row. The caret is the WHOLE marker — a
+            // hairline rule stood beside it and is gone, because a divider and
+            // a prompt caret an inch apart make the same statement twice and
+            // the row is drawn over the tree, where the second copy is paid for
+            // in reading room. What the rule really contributed was air, so the
+            // air is kept (see SEAM_GAP, wider than the inter-chip gap by
+            // enough to read as structure) and only the ink is dropped.
+            //
+            // The caret is a shell prompt's, which says "what follows is
+            // entered" where a pencil only
             // said "writing" in the abstract — and it needs no size override,
             // unlike the rail's glyphs: at PILL_FONT_PX it inks 8.13px tall
             // against the chip labels' own 7.9–8.6 band, so the equal-INK
@@ -4937,16 +4978,13 @@ export default function ProofTreeView({
             const sep =
               vi === firstWriter && firstWriter > 0 ? (
                 <g pointerEvents="none">
-                  <line
-                    x1={cx + 7}
-                    y1={2}
-                    x2={cx + 7}
-                    y2={CHIP_H - 2}
-                    stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
-                    strokeWidth={1}
-                  />
                   <text
-                    x={cx + 17}
+                    x={
+                      cx -
+                      CHIP_GAP +
+                      SEAM_GAP +
+                      measureText(SEAM_GLYPH, PILL_FONT_PX) / 2
+                    }
                     y={CHIP_H / 2}
                     dy="0.32em"
                     textAnchor="middle"
@@ -4955,11 +4993,11 @@ export default function ProofTreeView({
                     fill={SEQ_STROKE}
                     style={{ userSelect: "none" }}
                   >
-                    ❯
+                    {SEAM_GLYPH}
                   </text>
                 </g>
               ) : null;
-            if (sep) cx += SEP_W;
+            if (sep) cx += sepW;
             const w = chipWs[vi];
             const at = cx;
             cx += w + CHIP_GAP;
@@ -6736,6 +6774,157 @@ export default function ProofTreeView({
                       ))}
                     </text>
                   )}
+                  {/* Big-comment chrome (COMMENT_CLAMP_MIN+ wrapped lines):
+                      a hairline gutter rule down the block's left — the
+                      strip's document treatment, drawn INSIDE the
+                      COMMENT_RULE_INDENT the measurer already added to every
+                      line, so the ink is inside the measured width — and the
+                      clamp's affordance line ("⋯ N more lines" / "⌃
+                      collapse") in its own <text> with its own click, since
+                      the strip's handlers edit and this one RELAYOUTS: the
+                      toggle is a click, never a hover (no-relayout-on-hover),
+                      anchored on the node so the band growing above/below
+                      doesn't walk the view. Both hide with the strip while
+                      its editor overlay is up. stopPropagation on click AND
+                      dblclick — on a GOAL a bubbled click is the fold (the
+                      strip's own lesson). */}
+                  {node.data.commentMore &&
+                    node.data.commentLines.length > 0 && (
+                      <g
+                        visibility={
+                          isEditing && editing?.comment ? "hidden" : undefined
+                        }
+                      >
+                        <rect
+                          x={
+                            (compact
+                              ? -w / 2 +
+                                (node.data.parents.length > 0
+                                  ? COMMENT_INDENT
+                                  : 0)
+                              : -node.data.commentW / 2) + 1
+                          }
+                          y={
+                            boxTop -
+                            topH +
+                            (floatComment
+                              ? -node.data.commentBlockH
+                              : node.data.caseH) +
+                            3
+                          }
+                          width={1.5}
+                          rx={0.75}
+                          // The rule spans the PROSE only, stopping short of
+                          // the affordance's line slot — the quote is the
+                          // document, and the line that opens and shuts it is
+                          // not part of what was written. That is most of the
+                          // "separate it from the text" the affordance needed;
+                          // the rest is its own upright face and underline.
+                          height={
+                            node.data.commentLines.length * COMMENT_LINE_H - 6
+                          }
+                          fill={COMMENT_FILL}
+                          opacity={0.45}
+                        />
+                        {(() => {
+                          const mx =
+                            (compact
+                              ? -w / 2 +
+                                (node.data.parents.length > 0
+                                  ? COMMENT_INDENT
+                                  : 0)
+                              : -node.data.commentW / 2) + COMMENT_RULE_INDENT;
+                          const my =
+                            boxTop -
+                            topH +
+                            (floatComment
+                              ? -node.data.commentBlockH
+                              : node.data.caseH) +
+                            (node.data.commentLines.length + 0.5) *
+                              COMMENT_LINE_H;
+                          const mw = measureText(
+                            node.data.commentMore.label,
+                            COMMENT_FONT_PX,
+                            false,
+                          );
+                          const hot = moreHover === id;
+                          const toggle = (e: React.MouseEvent) => {
+                            e.stopPropagation();
+                            anchorOn(id);
+                            setCommentsExpanded((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(id)) next.delete(id);
+                              else next.add(id);
+                              return next;
+                            });
+                          };
+                          return (
+                            <g
+                              style={{ cursor: "pointer" }}
+                              onMouseEnter={() => setMoreHover(id)}
+                              onMouseLeave={() =>
+                                setMoreHover((h) => (h === id ? null : h))
+                              }
+                              onClick={toggle}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                            >
+                              <title>
+                                {node.data.commentMore.expanded
+                                  ? "collapse this comment back to its first lines"
+                                  : "show the rest of this comment"}
+                              </title>
+                              {/* The hit area — a control's, not a glyph's,
+                                  so the pointer finds it between the letters
+                                  and on the padding. Its fill is the hover
+                                  feedback: invisible at rest, so the strip
+                                  keeps its box-less prose look. Both edges
+                                  sit inside the measured commentW (the pad is
+                                  measured too — see COMMENT_MORE_PAD). */}
+                              <rect
+                                x={mx - COMMENT_MORE_PAD}
+                                y={my - COMMENT_LINE_H / 2}
+                                width={mw + COMMENT_MORE_PAD * 2}
+                                height={COMMENT_LINE_H}
+                                rx={3}
+                                fill={COMMENT_FILL}
+                                opacity={hot ? 0.14 : 0}
+                              />
+                              <text
+                                textAnchor="start"
+                                fontSize={COMMENT_FONT_PX}
+                                fontFamily={getCodeFontFamily()}
+                                fill={COMMENT_FILL}
+                                // Upright where the prose is italic, and
+                                // underlined — the quiet web convention for
+                                // "this word does something", which is what
+                                // was asked for over button chrome. The
+                                // underline is SOLID and unconditional:
+                                // `text-decoration-style: dotted` is accepted
+                                // on the inline style and PAINTS SOLID on SVG
+                                // text (measured — the attribute reads
+                                // `dotted`, `getComputedStyle` reads `solid`),
+                                // so a rest/hover distinction carried by it
+                                // would have been a distinction nobody could
+                                // see. Hover is the backing fill and the ink
+                                // going full instead.
+                                style={{
+                                  letterSpacing: 0,
+                                  textDecorationLine: "underline",
+                                  textDecorationThickness: 1,
+                                  textUnderlineOffset: 2,
+                                  opacity: hot ? 1 : 0.85,
+                                }}
+                                x={mx}
+                                y={my}
+                                dy="0.32em"
+                              >
+                                {node.data.commentMore.label}
+                              </text>
+                            </g>
+                          );
+                        })()}
+                      </g>
+                    )}
 
                   <rect
                     x={-w / 2}
@@ -9371,37 +9560,21 @@ function ControlRail({
         ]}
       />
       <RailFlyout
-        id="reading"
-        glyph="⋮"
-        label="Reading aids"
-        open={flyout === "reading"}
-        onOpenChange={onFlyoutChange}
-        members={[
-          {
-            glyph: "⇅",
-            title:
-              "Accordion: expanding a node collapses its sibling branches",
-            away: accordion,
-            onClick: () => onAccordionChange(!accordion),
-          },
-          {
-            glyph: "⋯",
-            title:
-              "Brief: collapse boilerplate inside tactics to … (a binding's := derivation, a long [ … ] list), keeping the head and the bindings — hover a … to reveal it",
-            away: brief,
-            onClick: () => onBriefChange(!brief),
-          },
-        ]}
-      />
-      <RailFlyout
         id="picking"
-        glyph="✛"
-        // Reuses RAIL_GLYPH_BIG, so it mints no new number: at 17.5 ✛ inks
-        // 9.6px, the band ⑃ (9.3) and ⋮ (9.2) already sit in. It replaced ⌖,
-        // which read skinny at every size the band allows — ⌖ is a hairline
-        // circle with crosshairs and carries 14.5 units of ink where ✛ carries
-        // 28.6, so the weight comes from the GLYPH here, not from a font
-        // weight (see below).
+        glyph="⊹"
+        // A crosshair with an OPEN centre and detached arms. Reuses
+        // RAIL_GLYPH_BIG, so it mints no new number: at 17.5 ⊹ inks 9.3px, the
+        // band ⑃ (9.4) and ⋮ (9.4) already sit in. Third glyph in this slot,
+        // and the third is what settled that the reading is a RATIO, not a
+        // size — normalized to one band height, ⌖ carries 10.8 units of ink on
+        // 0.4px arms (hairline: the reported skinny), ✛ carries 25.4 on 1.6px
+        // arms closed to a 1.25px centre (a heavy `+`, one button above zoom's
+        // own), and ⊹ carries 12.9 on 1.1px arms around a 2.9px centre — arms
+        // three times ⌖'s stroke with more than double ✛'s gap. Scaling either
+        // of the others moves gap and arm together and so can reach neither.
+        // The glyph sits directly above the ⋮ reading head; the two are the
+        // only sparse marks on the rail, but ⋮'s dots are collinear and
+        // vertical where ⊹'s four strokes point out of an empty middle.
         glyphPx={RAIL_GLYPH_BIG}
         label="Pick on the tree"
         open={flyout === "picking"}
@@ -9431,6 +9604,29 @@ function ControlRail({
             pressedColor: SEQ_STROKE,
             disabled: !bandEnabled,
             onClick: onToggleBand,
+          },
+        ]}
+      />
+      <RailFlyout
+        id="reading"
+        glyph="⋮"
+        label="Reading aids"
+        open={flyout === "reading"}
+        onOpenChange={onFlyoutChange}
+        members={[
+          {
+            glyph: "⇅",
+            title:
+              "Accordion: expanding a node collapses its sibling branches",
+            away: accordion,
+            onClick: () => onAccordionChange(!accordion),
+          },
+          {
+            glyph: "⋯",
+            title:
+              "Brief: collapse boilerplate inside tactics to … (a binding's := derivation, a long [ … ] list), keeping the head and the bindings — hover a … to reveal it",
+            away: brief,
+            onClick: () => onBriefChange(!brief),
           },
         ]}
       />

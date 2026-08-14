@@ -381,28 +381,48 @@ function publishThemeColors() {
 }
 
 // ---- editor-chrome strip -------------------------------------------------
-// There is NO per-window settings API, so anything beyond per-editor options
-// (line numbers) can only be stripped GLOBALLY while a lens is open and
+// There is NO per-window and NO per-group settings API, so anything beyond
+// per-editor options can only be stripped GLOBALLY while a lens is open and
 // restored when it closes. The goal is maximum vertical room in the infoview
-// column: tab rows and breadcrumbs go entirely, plus the gutter/minimap
-// chaff. Main-window impact while a lens is open: no tab row (ctrl-tab still
-// switches), no breadcrumbs, no minimap; folding controls only show on
-// mouseover by default and the glyph margin is the breakpoint lane. The
-// originals are snapshotted to disk (PID-stamped) so a crash mid-lens can't
-// permanently eat the user's settings — restored on next activation if the
-// owning extension host is dead.
+// column: tab rows and breadcrumbs go entirely, plus the minimap.
+//
+// WHAT IS PER-EDITOR AND WHAT IS NOT — re-checked against the RUNNING VS Code
+// (1.132), both in `vscode.d.ts` and in the extension host's own options
+// object, because this question keeps coming back. `TextEditorOptions` is
+// EXACTLY tabSize / indentSize / insertSpaces / cursorStyle / lineNumbers, and
+// the ext-host `ExtHostTextEditorOptions` value exposes those five accessors
+// and nothing else. So of everything that makes up an editor's left margin:
+//   - line numbers      PER-EDITOR  → off in the lens only (and our lens tag)
+//   - glyph margin      GLOBAL only → NOT stripped any more, see below
+//   - folding controls  GLOBAL only → never stripped
+// and of the rest of the chrome: tabs, breadcrumbs, minimap and sticky scroll
+// are all global-only too.
+//
+// The originals are snapshotted to disk (PID-stamped) so a crash mid-lens
+// can't permanently eat the user's settings — restored on next activation if
+// the owning extension host is dead.
 const STATIC_STRIP = {
   "workbench.editor.showTabs": "none",
   "breadcrumbs.enabled": false,
-  "editor.glyphMargin": false,
-  // NOT `editor.folding: false`. It was stripped once for the last scrap of
-  // gutter, then kept because the lens folded itself down to the cursor's
-  // path — and that fold is now gone too (it collapsed and re-expanded the
-  // whole file every time a lens opened, which is half of the reported
-  // shaking). What remains is the plain reason not to strip it: the gutter
-  // costs nothing in a pane with `lineNumbers: Off`, folding is the user's own
-  // editor working normally, and leaving it alone is one less global side
-  // effect.
+  // NOT `editor.glyphMargin: false`. It WAS stripped, and it is the one strip
+  // the user could see from outside the lens: the glyph margin is the gutter's
+  // breakpoint lane, so opening a lens narrowed the left margin of every
+  // editor in every window and the text jumped sideways — reported as the
+  // gutter disappearing being jarring. It is `editor.fontSize`'s case exactly
+  // (a global setting bought for a slim pane's benefit), and it goes the same
+  // way. There is no per-editor route to salvage it: the five-key list above
+  // has no glyph margin in it, and a per-LANGUAGE scope (`"[lean4]": …`) would
+  // hit the main buffer too, which is the very editor being protected. The
+  // lens keeps the lane; that costs it ~20px of WIDTH, which is what
+  // `lensWordWrap` is for, and no height at all.
+  //
+  // NOT `editor.folding: false` either. It was stripped once for the last
+  // scrap of gutter, then kept because the lens folded itself down to the
+  // cursor's path — and that fold is now gone too (it collapsed and
+  // re-expanded the whole file every time a lens opened, which is half of the
+  // reported shaking). What remains is the plain reason not to strip it: the
+  // gutter costs nothing in a pane with `lineNumbers: Off`, folding is the
+  // user's own editor working normally, and it is one less global side effect.
   "editor.minimap.enabled": false,
   // Sticky scroll pins the enclosing declaration to the top of the editor —
   // in a lens a few lines tall that is `theorem foo … := by` eating a large
@@ -415,8 +435,10 @@ const STATIC_STRIP = {
 // felt everywhere OUTSIDE the lens: settings are user-global, so opening a lens
 // resized the text in the main editor and every other window. Shrinking the
 // glyphs to buy four lines is not worth making the file you are actually
-// reading smaller. Everything left in STATIC_STRIP is chrome — margins, tabs,
-// the minimap — whose absence costs nothing to read.
+// reading smaller. (`editor.glyphMargin` has since gone the same way for the
+// same reason — see above.) Everything left in STATIC_STRIP is chrome — tabs,
+// breadcrumbs, the minimap, sticky scroll — that a reader can lose for the
+// duration without the text under their eyes MOVING.
 //
 // There is genuinely no per-editor alternative, which is why the trade existed
 // and why it can't be salvaged: `TextEditorOptions` exposes only
@@ -428,12 +450,14 @@ const STATIC_STRIP = {
 // pane meant for typing — and it gains no lines either, since line height
 // derives from the fontSize setting rather than the painted glyphs.
 //
-// There is no height knob at all any more: the lens is whatever the split
-// makes it (see popout).
+// The height knob is not a setting at all: it is `vscode.setEditorLayout`,
+// applied once to the freshly split group (see sizeLens/popout).
 // Keys to snapshot and restore. Every strip now has a static target, so this
 // is exactly STATIC_STRIP's keys. (A crash backup written by an OLDER version
-// may still carry `editor.fontSize`; restore iterates the SNAPSHOT's keys, not
-// this list, so such a backup is still undone correctly.)
+// may still carry `editor.fontSize` or `editor.glyphMargin`; restore iterates
+// the SNAPSHOT's keys, not this list, so such a backup is still undone
+// correctly — which is also what un-strips a glyph margin left off by the
+// version before this one.)
 const STRIP_KEYS = Object.keys(STATIC_STRIP);
 let strippedOriginals = null; // in-memory while a lens is open
 
@@ -556,6 +580,112 @@ let lensColumn = null;
 // when the lens goes away and its editor state with it.
 let lensWrapped = false;
 
+/** The share of the infoview column the lens takes when it is first split off.
+ * The split's own default is half and half; the lens is meant to be a slim
+ * strip of buffer UNDER the tree, not its equal, so it takes a third. One
+ * constant, one edit to retune. */
+const LENS_HEIGHT_SHARE = 1 / 3;
+
+/**
+ * Locate a viewColumn's leaf inside a `vscode.getEditorLayout` tree.
+ *
+ * The layout is a tree of `{size, groups?}` carrying NO group identity — the
+ * only handle on it is order: leaves in depth-first order ARE the groups in
+ * grid-appearance order, which is what viewColumn numbers. Returns the leaf's
+ * SIBLING ARRAY and its index in it, i.e. everything sharing one axis with it.
+ */
+function locateLayoutLeaf(layout, column) {
+  let seen = 0;
+  const walk = (siblings) => {
+    for (let i = 0; i < siblings.length; i++) {
+      const n = siblings[i];
+      if (Array.isArray(n.groups) && n.groups.length) {
+        const hit = walk(n.groups);
+        if (hit) return hit;
+      } else if (++seen === column) {
+        return { siblings, index: i };
+      }
+    }
+    return null;
+  };
+  return walk(Array.isArray(layout?.groups) ? layout.groups : []);
+}
+
+/**
+ * Give the freshly split lens `LENS_HEIGHT_SHARE` of the height it shares with
+ * the infoview, in ONE atomic `vscode.setEditorLayout` call.
+ *
+ * This is the replacement for the run of `decreaseViewHeight` nudges that was
+ * removed: not because a resize must not animate — it does, and that is
+ * accepted — but because a single call states the proportion it wants instead
+ * of stepping toward it, and because the pane reaches its final height BEFORE
+ * the document is opened in it, so `revealAtFraction` measures the height the
+ * lens will keep and needs no second pass.
+ *
+ * Three facts about the command, read off the running VS Code (1.132) rather
+ * than assumed:
+ *
+ *  1. Sizes are RELATIVE, not pixels and not fractions. The deserializer sums
+ *     each branch's children and scales the result to the real container, so
+ *     any consistent unit works — and MIXING units does not. `getEditorLayout`
+ *     hands back absolute pixels, so this rescales within the branch's own
+ *     total instead of writing 0.33/0.67 into a tree measured in hundreds.
+ *  2. A layout with FEWER leaves than there are groups MERGES the extras —
+ *     silently, destructively. So the tree that goes back is the tree that
+ *     came out, one branch's sizes rewritten and nothing else touched. Never
+ *     synthesise `{groups:[{},{}]}` here.
+ *  3. It applies to the ACTIVE editor part and restores focus to the active
+ *     group, which at this point is the lens. Focus therefore survives.
+ *
+ * Nothing needs restoring on close, and that is worth stating because the
+ * obvious "capture the layout and put it back" is a TRAP — by then the group
+ * count may have changed and (2) would merge the user's groups. We only ever
+ * rewrite sizes WITHIN the infoview/lens branch, never the branch's own size
+ * in the root axis; when the lens closes the branch dissolves and its sibling
+ * reclaims the whole of it, which is exactly the pre-split state.
+ *
+ * Only on CREATE. A reused lens keeps whatever height it has, since after the
+ * first popout that height may be one the user dragged.
+ */
+async function sizeLens(column) {
+  let layout;
+  try {
+    layout = await vscode.commands.executeCommand("vscode.getEditorLayout");
+  } catch (e) {
+    say(`  size: getEditorLayout failed (${e}); leaving the split as it is`);
+    return;
+  }
+  const spot = locateLayoutLeaf(layout, column);
+  if (!spot || spot.siblings.length < 2) {
+    say(`  size: no sibling axis for column ${column}; leaving the split`);
+    return;
+  }
+  const before = spot.siblings.map((g) => g.size);
+  if (!before.every((s) => typeof s === "number" && isFinite(s) && s > 0)) {
+    say(`  size: unusable sizes ${JSON.stringify(before)}; leaving the split`);
+    return;
+  }
+  const total = before.reduce((a, b) => a + b, 0);
+  const rest = total - before[spot.index];
+  if (rest <= 0) {
+    say("  size: lens has no siblings to take from; leaving the split");
+    return;
+  }
+  const want = total * LENS_HEIGHT_SHARE;
+  spot.siblings.forEach((g, i) => {
+    g.size = i === spot.index ? want : (before[i] / rest) * (total - want);
+  });
+  try {
+    await vscode.commands.executeCommand("vscode.setEditorLayout", layout);
+    say(
+      `  size: lens ${before[spot.index].toFixed(0)}→${want.toFixed(0)} of ` +
+        `${total.toFixed(0)} (${Math.round(LENS_HEIGHT_SHARE * 100)}%)`,
+    );
+  } catch (e) {
+    say(`  size: setEditorLayout failed (${e}); the split keeps its own size`);
+  }
+}
+
 /** How much of the lens to leave ABOVE the tactic. AtTop alone pins it to the
  * very first row, which reads as though the proof began there; a third of the
  * way down shows the step it follows from without pushing what comes next off
@@ -565,10 +695,14 @@ const LENS_TOP_FRACTION = 1 / 3;
 /** Scroll the lens so `selection` sits LENS_TOP_FRACTION down it. There is no
  * "reveal at fraction" API, so this reveals a line that far ABOVE the target
  * AtTop instead, measuring the pane's height in lines from `visibleRanges`.
- * It runs ONCE, and that is a consequence of the shrink nudges being gone:
- * while they existed this measured a pane twice the height it would end up at,
- * so a first popout had to reveal again afterwards. Nothing resizes the lens
- * after it now. Degenerate readings (an editor that hasn't laid out yet, a
+ * It runs ONCE, and the ordering in `popout` is what earns that: the group is
+ * resized to its final height BEFORE the document is shown in it, so the
+ * `visibleRanges` this measures are the lens's own. (While the old shrink
+ * nudges existed they ran after, this measured a pane twice the height it
+ * would end up at, and a first popout had to reveal a second time.) A resize
+ * AFTER the reveal would put that second pass back, which is the standing
+ * reason not to move the call. Degenerate readings (an editor that hasn't
+ * laid out yet, a
  * tactic near the top of the file) clamp to a zero pad, i.e. plain AtTop. */
 function revealAtFraction(ed, selection) {
   const vis = ed.visibleRanges[0];
@@ -932,17 +1066,13 @@ async function popout(uri, selection) {
   await vscode.commands.executeCommand("workbench.action.newGroupBelow");
   lensColumn = vscode.window.tabGroups.activeTabGroup.viewColumn;
   say(`  popout: lens opened in column ${lensColumn}`);
-  // The lens takes the split's own height and keeps it. It used to be shrunk
-  // by a run of `decreaseViewHeight` nudges, which is REMOVED: each nudge is a
-  // discrete animated resize of the whole editor area, so opening a lens made
-  // the window step down three times and then re-place its text — reported as
-  // stuttering and shaking, and it looked like it. The height is the split's
-  // to decide; a pane you type in can afford to be the size VS Code made it.
-  //
-  // With the shrink gone the reveal inside `showInLens` is also the LAST word:
-  // it used to run a second time here because the first measured a pane twice
-  // the height it would end up at. Nothing resizes after it now, so one reveal
-  // is both correct and the only one the eye sees.
+  // The split is half and half; the lens takes a third of the column. ORDER IS
+  // LOAD-BEARING: resize the EMPTY group first, open the document into it
+  // second. That way the reveal inside `showInLens` measures the height the
+  // lens will keep, so it is the last word and runs once — the old run of
+  // `decreaseViewHeight` nudges resized after the text was placed, which is
+  // why it needed a second reveal chasing it.
+  await sizeLens(lensColumn);
   await showInLens(doc, selection, lensColumn);
   await stripEditorChrome();
 }

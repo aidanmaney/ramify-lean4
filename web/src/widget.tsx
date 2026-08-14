@@ -36,6 +36,7 @@ import { observeThemeChange } from "./theme";
 import {
   makeTacticRenderer,
   renderTacticTokens,
+  type LabelToken,
   type TacticToken,
   type TacticTokenInfo,
 } from "./tacticTokens";
@@ -266,6 +267,10 @@ interface TacticEditEntry {
   text: string;
   /** The server's semantic tokens for `text` — drives the label colouring. */
   tokens?: TacticToken[];
+  /** Spans of the LABEL no source token can reach (see `LabelToken`): today
+  exactly the `rfl` a `rw [rfl]` node draws, which the prettifier minted from
+  the closing `]` and which therefore indexes into no source. */
+  labelTokens?: LabelToken[];
   /** Column where this step's line begins its tactic text — past the indent
   and past a bullet marker (see the Lean-side `tacticIndentAt`). What (+)
   insertions indent new sibling tactics by. */

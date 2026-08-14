@@ -1018,16 +1018,41 @@ function caseSize(
   };
 }
 
+// Big-comment clamp: a strip wrapping to COMMENT_CLAMP_MIN or more lines is a
+// DOCUMENT (a multi-paragraph docstring, a long /- -/ block), not an aside —
+// and drawn whole it can be a third of a small proof's height (measured:
+// 23-36% on the flags fixtures, 7-8 line root strips at 136-154px each). So a
+// big strip shows only its first COMMENT_CLAMP_SHOWN lines plus one affordance
+// line ("⋯ N more lines"), and expanding is a per-node CLICK — a relayout,
+// anchored on the node, never a hover (the no-relayout-on-hover rule). The
+// threshold is deliberately past 3: a 3-line strip clamped to 2+affordance
+// saves nothing, and 1-3-line comments are the ones the user called fine.
+// Big strips (clamped AND expanded) also hang their prose behind a hairline
+// gutter rule — the indent is added HERE so commentW measures it and the
+// render draws inside measured ink (contour packing and the overlap sweeps
+// stay honest).
+export const COMMENT_CLAMP_MIN = 4;
+export const COMMENT_CLAMP_SHOWN = 2;
+export const COMMENT_RULE_INDENT = 9;
+/** Breathing room each side of the affordance's own text, so the hover
+backing it draws reads as a control rather than as a highlight sitting on the
+words. Measured here as well as drawn: the backing is INK, and ink outside
+`commentW` is ink the contour packing cannot see. */
+export const COMMENT_MORE_PAD = 4;
 function commentSize(
   text: string | undefined,
   reflow: ReflowMode = "off",
-): Pick<LayoutNode, "commentLines" | "commentBlockH" | "commentW"> {
+  expanded = false,
+): Pick<
+  LayoutNode,
+  "commentLines" | "commentBlockH" | "commentW" | "commentMore"
+> {
   if (!text)
     return { commentLines: [], commentBlockH: 0, commentW: 0 };
   // Same budget as the labels: a narrow box under a full-width comment strip
   // would defeat the whole point of the mode, since the strip's width joins
   // the node's effective width in both layouts.
-  const commentLines = wrapText(
+  const wrapped = wrapText(
     text,
     budgetFor(reflow),
     COMMENT_FONT_PX,
@@ -1035,16 +1060,50 @@ function commentSize(
     "none",
     reflow !== "off",
   );
+  const big = wrapped.length >= COMMENT_CLAMP_MIN;
+  let shown =
+    big && !expanded ? wrapped.slice(0, COMMENT_CLAMP_SHOWN) : wrapped;
+  // A clamp cut at a paragraph break leaves a BLANK line as the last shown
+  // one — a gap saying nothing, right above the affordance that says it
+  // better. Trim trailing blanks off the clamped slice (they count as hidden,
+  // honestly: the paragraph they separated is).
+  while (big && !expanded && shown.length > 1 && !shown[shown.length - 1].text)
+    shown = shown.slice(0, -1);
+  const commentMore = big
+    ? {
+        hidden: expanded ? 0 : wrapped.length - shown.length,
+        expanded,
+        label: expanded
+          ? "⌃ collapse"
+          : `⋯ ${wrapped.length - shown.length} more lines`,
+      }
+    : undefined;
+  // The gutter rule's indent joins every line of a big block, affordance
+  // included, so the measured width covers the rule and the shifted text.
+  const commentLines = big
+    ? shown.map((l) => ({ ...l, indent: l.indent + COMMENT_RULE_INDENT }))
+    : shown;
   const commentW = Math.max(
     ...commentLines.map(
       (l) =>
         l.indent + measureText(l.text, COMMENT_FONT_PX, true),
     ),
+    commentMore
+      ? COMMENT_RULE_INDENT +
+          measureText(commentMore.label, COMMENT_FONT_PX, false) +
+          COMMENT_MORE_PAD
+      : 0,
   );
   return {
     commentLines,
-    commentBlockH: commentLines.length * COMMENT_LINE_H + COMMENT_GAP,
+    // The affordance occupies a line slot of its own, so the band arithmetic
+    // (bandTopH, inkExtent, floated strips) needs no second reader: block
+    // height stays lines-in-block × line height + gap.
+    commentBlockH:
+      (commentLines.length + (commentMore ? 1 : 0)) * COMMENT_LINE_H +
+      COMMENT_GAP,
     commentW,
+    commentMore,
   };
 }
 
@@ -1192,6 +1251,12 @@ export interface LayoutEngineOptions {
   /** Ids whose strip is hidden individually (the selection pill's verb), on
    * top of whatever `comments` says globally. Same seam, same reason. */
   commentsHidden?: ReadonlySet<string>;
+  /** Ids whose BIG comment strip (see COMMENT_CLAMP_MIN) is expanded to its
+   * full wrapped height. Big strips clamp by default; expansion is per-node
+   * view state with the `commentsHidden` lifecycle (remapped on shape change,
+   * cleared on a proof change). GEOMETRY, hence engine-tier: the strip is
+   * band height, and an expansion has to reserve the room it uncovers. */
+  commentsExpanded?: ReadonlySet<string>;
 }
 
 // Overview chip geometry. Text stays at NODE_FONT_PX — a smaller font would
@@ -1252,6 +1317,7 @@ export function createLayoutEngine(
     overview,
     comments = true,
     commentsHidden,
+    commentsExpanded,
   }: LayoutEngineOptions = {},
 ) {
   // Stable left-to-right order key for the wide layout, assigned below once
@@ -1437,7 +1503,11 @@ export function createLayoutEngine(
           n.id,
           {
             ...sizeOf(n.label, n.hyps, reflow),
-            ...commentSize(hideComment ? undefined : n.comment, reflow),
+            ...commentSize(
+              hideComment ? undefined : n.comment,
+              reflow,
+              commentsExpanded?.has(n.id) ?? false,
+            ),
             ...caseSize(n.caseLabel),
             chipH:
               chips && (n.addSpec || n.addLink)

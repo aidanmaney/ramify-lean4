@@ -453,6 +453,15 @@ export interface LayoutNode extends TreeNode {
   // lane, action bar and hover peek on this same bit — set only by the
   // engine's sizing, so geometry and render cannot disagree.
   mini?: boolean;
+  // A BIG comment strip (COMMENT_CLAMP_MIN+ wrapped lines) is clamped to its
+  // first COMMENT_CLAMP_SHOWN lines with an affordance line after them; this
+  // record is present exactly when the strip is big (clamped OR expanded —
+  // an expanded strip keeps it so the way back stays drawn). `hidden` is the
+  // wrapped-line count not shown (0 while expanded); `label` is the EXACT
+  // affordance string the width measurement used, so the render paints what
+  // was measured (the measurer/renderer pairing rule). Set only by the
+  // engine's sizing — the `mini` discipline: one writer, render reads the bit.
+  commentMore?: { hidden: number; expanded: boolean; label: string };
   // Narration mode (⌥ on the -- rail button): this tactic's `lines` are its
   // COMMENT prose standing in for the label — measured italic, drawn italic in
   // comment ink, tagged/token rendering skipped outright (prose is not source,

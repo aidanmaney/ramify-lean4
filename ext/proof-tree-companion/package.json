@@ -3,7 +3,7 @@
   "displayName": "Proof Tree Companion",
   "description": "Editor-side commands for the proof-tree infoview widget: unlocks persistent settings, a slim editor under the infoview, and revealing nodes in the source.",
   "publisher": "aidan",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "engines": {
     "vscode": "^1.85.0"
   },
