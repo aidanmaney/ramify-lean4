@@ -54,7 +54,12 @@ import type {
   TacticSlot,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import { PLACEHOLDER, calcOpenSlots, calcOpenText } from "./calcEdit";
+import {
+  PLACEHOLDER,
+  calcOpenSlots,
+  calcOpenText,
+  dedupLeadingBy,
+} from "./calcEdit";
 import {
   GLOBAL_MAX,
   MIN_GLOBAL_PREFIX,
@@ -1878,7 +1883,13 @@ export default function ProofTreeView({
       // slip into an unarmed destructive write, when the ARMED one is a glyph
       // away in the same hover bar.
     } else if (cur.fill ? cur.value.trim() !== "" : cur.value !== cur.original) {
-      onEditTactic?.(cur.pos, cur.value);
+      // A FILL types over the `sorry` in a `by sorry` THIS GESTURE wrote (see
+      // calcEdit's STUB), so the `by` is already in the document, one
+      // character left of the box and invisible inside it — an author who
+      // types `by ring` out of habit got `:= by by ring`. Dedup only on the
+      // fill: a plain replace edits a tactic that was already in the source
+      // and prepends nothing, so what is typed there is written verbatim.
+      onEditTactic?.(cur.pos, cur.fill ? dedupLeadingBy(cur.value) : cur.value);
     }
     setEditing(null);
   };

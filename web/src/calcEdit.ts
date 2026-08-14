@@ -48,6 +48,44 @@ export const STUB = "by sorry";
 /** The part of STUB an edit replaces — what `fillNth` counts and locates. */
 const STUB_TACTIC = "sorry";
 
+/** Drop ONE leading `by` from a tactic the author typed into a gesture that
+ * supplies a `by` of its own: the `?_` hole fill (which writes `by <text>`)
+ * and the fill of the `sorry` in a generated `:= by sorry` (where the `by` is
+ * already in the document, one character left of the box and invisible inside
+ * it). Typing `by ring` out of habit wrote `by by ring`.
+ *
+ * De-duplication ONLY. It removes a doubling this tool would itself have
+ * introduced and adds nothing — a missing `by` is never supplied, per the
+ * standing rule that the author's text is left unfinished rather than
+ * completed with something they did not choose.
+ *
+ * `by` is matched as a TOKEN, never as a prefix: `by_cases h : p` is an
+ * ordinary tactic and a prefix test turns it into `_cases h : p`. So the
+ * token must be followed by whitespace AND by something that is not:
+ *
+ * - a bare `by` (or `by   `) is not a tactic at all and is left ALONE — the
+ *   only other answer is writing an EMPTY replacement over the `sorry`, the
+ *   destructive slip every commit path here already refuses.
+ * - only the START of the text is considered: `exact (by ring)` and
+ *   `refine ⟨by simp, ?_⟩` are correct as written and survive verbatim.
+ * - the whitespace run after the token goes with it (`by   ring` → `ring`),
+ *   newlines included — `by` alone on a line above an indented block is the
+ *   standard multi-line spelling and doubles exactly the same way. Leading
+ *   whitespace is KEPT: it is the author's, and trimming it is not this
+ *   function's business.
+ * - NOT recursive. `by by ring` loses one `by`, which is precisely the one we
+ *   were about to add; removing both would be editing what was typed rather
+ *   than undoing what we write.
+ *
+ * Two call sites, and no third: the in-place tactic editor, the `+` chip, the
+ * calc endpoint stages (which take an EXPRESSION, not a tactic) and the
+ * counterfactual stub editor all write text into a range the author's own
+ * `by` may legitimately live in, and none of them prepends one. */
+export function dedupLeadingBy(text: string): string {
+  const m = /^(\s*)by\s+(\S[\s\S]*)$/.exec(text);
+  return m ? m[1] + m[2] : text;
+}
+
 /** Absolute range of the `fillNth`-th `sorry` in an edit's replacement text,
 so the caller can open the in-place editor on it. Exact in every shape used
 here: a target on a LATER line than the anchor needs only the line count and
@@ -246,8 +284,14 @@ export function calcEdit(spec: AddSpec, text: string): DocEdit | null {
     .split("\n")
     .map((l, i) => (i === 0 ? l : inner + l))
     .join("\n");
+  // The `by` here is OURS, so a `by` the author typed in front of the tactic
+  // is a duplicate we would be creating (`by by ring`) — dropped, as a token,
+  // by `dedupLeadingBy`. Nothing else about the text is touched.
   if (spec.kind === "hole")
-    return { range: { start: h.start, end: h.stop }, newText: `by ${body}` };
+    return {
+      range: { start: h.start, end: h.stop },
+      newText: `by ${dedupLeadingBy(body)}`,
+    };
   const at = { line: h.ownerStart.line, character: 0 };
   return {
     range: { start: at, end: at },
