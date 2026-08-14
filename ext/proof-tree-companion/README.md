@@ -124,8 +124,7 @@ reading a VS Code setting:
   from.
 - `proofTree.linkMarks` (default `true`) — the small marks on each connector
   saying whether it lands on a goal or a tactic. The accessible baseline (it
-  survives without colour), hence the only one of the three defaulting on.
-- `proofTree.linkEmoji` (default `false`) — draw those marks as 🎯/⚙️ instead.
+  survives without colour), hence the one of the two defaulting on.
 - `proofTree.linkTint` (default `false`) — tint each edge toward its target's
   hue.
 - `proofTree.counterfactual` (default `true`) — while you type a tactic and

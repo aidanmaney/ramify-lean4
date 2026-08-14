@@ -81,12 +81,16 @@ export function HelpPanel({
         style={{
           display: "flex",
           alignItems: "baseline",
-          justifyContent: "space-between",
+          // No title: the section headings say what each group is and the rail
+          // button that opens this says what the panel is, so a heading here
+          // only repeated them. With the ✕ alone in the row, `flex-end` is
+          // what keeps it in its corner — `space-between` puts a lone child at
+          // the START, which would have parked it on the left.
+          justifyContent: "flex-end",
           gap: 8,
           marginBottom: 6,
         }}
       >
-        <strong style={{ fontSize: 12 }}>What you can do here</strong>
         <button
           type="button"
           title="Close (Esc, or ?)"
@@ -127,9 +131,9 @@ export function HelpPanel({
         );
       })}
       <div style={{ marginTop: 10, opacity: 0.72 }}>
-        The rail on the right is the whole view — every button says what it does
-        when you hover it, and holding ⌥ over the rail swaps three of them to
-        their second gesture.
+        The rail on the right is the whole view — hover any button for what it
+        does. Three of them open a row of more buttons when clicked, and
+        holding ⌥ swaps three others to their second gesture.
       </div>
     </div>
   );

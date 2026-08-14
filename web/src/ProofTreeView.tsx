@@ -851,20 +851,17 @@ export interface ProofTreeViewProps {
    */
   outline?: boolean;
   /**
-   * Widget-only settings on the same channel as `outline`. `linkEmoji` swaps
-   * the marks for unmistakable emoji (🎯 goal / ⚙️ tactic) and `linkTint`
-   * pulls each edge's ink toward its target's hue; both default off, both
-   * purely paint.
+   * Widget-only settings on the same channel as `outline`. `linkTint` pulls
+   * each edge's ink toward its target's hue; it defaults off and is purely
+   * paint.
    *
-   * `linkMarks` gates the mark LAYER itself (`linkEmoji` only picks its
-   * style), and unlike the other two it defaults ON: the marks are the
-   * accessible baseline — the one channel that survives without colour — so
-   * dropping them is a deliberate opt-out for readers who find the ink
-   * distracting and read the target's kind off the tint or the box shape.
-   * Defaulting on also means an older companion, which sends no such key at
-   * all, keeps drawing exactly what it drew before.
+   * `linkMarks` gates the mark LAYER itself, and unlike `linkTint` it defaults
+   * ON: the marks are the accessible baseline — the one channel that survives
+   * without colour — so dropping them is a deliberate opt-out for readers who
+   * find the ink distracting and read the target's kind off the tint or the
+   * box shape. Defaulting on also means an older companion, which sends no
+   * such key at all, keeps drawing exactly what it drew before.
    */
-  linkEmoji?: boolean;
   linkTint?: boolean;
   linkMarks?: boolean;
   /**
@@ -1082,7 +1079,6 @@ export default function ProofTreeView({
   fetchGlobalNames,
   tokenColors,
   outline = false,
-  linkEmoji = false,
   linkMarks = true,
   linkTint = false,
   onPopoutEdit,
@@ -5109,7 +5105,7 @@ export default function ProofTreeView({
                     ? "why this part is not worth reading (Enter writes .none)"
                     : // A closing step has nothing below it to put away, so
                       // the sentence IS the elision — an empty commit cancels.
-                      "why this closing step is not worth reading (the words are the point here)"
+                      "why this closing step is not worth reading"
               }
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
@@ -5982,20 +5978,10 @@ export default function ProofTreeView({
                 <g key={i}>
                   <path fill="none" stroke={stroke} strokeWidth={1.5} d={d} />
                   {linkMarks && startMark && (
-                    <LinkMark
-                      {...startMark}
-                      goal={goalBound}
-                      emoji={linkEmoji}
-                      stroke={stroke}
-                    />
+                    <LinkMark {...startMark} goal={goalBound} stroke={stroke} />
                   )}
                   {linkMarks && endMark && (
-                    <LinkMark
-                      {...endMark}
-                      goal={goalBound}
-                      emoji={linkEmoji}
-                      stroke={stroke}
-                    />
+                    <LinkMark {...endMark} goal={goalBound} stroke={stroke} />
                   )}
                 </g>
               );
@@ -7095,7 +7081,7 @@ export default function ProofTreeView({
                                     ? `add the next link to this chain — pick its relation (${node.data.addLink.rels!
                                         .map((o) => o.rel)
                                         .join(" ")}); \`${node.data.addLink.rel}\` closes the chain, anything else adds a step and leaves it open`
-                                    : `close this chain with a \`${node.data.addLink.rel}\` link — type its right-hand side, or take the \`_\` to end it here`
+                                    : `close this chain with a \`${node.data.addLink.rel}\` link — type its right-hand side, or keep the \`_\` to end it here`
                                   : "add a calc step above this link — the new link appears above this box, and this one closes the remainder; type its right-hand side"
                             }
                             // Alone on the lane when the block is broken: the
@@ -8502,14 +8488,12 @@ wrong line off the trunk. Both marks are PAINTED over the stroke (bg-coloured
 cut segments), never a path edit — so layout.ts's linkSpans mirror is
 untouched. The dash is not a drawn glyph: TWO cuts leave a short piece of the
 original stroke floating between them, so it stays exactly on the line at any
-zoom. `emoji` (proofTree.linkEmoji) swaps the subtle marks for unmistakable
-ones. */
+zoom. */
 function LinkMark({
   x,
   y,
   horiz = false,
   goal,
-  emoji,
   stroke,
 }: {
   x: number;
@@ -8518,7 +8502,6 @@ function LinkMark({
       leg of a │└ elbow (the marks orient along the line, not the page). */
   horiz?: boolean;
   goal: boolean;
-  emoji: boolean;
   stroke: string;
 }) {
   // A cut: a short background-coloured segment along the run, centered at
@@ -8544,21 +8527,6 @@ function LinkMark({
         stroke="var(--ptw-bg)"
         strokeWidth={4}
       />
-    );
-  if (emoji)
-    return (
-      <g pointerEvents="none">
-        {cut("c", 0, 13)}
-        <text
-          x={x}
-          y={y}
-          fontSize={9}
-          textAnchor="middle"
-          dominantBaseline="central"
-        >
-          {goal ? "🎯" : "⚙️"}
-        </text>
-      </g>
     );
   return (
     <g pointerEvents="none">
@@ -9100,7 +9068,7 @@ function ControlRail({
         }
         title={
           commentMode === "instead"
-            ? "Narration: each comment stands in for the tactic it decorates, the tactic itself one hover (or double-click) away — ⌥-click for the ordinary comment strips"
+            ? "Narration: each comment stands in for the tactic it decorates, the tactic itself available on hover (or double-click) — ⌥-click for the ordinary comment strips"
             : "Comments: draw the source's comment strips above the nodes they annotate (drag-select a node to hide just its own; ⌥-click: narration — the prose moves inside the box)"
         }
         pressed={commentMode !== "shown"}
@@ -9132,7 +9100,7 @@ function ControlRail({
         glyph={alt ? "⇌" : HYP_MODES[hypMode].glyph}
         title={`${HYP_MODES[hypMode].title}. ⌥-click: ${
           hypGroup
-            ? "draw each context in Lean's own binder order instead of data-then-propositions"
+            ? "draw each context in Lean's original binder order instead of data-then-propositions"
             : "regroup each context data-then-propositions (currently binder order)"
         }`}
         // Pressed whenever the context is NOT the default breadth, so the rail
@@ -9197,7 +9165,7 @@ function ControlRail({
           {
             glyph: "⇉",
             title:
-              "Combine: merge each straight run of tactics into one node (stacked), dropping the pass-through goals between them",
+              "Combine: merge each straight run of tactics into one node (stacked), dropping intermediate goals between them",
             away: combine,
             onClick: () => onCombineChange(!combine),
           },

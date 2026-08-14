@@ -357,7 +357,6 @@ function useThemeTokenColors(
   brackets: boolean;
   outline: boolean;
   tallFrame: boolean;
-  linkEmoji: boolean;
   linkTint: boolean;
   linkMarks: boolean;
   typingHoldMs: number;
@@ -368,7 +367,6 @@ function useThemeTokenColors(
   const [brackets, setBrackets] = useState(false);
   const [outline, setOutline] = useState(false);
   const [tallFrame, setTallFrame] = useState(false);
-  const [linkEmoji, setLinkEmoji] = useState(false);
   const [linkTint, setLinkTint] = useState(false);
   // Defaults ON, unlike its two neighbours: absent means an older companion
   // that never knew the key, and the marks are what it was already drawing.
@@ -401,7 +399,6 @@ function useThemeTokenColors(
           setBrackets(!!r.brackets);
           setOutline(!!r.outline);
           setTallFrame(!!r.tallFrame);
-          setLinkEmoji(!!r.linkEmoji);
           setLinkTint(!!r.linkTint);
           setLinkMarks(r.linkMarks !== false);
           setTypingHoldMs(
@@ -462,7 +459,6 @@ function useThemeTokenColors(
     brackets,
     outline,
     tallFrame,
-    linkEmoji,
     linkTint,
     linkMarks,
     typingHoldMs,
@@ -482,10 +478,9 @@ interface ThemeColorsResponse {
   /** `proofTree.tallFrame` — ditto. Optional: an older companion's file has no
   such key, and a missing one means the default (leave the strip clear). */
   tallFrame?: boolean;
-  /** `proofTree.linkEmoji` / `proofTree.linkTint` — the connector target-type
-  marks' loud variants (emoji marks; edge ink tinted toward the target's hue).
-  Optional for the same older-companion reason; missing means off. */
-  linkEmoji?: boolean;
+  /** `proofTree.linkTint` — the connector target-type marks' loud variant
+  (edge ink tinted toward the target's hue). Optional for the same
+  older-companion reason; missing means off. */
   linkTint?: boolean;
   linkMarks?: boolean;
   /** `proofTree.typingHoldMs` — the typing hold's quiet period (see
@@ -575,7 +570,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     brackets: colorBrackets,
     outline: outlineOnly,
     tallFrame,
-    linkEmoji,
     linkTint,
     linkMarks,
     typingHoldMs,
@@ -1388,7 +1382,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         fetchGlobalNames={fetchGlobalNames}
         tokenColors={tokenColors}
         outline={outlineOnly}
-        linkEmoji={linkEmoji}
         linkTint={linkTint}
         linkMarks={linkMarks}
         abbrev={abbrev}

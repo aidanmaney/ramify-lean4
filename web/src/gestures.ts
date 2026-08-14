@@ -120,7 +120,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "goal",
     input: `${CMD}-click`,
-    says: "to reveal in source",
+    says: "to reveal this goal in source",
     needs: "reveal",
     // Mutually exclusive with the tactic row in practice (one is goals, the
     // other tactics), but stated as an exclusion so the hint can never show
@@ -130,18 +130,20 @@ export const GESTURES: Gesture[] = [
   {
     target: "goal",
     input: "⌥-click",
-    says: "to focus this subtree",
+    says: "to focus this goal's subtree",
     when: (g) => g.focusable,
   },
   {
     target: "goal",
     input: "⌥-click (or Esc)",
-    says: "to leave this focus",
+    says: "to stop focusing this goal's subtree",
     when: (g) => g.isFocusRoot,
   },
   {
     target: "goal",
     input: "hover",
+    // Each glyph next to the verb it performs — `◎ and focus` read as though
+    // the ◎ belonged to the conjunction.
     says: "for » reveal and ◎ focus",
   },
   {
@@ -161,10 +163,10 @@ export const GESTURES: Gesture[] = [
   {
     target: "tactic",
     input: "double-click",
-    says: "to edit it in place",
+    says: "to edit the tactic in place",
     needs: "edit",
     when: (g) => g.editable && !g.proseLabel,
-    note: "Enter commits, ⇧Enter is a newline, Esc cancels, empty cancels; \\alpha expands to α",
+    note: "⇧Enter inserts a newline, Esc cancels, Enter commits; Unicode expands automatically e.g. \\alpha -> α",
   },
   {
     // Narration mode swaps what this gesture edits, and the hint has to swap
@@ -172,10 +174,10 @@ export const GESTURES: Gesture[] = [
     // the wrong thing entirely.
     target: "tactic",
     input: "double-click",
-    says: "to edit this comment — the box is showing prose",
+    says: "to edit comment-tactic prose",
     needs: "edit",
     when: (g) => g.editable && g.proseLabel,
-    note: "⌥-click `--` on the rail to get the tactic's own text back",
+    note: "⌥-click `--` on the rail to show tactics normally",
   },
   {
     target: "tactic",
@@ -187,9 +189,9 @@ export const GESTURES: Gesture[] = [
   {
     target: "tactic",
     input: "⌥-click",
-    says: "to elide this step into the trunk",
+    says: "to elide step(s) into the trunk",
     when: (g) => g.elidable && !g.leafFold,
-    note: "a ghost stays behind; click it to bring the step back",
+    note: "a ghost stays behind; click to bring step(s) back",
   },
   {
     target: "tactic",
@@ -198,7 +200,7 @@ export const GESTURES: Gesture[] = [
     when: (g) => g.elidable && g.leafFold,
     // The substitution `leafFoldTargets` makes, said out loud. It is invisible
     // otherwise — there is no glyph on a bare modifier to explain it.
-    note: "a closing step has nothing below to elide, so this folds the goal above; that goal's + brings it back, and the hover bar's ◌ carries a small − inside it here",
+    note: "a closing step has nothing below to elide, so this folds the goal above; that goal's + brings it back",
   },
   {
     target: "tactic",
@@ -208,8 +210,8 @@ export const GESTURES: Gesture[] = [
   },
   {
     target: "tactic",
-    input: "⊘ then ⊘",
-    says: "to delete — the first click only ARMS it",
+    input: "⊘ + confirm",
+    says: "to delete; first click opens prompt",
     needs: "del",
     note: "the extent lights up in the editor and the chip says how many lines",
   },
@@ -217,7 +219,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "ghost",
     input: "click",
-    says: "to bring back what a ◌ took",
+    says: "to return what elide ◌ took",
   },
   {
     target: "ghost",
@@ -227,13 +229,13 @@ export const GESTURES: Gesture[] = [
   {
     target: "chips",
     input: "+",
-    says: "opens an editor to write the missing tactic",
+    says: "opens a textbox to enter the missing tactic",
     needs: "add",
   },
   {
     target: "chips",
     input: "sorry",
-    says: "stubs the goal in one click — this one WRITES immediately",
+    says: "stubs the goal in one click; writes immediately",
     needs: "add",
   },
   {
@@ -241,7 +243,7 @@ export const GESTURES: Gesture[] = [
     input: "calc / step",
     says: "opens or grows a chain, one link at a time",
     needs: "add",
-    note: "it asks for the ends separately; Escape leaves an `_`, which is a valid answer",
+    note: "asks for the ends separately; Escape leaves an underscore `_`, which is a valid answer",
   },
   {
     target: "chips",
@@ -253,26 +255,27 @@ export const GESTURES: Gesture[] = [
   {
     target: "strip",
     input: "double-click",
-    says: "to edit the comment (a single click does nothing here)",
+    says: "to edit the comment (single click is a no-op)",
     needs: "edit",
-    note: "committing it empty removes the comment — that is how you delete one",
+    note: "leaving the textbox empty removes the comment",
   },
   // ── The background ────────────────────────────────────────────────────────
   {
     target: "background",
     input: "drag",
-    says: "to rubber-band a selection, then pick a verb from the pill",
+    says: "to select nodes in a rectangle, then pick an action",
   },
   {
     target: "background",
     input: "click",
-    says: "to dismiss the cursor accent and close what is open",
+    says: "to unhighlight a node and close open prompts",
   },
   // ── Keys ──────────────────────────────────────────────────────────────────
   {
     target: "keys",
     input: "Esc",
-    says: "backs out of one thing at a time — the most recent first",
+    says: "backs out of one state at a time — the most recent first",
+    note: "E.g. escaping twice to stop deleting tactics then exit a focused subtree",
   },
   {
     target: "keys",
@@ -283,7 +286,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "keys",
     input: `${CMD}-scroll`,
-    says: "zooms at the pointer; plain scrolling locks to one axis",
+    says: "zooms at the pointer",
   },
   {
     target: "keys",
@@ -294,12 +297,12 @@ export const GESTURES: Gesture[] = [
 
 /** Section headings for the panel, in the order they are drawn. */
 export const GESTURE_SECTIONS: { target: GestureTarget; title: string }[] = [
-  { target: "goal", title: "On a goal box" },
-  { target: "tactic", title: "On a tactic box" },
-  { target: "ghost", title: "On a ghost (◌)" },
-  { target: "chips", title: "On the chips under an unfinished goal" },
-  { target: "strip", title: "On a comment strip" },
-  { target: "background", title: "On the background" },
+  { target: "goal", title: "Goal boxes" },
+  { target: "tactic", title: "Tactic boxes" },
+  { target: "ghost", title: "Ghosts (◌)" },
+  { target: "chips", title: "Unfinished goal chips" },
+  { target: "strip", title: "Comment strips" },
+  { target: "background", title: "Background" },
   { target: "keys", title: "Keys" },
 ];
 
@@ -357,7 +360,7 @@ const UNDO = `${CMD}Z in the editor undoes it`;
 export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   elide: {
     label: "elide",
-    title: "Collapse the selection to one ◌ marker (click it to restore)",
+    title: "Collapse the selection to a ◌ marker (click to restore)",
     writes: false,
   },
   combine: {
@@ -367,7 +370,7 @@ export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   },
   uncombine: {
     label: "uncombine",
-    title: "Dissolve the selected combined run(s) back into their tactics",
+    title: "Unmerge the selected combined run(s) back into their tactics",
     writes: false,
   },
   noteHide: {
@@ -408,7 +411,7 @@ export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   },
   unflag: {
     label: "unflag",
-    title: `Remove the selected nodes' flag comments — the WHOLE line goes, prose included, so this one arms first (${UNDO})`,
+    title: `Remove the selected nodes' flag comments — the WHOLE line goes, prose included upon confirming the prompt (${UNDO})`,
     writes: true,
   },
 };

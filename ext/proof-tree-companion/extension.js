@@ -296,11 +296,9 @@ function publishThemeColors() {
     // is measured from its own offset rather than from the top of the page.
     const tallFrame =
       vscode.workspace.getConfiguration("proofTree").get("tallFrame") === true;
-    // The connectors' target-type marks: emoji variant and hue tint. Both
-    // standing look preferences, so settings rather than rail buttons, riding
-    // the same channel for the same webview-can't-read-settings reason.
-    const linkEmoji =
-      vscode.workspace.getConfiguration("proofTree").get("linkEmoji") === true;
+    // The connectors' target-type marks' hue tint: a standing look
+    // preference, so a setting rather than a rail button, riding the same
+    // channel for the same webview-can't-read-settings reason.
     const linkTint =
       vscode.workspace.getConfiguration("proofTree").get("linkTint") === true;
     // Whether the marks are drawn at all. `!== false` rather than `=== true`:
@@ -348,7 +346,6 @@ function publishThemeColors() {
           brackets,
           outline,
           tallFrame,
-          linkEmoji,
           linkTint,
           linkMarks,
           typingHoldMs,
@@ -370,7 +367,6 @@ function publishThemeColors() {
       `theme "${name}" (brackets ${brackets ? "on" : "off"}, ` +
         `outline ${outline ? "on" : "off"}, ` +
         `tall frame ${tallFrame ? "on" : "off"}, ` +
-        `link emoji ${linkEmoji ? "on" : "off"}, ` +
         `link tint ${linkTint ? "on" : "off"}, ` +
         `link marks ${linkMarks ? "on" : "off"}, ` +
         `typing hold ${typingHoldMs}ms, ` +
