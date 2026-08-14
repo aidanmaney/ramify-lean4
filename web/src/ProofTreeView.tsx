@@ -235,9 +235,13 @@ type LayoutMode = "stacked" | "spine" | "tracks" | "wide";
 //     same ~10px — at 17.5 it drew 17.5px of ink, near twice its neighbours.
 const RAIL_GLYPH_BIG = 17.5;
 const RAIL_GLYPH_FULL = 10;
-// § is tall and narrow — it inks about 0.72em, between the half-height math
-// glyphs and the full-em ASCII ones, so it lands in the ~10px band at 11.5.
-const RAIL_GLYPH_PROSE = 11.5;
+// The quote that marks narration. Sized to look equal rather than measure
+// equal (see the button's own comment) and nudged down, because a quotation
+// mark is drawn at cap height while the button centres the em box: at 22 the
+// ink is 5.6px tall sitting 7.4px above centre, and +7 lands it 0.4px above,
+// which is where ⊟ (0.75) and ⑃ (0.1) already sit.
+const RAIL_GLYPH_PROSE = 22;
+const RAIL_GLYPH_PROSE_DY = 7;
 
 // The default is right for ☰, whose three bars fill the em box; ⊦ ⋔ are thin
 // and sparse and || is full-height, so all three carry an explicit `px`.
@@ -8553,6 +8557,7 @@ function LinkMark({
 function RailButton({
   glyph,
   glyphPx,
+  glyphDy,
   title,
   onClick,
   pressed,
@@ -8564,6 +8569,12 @@ function RailButton({
   // that read small at it (see RAIL_GLYPH_BIG). The BOX never changes — the
   // rail's grid of 26px squares is what makes it read as one control.
   glyphPx?: number;
+  /** Push the glyph DOWN by this many px. A button centres the em BOX, which
+  is right for a glyph drawn around the middle and wrong for one drawn at cap
+  height: ❞ lands 7px above centre and reads as stuck to the top edge
+  (measured — every other rail glyph sits within 1px of centre). Paint only;
+  the 26px box is untouched, so the rail's grid still governs. */
+  glyphDy?: number;
   title: string;
   // The event is passed through so a button can carry a second gesture on a
   // modifier (⌥ on the context-breadth button); callers that don't care stay
@@ -8594,7 +8605,11 @@ function RailButton({
             : base
       }
     >
-      {glyph}
+      {glyphDy ? (
+        <span style={{ transform: `translateY(${glyphDy}px)` }}>{glyph}</span>
+      ) : (
+        glyph
+      )}
     </button>
   );
 }
@@ -8610,6 +8625,12 @@ themselves would show. */
 interface FlyMember {
   glyph: string;
   glyphPx?: number;
+  /** Push the glyph DOWN by this many px. A button centres the em BOX, which
+  is right for a glyph drawn around the middle and wrong for one drawn at cap
+  height: ❞ lands 7px above centre and reads as stuck to the top edge
+  (measured — every other rail glyph sits within 1px of centre). Paint only;
+  the 26px box is untouched, so the rail's grid still governs. */
+  glyphDy?: number;
   title: string;
   pressedColor?: string;
   disabled?: boolean;
@@ -9077,11 +9098,14 @@ function ControlRail({
           that no glyph could name a destination dissolves once the two
           destinations have distinct resting glyphs. */}
       <RailButton
-        glyph={(commentMode === "instead") !== alt ? "§" : "--"}
+        glyph={(commentMode === "instead") !== alt ? "❞" : "--"}
         glyphPx={
           (commentMode === "instead") !== alt
             ? RAIL_GLYPH_PROSE
             : RAIL_GLYPH_FULL
+        }
+        glyphDy={
+          (commentMode === "instead") !== alt ? RAIL_GLYPH_PROSE_DY : undefined
         }
         title={
           commentMode === "instead"
@@ -9150,13 +9174,15 @@ function ControlRail({
           must not do. */}
       <RailFlyout
         id="structure"
-        // A FORK — the shape of the thing all three members are about: a
-        // tactic that splits. It replaces ⫴, three vertical bars, which sat
-        // four buttons from `||` aligned-tracks and read as the same sign.
-        // Inks 10px at RAIL_GLYPH_BIG (measured), so it reuses that constant
-        // rather than minting a number; resolves in every code-font stack
-        // tested, none falling back to ⬚.
-        glyph="⑂"
+        // A FORK pointing the way a CS tree grows — root above, branches
+        // descending. U+2443 INVERTED fork, not U+2442: measured, ⑂ carries
+        // its arms at the TOP (arm ink 157 above, 0 below) and ⑃ at the bottom
+        // (0 above, 159 below), so ⑂ was a tree growing upward. It replaces
+        // ⫴, three vertical bars, which sat four buttons from `||`
+        // aligned-tracks and read as the same sign. Inks 9.4px at
+        // RAIL_GLYPH_BIG, so it mints no new number; resolves in every
+        // code-font stack tested, none falling back to ⬚.
+        glyph="⑃"
         glyphPx={RAIL_GLYPH_BIG}
         label="Branch views"
         open={flyout === "structure"}
