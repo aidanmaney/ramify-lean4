@@ -1145,6 +1145,19 @@ export default function ProofTreeView({
   const [reflow, setReflow] = useState<ReflowMode>("off");
   // Whether the ¶ button is expanded into its width slider (see ReflowControl).
   const [reflowOpen, setReflowOpen] = useState(false);
+  // Which rail flyout group is expanded (see RailFlyout) — ONE value, not a
+  // boolean per group, so opening one closes the others by construction. The
+  // reflow slider is the same kind of surface (a transient row left of the
+  // rail), so the two setters close each other below; both live in `layers`.
+  const [railFlyout, setRailFlyout] = useState<RailFlyoutId | null>(null);
+  const openFlyout = (v: RailFlyoutId | null) => {
+    setRailFlyout(v);
+    if (v) setReflowOpen(false);
+  };
+  const openReflow = (v: boolean) => {
+    setReflowOpen(v);
+    if (v) setRailFlyout(null);
+  };
   // Whether the gesture reference (HelpPanel) is open. Almost every gesture on
   // this tree is a click, a modifier or a drag, and the one place they were
   // written down — the node's native <title> — is COVERED by the tagged label's
@@ -1483,6 +1496,14 @@ export default function ProofTreeView({
   // rail button that turned the mode on, and the hint pill's ✕.
   type Layer = { id: string; up: boolean; off: () => void; bg: boolean };
   const layers: Layer[] = [
+    // First: the cheapest thing to rebuild (one click on its head), so a stray
+    // Esc takes it before anything that cost a gesture.
+    {
+      id: "railFlyout",
+      up: railFlyout !== null,
+      off: () => setRailFlyout(null),
+      bg: true,
+    },
     { id: "help", up: helpOpen, off: () => setHelpOpen(false), bg: true },
     // The prose prompt sits ABOVE the selection that spawned it: backing out
     // of `.none…` should hand you back the selection, not dissolve it.
@@ -5512,7 +5533,9 @@ export default function ProofTreeView({
         reflow={reflow}
         forcedReflow={forcedReflow}
         reflowOpen={reflowOpen}
-        onReflowOpenChange={setReflowOpen}
+        onReflowOpenChange={openReflow}
+        flyout={railFlyout}
+        onFlyoutChange={openFlyout}
         onReflowChange={(v) => {
           // Pin the root only when ENTERING or LEAVING the mode, which
           // repositions everything. A slider step must not: dragging the width
@@ -8599,6 +8622,117 @@ function RailButton({
   );
 }
 
+/** The three rail flyout groups. One value across them (see the state's own
+comment), so a second group opening closes the first by construction. */
+type RailFlyoutId = "structure" | "reading" | "picking";
+
+/** One member of a flyout: an ordinary RailButton's props, plus `away` — is
+this control away from its home state? The head derives its face and pressed
+state from the members' `away` flags, so it can only report what the buttons
+themselves would show. */
+interface FlyMember {
+  glyph: string;
+  glyphPx?: number;
+  title: string;
+  pressedColor?: string;
+  disabled?: boolean;
+  away: boolean;
+  onClick: () => void;
+}
+
+/** A rail slot that owns a HEAD button and, when open, a horizontal row of
+the group's real buttons, hanging LEFT of the rail (the ReflowControl idiom —
+the rail is pinned to the right edge, so left is the only side with room).
+
+The row sits on an opaque backing card: it hangs over the tree, and rail
+buttons are near-transparent chrome that is unreadable over node ink (the
+selection pill's card lesson).
+
+THE HEAD'S FACE IS DERIVED, one rule for all three groups: when exactly ONE
+member is away from home, the head wears that member's glyph (and its pressed
+colour — an armed picking mode shows in the hint pill's ink); otherwise the
+fixed group glyph. Pressed iff ANY member is away. The picking group gets the
+useful special case for free (its modes are mutually exclusive, so an armed
+mode always shows on the head), while the structure group — independent
+toggles, several can be on at once — falls back to the group glyph rather
+than electing one of them to lie about the rest.
+
+Clicking a member acts AND collapses the row — one gesture, one visible
+effect; the row is always one click away, and for a picking mode the hint
+pill takes over as the mode indicator the moment it arms. A DISABLED member
+swallows the click (the button's own `disabled`), so the row stays open and
+nothing pretends to have happened.
+
+Dismissal is the `layers` table's (Esc, background click) — the open state
+lives in the view, not here, exactly like `reflowOpen`. While ⌥ is held the
+head does NOT swap its face: it carries no second gesture. */
+function RailFlyout({
+  id,
+  glyph,
+  glyphPx,
+  label,
+  members,
+  open,
+  onOpenChange,
+}: {
+  id: RailFlyoutId;
+  /** The group's resting face, worn while no single member is away. */
+  glyph: string;
+  glyphPx?: number;
+  /** Short group name for the head's title. */
+  label: string;
+  members: FlyMember[];
+  open: boolean;
+  onOpenChange: (v: RailFlyoutId | null) => void;
+}) {
+  const away = members.filter((m) => m.away);
+  const face = away.length === 1 ? away[0] : null;
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <RailButton
+        glyph={face ? face.glyph : glyph}
+        glyphPx={face ? face.glyphPx : glyphPx}
+        title={`${label}: ${members.map((m) => m.glyph).join(" · ")} — click to choose`}
+        pressed={away.length > 0}
+        pressedColor={face?.pressedColor}
+        onClick={() => onOpenChange(open ? null : id)}
+      />
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            right: "100%",
+            marginRight: 4,
+            top: 0,
+            display: "flex",
+            gap: 4,
+            padding: 3,
+            background: "var(--vscode-editorWidget-background, #fff)",
+            border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+            borderRadius: 3,
+          }}
+        >
+          {members.map((m) => (
+            <RailButton
+              key={m.glyph}
+              glyph={m.glyph}
+              glyphPx={m.glyphPx}
+              title={m.title}
+              pressed={m.away}
+              pressedColor={m.pressedColor}
+              disabled={m.disabled}
+              onClick={() => {
+                m.onClick();
+                onOpenChange(null);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The ¶ control: a rail button that EXPANDS into a width slider, because the
 right wrap column is a judgement about this proof in this viewport and not
 something a two-stop cycle can guess. The unit is COLUMNS (characters), which
@@ -8787,6 +8921,8 @@ function ControlRail({
   onReflowChange,
   reflowOpen,
   onReflowOpenChange,
+  flyout,
+  onFlyoutChange,
   brief,
   onBriefChange,
   commentMode,
@@ -8833,6 +8969,10 @@ function ControlRail({
   onReflowChange: (v: ReflowMode) => void;
   reflowOpen: boolean;
   onReflowOpenChange: (v: boolean) => void;
+  /** Which flyout group is expanded — one value for all three (see the state's
+  own comment: opening one closes the others by construction). */
+  flyout: RailFlyoutId | null;
+  onFlyoutChange: (v: RailFlyoutId | null) => void;
   brief: boolean;
   onBriefChange: (v: boolean) => void;
   commentMode: "shown" | "hidden" | "instead";
@@ -8910,12 +9050,6 @@ function ControlRail({
       />
       <RailButton glyph="⊟" title="Collapse all" onClick={onCollapseAll} />
       <div style={{ height: 6 }} />
-      <RailButton
-        glyph="⇅"
-        title="Accordion: expanding a node collapses its sibling branches"
-        pressed={accordion}
-        onClick={() => onAccordionChange(!accordion)}
-      />
       {/* Three layouts on one button (see LAYOUT_MODES): the glyph shows the
           CURRENT mode, pressed means "not the stacked home". */}
       <RailButton
@@ -8925,44 +9059,12 @@ function ControlRail({
         pressed={layout !== "stacked"}
         onClick={() => onLayoutChange(LAYOUT_MODES[layout].next)}
       />
-      {/* Both of the next two are INERT under another mode, so both say so
-          rather than lighting up and doing nothing (see the rule above). And
-          neither clears its own state on disable: a rail toggle is how this
-          reader reads, so coming back to ☰ must restore what was set. */}
-      <RailButton
-        glyph="◫"
-        title={
-          sbsEnabled
-            ? "Side-by-side branches: goals spawned by one tactic lay out as columns (compact mode; pairs well with ¶ reflow)"
-            : "Side-by-side branches — compact layouts only; ⋔ wide lays branches out itself"
-        }
-        pressed={sbsEnabled && sideBySide}
-        disabled={!sbsEnabled}
-        onClick={() => onSideBySideChange(!sideBySide)}
-      />
-      <RailButton
-        glyph="❮❯"
-        title={
-          seqActive
-            ? "Gallery — not while ⇝ has linearized a path; that already shows one branch"
-            : "Gallery: show one of a branching tactic's subtrees at a time, cycled by the ‹ n/m › pager under it"
-        }
-        pressed={gallery && !seqActive}
-        disabled={seqActive}
-        onClick={() => onGalleryChange(!gallery)}
-      />
       <ReflowControl
         reflow={reflow}
         forced={forcedReflow}
         onChange={onReflowChange}
         open={reflowOpen}
         onOpenChange={onReflowOpenChange}
-      />
-      <RailButton
-        glyph="⋯"
-        title="Brief: collapse boilerplate inside tactics to … (a binding's := derivation, a long [ … ] list), keeping the head and the bindings — hover a … to reveal it"
-        pressed={brief}
-        onClick={() => onBriefChange(!brief)}
       />
       {/* Comment strips on/off. `--` is Lean's own comment marker, so the
           glyph names what it hides; pressed = hidden, the away-from-home
@@ -9004,12 +9106,6 @@ function ControlRail({
           )
         }
       />
-      <RailButton
-        glyph="⇉"
-        title="Combine: merge each straight run of tactics into one node (stacked), dropping the pass-through goals between them"
-        pressed={combine}
-        onClick={() => onCombineChange(!combine)}
-      />
       {/* Outline-only is NOT here: it is a standing preference about how boxes
           look rather than a gesture, so it lives in the companion's settings
           (`proofTree.outlineOnly`) and arrives as a prop. */}
@@ -9045,32 +9141,118 @@ function ControlRail({
             : onHypModeChange(HYP_MODES[hypMode].next)
         }
       />
-      <div style={{ height: 6 }} />
-      <RailButton
-        glyph="⇝"
-        title="Linearize one path: pick a start node, then an end node"
-        pressed={seqActive}
-        pressedColor={SEQ_STROKE}
-        onClick={onToggleSequence}
+      {/* THE FLYOUT GROUPS — the rail's answer to having outgrown the frame.
+          At 20 buttons the column was 646px against a ~580px default frame, so
+          its tail (⛶, and `?` entirely) was CLIPPED by the root's
+          overflow:hidden — invisible and unclickable, with no scroll that
+          could reach it (the rail is a sibling of the scroll container). Six
+          buttons fold into three heads; every control stays one click away.
+
+          Members keep their exact former behaviour, titles and gates — only
+          how they are REACHED changed. The picking modes were explicitly made
+          a fan-out rather than a cycle: arming a mode you did not want takes
+          over every click on the tree, which is the one thing a mis-cycle
+          must not do. */}
+      <RailFlyout
+        id="structure"
+        glyph="⫴"
+        label="Branch views"
+        open={flyout === "structure"}
+        onOpenChange={onFlyoutChange}
+        members={[
+          // Both ◫ and gallery are INERT under another mode, so both say so
+          // rather than lighting up and doing nothing (the pressed/disabled
+          // rule above). Neither clears its own state on disable: a rail
+          // toggle is how this reader reads, so coming back to ☰ must restore
+          // what was set. `away` mirrors each pressed expression, so the HEAD
+          // also reports the effective state, never the overridden one.
+          {
+            glyph: "◫",
+            title: sbsEnabled
+              ? "Side-by-side branches: goals spawned by one tactic lay out as columns (compact mode; pairs well with ¶ reflow)"
+              : "Side-by-side branches — compact layouts only; ⋔ wide lays branches out itself",
+            away: sbsEnabled && sideBySide,
+            disabled: !sbsEnabled,
+            onClick: () => onSideBySideChange(!sideBySide),
+          },
+          {
+            glyph: "❮❯",
+            title: seqActive
+              ? "Gallery — not while ⇝ has linearized a path; that already shows one branch"
+              : "Gallery: show one of a branching tactic's subtrees at a time, cycled by the ‹ n/m › pager under it",
+            away: gallery && !seqActive,
+            disabled: seqActive,
+            onClick: () => onGalleryChange(!gallery),
+          },
+          {
+            glyph: "⇉",
+            title:
+              "Combine: merge each straight run of tactics into one node (stacked), dropping the pass-through goals between them",
+            away: combine,
+            onClick: () => onCombineChange(!combine),
+          },
+        ]}
       />
-      <RailButton
-        glyph="⇥"
-        title="Elide a run of nodes: pick a start node, then an end node — the path between collapses to a marker (click it to restore)"
-        pressed={elidePicking}
-        pressedColor={SEQ_STROKE}
-        onClick={onToggleElide}
+      <RailFlyout
+        id="reading"
+        glyph="⋮"
+        label="Reading aids"
+        open={flyout === "reading"}
+        onOpenChange={onFlyoutChange}
+        members={[
+          {
+            glyph: "⇅",
+            title:
+              "Accordion: expanding a node collapses its sibling branches",
+            away: accordion,
+            onClick: () => onAccordionChange(!accordion),
+          },
+          {
+            glyph: "⋯",
+            title:
+              "Brief: collapse boilerplate inside tactics to … (a binding's := derivation, a long [ … ] list), keeping the head and the bindings — hover a … to reveal it",
+            away: brief,
+            onClick: () => onBriefChange(!brief),
+          },
+        ]}
       />
-      <RailButton
-        glyph="⇳"
-        title={
-          bandEnabled
-            ? "Cut a vertical band: pick a top node, then a bottom node — everything between them (any branch) collapses to a marker (click it to restore)"
-            : "Cut a vertical band (compact stacked layout only)"
-        }
-        pressed={bandPicking}
-        pressedColor={SEQ_STROKE}
-        disabled={!bandEnabled}
-        onClick={onToggleBand}
+      <RailFlyout
+        id="picking"
+        glyph="⌖"
+        // The equal-INK rule: ⌖ inks 13px at the shared 14 (¶'s figure, but ¶
+        // is a grandfathered outlier) — 12 brings it to 10, the band ⫴ (9) and
+        // ⋮ (10) already sit in. Measured, like every override here.
+        glyphPx={12}
+        label="Pick on the tree"
+        open={flyout === "picking"}
+        onOpenChange={onFlyoutChange}
+        members={[
+          {
+            glyph: "⇝",
+            title: "Linearize one path: pick a start node, then an end node",
+            away: seqActive,
+            pressedColor: SEQ_STROKE,
+            onClick: onToggleSequence,
+          },
+          {
+            glyph: "⇥",
+            title:
+              "Elide a run of nodes: pick a start node, then an end node — the path between collapses to a marker (click it to restore)",
+            away: elidePicking,
+            pressedColor: SEQ_STROKE,
+            onClick: onToggleElide,
+          },
+          {
+            glyph: "⇳",
+            title: bandEnabled
+              ? "Cut a vertical band: pick a top node, then a bottom node — everything between them (any branch) collapses to a marker (click it to restore)"
+              : "Cut a vertical band (compact stacked layout only)",
+            away: bandPicking,
+            pressedColor: SEQ_STROKE,
+            disabled: !bandEnabled,
+            onClick: onToggleBand,
+          },
+        ]}
       />
       {/* No exit-focus button here: leaving a focus is not a view setting, and
           a glyph at the far right of a wide tree is a long way from where the
