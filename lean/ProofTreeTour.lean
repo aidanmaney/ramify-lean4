@@ -18,8 +18,8 @@ the infoview prints them; green boxes are tactics. Try, in order:
 * Cycle the context breadth with the [Δ] button: Δ what this goal gained,
   ∀ everything in scope, ▸ only what the next tactic uses, ↓ only what the
   previous tactic bound. The `▸` gutter marks the used hypotheses.
-* Hover any identifier in a label e.g. `Nat.le_total`, `h`, `rcases` for
-  type/doc popups
+* Hover any identifier in a label, e.g. `Nat.le_total`, `h`, `rcases`, for
+  type/doc popups.
 -/
 theorem tour_reading (n m : Nat) : n ≤ m ∨ m ≤ n := by
   -- tree shows the split: each case left/right is its own branch
@@ -40,11 +40,11 @@ demonstrate the layout gestures [⑃]:
 * [◫] **side-by-side**: branches as columns instead of a stack. Pairs with
   [¶] reflow, which wraps labels at a narrower column so the columns fit.
 * [⇉] **combine**: merge each straight run of tactics into one stacked node —
-  the `have`/`rw` run in the `succ` case becomes a single box
+  the `have`/`rw` run in the `succ` case becomes a single box.
 * [⋯] **brief**: collapse boilerplate inside labels to `…` — hover to
   peek at what it hides.
 * [⇝] linearize a path; [⇥]/[⇳] elide a run or a vertical band: pick two
-  nodes and the stretch between them folds to a restorable marker -/
+  nodes and the stretch between them folds to a restorable marker. -/
 theorem tour_reshaping (n : Nat) : n + 0 = 0 + n := by
   induction n with
   | zero => rfl
@@ -58,12 +58,12 @@ Every write goes through the editor's own pipeline, so ⌘Z (or the rail's
 [↶]/[↷]) undoes it like any other edit:
 
 * **Double-click** a tactic to edit it in place. The overlay keeps its syntax
-  colouring while you type and expands unicode the way this buffer does i.e.
+  colouring while you type and expands unicode the way this buffer does, i.e.
   `\dvd` → `∣`, `\ne` → `≠`, and completes from what is already here:
-  hypotheses, subterms, global constants/tactics
+  hypotheses, subterms, global constants/tactics.
 * The hover bar on a tactic carries [⧉] — the lens: a slim pane under the
-  infoview, annotates lines with the goal state after tactics run i.e. `⊢ …`,
-  or `∎` where the line closes its goals.
+  infoview that annotates lines with the goal state after tactics run, i.e.
+  `⊢ …`, or `∎` where the line closes its goals.
 * [⊘] on the bar arms a delete: the extent lights up in the buffer, every
   node it would remove dims in the tree, and a second click on the count
   confirms. On a goal it clears the whole sub-proof, returning the goal to
@@ -76,17 +76,9 @@ theorem tour_editing (a b : Nat) (h : a ∣ b) (hb : b ≠ 0) : a ∣ b * b ∧ 
 
 /-! ## 4 · `calc` chains
 
-A chain draws as one **ledger**: the opening expression, then a row per link —
-the relation and its right-hand side, the same column the source writes. The
-expression each link shares with the one before it appears once rather than
-being restated on both sides of a box, so the chain reads top to bottom as a
-single flow, and the local context is drawn once for the whole chain instead
-of on every link.
-
-The justifications hang below in one line, each under the link it proves: a
-`:= by` justification is a real tactic node, a term justification is the node
-itself. A `rw`'s reflexivity residue (`x = x`, closed by the macro's own
-`rfl`) starts folded — click it, or [⊞], to see it. -/
+* Tactics and intermediate goals are stacked in the tree.
+  Try commenting out a step here and then adding it back via the tree.
+  Note: a `rw`'s implicit `rfl` starts folded — click it, or [⊞], to see it. -/
 theorem tour_calc (a b c : Nat) : (a + b) + c = c + (b + a) := by
   calc
     (a + b) + c = a + (b + c) := by rw [Nat.add_assoc a b c]
@@ -96,32 +88,27 @@ theorem tour_calc (a b c : Nat) : (a + b) + c = c + (b + a) := by
 
 /-! ## 5 · The live frontier (unfinished on purpose, from here down)
 
-`constructor` splits the goal and nothing answers either half yet, so both
-goals grow dashed chips under their boxes — the tactic that isn't there:
+`constructor` splits the goal into two unfinished ones, with dashed chips for
+the missing tactics:
 
-* `+` opens the in-place editor to type it (`omega` closes either goal — type
-  `om` then enter twice)
-* `sorry` stubs a branch in one click so the rest can elaborate
-* `calc` opens a chain on a goal that is a relation: it asks only for the
-  first intermediate expression and writes a two-link skeleton whose free
-  ends are `_`
-
-Note the `unsolved goals` error does NOT show in the pill here: the chips are
-already saying it, louder. -/
+* `+` opens the in-place editor (`omega` closes either goal: type `om`, then
+  enter twice).
+* `sorry` stubs a branch so the rest can elaborate.
+* `calc` opens a chain on a goal that is a relation (uses the `Trans`
+  typeclass). -/
 theorem tour_frontier (n : Nat) : 0 < n + 1 ∧ n + 0 = n := by
   constructor
 
-/-! ## 6 · When it goes wrong
+/-! ## 6 · Errors
 
-The first two tactics below fail and shown in the tree, the `exact` after it
-as a dashed ghost that never ran, and the error rides the node as a thick cap
-on its left edge with the full message in the tooltip. The pill at the top
-left counts every problem in the proof; `‹ ›` walks them, unfolding and
-scrolling to each, and clicking the message jumps back to the one showing.
+The first two tactics below fail and are shown in the tree.
+The `exact` tactic doesn't get to run but is shown as a dashed ghost.
+The error rides the node as a thick cap on the left edge: hover to see the
+message. The pill at the top left enumerates each problem in the proof;
+`‹ ›` moves between them.
 
-To fix it, use section 3's gestures on the broken node itself: arm [⊘] on the
-dashed `rw` and confirm — the `exact Nat.add_comm a b` below it already
-closes the goal — or double-click it and type the rewrite you meant. -/
+To fix it, delete [⊘] the dashed `rw`, or double-click it and write what you
+meant. -/
 theorem tour_errors (a b : Nat) : a + b = b + a := by
   have hmul : a * b = b * a := by exact Nat.add_comm a b
   rw [Nat.succ_ne_zero]
