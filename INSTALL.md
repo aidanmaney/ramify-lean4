@@ -2,7 +2,7 @@
 
 An interactive proof tree visualizer for Lean 4, drawn in the VS Code infoview. Read a proof as a tree, edit it in place, and reshape what the tree shows you.
 
-Ramify comes in two parts: a Lean 4 widget and a VS Code extension.[^1] (Just want a look? Clone-and-go in the [Quickstart](#quickstart).)
+Ramify comes in two parts: a Lean 4 widget and a VS Code extension.[^1] ([Quickstart](#quickstart))
 
 |                                              |                                                                                                                                                                          |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -145,4 +145,4 @@ ext/proof-tree-companion/   the VS Code extension
 
 Ramify is MIT licensed; see [LICENSE](LICENSE). It builds on Paperproof, ProofWidgets and `@leanprover/unicode-input`; see [NOTICE](NOTICE) for the breakdown.
 
-[^1]: It's likely possible the widget works with other editors but this is not currently tested/supported. Doing that is left as an exercise for the user.
+[^1]: It's likely possible the widget works with other editors but this is not currently tested/supported. Doing so is left as an exercise for the user.
