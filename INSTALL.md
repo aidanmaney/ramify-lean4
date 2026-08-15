@@ -27,7 +27,7 @@ Add one dependency to your project's `lakefile.toml`:
 ```toml
 [[require]]
 name = "proofTree"
-git = "https://github.com/aidanmaney/prooftree-lean4-dist.git"
+git = "https://github.com/aidanmaney/ramify-lean4.git"
 subDir = "dist"
 rev = "main"
 ```
@@ -37,7 +37,7 @@ rev = "main"
 
 ```lean
 require proofTree from git
-  "https://github.com/aidanmaney/prooftree-lean4-dist.git" @ "main" / "dist"
+  "https://github.com/aidanmaney/ramify-lean4.git" @ "main" / "dist"
 ```
 </details>
 
@@ -69,8 +69,8 @@ Put your cursor inside the proof and the tree will appear in the infoview. It fo
 If you only want to look at it without Mathlib, skip the full dependency:
 
 ```bash
-git clone https://github.com/aidanmaney/prooftree-lean4-dist.git
-cd prooftree-lean4-dist/dist && lake build
+git clone https://github.com/aidanmaney/ramify-lean4.git
+cd ramify-lean4/dist && lake build
 code .
 ```
 
