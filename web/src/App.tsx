@@ -90,14 +90,21 @@ function CfReplay({
 // data-source-specific code in the app: the renderer (ProofTreeView) is fed a
 // plain `Proof`. The Lean infoview widget (widget.tsx) is the other data source —
 // it fetches the same `Proof` over RPC instead of reading this file.
-const SAMPLE_URL = `${import.meta.env.BASE_URL}sample.ndjson`;
-
 // The dev-harness query flags, parsed once: `location.search` is fixed for the
 // page's life, so re-parsing it per render (one of them inside a JSX spread)
 // was three allocations for a constant.
 const QUERY = new URLSearchParams(location.search);
+const SAMPLE_URL = `${import.meta.env.BASE_URL}${
+  // PROTOTYPE harness flag: read another harvest out of /public instead
+  // (`?ndjson=tour.ndjson`), so a fixture that is not part of the tracked
+  // corpus can be looked at without editing the corpus.
+  QUERY.get("ndjson") ?? "sample.ndjson"
+}`;
 const REPLAY_AT = QUERY.get("cf-replay");
 const STUB_EDIT = QUERY.has("stub-edit");
+// PROTOTYPE: `?no-ledger` restores the per-link goal boxes a `calc` chain drew
+// before the ledger, so the two readings can be screenshotted from one build.
+const NO_LEDGER = QUERY.has("no-ledger");
 // `?cf-stub=<line>[:<draft>]`, parsed to the prop shape up front. Line only,
 // so this drives the overlay's FALLBACK node rule; the exact-position path
 // (`cfStubPos`, which only a real server mints) is exercised by `?cf-replay`
@@ -166,6 +173,7 @@ export default function App() {
     // harness covers it too (a `key` remount here would bypass it).
     <ProofTreeView
       proof={proof!}
+      ledger={!NO_LEDGER}
       // Dev-only editing stubs, on `?stub-edit`: the widget-only gestures
       // (in-place editing, the flag verbs, comment editing) are gated on
       // these hooks, so the preview harness can only drive them with fakes.
@@ -222,6 +230,20 @@ export default function App() {
               };
               w.__adds = [...(w.__adds ?? []), { spec, text }];
               return { fill: null };
+            },
+            // Reveal-in-source, the fourth hook the harness was blind to: a
+            // tactic is `revealable` only where this exists, and that predicate
+            // decides what a plain click on a tactic DOES (reveal in the widget,
+            // fold here) and whether the box draws a fold mark at all. Without
+            // it every tactic in the harness took the standalone branch, so the
+            // shipping click routing was the one thing the preview could not
+            // show — including a COLLAPSED tactic's `+` and the click that
+            // opens it, which is what an absorbed `rw` residue hangs on.
+            // Positions land in `window.__reveals`; nothing else happens, since
+            // there is no editor behind the NDJSON.
+            onReveal: (pos: unknown) => {
+              const w = window as unknown as { __reveals?: unknown[] };
+              w.__reveals = [...(w.__reveals ?? []), pos];
             },
           }
         : {})}

@@ -999,6 +999,9 @@ export interface ProofTreeViewProps {
     goalId: string,
     lines: string[],
     hiddenLhs?: string,
+    // What the dropped prefix is replaced by — `_` for a brief-mode elision,
+    // nothing for a `calc` ledger row (see LedgerRow).
+    prefix?: string,
   ) => ReactNode[] | null;
   /**
    * Widget-only, same idea for the context lines stacked above a goal's type
@@ -1049,6 +1052,13 @@ export interface ProofTreeViewProps {
    * no honest extent to offer.
    */
   deleteSlots?: TacticSlot[];
+  /**
+   * PROTOTYPE: draw a `calc` chain's settled links as one LEDGER node rather
+   * than one goal box each (see TreeNode.ledger and proofToTree's `ledger`
+   * option). On by default; the standalone harness turns it off with
+   * `?no-ledger` so the two readings can be compared side by side.
+   */
+  ledger?: boolean;
   /**
    * Widget-only: commit a deletion. `spec` says what the node stands for; the
    * widget resolves it to a document edit and applies it through the editor's
@@ -1124,6 +1134,7 @@ export default function ProofTreeView({
   onAddTactic,
   onHoverTactic,
   deleteSlots,
+  ledger = true,
   onDeleteTactic,
   onPreviewRange,
   onUndo,
@@ -2243,9 +2254,16 @@ export default function ProofTreeView({
     // the widget keeps slots OFF its rebuilt `Proof` (one source of truth, as
     // a sibling on `stable`), so the field is present on the CLI wire and
     // absent on the widget's — and comment attribution needs them on both.
-    () => proofToTree(proof, { hypMode, hypGroup, brief, slots: deleteSlots }),
+    () =>
+      proofToTree(proof, {
+        hypMode,
+        hypGroup,
+        brief,
+        ledger,
+        slots: deleteSlots,
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, hypMode, hypGroup, brief, codeFont, deleteSlots],
+    [proof, hypMode, hypGroup, brief, ledger, codeFont, deleteSlots],
   );
   // Every tactic the step cut (hover-bar ◌) is offered on. Computed in one
   // pass per base tree: the test walks a subtree, so asking it per drawn node
@@ -6408,7 +6426,10 @@ export default function ProofTreeView({
               const taggedHyps =
                 hyps && hyps.length > 0 && renderTaggedHyps
                   ? renderTaggedHyps(
-                      id,
+                      // A ledger's context belongs to the goal the `calc`
+                      // consumes; its own id is a source position, which keys
+                      // no interactive print (see TreeNode.hypGoalId).
+                      node.data.hypGoalId ?? id,
                       hyps.map((l) => l.text),
                     )
                   : null;
@@ -6419,9 +6440,31 @@ export default function ProofTreeView({
               // A prose label (narration mode) is not source text; declining
               // the tagged path OUTRIGHT is the decision, not letting the
               // text-equality guard fail its way to the same answer.
+              // A `calc` LEDGER is one node standing for SEVERAL goals, so it
+              // is rendered PER ROW — each row against its own link goal,
+              // through the same prefix-drop rewrite brief mode uses, with the
+              // prefix replaced by nothing (LedgerRow). Degradation is per
+              // row, which is the granularity the context lines already use:
+              // the HEAD row states no link and so has no goal to tag, and a
+              // row whose print no longer matches simply stays plain text
+              // beside its tagged neighbours.
               const taggedLines = node.data.proseLabel
                 ? null
-                : type === "goal"
+                : node.data.ledger
+                  ? (renderTaggedGoal &&
+                    lines.length === node.data.ledger.length
+                      ? node.data.ledger.map((r, i) =>
+                          r.goalId
+                            ? (renderTaggedGoal(
+                                r.goalId,
+                                [lines[i].text],
+                                r.hiddenLhs,
+                                "",
+                              )?.[0] ?? r.text)
+                            : r.text,
+                        )
+                      : null)
+                  : type === "goal"
                   ? (renderTaggedGoal?.(
                       id,
                       lines.map((l) => l.text),
@@ -6472,7 +6515,16 @@ export default function ProofTreeView({
                 // On editable tactics the reveal defers past the double-click
                 // window (see deferReveal), so the in-place editor's opening
                 // gesture isn't cut short by a focus jump to the editor.
-                if (revealable) {
+                //
+                // COLLAPSED is the exception, and it is the `+` glyph's pair:
+                // that mark is drawn on a collapsed tactic precisely because
+                // something is hidden under it, and the click that opens it has
+                // to be the one the mark is inviting — otherwise the only way
+                // back is ⊞, which opens the whole proof. Reveal is unchanged
+                // the moment it is open again (and stays one ⌘-click away
+                // meanwhile), so this costs a gesture nothing and buys the
+                // absorbed `rw` residues their way back.
+                if (revealable && !isCollapsed) {
                   // The id seeds the instant accent — this branch is
                   // tactics only, which is exactly where the accent may land.
                   if (editable || partEditable) deferReveal(actPos!, id);
@@ -7080,7 +7132,17 @@ export default function ProofTreeView({
 
                   {canFold &&
                     !seqActive &&
-                    !revealable &&
+                    // A REVEALABLE tactic's whole box reveals, so a `−` there
+                    // would advertise a gesture the box does not do — but a
+                    // COLLAPSED one is a different claim: it says something is
+                    // hidden under this node, which is state and not a gesture,
+                    // and it is the only thing on screen that does. Without it
+                    // a widget reader who pressed ⊟, or who is looking at a
+                    // chain whose links absorbed their `rw` residues, has a box
+                    // with a subtree behind it and no mark at all. The click
+                    // handler pairs with this: while collapsed, a plain click
+                    // opens instead of revealing.
+                    (!revealable || isCollapsed) &&
                     !hideForEdit &&
                     !isMarker && (
                     // `+`/`−`, not the rail's ⊞/⊟. Those were tried, on the

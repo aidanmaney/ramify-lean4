@@ -31,12 +31,21 @@ export type ElideCut =
   | { kind: "step"; id: string; note?: string }
   | { kind: "combine"; ids: string[] }; // a linear tactic run, shown stacked
 
-/** The view the SOURCE asks for: which goals `.fold` starts collapsed, and the
+/** The view the proof OPENS in: which goals `.fold` starts collapsed, and the
  * `step` cuts `.none` starts as ghosts (see NodeFlags). Pure, and deliberately
  * the ONLY place that translation lives — it is read once per proof by the
  * seed and again by the ⌥-⊞ reset, and a reset that rebuilt the rule by hand
  * would be a second answer to "what does the source say", exactly the kind of
  * pair that drifts.
+ *
+ * Mostly the source's own directives, and one structural default that behaves
+ * exactly like one: an `rw`'s `x = x` residue inside a `calc` chain opens
+ * FOLDED, so the state the link steps to is drawn and the synthetic `rw [rfl]`
+ * closing it is not (see TreeNode.rflResidue). It rides here rather than
+ * beside the seed because it
+ * has to answer the same two questions a flag does — what does this proof look
+ * like when opened, and what does ⌥-⊞ put back — and a second seeding path
+ * would be free to disagree with ⊞ about which of them it is.
  *
  * Read off the BASE nodes, never the engine's: applying a `.none` cut is what
  * removes the flagged node from the engine's tree, so asking the drawn tree
@@ -54,6 +63,21 @@ export function sourceView(nodes: TreeNode[]): {
   const folds: string[] = [];
   const cuts: ElideCut[] = [];
   for (const n of nodes) {
+    // The residue GOAL itself is what the fold is seeded on, so the box stays
+    // drawn and only the synthetic `rw [rfl]` under it is hidden (see
+    // TreeNode.rflResidue). Seeding the JUSTIFICATION above it instead — which
+    // would take the `⊢ x = x` box away with its child — was tried and is one
+    // step too far by the author's own reading: the intermediate states of a
+    // chain are the chain, and a link that steps to a state the tree never
+    // draws is a link you cannot check.
+    //
+    // The fold and not a combine cut, and not an absorb in proofToTree: a
+    // combined node would DRAW the `rw [rfl]` as a second label line, which is
+    // the line this exists to remove, and dropping the pair from the tree
+    // outright would need a new affordance to get it back. A fold already means
+    // "there is more below this" and is already undone by ⊞, by ⌥-⊞ and by the
+    // box's own `+`.
+    if (n.rflResidue) folds.push(n.id);
     if (n.flags?.fold) folds.push(...(n.flags.targets ?? []));
     if (!n.flags?.elide) continue;
     const note = n.flags.note;
@@ -382,10 +406,18 @@ export function combineRuns(
   // either — a failed→skipped run IS linear, and merging it would fold the
   // one box whose dashed/danger styling says what happened into an ordinary
   // green one.
+  // A `calc` HEAD is never combined either. Its children are the chain's LINKS
+  // rather than a continuation (see TreeNode.chain), so merging its label into
+  // the run above it hides the one node that says a chain starts here — and
+  // with a ledger below it, the head of a two-node column. Measured on
+  // `proofs/calc.lean`: under ⇉ the first chain's head merged with the `have`
+  // above it into one box reading `have hsq … ⏎ calc (a + b) ^ 2` (25 drawn
+  // nodes → 23); with this clause both heads stand.
   const blocked = (id: string) =>
     (exclude?.has(id) ?? false) ||
     !!byId.get(id)?.synthetic ||
-    !!byId.get(id)?.recovered;
+    !!byId.get(id)?.recovered ||
+    !!byId.get(id)?.chain;
 
   const runs: ElideCut[] = [];
   const seen = new Set<string>();

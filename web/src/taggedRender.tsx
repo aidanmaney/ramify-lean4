@@ -147,6 +147,11 @@ export interface TaggedRenderers {
     lines: string[],
     // Brief mode: the LHS the label replaced with `_` (TreeNode.goalElision).
     hiddenLhs?: string,
+    // What the dropped prefix is replaced BY. `_` is the brief-mode elision's
+    // own stand-in; a `calc` LEDGER row replaces it with nothing at all (its
+    // drawn text opens on the relation, which is already the first token of
+    // what is left). The same one rewrite either way — see LedgerRow.
+    prefix?: string,
   ) => ReactNode[] | null;
   renderTaggedHyps: (
     goalId: string,
@@ -220,11 +225,12 @@ export function makeTaggedRenderers(
     goalId: string,
     lines: string[],
     hiddenLhs?: string,
+    prefix = "_",
   ) => {
     const key = keyOf(goalId, lines);
     const hit = goalCache.get(key);
     if (hit !== undefined) return hit;
-    const out = computeTaggedGoal(goalId, lines, hiddenLhs);
+    const out = computeTaggedGoal(goalId, lines, hiddenLhs, prefix);
     goalCache.set(key, out);
     return out;
   };
@@ -232,6 +238,7 @@ export function makeTaggedRenderers(
     goalId: string,
     lines: string[],
     hiddenLhs?: string,
+    prefix = "_",
   ) => {
     const ig = tagged.get(goalId);
     if (!ig) return null;
@@ -246,7 +253,9 @@ export function makeTaggedRenderers(
       if (!flat.startsWith(hiddenLhs)) return null;
       const rest = sliceTaggedText(fmt, hiddenLhs.length, flat.length);
       if (!rest) return null;
-      fmt = { append: [{ text: "_" }, rest] };
+      // An empty prefix (a ledger row) appends nothing: the row's drawn text
+      // IS the suffix, so the flat text must be it exactly.
+      fmt = prefix ? { append: [{ text: prefix }, rest] } : rest;
     }
     // Goal labels carry a plain "⊢ " prefix (proofToTree) that the
     // interactive print doesn't — strip it for the text-equality match,

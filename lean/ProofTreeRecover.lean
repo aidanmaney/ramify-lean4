@@ -736,6 +736,16 @@ def recoverCalcLinks (fileMap : FileMap) (tree : InfoTree)
     let some calcStep := container | continue
     for lnk in b.links do
       let some just := lnk.just? | continue
+      -- A HOLE justification (`?_`, or a named `?foo`) is not an undrawn link:
+      -- the hole's goal is PENDING, so the client already draws it as a goal
+      -- box carrying the fill and grow-a-link chips. The completeness witness
+      -- below cannot see that — it tests harvested STEPS, and a hole is proved
+      -- by none — so without this gate the link is drawn TWICE, once as the
+      -- pending goal and once as a term-recovered copy of it. `?_` and a named
+      -- `?foo` are the same syntax kind, which is the same one test
+      -- `ProofTree.collectHoles` collects on: keep the two pointing at each
+      -- other.
+      if just.isOfKind ``Lean.Parser.Term.syntheticHole then continue
       let some jr := just.getRange? (canonicalOnly := true) | continue
       let jStart := fileMap.utf8PosToLspPos jr.start
       let jStop := fileMap.utf8PosToLspPos jr.stop

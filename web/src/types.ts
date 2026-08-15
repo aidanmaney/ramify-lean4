@@ -157,6 +157,37 @@ export interface CombinedPart {
   elision?: { original: string; keep: KeepSeg[]; marks: Mark[] };
 }
 
+/** One row of a `calc` LEDGER (see TreeNode.ledger).
+ *
+ * The head row is the chain's starting expression and states no link, so it
+ * carries no `goalId`. Every other row is one settled link, drawn the way the
+ * SOURCE writes it — `<relation> <RHS>`, the LHS left to the row above — and
+ * sliced out of that link goal's own printed type so the drawn text is a
+ * verbatim SUFFIX of it. `hiddenLhs` is the prefix that was dropped (the LHS
+ * plus the whitespace before the relation), which is exactly the shape the one
+ * sanctioned tagged rewrite takes (taggedRender's `goalElision` branch), so a
+ * row can be rendered interactively without a second pathway. */
+export interface LedgerRow {
+  /** The link goal this row states. Absent on the head row alone. */
+  goalId?: string;
+  /** The drawn text. */
+  text: string;
+  /** The part of `goalId`'s type this row does NOT draw. Absent on the head. */
+  hiddenLhs?: string;
+  /** The link's justification span (its consuming step's range) — carried so a
+  row can be pointed at source without re-deriving the join. */
+  position?: ProofStepPosition;
+}
+
+/** Which row of a ledger is the HEAD — the chain's starting expression, the one
+ * row that states no link. The test is the absence of a link goal, not the row's
+ * index: the head is DROPPED whenever the `calc` node's own label already writes
+ * the LHS (the one-line `calc x = y := j` formatting), and after that drop row 0
+ * is an ordinary relation row that must keep the relation rows' indent. One
+ * coding, read by the measurer (ledgerSize) and by anything that renders a row.
+ */
+export const isLedgerHead = (r: LedgerRow) => r.goalId === undefined;
+
 // Raw node in the proof tree. `id` is a stable key (an mvarId for goals, a
 // derived key for tactics) used for layout ordering and fold state; `label` is
 // the human-readable text drawn in the box (the goal type, or the tactic
@@ -257,6 +288,69 @@ export interface TreeNode {
   // there the last branch genuinely is where the proof ends up, and indenting
   // every branch would walk the trunk right at every split.
   chain?: boolean;
+  /** GOAL nodes only, and the one goal node that stands for SEVERAL goals: the
+   * SETTLED links of a `calc` chain, drawn as the source's own column instead
+   * of one box per link.
+   *
+   * A settled link is one some real justification consumes (a `by` block's
+   * tactics, or a Part D term node). Its goal box was 59% context block by ink,
+   * 43% of it byte-identical repeats — the goal directly above the `calc` node
+   * already shows the whole context — and its statement restated the row above
+   * it in full. So the rows carry the statements, no hyps are drawn, and each
+   * link's justification hangs off this node as an ordinary child in source
+   * order. Unsettled links (holes, stub-consumed links, the residue) keep their
+   * own goal boxes as siblings after it: every editing gesture lives there.
+   *
+   * The ledger DOES carry the chain's context block (`hyps`, drawn above the
+   * rows the way a goal box draws them above its `⊢`), and that is what pays
+   * for itself: every goal inside the chain's justification subtrees then draws
+   * only what it ADDS to it, so a link's residue goal — which adds nothing —
+   * draws with no context block at all. See `contextFor`'s `inherited`. */
+  ledger?: LedgerRow[];
+  /** Ledger nodes only: whose context `hyps` is. The tagged renderer keys the
+   * interactive context lines by GOAL id, and a ledger's own id is a source
+   * position (it stands for several goals, so it can be no single mvarId) —
+   * without this the chain's context would silently drop to plain SVG in the
+   * widget while every other box kept its type tooltips. */
+  hypGoalId?: string;
+  /** The id of an ANCESTOR node that draws this node's context block too —
+   * set on a `calc` LEDGER, whose block is the chain goal's own, computed once
+   * and handed to both (see the ledger emission in proofToTree).
+   *
+   * It says "drop my block whenever that node is still drawn above me", and
+   * the two halves are split on purpose. proofToTree decides the SEMANTICS,
+   * because only it knows the breadth: under ∀ (`full`) the reader has asked
+   * every box for everything and the flag is not written at all, which is the
+   * same exemption `contextFor`'s `inherited` makes and for the same reason.
+   * The LAYOUT decides whether the condition holds, because only it has the
+   * drawn tree: the ledger sits two links under the chain goal in every layout
+   * mode (⋔ wide moves it, it does not detach it), so the block really is
+   * adjacent — but an elide cut can take the goal away and leave the ledger
+   * standing, and then the block is the only copy there is.
+   *
+   * Structural, never geometric: "is that node in the drawn tree" is a fact
+   * about the graph, and no pixel feeds back into the tree to answer it. */
+  hypsInheritedFrom?: string;
+  /** GOAL nodes only: I am the `x = x` state an `rw` leaves behind.
+   *
+   * `rw` is a macro — `rewrite …; with_reducible rfl` — so every `rw [X]` inside
+   * a chain is followed by a goal restating the rewritten side against itself
+   * and a synthetic `rw [rfl]` node closing it. The `rw [rfl]` says nothing the
+   * box above it did not — its own source slice is the closing `]` of the `rw`
+   * that produced it, the two sharing one `TacticSlot` — so the proof opens
+   * with THIS GOAL folded (`sourceView` seeds it, exactly as a `.fold` flag
+   * would): the state the link steps to keeps its box, and the no-op closing it
+   * is the only thing hidden. Clicking the box, or its `+`, or ⊞, opens it like
+   * any other fold; ⌥-⊞ folds it again.
+   *
+   * The fold was briefly seeded one level UP, on the justification, so that the
+   * residue box went too — rejected by the author: a chain's intermediate
+   * states are what a reader checks the links against, and hiding one leaves a
+   * step whose destination is nowhere on screen.
+   *
+   * Structural, never a count: the goal's type must be a reflexivity on its
+   * relation spine and its consuming step must be the macro's own `rw [rfl]`. */
+  rflResidue?: boolean;
   // GOAL nodes only: I am a proof OBLIGATION this tactic generated, not the
   // mathematics continuing — a conditional rewrite's side condition
   // (`rw [Nat.sub_add_cancel]` leaving `b ≤ a`). The compact layout keeps the

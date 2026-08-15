@@ -3,11 +3,13 @@ import type { GraphNode, SugiNode } from "d3-dag";
 import type {
   HypLine,
   LayoutNode,
+  LedgerRow,
   PlacedLink,
   PlacedNode,
   TreeNode,
   WrappedLine,
 } from "./types";
+import { isLedgerHead } from "./types";
 import type { ProofStepPosition } from "./paperproof";
 
 // Links carry no data of their own: a goal's context now lives inside the goal
@@ -552,7 +554,38 @@ function trunkLayout(
     // `calc` block), whose links are a list rather than a split, so every one
     // of them indents and they read as a column (see TreeNode.chain).
     // `undefined` never matches `c === trunk`.
-    const trunk = n.chain ? undefined : order[order.length - 1];
+    //
+    // A chain that drew a LEDGER is the exception's exception: the ledger is
+    // the chain's column itself rather than one of its links, and it is the
+    // one child there is, so it resumes the trunk under its `calc` node and
+    // the links hang off IT at the branch indent. (It once took an indent of
+    // its own, read off the `calc` label's `"calc "` prefix so row 0 landed
+    // under the source's own LHS; the author's reading is that a ledger just
+    // follows `calc` down the trunk, and an offset that matched neither the
+    // trunk nor the branch indent read as a misalignment.)
+    //
+    // Below the ledger the exception's exception continues: the ledger is the
+    // chain's COLUMN HEAD, so its justifications carry that column on rather
+    // than indenting under it — the spine's first `rw` resumes the trunk at
+    // the ledger's own x, and every later one inherits it through the ordinary
+    // last-child rule. (A ledger has exactly one child, the first ledgered
+    // link's justification; the unsettled links hang off their own goals.)
+    //
+    // And inside the spine an `rw`'s folded `x = x` RESIDUE never takes the
+    // trunk (TreeNode.rflResidue): it is a leaf beside the chain, not the
+    // chain continuing, so it branches off like its siblings. Without this the
+    // LAST link's residue — the one link with nothing after it — was the only
+    // residue in the chain drawn on the spine's own x. `rflResidue` is minted
+    // only inside a chain, so nothing outside one can reach this.
+    const last = order[order.length - 1];
+    const trunk =
+      n.ledger !== undefined
+        ? order[0]
+        : n.chain
+          ? order.find((c) => c.ledger !== undefined)
+          : last?.rflResidue
+            ? undefined
+            : last;
     // Spine mode: this tactic leaves the trunk, so its children resume just
     // under the connector STUB (its box middle — where the incoming elbow's
     // horizontal lands) instead of under its whole band. That is the mode's
@@ -1136,6 +1169,27 @@ function sizeOf(
   );
   const cap = reflow !== "off" ? budget + 2 * NODE_PAD : MAX_W;
   const labelW = Math.max(MIN_W, Math.min(cap, widest + 2 * NODE_PAD));
+  const { hypLines, hypW, hypH } = hypBlockSize(hyps, reflow);
+  return {
+    lines,
+    hyps: hypLines,
+    w: Math.max(labelW, hypW),
+    h: hypH + lines.length * LINE_H + 2 * NODE_PAD_Y,
+    hypH,
+  };
+}
+
+// The CONTEXT BLOCK's own geometry — the lines as drawn, the width they need
+// and the height they occupy. Factored out of `sizeOf` when the `calc` ledger
+// grew a context block of its own (it draws the chain's hyps once, above its
+// rows): two boxes stacking hyps the same way must measure them with one body,
+// or the gutter reservation and the divider's leading become a pair that can
+// drift — and both of those already have a matching rule in HypBlock.
+function hypBlockSize(
+  hyps: HypLine[] | undefined,
+  reflow: ReflowMode,
+): { hypLines: HypLine[]; hypW: number; hypH: number } {
+  const budget = budgetFor(reflow);
   const raw = hyps ?? [];
   // The `▸` gutter exists to tell used hyps from unused ones, so it is
   // reserved only when there is actually a distinction to draw. In `used` mode
@@ -1195,13 +1249,7 @@ function sizeOf(
   const sepExtra = hypLines.some((l) => l.sep) ? HYP_SEP_H : 0;
   const hypH =
     hypLines.length > 0 ? hypLines.length * HYP_LINE_H + sepExtra + HYP_GAP : 0;
-  return {
-    lines,
-    hyps: hypLines,
-    w: Math.max(labelW, hypW),
-    h: hypH + lines.length * LINE_H + 2 * NODE_PAD_Y,
-    hypH,
-  };
+  return { hypLines, hypW, hypH };
 }
 
 // The full-size measurement, exported for the overview peek: hovering a mini
@@ -1284,6 +1332,55 @@ function miniSize(
   };
 }
 
+// A `calc` LEDGER (see TreeNode.ledger): one drawn line per row, the relation
+// rows hanging under the head at the source's own step indent.
+//
+// Rows are deliberately NOT pixel-wrapped, for exactly the reason context lines
+// are not: a row is a verbatim SUFFIX of its link goal's printed type, which is
+// the string the widget's tagged renderer matches on, and a mid-row break would
+// destroy it. So the box grows to fit instead — and unlike `sizeOf` there is no
+// MAX_W clamp, since clamping a width nothing wrapped to only spills the text
+// out of the box.
+// The relation rows' own indent, Lean's own: a link is written `_ = z`, so with
+// the HEAD row putting the chain's LHS at indent 0, two character cells is
+// exactly where the relation lands under it.
+//
+// It is a RELATIVE shape, so it only applies where the head row is actually
+// drawn. Where the `calc` node's own label states the LHS the head row is
+// dropped (see `ledgerHead`), and indenting what remains would be a uniform pad
+// aligning the rows with nothing — the box sits on the trunk under `calc` like
+// any other node, so its text starts where every other box's does.
+const LEDGER_INDENT = 2 * CHAR_W;
+function ledgerSize(
+  rows: LedgerRow[],
+  hyps: HypLine[] | undefined,
+  reflow: ReflowMode,
+): Pick<LayoutNode, "lines" | "w" | "h" | "hypH" | "hyps"> {
+  const head = rows.some(isLedgerHead);
+  const lines: WrappedLine[] = rows.map((r, i) => ({
+    text: r.text,
+    cont: false,
+    // Keyed on the HEAD row's presence, never on the index: after the head is
+    // dropped, row 0 is an ordinary relation row and the whole block is flush.
+    indent: head && !isLedgerHead(r) ? LEDGER_INDENT : 0,
+    seg: i,
+  }));
+  const widest = Math.max(
+    ...lines.map((l) => l.indent + measureText(l.text, NODE_FONT_PX)),
+  );
+  // The chain's CONTEXT, drawn once here instead of once per link box. Measured
+  // through the same body every other box's is (hypBlockSize), so the ▸ gutter
+  // and the data/props divider behave identically inside a chain.
+  const { hypLines, hypW, hypH } = hypBlockSize(hyps, reflow);
+  return {
+    lines,
+    hyps: hypLines,
+    w: Math.max(MIN_W, widest + 2 * NODE_PAD, hypW),
+    h: hypH + lines.length * LINE_H + 2 * NODE_PAD_Y,
+    hypH,
+  };
+}
+
 // Narration mode: the comment prose measured AS the label, italic at the
 // label's own font and budget. A sibling of `sizeOf` rather than a flag on it
 // because the two differ in every dimension that matters: italic (glyphs are
@@ -1308,6 +1405,15 @@ function proseLabelSize(
     hypH: 0,
   };
 }
+
+/** Everything the engine measures once per node: the box (label + context
+ * block), the comment strip, the case badge, the chip lane, and the two bits a
+ * measurement branch stamps for the render to read (`mini`, `proseLabel`).
+ * Named because there are now two of these per ledger node — see `HYP_ALT`. */
+type SizeRec = ReturnType<typeof sizeOf> &
+  ReturnType<typeof commentSize> &
+  ReturnType<typeof caseSize> &
+  Pick<LayoutNode, "chipH" | "mini" | "proseLabel">;
 
 export function createLayoutEngine(
   data: TreeNode[],
@@ -1421,17 +1527,18 @@ export function createLayoutEngine(
   // Narration mode's bullet test needs a node's consumed goal; ids only, so a
   // plain map over the same array the SIZE pass walks.
   const BY_ID = new Map(data.map((n) => [n.id, n]));
+  // The alternative size of a node whose context block SIZE dropped because an
+  // ancestor draws it too (see TreeNode.hypsInheritedFrom): the block put back,
+  // plus the id whose being drawn was the reason to drop it. `computeLayout`
+  // reads it when that ancestor is not in the layout after all — focus scoped
+  // to the chain, sequence mode, a paged-away branch — where the "already on
+  // screen" premise fails and the only copy of the block is this one. Filled
+  // by the SIZE pass below, which is where the decision is already being made;
+  // empty for every proof that has no ledger.
+  const HYP_ALT = new Map<string, { src: string; size: SizeRec }>();
   const SIZE = new Map(
     data.map(
-      (
-        n,
-      ): [
-        string,
-        ReturnType<typeof sizeOf> &
-          ReturnType<typeof commentSize> &
-          ReturnType<typeof caseSize> &
-          Pick<LayoutNode, "chipH" | "mini" | "proseLabel">,
-      ] => {
+      (n): [string, SizeRec] => {
         // Overview: a node outside the keep set is a mini chip. Its comment
         // strip and chip lane go with the context block — the mode shows
         // SHAPE, and the case badge stays because a branch's name IS shape.
@@ -1458,6 +1565,44 @@ export function createLayoutEngine(
         // that simply has no comment. Same trick the overview branch uses.
         const hideComment =
           !comments || (commentsHidden?.has(n.id) ?? false);
+        // A ledger measures its ROWS, not its joined label (which exists only
+        // so a generic reader has text): each row keeps its own indent, and
+        // none of them wraps. Its comment strip and case badge behave like any
+        // other node's; it carries no chips, so no lane is reserved.
+        if (n.ledger) {
+          const chrome = {
+            ...commentSize(
+              hideComment ? undefined : n.comment,
+              reflow,
+              commentsExpanded?.has(n.id) ?? false,
+            ),
+            ...caseSize(n.caseLabel),
+            chipH: 0,
+          };
+          // The context block, DROPPED while the ancestor that also draws it
+          // is in the drawn tree (see TreeNode.hypsInheritedFrom). Structural:
+          // `data` is the post-elision node list, so a band cut that took the
+          // chain goal away answers "no" here and the block comes straight
+          // back — the suppression is a claim about what is on screen, and
+          // this is the last place that can still check it cheaply.
+          const src =
+            n.hypsInheritedFrom !== undefined
+              ? BY_ID.get(n.hypsInheritedFrom)
+              : undefined;
+          const drawnAbove = !!src?.hyps?.length;
+          if (drawnAbove)
+            HYP_ALT.set(n.id, {
+              src: n.hypsInheritedFrom!,
+              size: { ...ledgerSize(n.ledger, n.hyps, reflow), ...chrome },
+            });
+          return [
+            n.id,
+            {
+              ...ledgerSize(n.ledger, drawnAbove ? undefined : n.hyps, reflow),
+              ...chrome,
+            },
+          ];
+        }
         // Narration: a commented TACTIC's prose becomes its label; the strip
         // is zeroed (the prose moved, it didn't double). Only as-written
         // tactics — markers/synthetic/recovered nodes stand for no single
@@ -1662,14 +1807,23 @@ export function createLayoutEngine(
 
     const visible: LayoutNode[] = data
       .filter((n) => shown(n.id))
-      .map((n) => ({
-        ...n,
-        parents: n.parents.filter((p) => shown(p.id)),
-        foldable: HAS_CHILDREN.has(n.id),
-        // Box geometry (label + context block) and the comment strip's, both
-        // measured once when the engine was built.
-        ...SIZE.get(n.id)!,
-      }));
+      .map((n) => {
+        // A context block dropped as a duplicate is put back when the node it
+        // duplicated is not in THIS layout (see HYP_ALT): `focus` on the chain
+        // and sequence mode both scope the ancestor away, and "already drawn
+        // above you" then names nothing on screen. Both records were measured
+        // when the engine was built — this picks between them, it never
+        // measures.
+        const alt = HYP_ALT.get(n.id);
+        return {
+          ...n,
+          parents: n.parents.filter((p) => shown(p.id)),
+          foldable: HAS_CHILDREN.has(n.id),
+          // Box geometry (label + context block) and the comment strip's, both
+          // measured once when the engine was built.
+          ...(alt && !shown(alt.src) ? alt.size : SIZE.get(n.id)!),
+        };
+      });
 
     if (compact)
       return trunkLayout(visible, srcRank, sideBySide, aside, srcCol);
