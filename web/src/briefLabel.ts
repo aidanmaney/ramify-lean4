@@ -23,16 +23,41 @@ export interface KeepSeg {
   len: number;
 }
 
+/** A marker standing in the collapsed text for something removed: `…` for
+hidden CONTENT, a typed glyph for a tactic's elided command word (Rule F).
+`hidden` is what it replaced, for the hover reveal. Silent removals — pure
+ceremony, like a namespace prefix — record no mark at all, because there is
+nothing a reader would want revealed and nothing drawn to hover. */
+export interface Mark {
+  outAt: number;
+  /** Length of the marker in the collapsed text (always 1 today). */
+  len: number;
+  hidden: string;
+}
+
 export interface CollapsedLabel {
-  /** The collapsed display string (contains `…` at each elision). */
+  /** The collapsed display string (contains a marker at each shown elision). */
   text: string;
-  /** Kept runs, in order; gaps between them are the `…`s. */
+  /** Kept runs, in order; gaps between them are the elisions. */
   keep: KeepSeg[];
   /** The untouched original label, for aligning tokens before remapping. */
   original: string;
+  /** Where each VISIBLE marker landed, recorded by the assembler. Derived
+  here rather than re-found downstream: with three marker glyphs and silent
+  gaps that emit none, "scan the output for `…` and pair with the KEEP gaps in
+  order" is no longer a sound reconstruction. */
+  marks: Mark[];
 }
 
 const ELLIPSIS = "…";
+/** Rule F's typed markers — the move, in one character, where the command word
+was. Chosen against the tree's existing vocabulary, not for looks: `▸` was
+ruled out because it is already the used-hypothesis gutter mark AND the
+context-breadth rail glyph, and `←` because it occurs INSIDE rw labels
+(`rw [← hk]`), where it would collide with the content it sits next to. Both
+resolve on all eight code-font stacks (measured, 0 tofu). */
+const MARK_REWRITE = "↪";
+const MARK_CLOSE = "∎";
 const OPENERS = "([{⟨";
 const CLOSERS = ")]}⟩";
 
@@ -124,12 +149,60 @@ label we cannot classify. `simp only` and friends match as a UNIT, or the
 const VERB_KW =
   /^(exact\??|apply|rw|rewrite|erw|nth_rewrite|simp\w*|simpa|dsimp|norm_num|norm_cast|push_cast|push_neg|field_simp|ring_nf|linarith|nlinarith|polyrith|positivity|gcongr|omega|decide|aesop|tauto|itauto|trivial|assumption|contradiction|constructor|left|right|rfl|ring|abel|group|module|linear_combination|revert|subst|substs|convert|congr|ext|change|unfold|delta|conv|bound|hint|first|repeat|try|all_goals|any_goals|focus)(\s+only)?\b/;
 
+/** A range of the original label to hide, with the marker that stands in for
+it: `…` (hidden content), a Rule F glyph (the move), or `""` (silent). */
+type Elision = [number, number, string];
+
+/** The depth-0 `[` at `open` → the index of its `]`, or -1. Read off `scan`'s
+groups rather than re-scanned, so bracket depth has ONE implementation. */
+function matchingClose(s: Scan, open: number): number {
+  return s.lists.find((g) => g.open === open)?.close ?? -1;
+}
+
+/** The half-open spans of a bracket list's top-level items, from `scan`'s
+comma positions — no parser needed, and the same source of truth Rule C uses
+to decide a list is long enough to trim. */
+function listItems(s: Scan, open: number, close: number): [number, number][] {
+  const g = s.lists.find((x) => x.open === open);
+  if (!g) return [];
+  const bounds = [open, ...g.commas, close];
+  const out: [number, number][] = [];
+  for (let i = 0; i + 1 < bounds.length; i++) out.push([bounds[i] + 1, bounds[i + 1]]);
+  return out;
+}
+
+/** A qualified name's NAMESPACE, if this span begins with one: the `Nat.` of
+`Nat.add_zero`. Silent — it is ceremony, and in a proof about ℕ the prefix is
+what the surrounding context already says.
+//
+Two guards keep it off TERMS, where stripping would edit mathematics rather
+than ceremony (measured: a blanket strip turns `Or.inl` into a meaningless
+`inl` and rewrites `∑ i ∈ Finset.range (k+1)` into `∑ i ∈ range (k+1)`). It
+fires only at the HEAD of a rewrite rule or of an `exact`/`apply` argument —
+never inside a structured term, whose head is `⟨` or `(` and matches nothing —
+and only on CAPITALISED components, so `h.symm`, `hp.pos` and `h.1` are
+untouched: those dots are projections, not namespaces. */
+function pushNamespace(
+  out: Elision[],
+  label: string,
+  from: number,
+  to: number,
+): void {
+  let i = from;
+  while (i < to && (label[i] === " " || label[i] === "←")) i++;
+  const m = /^(?:\p{Lu}[\p{L}\p{N}_']*\.)+/u.exec(label.slice(i, to));
+  if (m) out.push([i, i + m[0].length, ""]);
+}
+
 /** The half-open ranges of the original label to hide, from the rules. */
-function elisionRanges(label: string, short: boolean): [number, number][] {
+function elisionRanges(label: string, short: boolean): Elision[] {
   const s = scan(label);
-  const ranges: [number, number][] = [];
-  const push = (a: number, b: number) => {
-    if (b - a >= MIN_ELIDE) ranges.push([a, b]);
+  const ranges: Elision[] = [];
+  // MIN_ELIDE is a WIDTH rule — it asks whether hiding text pays for the `…`
+  // that replaces it. It therefore applies only to `…`: a typed marker is the
+  // point rather than a saving, and a silent removal costs nothing at all.
+  const push = (a: number, b: number, mark = ELLIPSIS) => {
+    if (mark !== ELLIPSIS || b - a >= MIN_ELIDE) ranges.push([a, b, mark]);
   };
 
   // Rule E1 — a BINDER's command word, replaced by the `…` itself, so the
@@ -144,14 +217,88 @@ function elisionRanges(label: string, short: boolean): [number, number][] {
   // command word, and collapsing it to `…` would erase the step instead of
   // shortening it — losing even that anything is there.
   const mE = BINDER_KW.exec(label);
-  if (mE && label.slice(mE[0].length).trim() !== "") ranges.push([0, mE[0].length]);
+  if (mE && label.slice(mE[0].length).trim() !== "")
+    ranges.push([0, mE[0].length, ELLIPSIS]);
+
+  // Rule F — a REWRITE's ceremony, replaced by one typed glyph. `rw [X]` is
+  // the case Rule E2 gets backwards: E2's premise is that the keyword
+  // classifies the move and the argument is noise, which holds for a simp set
+  // and fails here, where the bracket list IS the move and the lemma name is
+  // drawn NOWHERE ELSE in the tree. Left to E2 the label read `rw …` — the
+  // content gone, the noise kept.
+  //
+  // Like E1 this bypasses BOTH width gates, and for E1's reason: the defect
+  // is UNIFORMITY, not width. Under the gates `rw [Nat.add_zero]` (17 chars)
+  // was left whole while `rw [Finset.sum_range_succ]` (26) collapsed — the
+  // same shape treated oppositely because one lemma has a longer name.
+  //
+  // The glyph is what keeps this from being a loss: dropping the head outright
+  // makes `rw [h]` and `exact h` both read `h`, two moves in one box (measured:
+  // 19 of 52 changed corpus labels fell to ≤2 chars). One character buys the
+  // distinction back. `simp only [ … ]` is deliberately NOT here — a simp set
+  // is not a rewrite, and `↪` would say it was; it keeps E2 and Rule C.
+  const mF = /^(rw|rewrite|erw|nth_rewrite)\b/.exec(label);
+  const open = mF ? label.indexOf("[", mF[0].length) : -1;
+  const close = open >= 0 ? matchingClose(s, open) : -1;
+  let ruleF = false;
+  if (
+    mF &&
+    open >= 0 &&
+    close > open + 1 &&
+    // Only whitespace or an occurrence numeral may sit between the head and
+    // its `[`; anything else means this `[` is not the rule list (a bracket
+    // inside a trailing comment, say), and the rule declines rather than
+    // guessing.
+    /^\s*\d*\s*$/.test(label.slice(mF[0].length, open)) &&
+    // Gated on a rule REMAINING, E1's rule: the corpus contains
+    // `rw []  -- goal: c = c  (closed by rfl)]`, and without this the head and
+    // both brackets collapse to a marker standing for nothing.
+    label.slice(open + 1, close).trim() !== ""
+  ) {
+    ruleF = true;
+    // The keyword and the brackets go SEPARATELY, so anything between them
+    // survives: `nth_rewrite 2 [h]` keeps its occurrence numeral, which says
+    // which `h` is being rewritten and is content by any reading.
+    // Through the whitespace, not just the word: the space between `rw` and
+    // `[` is ceremony too, and left as a kept run it doubles the marker's own
+    // separator (`↪  add_zero`). An occurrence numeral is past that space and
+    // survives.
+    let headEnd = mF[0].length;
+    while (headEnd < open && label[headEnd] === " ") headEnd++;
+    ranges.push([0, headEnd, MARK_REWRITE]);
+    ranges.push([open, open + 1, ""]); // the `[`, silently
+    ranges.push([close, close + 1, ""]); // the `]`, silently
+    for (const [from, to] of listItems(s, open, close))
+      pushNamespace(ranges, label, from, to);
+  }
+  // `exact` CLOSES its goal, which is what `∎` already means on the lens's
+  // inline annotations — the reuse is meaning-compatible, not a collision.
+  // `apply` is left with its keyword: it does not close anything, so neither
+  // marker fits, and `apply f` is short and clear as it stands. Both still
+  // get their head lemma unqualified below.
+  const mX = /^(exact)\s+/.exec(label);
+  if (mX && label.slice(mX[0].length).trim() !== "") {
+    ranges.push([0, mX[0].length, MARK_CLOSE]);
+    ruleF = true;
+  }
+  const mH = /^(exact|apply)\s+/.exec(label);
+  if (mH) pushNamespace(ranges, label, mH[0].length, label.length);
+
   // Everything below is a WIDTH saving, so it keeps the short-label gate.
   if (short) return ranges;
+
+  // Read once, here, because Rule A below must stand down on a calc label —
+  // see Rule D, whose whole reason for existing is that A's polarity is
+  // INVERTED there (A keeps `:= by` and elides a term RHS; on a chain the `by`
+  // is the redundant half and the term is the only copy). While D covered the
+  // line to its end A was harmlessly subsumed; now that D stops at the `:=`,
+  // an ungated A would elide precisely the justification D just protected.
+  const mD = /^\s*calc\s+/.exec(label);
 
   // Rule A — the flagship: the RHS of a top-level `:=` (a binding's derivation)
   // is boilerplate, while the LHS bindings and any `: type` before the `:=` are
   // the point. `:= by` opens a subtree the tree already folds, so leave it.
-  if (s.assign >= 0) {
+  if (s.assign >= 0 && !mD) {
     let rhs = s.assign + 2;
     while (rhs < label.length && label[rhs] === " ") rhs++;
     const rest = label.slice(rhs);
@@ -193,8 +340,13 @@ function elisionRanges(label: string, short: boolean): [number, number][] {
   // the first rewrite rule, which is strictly more than `rw …` and was a
   // deliberate earlier decision. C's range is a subset of E2's, so without
   // this the merge would swallow it.
+  //
+  // It also stands down where RULE F already spoke for the label: F elides the
+  // very head E2 would keep, so both firing would leave overlapping ranges
+  // whose merge erases the argument F exists to preserve.
   const mE2 = VERB_KW.exec(label);
-  if (mE2 && ranges.length === beforeC) push(mE2[0].length, label.length);
+  if (mE2 && ranges.length === beforeC && !ruleF)
+    push(mE2[0].length, label.length);
 
   // Rule D — a `calc` chain's first line. Everything after the keyword is
   // ALREADY DRAWN, by the tree rather than by this label: the chain's starting
@@ -213,8 +365,20 @@ function elisionRanges(label: string, short: boolean): [number, number][] {
   // A keeps `:= by` (a folded subtree) and elides a term RHS, but for a calc
   // the `by` is the redundant half and a term justification is the one part
   // drawn nowhere else. A's range is a subset of D's and merges into it.
-  const mD = /^\s*calc\s+/.exec(label);
-  if (mD) push(mD[0].length, label.length);
+  //
+  // NARROWED, now that the Lean side restores a term-justified first link into
+  // the label (collectTacticTails): what the TREE draws is the RELATION — the
+  // goal box below — and a `:= by tac` justification, which is that tac's own
+  // node. A TERM justification is drawn NOWHERE, so it is the one part of the
+  // line brief must keep, and D stops at the `:=`. Before the restoration this
+  // could not arise: written `calc` on its own line the term never reached the
+  // label at all, it was simply lost.
+  if (mD) {
+    let j = s.assign >= 0 ? s.assign + 2 : -1;
+    while (j > 0 && j < label.length && label[j] === " ") j++;
+    const termJust = j > 0 && !/^by(\s|$)/.test(label.slice(j));
+    push(mD[0].length, termJust ? s.assign : label.length);
+  }
 
   return ranges;
 }
@@ -233,13 +397,37 @@ export function collapseLabel(label: string): CollapsedLabel | null {
   // nothing twice and reads as a rendering fault. (Rule E's command word and
   // Rule B's scrutinee are exactly one space apart — the case that forced
   // this, before rcases/cases were excluded from E for the better reason.)
-  raw.sort((a, b) => a[0] - b[0]);
-  const merged: [number, number][] = [];
-  for (const [a, b] of raw) {
+  //
+  // Ranges may merge only when their MARKERS agree. Rule F's silent `]` sits
+  // immediately after Rule C's `…` inside the same bracket list, and merging
+  // those would swallow the one marker saying content is hidden — the `…` is
+  // a claim about the label, and a silent removal makes no claim to merge with.
+  raw.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged: Elision[] = [];
+  for (const [a, b, mark] of raw) {
     const last = merged[merged.length - 1];
-    if (last && label.slice(last[1], Math.max(last[1], a)).trim() === "")
+    if (
+      last &&
+      last[2] === mark &&
+      label.slice(last[1], Math.max(last[1], a)).trim() === ""
+    )
       last[1] = Math.max(last[1], b);
-    else merged.push([a, b]);
+    else merged.push([a, b, mark]);
+  }
+
+  // Ranges must be MONOTONIC and non-overlapping before the walk, and merging
+  // by marker is not enough to guarantee it: Rule C's `…` covers a list's tail,
+  // and Rule F's silent namespace strips sit INSIDE it. Overlap made the walk's
+  // cursor go backwards and resurrect text that was supposed to be hidden
+  // (measured: `rw [Nat.add_zero, Nat.add_succ, Nat.zero_add]` printed
+  // `↪ add_zero, … zero_add`). A range already covered is dropped; one that
+  // straddles is clipped to what is left.
+  const ordered: Elision[] = [];
+  let reach = -1;
+  for (const [a, b, mark] of merged) {
+    if (b <= reach) continue;
+    ordered.push([Math.max(a, reach), b, mark]);
+    reach = b;
   }
 
   // Assemble the collapsed text and KEEP map by walking the label: kept runs
@@ -251,12 +439,37 @@ export function collapseLabel(label: string): CollapsedLabel | null {
   // token remap stays exact.
   let text = "";
   const keep: KeepSeg[] = [];
+  const marks: Mark[] = [];
   let cursor = 0;
   let afterElision = false;
   const last = () => text[text.length - 1];
-  const emitKeep = (from: number, to: number) => {
+  // A run's whitespace is trimmed so the spacing around a MARKER can be
+  // normalised — but a SILENT removal has no marker, and the text either side
+  // of it must close up exactly as the source wrote it. So each end of a run
+  // keeps its space when a silent gap abuts it: without the leading half,
+  // `rw [hb] at h` reads `↪ hbat h`; without the trailing half,
+  // `apply Nat.le_trans` reads `applyle_trans` (both measured).
+  const emitKeep = (
+    from: number,
+    to: number,
+    silentBefore = false,
+    silentAfter = false,
+  ) => {
     let s = from;
     let e = to;
+    if (silentBefore || silentAfter) {
+      if (e > s) {
+        // The marker's own trailing space is still owed: `rw [Nat.add_zero]`
+        // elides `rw [` (marked ↪) and then `Nat.` (silent) back to back, and
+        // skipping the whole spacing path here printed `↪add_zero`.
+        if (afterElision && text !== "" && !CLOSERS.includes(label[s]))
+          text += " ";
+        afterElision = false;
+        keep.push({ outAt: text.length, srcAt: s, len: e - s });
+        text += label.slice(s, e);
+      }
+      return;
+    }
     // `\n` trims like a space: a multi-line label (restored tails) elides
     // ACROSS newlines, and a kept run must not open or close on one — brief's
     // point is collapsing the label back toward one line.
@@ -269,56 +482,70 @@ export function collapseLabel(label: string): CollapsedLabel | null {
     keep.push({ outAt: text.length, srcAt: s, len: e - s });
     text += label.slice(s, e);
   };
-  for (const [a, b] of merged) {
-    emitKeep(cursor, a);
-    // A space before the `…`, unless the kept text ends with an opener.
+  let silentGap = false;
+  for (let i = 0; i < ordered.length; i++) {
+    const [a, b, mark] = ordered[i];
+    emitKeep(cursor, a, silentGap, mark === "");
+    silentGap = false;
+    // A SILENT removal emits nothing at all — no glyph and no spacing. It is
+    // ceremony being deleted (a namespace prefix, a rewrite's closing `]`),
+    // so the text either side must close up as though it were never written.
+    if (mark === "") {
+      cursor = b;
+      silentGap = true;
+      continue;
+    }
+    // A space before the marker, unless the kept text ends with an opener.
     if (text !== "" && last() !== " " && !OPENERS.includes(last())) text += " ";
-    text += ELLIPSIS;
+    marks.push({ outAt: text.length, len: mark.length, hidden: label.slice(a, b) });
+    text += mark;
     afterElision = true;
     cursor = b;
   }
-  emitKeep(cursor, label.length);
+  emitKeep(cursor, label.length, silentGap);
 
   // A degenerate result (everything elided, or no net shortening) is not worth
   // it — fall back to the original.
   if (keep.length === 0 || text.length >= label.length) return null;
-  return { text, keep, original: label };
+  return { text, keep, original: label, marks };
 }
 
-/** Map an offset range in the ORIGINAL label into collapsed-text space, or null
-if it lands (even partly) inside an elided gap. Used by the token renderer to
-shift a source-aligned token span onto the collapsed label. */
+/** Map an offset range in the ORIGINAL label into collapsed-text space,
+CLIPPED to the kept run it overlaps — null only when it overlaps no kept run at
+all. Used by the token renderer to shift a source-aligned token span onto the
+collapsed label.
+//
+CLIPPING, not containment, and the difference is load-bearing: a SILENT gap
+cuts INSIDE a token. Lean lexes `Nat.add_zero` as ONE identifier spanning the
+whole name, and Rule F removes `Nat.` from the middle of it — under a
+containment test that span matches no kept run, so the surviving `add_zero`
+would render uncoloured and un-hoverable, with nothing anywhere reporting it.
+That is the same discipline `renderTacticTokens` already applies to
+`alignInLabel`'s segments. A span lying WHOLLY inside a gap still returns null,
+so a `…` keeps swallowing its tokens. */
 export function mapRange(
   keep: KeepSeg[],
   srcAt: number,
   srcEnd: number,
 ): { start: number; end: number } | null {
   for (const k of keep) {
-    if (srcAt >= k.srcAt && srcEnd <= k.srcAt + k.len) {
-      const shift = k.outAt - k.srcAt;
-      return { start: srcAt + shift, end: srcEnd + shift };
-    }
+    const kEnd = k.srcAt + k.len;
+    if (srcEnd <= k.srcAt || srcAt >= kEnd) continue;
+    const shift = k.outAt - k.srcAt;
+    return {
+      start: Math.max(srcAt, k.srcAt) + shift,
+      end: Math.min(srcEnd, kEnd) + shift,
+    };
   }
   return null;
 }
 
-/** The elisions as { outAt (offset of the `…` in the collapsed text), hidden
-(the original substring it replaced) } — for the `…`'s hover reveal. The hidden
-texts come from the gaps between KEEP segments, in order; their positions are
-found by scanning the collapsed text for `…`, which is robust to the synthetic
-spaces the assembler inserts around each marker. */
-export function elisionsOf(c: CollapsedLabel): { outAt: number; hidden: string }[] {
-  const hidden: string[] = [];
-  let prevSrcEnd = 0;
-  for (const k of c.keep) {
-    if (k.srcAt > prevSrcEnd) hidden.push(c.original.slice(prevSrcEnd, k.srcAt));
-    prevSrcEnd = k.srcAt + k.len;
-  }
-  if (prevSrcEnd < c.original.length)
-    hidden.push(c.original.slice(prevSrcEnd));
-  const out: { outAt: number; hidden: string }[] = [];
-  let hi = 0;
-  for (let i = 0; i < c.text.length && hi < hidden.length; i++)
-    if (c.text[i] === ELLIPSIS) out.push({ outAt: i, hidden: hidden[hi++] });
-  return out;
+/** The visible markers, for the renderer's hover reveal. Just the recorded
+list now: it used to be RE-DERIVED by pairing the KEEP gaps with a scan of the
+collapsed text for `…`, which only worked while every gap emitted exactly one
+identical glyph. With three glyphs and silent gaps that emit none, that pairing
+would hand a marker the wrong hidden text — so the assembler, which is the only
+place that knows, records it instead. */
+export function elisionsOf(c: CollapsedLabel): Mark[] {
+  return c.marks;
 }

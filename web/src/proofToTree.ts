@@ -1686,7 +1686,11 @@ export function proofToTree(
       id: tId,
       label: collapsed ? collapsed.text : fullLabel,
       elision: collapsed
-        ? { original: collapsed.original, keep: collapsed.keep }
+        ? {
+            original: collapsed.original,
+            keep: collapsed.keep,
+            marks: collapsed.marks,
+          }
         : undefined,
       type: "tactic",
       parents: [{ id: goalId }],

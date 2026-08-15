@@ -707,7 +707,7 @@ def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
         continue
       seenSeqs := seenSeqs.push sr
       for child in seqChildrenStx seq do
-        if child.getKind == ``Lean.calcTactic then continue
+        let isCalc := child.getKind == ``Lean.calcTactic
         let some kr := child.getRange? (canonicalOnly := true) | continue
         let tight := tightStop src kr.start kr.stop
         let text := String.Pos.Raw.extract src kr.start tight
@@ -729,6 +729,27 @@ def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
         for alts in nodesOfKind altClauseKinds child do
           let some ar := alts.getRange? (canonicalOnly := true) | continue
           drawnFrom := minLine drawnFrom (fileMap.utf8PosToLspPos ar.start).line
+        -- A `calc` is a BOUNDARY case, not an exclusion. It used to be skipped
+        -- outright on the premise that "the chain's links are drawn by the tree
+        -- itself" — true of links 2..n, true of a `by`-justified FIRST link
+        -- (goal box + tactic node), and FALSE of a term-justified one: it
+        -- spawns no goal and no step, so the label's first line was its only
+        -- copy in the whole tree. Written `calc` alone on its line that copy is
+        -- the bare string "calc", and the link vanishes (measured: the same
+        -- chain labels 53 / 16 / 4 characters purely by where the author broke
+        -- the line).
+        --
+        -- So: every SUBSEQUENT link bounds the front, and the trailing region
+        -- is switched off — every line past the last nested block is a later
+        -- link, which the tree does draw. What is left is exactly the material
+        -- drawn nowhere. A `by`-justified first link needs no special case: its
+        -- own block already sets `drawnFrom` to its line, so nothing is
+        -- restored and the label stays `calc`.
+        if isCalc then
+          lastBlockLine := stop.line
+          for lnk in nodesOfKind [``Lean.calcStep] child do
+            let some lr := lnk.getRange? (canonicalOnly := true) | continue
+            drawnFrom := minLine drawnFrom (fileMap.utf8PosToLspPos lr.start).line
         let lines := (text.splitOn "\n").toArray
         let head := (lines[0]?.getD text).trimAscii.toString
         -- One predicate over the lines AFTER the head (`j` from 1): a line is

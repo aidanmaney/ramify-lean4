@@ -4,7 +4,7 @@ import type {
   CalcRelOption,
   ProofStepPosition,
 } from "./paperproof";
-import type { KeepSeg } from "./briefLabel";
+import type { KeepSeg, Mark } from "./briefLabel";
 
 // One line of a goal's local context, e.g. `h : p ∧ q`, with whether the tactic
 // that consumes the goal actually uses it (Paperproof's tacticDependsOn).
@@ -154,7 +154,7 @@ brief-mode keep-map, carried so combine composes with brief. */
 export interface CombinedPart {
   label: string;
   position?: ProofStepPosition;
-  elision?: { original: string; keep: KeepSeg[] };
+  elision?: { original: string; keep: KeepSeg[]; marks: Mark[] };
 }
 
 // Raw node in the proof tree. `id` is a stable key (an mvarId for goals, a
@@ -244,7 +244,7 @@ export interface TreeNode {
   // and this carries the original label + the KEEP map back to it, so the
   // token renderer can shift the source-aligned token spans onto the collapsed
   // label and reveal each `…`'s hidden text. Absent when nothing collapsed.
-  elision?: { original: string; keep: KeepSeg[] };
+  elision?: { original: string; keep: KeepSeg[]; marks: Mark[] };
   // Tactic nodes only: my children are the LINKS OF A CHAIN (a `calc` block),
   // so none of them resumes the trunk — the compact layout indents them all
   // equally and they read as one column.

@@ -4,7 +4,7 @@ import { DocTokenSpan } from "./docTip";
 import { ensureTaggedStyle } from "./taggedRender";
 import { flattenTaggedText, lineOffsets } from "./taggedText";
 import { TOKEN_COLOR } from "./theme";
-import { type KeepSeg, elisionsOf, mapRange } from "./briefLabel";
+import { type KeepSeg, type Mark, mapRange } from "./briefLabel";
 
 /** A span to draw on a wrapped line: a coloured token (`type`, optional hover
 `info`), or a `…` elision marker (`ellipsis` = the source it hid). Offsets are
@@ -24,6 +24,8 @@ Tokens are aligned against `original`, then shifted onto the collapsed label. */
 export interface Elision {
   original: string;
   keep: KeepSeg[];
+  /** Where each visible marker landed, and what it replaced. */
+  marks: Mark[];
 }
 
 // Syntax colouring for tactic node labels (widget only), from the Lean
@@ -421,15 +423,14 @@ export function renderTacticTokens(
     }
     spans.push({ start, end, type: lt.type, doc: lt.doc });
   }
-  // Each `…` in the collapsed label is a titled pseudo-span, so the emit loop
-  // draws it muted with the elided source as a hover tooltip.
+  // Each MARKER in the collapsed label is a titled pseudo-span, so the emit
+  // loop draws it muted with the text it replaced as a hover tooltip. The
+  // positions are the assembler's own record (see briefLabel's `marks`), not a
+  // re-scan of the output: `…`, `↪` and `∎` all mark elisions and a silent one
+  // marks nothing, so there is no glyph to search for.
   if (elision)
-    for (const e of elisionsOf({
-      text: label,
-      keep: elision.keep,
-      original: elision.original,
-    }))
-      spans.push({ start: e.outAt, end: e.outAt + 1, ellipsis: e.hidden });
+    for (const e of elision.marks)
+      spans.push({ start: e.outAt, end: e.outAt + e.len, ellipsis: e.hidden });
   // Segments are emitted head-first, but tokens within them are not
   // necessarily in label order (a rule further down the bracket list maps to
   // an earlier label offset than a token after it in the source).
