@@ -54,8 +54,8 @@ theorem sum_range_odd (n : ℕ) :
       ∧ (∑ i ∈ Finset.range (n + 1), (2 * i + 1))
           = (∑ i ∈ Finset.range n, (2 * i + 1)) + (2 * n + 1)
       ∧ (n % 2 = 0 ∨ n % 2 = 1) := by
-  -- Step 1: the identity itself. Everything below is a corollary of it.
 
+  -- Step 1: the identity itself. Everything below is a corollary of it.
   have key : ∀ m : ℕ, (∑ i ∈ Finset.range m, (2 * i + 1)) = m ^ 2 := by
     intro m
     induction m with
@@ -150,7 +150,11 @@ and each link's `by` justification hangs under the goal it proves.
 The links deliberately mix relations (`=` with `≤`, `<` with `≤`), so the chains
 lean on `Trans` rather than one relation throughout. Chain 2's first link is
 justified by a TERM rather than a tactic, which is worth seeing in the tree: it
-spawns no goal at all, so a three-link chain draws two branches. -/
+spawns no goal at all, so a three-link chain draws two branches. Chains 1 and 3
+each end on a link written `_ ≤ _` — both endpoints left for Lean to unify
+against the goal, the same shape the tree's own calc gestures write — so the
+link's goal is readable only in the tree (chain 3 keeps the spelled-out
+version in a comment for comparison). -/
 theorem calc_workout (a b : ℝ) (n : ℕ) :
     (a + b) ^ 2 ≤ 2 * (a ^ 2 + b ^ 2)
       ∧ (∑ i ∈ Finset.range (n + 1), (2 * i + 1)) = (n + 1) ^ 2
@@ -172,7 +176,8 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
         _ = (k + 1) ^ 2 + (2 * (k + 1) + 1) := by rw [ih]
         _ = (k + 1 + 1) ^ 2 := by ring
   · calc (0 : ℝ) < 1 := by norm_num
-      _ ≤ (a - b) ^ 2 + 1 := by linarith [sq_nonneg (a-b)]
+      _ ≤ _ := by linarith [sq_nonneg (a-b)]
+      -- _ ≤ (a - b) ^ 2 + 1 := by linarith [sq_nonneg (a-b)]
 
 
 /-- **√2 is irrational, over ℤ.** No coprime integers `m, n` satisfy

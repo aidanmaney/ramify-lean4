@@ -577,46 +577,119 @@ This exists to undo another loss in the vendored parser: Paperproof's
 `prettifyTacticString` implements "strip the comments and blank lines after
 the tactic" as literally *keep the first line* — so a step's `position` covers
 the whole tactic while its LABEL is cut at the first newline. Single-line
-nested `by` survives (`(by order)`), multi-line does not: in
+nested `by` survives (`(by order)`), multi-line does not.
+
+What the truncation dropped falls in TWO regions, on either side of the
+material the tree draws for itself, and the rule needs both — the second was
+missing for three weeks and is the shape this record now exists for:
 
 ```
-rcases foo <| by
-  grind
-  with ⟨p, hp, hpdvd⟩
+rcases foo <| by          ← head
+  grind                   ← nested block: its OWN node, not the label's
+  with ⟨p, hp, hpdvd⟩     ← TRAILING: after the last nested block
+```
+```
+have gap : ∀ m : ℕ,                 ← head
+    (∑ i ∈ Finset.range (m+1), f i) ← CONTINUATION: before the first nested
+      = … + f m := by               ←   block, i.e. still the STATEMENT
+  intro m                           ← nested block: its own node
 ```
 
-the `with ⟨p, hp, hpdvd⟩` clause appears nowhere in the tree. The nested
-by-body is NOT part of the loss — it owns its own node — so what wants
-restoring is exactly the tail AFTER the last nested tactic block.
+A `have`'s nested block runs to the slot's end, so the trailing region is
+empty and a trailing-only rule restored NOTHING here: the box drew a binder
+and a dangling comma. The continuation is not a tail and never could be
+reached by widening one — it is the head line's own sentence, finished.
 
 `head` is the prettifier's own output for this slot (first line, trimmed) —
-the application guard: only a label that IS that truncation gets the tail, so
-re-synthesized labels (`rw […]`) and split multi-rule steps are never touched. -/
+the application guard: only a label that IS that truncation is extended, so
+re-synthesized labels (`rw […]`) and split multi-rule steps are never
+touched. -/
 structure TacticTail where
   /-- The slot's tight span; a step of it starts inside `[start, stop)`. -/
   start : Lsp.Position
   stop  : Lsp.Position
   /-- What `prettifyTacticString` produces for this slot: first line, trimmed. -/
   head  : String
-  /-- The lines strictly after the last line any nested tactic block touches,
-  dedented by the slot's start column, joined with `\n`. With no nested block:
-  everything after the first line. -/
+  /-- The lines the truncation dropped and the tree does not draw elsewhere:
+  those before the first line any nested block or alternatives clause BEGINS
+  on (VERBATIM — they are contiguous with the head, so the label stays a
+  prefix of the source and every token aligns), plus those strictly after the
+  last line any nested block touches (dedented by the slot's start column —
+  a block was cut out above them, so no indent makes them align). In source
+  order, joined with `\n`. With neither: everything after the first line,
+  dedented, exactly as before. The two regions are one per-line test, so a
+  tactic with no nested block cannot collect a line twice. -/
   tail  : String
   deriving Inhabited
+
+/-- The alternatives clauses whose per-case markers the TREE draws, as case
+badges, rather than the label — so they bound the label's continuation
+exactly as a nested block does.
+
+Measured, and the reason this list exists at all: with only `tacticSeqKinds`
+as the boundary, an `induction`/`match` whose cases are written
+
+```
+induction n with
+  | zero =>
+    rfl
+```
+
+has its first nested block on the BODY line, two lines down, so "restore the
+lines before the first nested block" pulls `| zero =>` into the label — a
+marker the badge already carries, and the one thing the old trailing-only
+rule's own doc promised would never happen. `inductionAlts` starts at the
+`with` (measured: the head line) and `matchAlts` at the first marker, so
+either way the boundary lands at or before the first marker and nothing of
+the clause is restored. Decomposed by KIND, never by position, as everywhere
+here. `first | tac | tac` needs no entry — its alternatives ARE tactic
+sequences and each marker shares its body's line. -/
+def altClauseKinds : List Name :=
+  [``Lean.Parser.Tactic.inductionAlts, ``Lean.Parser.Term.matchAlts]
+
+/-! A COMMENT written above a nested block's first tactic lands in the
+continuation region, and is removed CLIENT-SIDE rather than here.
+
+The tempting server-side fix — bound the continuation at the block's LEADING
+TRIVIA instead of its first character — was built and MEASURED not to work:
+on `proofs/commented.lean`'s `nested_narration`, Lean attributes that comment
+to the PREVIOUS token's TRAILING trivia, so the block's leading trivia starts
+at line 63 exactly like its canonical range, and the two cannot be told apart
+from the block alone. Widening the boundary to include the trivia line then
+restored the block's own first tactic (`rfl`) into the label, which is worse
+than the comment.
+
+`cleanLabel` (proofToTree.ts, both wires) already answers this: it scrubs
+every comment's verbatim text out of a label and DROPS interior lines its
+scrub emptied — a clause written by the same commit as the trailing rule, for
+"a comment that occupied a whole INTERIOR line of a multi-line label". The
+continuation region is verbatim, so the comment text matches byte for byte
+and the line goes. Measured: the rendered label for that `have` is unchanged
+by this whole change. -/
 
 /-- Every multi-line tactic whose label truncation dropped real text.
 
 Same syntax descent as `tacticSlots` (direct children of every tactic
-sequence, over the same roots, deduped by range). The tail rule — lines
-strictly after the last line any NESTED block touches — is what keeps
-existing labels right everywhere the truncation is deliberate or harmless:
-`have … := by / tac / tac` (nested block runs to the slot's end → empty
-tail), `induction … with | zero => …` (the case bodies are the trailing
-blocks → empty tail; markers stay out of the label, the tree draws case
-badges instead). `calc` is excluded by KIND — its first-line label is
-deliberate, the chain's links are drawn by the tree itself. A multi-line
+sequence, over the same roots, deduped by range). TWO regions are restored
+and the second is not a widening of the first (see `TacticTail`): the lines
+BEFORE the first line any nested block or `altClauseKinds` clause begins on,
+and the lines strictly AFTER the last line any nested block touches. One
+per-line predicate computes both, so the no-nested-block case — where the
+first region already covers everything — cannot restore a line twice.
+
+That pair is what keeps existing labels right everywhere the truncation is
+deliberate or harmless: `have h : P := by / tac / tac` on ONE statement line
+(the block begins on the next line, so nothing is before it; it runs to the
+slot's end, so nothing is after), `induction … with | zero => …` (the clause
+bounds the front, the case bodies are the trailing blocks; markers stay out
+of the label either way). `calc` is excluded by KIND — its first-line label
+is deliberate, the chain's links are drawn by the tree itself. A multi-line
 tactic with NO nested block (`exact ⟨a,` / `b⟩`) restores its whole
-remainder, making label ≡ source. -/
+remainder, making label ≡ source.
+
+Deliberately NOT a boundary: `conv`'s `convSeq` is not a `tacticSeq`, so a
+multi-line `conv` restores its whole body into the label — pre-existing,
+unchanged here, and left for whoever decides what a conv block should draw. -/
 def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
     (extra : Option Syntax := none) : Array TacticTail := Id.run do
   let src := fileMap.source
@@ -642,25 +715,60 @@ def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
         let start := fileMap.utf8PosToLspPos kr.start
         let stop := fileMap.utf8PosToLspPos tight
         -- The last document line any nested block touches (tightened the same
-        -- way, or a block's trailing trivia would swallow a tail line).
+        -- way, or a block's trailing trivia would swallow a tail line) and the
+        -- FIRST line the tree's own material begins on — a nested block or an
+        -- alternatives clause. `none` means the tactic has neither, so every
+        -- line after the head is the label's.
         let mut lastBlockLine := start.line
+        let mut drawnFrom : Option Nat := none
         for blk in nodesOfKind tacticSeqKinds child do
           let some br := blk.getRange? (canonicalOnly := true) | continue
           let bLine := (fileMap.utf8PosToLspPos (tightStop src br.start br.stop)).line
           if bLine > lastBlockLine then lastBlockLine := bLine
+          drawnFrom := minLine drawnFrom (fileMap.utf8PosToLspPos br.start).line
+        for alts in nodesOfKind altClauseKinds child do
+          let some ar := alts.getRange? (canonicalOnly := true) | continue
+          drawnFrom := minLine drawnFrom (fileMap.utf8PosToLspPos ar.start).line
         let lines := (text.splitOn "\n").toArray
         let head := (lines[0]?.getD text).trimAscii.toString
+        -- One predicate over the lines AFTER the head (`j` from 1): a line is
+        -- the label's if it comes before everything the tree draws, or after
+        -- the last of it. The two regions can both be non-empty and can
+        -- coincide (no nested block), which is why this is a per-line test
+        -- and not two appended slices.
         let mut tailLines : Array String := #[]
-        for j in [0:lines.size] do
-          if start.line + j > lastBlockLine then
+        for j in [1:lines.size] do
+          let line := start.line + j
+          if line > lastBlockLine then
+            -- TRAILING region — tested first, so a tactic with no nested block
+            -- at all (where both tests pass) keeps the dedent it has always
+            -- had. A block was cut out above such a line, so the label can
+            -- never be a prefix of the source here whatever we do with the
+            -- indent, and dedenting reads better in the box.
             tailLines := tailLines.push (dedent start.character lines[j]!)
+          else if drawnFrom.all (line < ·) then
+            -- CONTINUATION region — VERBATIM, deliberately not dedented, and
+            -- this is the one place the two differ. These lines are CONTIGUOUS
+            -- with the head in the source, so leaving them alone makes the
+            -- label a literal PREFIX of the slot text — `alignInLabel`'s first
+            -- and best case. Measured on the reported `have gap`: verbatim
+            -- aligns 133/133 label characters, dedented 24/129 (the head line
+            -- and four spaces), i.e. dedenting restores the statement and then
+            -- draws it with no syntax colour and no per-token hover popups.
+            -- The cost is that the continuation keeps the tactic's own start
+            -- column, reading as a hanging indent under the trimmed head.
+            tailLines := tailLines.push lines[j]!
         let tail := "\n".intercalate tailLines.toList
         unless tail.trimAscii.toString.isEmpty do
           out := out.push { start, stop, head, tail }
   return out
 where
-  /-- Drop up to `col` leading spaces, so a tail line's indent reads relative
-  to the tactic rather than to the file's left margin. -/
+  /-- The earlier of a running boundary and a candidate line; `none` is "no
+  boundary seen yet", never line 0. -/
+  minLine (cur : Option Nat) (l : Nat) : Option Nat :=
+    some (match cur with | none => l | some c => min c l)
+  /-- Drop up to `col` leading spaces, so a restored line's indent reads
+  relative to the tactic rather than to the file's left margin. -/
   dedent (col : Nat) (l : String) : String := Id.run do
     let mut drop := 0
     for c in l.toList do
