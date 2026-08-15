@@ -707,7 +707,19 @@ def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
         continue
       seenSeqs := seenSeqs.push sr
       for child in seqChildrenStx seq do
-        let isCalc := child.getKind == ``Lean.calcTactic
+        -- A `calc` restores NOTHING: every one of its links is drawn by the
+        -- tree, so every line after the head is already on screen somewhere.
+        -- That was once true only of links 2..n and of `by`-justified ones —
+        -- a TERM-justified link spawned no goal and no step, so the label's
+        -- first line was its only copy anywhere, and the restoration above
+        -- was extended to cover it. `ProofTreeRecover.recoverCalcLinks` now
+        -- gives that link its own goal box and node from the elaborator's own
+        -- `expectedType?`, which is strictly more (the relation is drawn, the
+        -- justification aligns as an identity, the node is hoverable), so the
+        -- exclusion's premise holds again for every link and the restoration
+        -- would now draw the same text twice. ONE mechanism, and this is not
+        -- it.
+        if child.getKind == ``Lean.calcTactic then continue
         let some kr := child.getRange? (canonicalOnly := true) | continue
         let tight := tightStop src kr.start kr.stop
         let text := String.Pos.Raw.extract src kr.start tight
@@ -729,27 +741,6 @@ def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
         for alts in nodesOfKind altClauseKinds child do
           let some ar := alts.getRange? (canonicalOnly := true) | continue
           drawnFrom := minLine drawnFrom (fileMap.utf8PosToLspPos ar.start).line
-        -- A `calc` is a BOUNDARY case, not an exclusion. It used to be skipped
-        -- outright on the premise that "the chain's links are drawn by the tree
-        -- itself" — true of links 2..n, true of a `by`-justified FIRST link
-        -- (goal box + tactic node), and FALSE of a term-justified one: it
-        -- spawns no goal and no step, so the label's first line was its only
-        -- copy in the whole tree. Written `calc` alone on its line that copy is
-        -- the bare string "calc", and the link vanishes (measured: the same
-        -- chain labels 53 / 16 / 4 characters purely by where the author broke
-        -- the line).
-        --
-        -- So: every SUBSEQUENT link bounds the front, and the trailing region
-        -- is switched off — every line past the last nested block is a later
-        -- link, which the tree does draw. What is left is exactly the material
-        -- drawn nowhere. A `by`-justified first link needs no special case: its
-        -- own block already sets `drawnFrom` to its line, so nothing is
-        -- restored and the label stays `calc`.
-        if isCalc then
-          lastBlockLine := stop.line
-          for lnk in nodesOfKind [``Lean.calcStep] child do
-            let some lr := lnk.getRange? (canonicalOnly := true) | continue
-            drawnFrom := minLine drawnFrom (fileMap.utf8PosToLspPos lr.start).line
         let lines := (text.splitOn "\n").toArray
         let head := (lines[0]?.getD text).trimAscii.toString
         -- One predicate over the lines AFTER the head (`j` from 1): a line is
@@ -963,6 +954,26 @@ structure CalcChain where
   firstBare : Bool := false
   deriving ToJson, FromJson
 
+/-- One well-formed link of a `calc` block, as SYNTAX.
+
+The range alone was what this used to be, and it is not enough for the one
+question a link's own node answers: WHAT PROVES IT. A link justified by a
+`by` block is drawn by the tree already (goal box + tactic node under it); a
+link justified by a TERM spawns neither, so its justification has to be found
+and given a node of its own (`ProofTreeRecover.recoverCalcLinks`). Both halves
+are syntax facts — the justification is the `:=`'s right-hand argument — so
+they are recorded here rather than re-derived by a second descent that could
+disagree about which node is which link's. -/
+structure CalcLink where
+  /-- The `calcFirstStep`/`calcStep` node itself. -/
+  stx : Syntax
+  range : Lean.Syntax.Range
+  /-- This is the block's `calcFirstStep` (the one link that names its LHS). -/
+  isFirst : Bool
+  /-- The justification term (`:= proof`). `none` only for a bare first step,
+  whose justification is optional — see `CalcChain.firstBare`. -/
+  just? : Option Syntax
+
 /-- One `calc` block: its range, its WELL-FORMED links in source order, and
 whether the block as a whole failed to parse.
 
@@ -975,7 +986,7 @@ write into a neighbouring tactic. The `calcFirstStep` is intact in that state
 to repair the block. -/
 structure CalcBlock where
   range : Lean.Syntax.Range
-  links : Array (Lean.Syntax.Range × Bool)
+  links : Array CalcLink
   broken : Bool
   /-- The first link has no `:= proof` — see `CalcChain.firstBare`. -/
   firstBare : Bool := false
@@ -1011,9 +1022,9 @@ def calcBlocks (fileMap : FileMap) (tree : Elab.InfoTree)
         -- own layout rule rules it out — a link on a later line must be
         -- indented PAST the `calc`, or it is not part of the block.
         let links := (calcSteps stx).qsort
-            (fun a b => a.1.start.byteIdx < b.1.start.byteIdx)
-          |>.filter fun (lr, _) =>
-            let lp := fileMap.utf8PosToLspPos lr.start
+            (fun a b => a.range.start.byteIdx < b.range.start.byteIdx)
+          |>.filter fun l =>
+            let lp := fileMap.utf8PosToLspPos l.range.start
             lp.line == cp.line || lp.character > cp.character
         -- `calcFirstStep := ppIndent(colGe term (" := " term)?)`, so the
         -- justification is arg 1 and an empty node there means it is absent.
@@ -1035,9 +1046,19 @@ where
       if k == ``Lean.calcFirstStep then some stx
       else args.foldl (fun acc a => acc <|> firstStep a) none
     | _ => none
-  /-- The `calcFirstStep`/`calcStep` nodes under `stx`, with their ranges.
-  Recursive over raw syntax: a link is not an info node of its own. -/
-  calcSteps (stx : Syntax) : Array (Lean.Syntax.Range × Bool) := Id.run do
+  /-- The `calcFirstStep`/`calcStep` nodes under `stx`, with their ranges and
+  their justifications. Recursive over raw syntax: a link is not an info node
+  of its own.
+
+  The justification is found by KIND, never by index — the standing rule. Both
+  grammars end in the proof term, but they get there differently:
+  `calcFirstStep := ppIndent(colGe term (" := " term)?)` wraps `:=` and the
+  proof in an OPTIONAL group (which is empty for a bare first step, exactly
+  what `firstBare` tests), while `calcStep := ppIndent(colGe term " := " term)`
+  has them flat. Taking "the last argument that is a term" over the flattened
+  children is one rule for both and cannot be broken by a grammar that grows a
+  config node the way `have`'s did. -/
+  calcSteps (stx : Syntax) : Array CalcLink := Id.run do
     let mut out := #[]
     match stx with
     | .node _ k args =>
@@ -1045,9 +1066,25 @@ where
         -- A link the parser only half-read is not a link; see `CalcBlock`.
         if !stx.hasMissing then
           if let some r := stx.getRange? (canonicalOnly := true) then
-            out := out.push (r, k == ``Lean.calcFirstStep)
+            out := out.push {
+              stx, range := r
+              isFirst := k == ``Lean.calcFirstStep
+              just? := justOf stx }
       for a in args do out := out ++ calcSteps a
     | _ => pure ()
+    return out
+  /-- The link's proof term: the argument after the `:=` atom, looking through
+  the first step's optional group. `none` when the link is bare. -/
+  justOf (link : Syntax) : Option Syntax := Id.run do
+    -- Flatten one level of optional/group wrapping: a null node holding the
+    -- `:= proof` pair is the first step's shape.
+    let args := link.getArgs.flatMap fun a =>
+      if a.getKind == nullKind then a.getArgs else #[a]
+    let mut seen := false
+    let mut out := none
+    for a in args do
+      if seen then out := some a
+      if a.isOfKind `«:=» || (a.isAtom && a.getAtomVal == ":=") then seen := true
     return out
 
 /-- Every `calc` block, with the line and column a NEW LAST link would take.
@@ -1068,14 +1105,14 @@ def collectCalcChains (fileMap : FileMap) (tree : Elab.InfoTree)
     for b in calcBlocks fileMap tree extra do
       let start := fileMap.utf8PosToLspPos b.range.start
       let indent := match b.links[1]? with
-        | some (r, _) => (fileMap.utf8PosToLspPos r.start).character
+        | some l => (fileMap.utf8PosToLspPos l.range.start).character
         | none => start.character + 2
       -- The reportable span (see `CalcChain.stop`): through the last
       -- well-formed link, or to the end of the `calc`'s own line when the
       -- block has none — never the block's range, which when broken runs on
       -- into the tactic the parser swallowed.
       let stopPos := match b.links.back? with
-        | some (r, _) => r.stop
+        | some l => l.range.stop
         | none => Id.run do
           let mut p := b.range.start
           while !String.Pos.Raw.atEnd src p && String.Pos.Raw.get src p != '\n' do
@@ -1131,20 +1168,22 @@ def collectHoles (fileMap : FileMap) (tree : Elab.InfoTree)
       let stop := fileMap.utf8PosToLspPos r.stop
       -- The SMALLEST containing link, so a nested calc's links can't claim a
       -- hole belonging to an inner one.
-      let mut best : Option (Lean.Syntax.Range × Bool) := none
-      for l@(lr, _) in links do
+      let mut best : Option CalcLink := none
+      for l in links do
+        let lr := l.range
         if lr.start ≤ r.start && r.stop ≤ lr.stop then
           match best with
-          | some (br, _) =>
-            if lr.stop.byteIdx - lr.start.byteIdx < br.stop.byteIdx - br.start.byteIdx then
+          | some b =>
+            if lr.stop.byteIdx - lr.start.byteIdx
+                < b.range.stop.byteIdx - b.range.start.byteIdx then
               best := some l
           | none => best := some l
       match best with
-      | some (lr, isFirst) =>
+      | some l =>
         out := out.push {
           goalId, start, stop
-          ownerStart := fileMap.utf8PosToLspPos lr.start
-          first := isFirst
+          ownerStart := fileMap.utf8PosToLspPos l.range.start
+          first := l.isFirst
           inCalc := true
           -- A calc link is inside the calc TACTIC, but a link is not a slot
           -- and nothing may be appended between links; it is exactly the case

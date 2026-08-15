@@ -985,11 +985,16 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
     -- all — synthesize its structure from the syntax + TermInfo.
     let recovB ← Recover.recoverTerm fileMap snap.infoTree (some snap.stx)
       remapped.steps
+    -- Part D: a `calc` link justified by a TERM, which elaborates no tactic
+    -- and so reaches the harvest as an absence — the link's relation and its
+    -- proof are both drawn nowhere without this.
+    let recovD ← Recover.recoverCalcLinks fileMap snap.infoTree remapped.steps
+      (extra := some snap.stx)
     let recov : Recover.Recovery := {
-      steps := recovA.steps ++ recovB.steps
-      goals := recovA.goals ++ recovB.goals
-      grafts := recovA.grafts ++ recovB.grafts
-      recovered := recovA.recovered ++ recovB.recovered }
+      steps := recovA.steps ++ recovB.steps ++ recovD.steps
+      goals := recovA.goals ++ recovB.goals ++ recovD.goals
+      grafts := recovA.grafts ++ recovB.grafts ++ recovD.grafts
+      recovered := recovA.recovered ++ recovB.recovered ++ recovD.recovered }
     -- Part C: an EMPTY `by` block. No step is synthesized — the whole point is
     -- that there is no tactic to draw a box for — so this is read BEFORE the
     -- empty early-out and suspends it: the payload it wants is one with no

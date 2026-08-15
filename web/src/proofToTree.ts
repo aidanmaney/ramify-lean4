@@ -1352,6 +1352,22 @@ export function proofToTree(
     comments: ProofStepPosition[] | undefined,
   ): DeleteSpec | undefined {
     if (!step) return undefined;
+    // A step synthesized from a TERM stands for no `TacticSlot`, and the
+    // widget's extent maths resolves an anchor to the SMALLEST slot containing
+    // it — so a `calc` link justified by a term (`_ = c := Nat.add_comm a b`)
+    // would resolve to the whole `calc` block and the one gesture that writes
+    // destructively would take the entire chain, labelled with the link. There
+    // is no as-written tactic to delete here, so decline rather than guess —
+    // the `prevSameLine` rule, and the same reason it exists. (Term-MODE steps
+    // decline for the same reason; they used to do it by accident, because a
+    // proof with no `by` has no slots at all, which stops being true the moment
+    // one is nested inside it.)
+    if (
+      recoveredAt.get(
+        `${step.position.start.line}:${step.position.start.character}`,
+      ) === "term"
+    )
+      return undefined;
     const anchors = [step.position];
     // A goal's whole proof is everything below it, continuation included —
     // that IS its proof. A tactic keeps its continuation.

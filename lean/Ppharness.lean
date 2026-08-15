@@ -147,11 +147,15 @@ def parseSource (src : String) (fileName : String := "<ppharness>") : IO (Array 
         -- all — synthesize its structure from the syntax + TermInfo.
         let recovB ← ProofTree.Recover.recoverTerm fileMap tree
           (ProofTree.Recover.commandStx? tree) r1.steps
+        -- Part D: a `calc` link justified by a TERM, which elaborates no
+        -- tactic and so reaches the harvest as an absence — the link's
+        -- relation and its proof are both drawn nowhere without this.
+        let recovD ← ProofTree.Recover.recoverCalcLinks fileMap tree r1.steps
         let recov : ProofTree.Recover.Recovery := {
-          steps := recovA.steps ++ recovB.steps
-          goals := recovA.goals ++ recovB.goals
-          grafts := recovA.grafts ++ recovB.grafts
-          recovered := recovA.recovered ++ recovB.recovered }
+          steps := recovA.steps ++ recovB.steps ++ recovD.steps
+          goals := recovA.goals ++ recovB.goals ++ recovD.goals
+          grafts := recovA.grafts ++ recovB.grafts ++ recovD.grafts
+          recovered := recovA.recovered ++ recovB.recovered ++ recovD.recovered }
         -- Part C: an EMPTY `by` block — no step, just the goal it owes and
         -- where a first tactic goes. Read before the empty guard below, which
         -- it suspends: this payload has no steps by construction.

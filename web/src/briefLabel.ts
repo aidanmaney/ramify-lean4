@@ -287,18 +287,12 @@ function elisionRanges(label: string, short: boolean): Elision[] {
   // Everything below is a WIDTH saving, so it keeps the short-label gate.
   if (short) return ranges;
 
-  // Read once, here, because Rule A below must stand down on a calc label —
-  // see Rule D, whose whole reason for existing is that A's polarity is
-  // INVERTED there (A keeps `:= by` and elides a term RHS; on a chain the `by`
-  // is the redundant half and the term is the only copy). While D covered the
-  // line to its end A was harmlessly subsumed; now that D stops at the `:=`,
-  // an ungated A would elide precisely the justification D just protected.
-  const mD = /^\s*calc\s+/.exec(label);
-
   // Rule A — the flagship: the RHS of a top-level `:=` (a binding's derivation)
   // is boilerplate, while the LHS bindings and any `: type` before the `:=` are
   // the point. `:= by` opens a subtree the tree already folds, so leave it.
-  if (s.assign >= 0 && !mD) {
+  // Not gated on a calc label: Rule D covers the line to its end there, and
+  // A's range is a subset that merges into it.
+  if (s.assign >= 0) {
     let rhs = s.assign + 2;
     while (rhs < label.length && label[rhs] === " ") rhs++;
     const rest = label.slice(rhs);
@@ -361,24 +355,19 @@ function elisionRanges(label: string, short: boolean): Elision[] {
   // 128 chars across the corpus. The width gate then keeps a genuinely short
   // head (`calc (a + b) ^ 2`) whole.
   //
-  // This deliberately INVERTS Rule A here, which is why it must exist at all:
-  // A keeps `:= by` (a folded subtree) and elides a term RHS, but for a calc
-  // the `by` is the redundant half and a term justification is the one part
-  // drawn nowhere else. A's range is a subset of D's and merges into it.
+  // This deliberately SUBSUMES Rule A here: A keeps `:= by` (a folded subtree)
+  // and elides a term RHS, so on a chain their ranges differ, but A's is a
+  // subset of D's and merges into it.
   //
-  // NARROWED, now that the Lean side restores a term-justified first link into
-  // the label (collectTacticTails): what the TREE draws is the RELATION — the
-  // goal box below — and a `:= by tac` justification, which is that tac's own
-  // node. A TERM justification is drawn NOWHERE, so it is the one part of the
-  // line brief must keep, and D stops at the `:=`. Before the restoration this
-  // could not arise: written `calc` on its own line the term never reached the
-  // label at all, it was simply lost.
-  if (mD) {
-    let j = s.assign >= 0 ? s.assign + 2 : -1;
-    while (j > 0 && j < label.length && label[j] === " ") j++;
-    const termJust = j > 0 && !/^by(\s|$)/.test(label.slice(j));
-    push(mD[0].length, termJust ? s.assign : label.length);
-  }
+  // It covers the line TO ITS END, including a term justification written on
+  // it. That was briefly narrowed to stop at the `:=`, on the ground that a
+  // term justification was drawn nowhere else — true then, and false now:
+  // `ProofTreeRecover.recoverCalcLinks` gives every term-justified link its own
+  // goal box and node, so the justification is on screen whether the author
+  // wrote it on the `calc` line or three lines down, and keeping a copy in the
+  // label would be the one thing brief exists to remove.
+  const mD = /^\s*calc\s+/.exec(label);
+  if (mD) push(mD[0].length, label.length);
 
   return ranges;
 }

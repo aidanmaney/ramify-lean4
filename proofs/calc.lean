@@ -16,8 +16,8 @@ The three chains below are shaped to show different things:
 1. a mixed `=`/`≤` chain, so the composite relation comes from `Trans` rather
    than from one relation throughout;
 2. a chain nested inside the successor case of an induction, whose FIRST link
-   is justified by a term rather than a tactic — it spawns no goal at all, so a
-   three-link chain draws two branches;
+   is justified by a TERM rather than a tactic — which elaborates nothing, so
+   the recovery parser synthesizes its goal and node (see recoverCalcLinks);
 3. a two-link `<` then `≤` chain.
 -/
 

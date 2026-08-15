@@ -63,7 +63,9 @@ structure RecoveredStep where
   start : Lsp.Position
   /-- `"failed"` — an error landed inside this tactic; `"skipped"` — it sits
   after a failure in its block, so Lean never ran it; `"term"` — synthesized
-  from a term-mode proof's structure. -/
+  from a TERM rather than from a tactic (a term-mode proof's structure, or a
+  `calc` link justified by a term). Only the first two draw as broken; a term
+  is a complete proof of what it stands for. -/
   kind : String
   deriving ToJson, FromJson, Inhabited
 
@@ -75,7 +77,8 @@ structure Recovery where
   goals     : List GoalInfo := []
   /-- Graft `GoalInfo` into the `spawnedGoals` of the step starting at the
   position — what hangs an orphaned branch goal under its `induction`/`have`
-  instead of letting it become a second root. -/
+  instead of letting it become a second root. SEVERAL grafts may share one
+  position (a `calc` with two term-justified links), and all of them land. -/
   grafts    : List (Lsp.Position × GoalInfo) := []
   recovered : Array RecoveredStep := #[]
 
@@ -86,9 +89,13 @@ result, so every downstream pass (rw-location remap excepted — recovered
 labels never start `rw [`) treats recovered steps as ordinary ones. -/
 def Recovery.apply (rc : Recovery) (r : Result) : Result :=
   let steps := r.steps.map fun s =>
-    match rc.grafts.find? (fun (p, _) => p == s.position.start) with
-    | some (_, g) => { s with spawnedGoals := s.spawnedGoals ++ [g] }
-    | none => s
+    -- EVERY graft for this position, not the first: a chain with two
+    -- term-justified links grafts two goals onto the one `calc` step, and a
+    -- `find?` here silently drew only one of them.
+    match rc.grafts.filterMap
+        (fun (p, g) => if p == s.position.start then some g else none) with
+    | [] => s
+    | gs => { s with spawnedGoals := s.spawnedGoals ++ gs }
   { steps := steps ++ rc.steps
     allGoals := rc.goals.foldl (·.insert ·) r.allGoals }
 
@@ -645,5 +652,123 @@ def recoverOpenBlock (fileMap : FileMap) (tree : InfoTree)
     goal
     anchor := fileMap.utf8PosToLspPos bodyRg.stop
     indent := (fileMap.utf8PosToLspPos cmdRg.start).character + 2 }
+
+/-! ## Part D — a `calc` link justified by a TERM
+
+`_ = (c+b)+a := Nat.add_comm a (c+b)` is a link like any other to read and an
+ABSENCE to the harvest: the vendored parser can only see what a `TacticInfo`
+records, and a term justification elaborates no tactic at all. So the link's
+relation is drawn nowhere, its proof is drawn nowhere, and a four-link chain
+comes back with three spawned goals — measured on the fixture, and independent
+of where the link sits (the first link is no different from the third).
+
+The goal IS reachable and needs no re-elaboration: the justification term has
+a `TermInfo` whose `expectedType?` is exactly the link's relation, with the
+link's own `lctx` beside it. That is the seam Part B already prints goals
+through (`synthGoal`), and it is EXACT — matched to the justification by
+SYNTAX RANGE, never by position-nearest or by mvar, so a nested chain cannot
+claim an outer link's proof. Measured on `proofs/calc.lean`'s term-justified
+link: `⊢ ∑ i ∈ Finset.range (k+1+1), (2*i+1) = ∑ i ∈ Finset.range (k+1), (2*i+1)
++ (2*(k+1)+1)`, which is the relation the source writes.
+
+So the link gets what every other proof step gets — a goal box, and one node
+under it whose label is the VERBATIM justification (label ≡ source, so
+`alignInLabel` is an identity and the token colouring lands). The shape is
+exactly a `by`-justified link's: the goal grafts into the `calc` step's
+`spawnedGoals`, the node consumes it and produces nothing.
+
+Two gates, both conservative:
+
+* **The block must not be BROKEN.** That state has its own synthesized node
+  and repair chip keyed on the chain's own start — the standing exclusion.
+* **No harvested step may START inside the justification.** This is the
+  completeness witness, not a syntax test on `byTactic`: it stands down
+  wherever the tree already draws something, so `:= by tac` is skipped for the
+  reason it should be (a step is there) and a term with a nested `by` inside it
+  is skipped too rather than drawing a second node over the same source.
+-/
+
+/-- The hypotheses a justification term MENTIONS, in Paperproof's own coding:
+the fvars of the instantiated proof term, restricted to the local context.
+
+`findHypsUsedByTactic` cannot be reused — it reads the mvar ASSIGNMENT, and a
+term justification assigns no metavariable — but the expression it would have
+instantiated is `TermInfo.expr` itself, so the rest of the recipe is verbatim.
+Without it the link's goal box would be empty under the DEFAULT `used`
+breadth, which is the one mode most readers ever see. -/
+private def termDeps (cctx : ContextInfo) (ti : TermInfo) : IO (List String) :=
+  cctx.runMetaM ti.lctx do
+    try
+      let full ← instantiateMVars ti.expr
+      let ids := (collectFVars {} full).fvarIds
+      return (ids.filterMap ti.lctx.find?).map (·.fvarId.name.toString) |>.toList
+    catch _ => return []
+
+/-- Part D: one step per `calc` link the harvest left undrawn.
+
+`steps` is the harvest as it stands (the vendored parser's, label fix-ups
+applied); `extra` is the widget's `snap.stx`, threaded through to `calcBlocks`
+for the same reason every other collector takes it. -/
+def recoverCalcLinks (fileMap : FileMap) (tree : InfoTree)
+    (steps : List ProofStep) (extra : Option Syntax := none) : IO Recovery := do
+  let blocks := calcBlocks fileMap tree extra
+  if blocks.isEmpty then return {}
+  let src := fileMap.source
+  let infos := tree.foldInfo (init := (#[] : Array (ContextInfo × TermInfo)))
+    fun ctx info acc => match info with
+      | .ofTermInfo ti => acc.push (ctx, ti)
+      | _ => acc
+  let mut out : Recovery := {}
+  for b in blocks do
+    if b.broken then continue
+    -- The step the chain hangs off: the INNERMOST harvested step containing
+    -- the `calc` keyword. Containment rather than an exact start match,
+    -- because a chain that is the only tactic of a bullet is recorded under
+    -- the bullet's own range (`· calc a ≤ b`) — the same reason the client's
+    -- `brokenChainByGoal` looks the owner up this way.
+    let blockStart := fileMap.utf8PosToLspPos b.range.start
+    let container := steps.foldl (init := (none : Option ProofStep)) fun best st =>
+      if containsPos st.position.start st.position.stop blockStart then
+        match best with
+        | some c => if posLE c.position.start st.position.start then some st else best
+        | none => some st
+      else best
+    let some calcStep := container | continue
+    for lnk in b.links do
+      let some just := lnk.just? | continue
+      let some jr := just.getRange? (canonicalOnly := true) | continue
+      let jStart := fileMap.utf8PosToLspPos jr.start
+      let jStop := fileMap.utf8PosToLspPos jr.stop
+      -- The tree already draws this link (see the gates above).
+      if steps.any (fun st => containsPos jStart jStop st.position.start) then
+        continue
+      let hit := infos.find? fun (_, ti) =>
+        match ti.stx.getRange? (canonicalOnly := true) with
+        | some r =>
+          r.start == jr.start && r.stop == jr.stop && ti.expectedType?.isSome
+        | none => false
+      let some (cctx, ti) := hit | continue
+      let some ety := ti.expectedType? | continue
+      let goal ← try synthGoal cctx ti.lctx ety jStart catch _ => continue
+      let deps ← termDeps cctx ti
+      -- Verbatim, trailing trivia trimmed — the label ≡ source property the
+      -- whole recovery parser keeps (`sliceStep`).
+      let raw := String.Pos.Raw.extract src jr.start jr.stop
+      let tight := trimmedEnd raw
+      out := { out with
+        steps := out.steps ++ [{
+          tacticString := String.Pos.Raw.extract raw ⟨0⟩ tight
+          goalBefore := goal
+          goalsAfter := []
+          tacticDependsOn := deps
+          spawnedGoals := []
+          position :=
+            { start := jStart
+              stop := fileMap.utf8PosToLspPos ⟨jr.start.byteIdx + tight.byteIdx⟩ }
+          theorems := [] }]
+        goals := goal :: out.goals
+        grafts := (calcStep.position.start, goal) :: out.grafts
+        recovered := out.recovered.push { start := jStart, kind := "term" } }
+  return out
 
 end ProofTree.Recover
