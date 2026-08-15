@@ -1,7 +1,7 @@
 import ProofTreeWidget
 
 /-!
-# Proof tree — try it here
+# Ramify — try it here
 
 This file is the smallest thing that shows the widget working, and it lives in
 the INSTALLABLE package on purpose: it is core-only, so nothing here needs
@@ -10,19 +10,24 @@ Mathlib and `lake build` in this directory is all it takes.
 Open it in VS Code with the Lean 4 extension, put your cursor inside any proof
 below, and the tree appears in the infoview panel. It follows the cursor.
 
-Things to try, roughly in order:
+Things to try, roughly in order. A few of them reach back OUT into the editor,
+which the infoview gives a widget no way to do on its own — those are marked
+`[companion]` and need the VS Code extension (see INSTALL.md). Everything
+else, every edit included, works with the Lean package alone.
 
 * **Move the cursor** between tactics — the matching node takes an accent
-  outline and the view scrolls to it. Click a tactic node to go the other way.
+  outline and the view scrolls to it. Click a tactic node to go the other way
+  `[companion]`.
 * **Fold** a goal box (click it) to hide the proof below it; the rail's `⊞`/`⊟`
   expand and collapse everything.
 * **Double-click a tactic** to edit it in place. Escape cancels, Enter commits
   (⌘/Ctrl-Enter for a multi-line tactic). The edit lands through the editor's
-  own pipeline, so ⌘Z undoes it — or use `↶` at the top of the rail.
-* **Hover a box** for its action bar: `»` reveal in source, `◎` focus this
-  subtree, `◌` elide the step into the trunk (leaving a ghost you can click
-  back open), `⊘` delete (which arms first — the second click is the one that
-  writes).
+  own pipeline, so ⌘Z in the editor undoes it. (`↶` at the top of the rail does
+  the same from here `[companion]`.)
+* **Hover a box** for its action bar: `»` reveal in source `[companion]`, `◎`
+  focus this subtree, `◌` elide the step into the trunk (leaving a ghost you
+  can click back open), `⊘` delete (which arms first — the second click is the
+  one that writes; the extent also lights up in the buffer `[companion]`).
 * **The rail, top right**, is the whole view: layout (`☰` outline, `⊦` goal
   spine, `∥` aligned tracks, `⋔` wide tree), `◫` side-by-side branches, `¶`
   wrap width, `⋯` brief labels, `⇉` merge straight runs, `▸`/`Δ`/`∀`/`↓`
@@ -32,10 +37,16 @@ Things to try, roughly in order:
   `calc` gestures leave a link they have not proved yet.
 
 For the rest — the frontier chips that write tactics for you, `calc` chains
-built from the tree, and Lean's errors drawn on the nodes — see
-`lean/ProofTreeTour.lean` in the repository. Those files sit in the
-DEVELOPMENT package, which also builds the offline CLI and therefore does need
-Mathlib.
+built from the tree, and Lean's errors drawn on the nodes — open
+`ProofTreeTour.lean`, right next to this file. It is core-only too, and it is a
+guided walkthrough: six theorems, one cluster of features each, with a
+docstring above every one saying what to try.
+
+NOTE: the tour does NOT compile, and that is deliberate. Its last two sections
+are left unfinished because the frontier chips and the error ribbon only exist
+where a proof is unfinished or broken — a tour of finished proofs could never
+show them. The errors there are the exhibit, not a fault in your install.
+Neither file is a Lake target, so `lake build` stays green either way.
 -/
 
 show_panel_widgets [ProofTreeWidget]
