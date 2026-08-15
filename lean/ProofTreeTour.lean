@@ -76,15 +76,20 @@ theorem tour_editing (a b : Nat) (h : a ∣ b) (hb : b ≠ 0) : a ∣ b * b ∧ 
 
 /-! ## 4 · `calc` chains
 
-A chain draws as a column/sequence of links hanging off one `calc` node.
-Turn on [⋯] brief mode here: the calc's label collapses to `calc …`, because
-everything after the keyword is already drawn by the tree — and each later
-link elides its left-hand side to `_`, exactly as the source writes it, since
-that text is the box above it. A `:= by` justification is a real tactic node
-under its link; a term justification (`Nat.add_comm …`) is part of the link
-itself. -/
+A chain draws as one **ledger**: the opening expression, then a row per link —
+the relation and its right-hand side, the same column the source writes. The
+expression each link shares with the one before it appears once rather than
+being restated on both sides of a box, so the chain reads top to bottom as a
+single flow, and the local context is drawn once for the whole chain instead
+of on every link.
+
+The justifications hang below in one line, each under the link it proves: a
+`:= by` justification is a real tactic node, a term justification is the node
+itself. A `rw`'s reflexivity residue (`x = x`, closed by the macro's own
+`rfl`) starts folded — click it, or [⊞], to see it. -/
 theorem tour_calc (a b c : Nat) : (a + b) + c = c + (b + a) := by
-  calc (a + b) + c = a + (b + c) := Nat.add_assoc a b c
+  calc
+    (a + b) + c = a + (b + c) := by rw [Nat.add_assoc a b c]
     _ = a + (c + b) := by rw [Nat.add_comm b c]
     _ = (c + b) + a := by rw [Nat.add_comm a (c + b)]
     _ = c + (b + a) := by rw [Nat.add_assoc c b a]

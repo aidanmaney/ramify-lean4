@@ -86,7 +86,7 @@ A nonce dedupes fs.watch's duplicate events.
 
 The relay is invisible by construction: a file written by a Lean server, read
 by a watcher in another process. So the companion logs every request, skip
-reason and failure to an **Output channel named "Proof Tree Companion"**. When
+reason and failure to an **Output channel named "Ramify Companion"**. When
 a widget gesture appears to do nothing, read that first — it distinguishes
 never-arrived from arrived-and-skipped from arrived-and-threw.
 

@@ -1,4 +1,4 @@
-// Proof Tree Companion — the editor-side half of widget gestures the infoview
+// Ramify Companion — the editor-side half of widget gestures the infoview
 // API can't express (its EditorApi has no executeCommand).
 //
 // Primary bridge: the widget calls the `ProofTree.popoutEdit` RPC, the Lean
@@ -23,7 +23,7 @@ const path = require("path");
 
 // Everything the relay does is invisible by design (a file written by a Lean
 // server, read by a watcher in another process), so every step logs here.
-// Open it from Output → "Proof Tree Companion" when a widget gesture appears
+// Open it from Output → "Ramify Companion" when a widget gesture appears
 // to do nothing: the log says whether the request arrived at all, and if it
 // was skipped, why.
 let log = null;
@@ -1078,7 +1078,7 @@ async function popout(uri, selection) {
 }
 
 function activate(context) {
-  log = vscode.window.createOutputChannel("Proof Tree Companion");
+  log = vscode.window.createOutputChannel("Ramify Companion");
   context.subscriptions.push(
     log,
     highlightDecoration,

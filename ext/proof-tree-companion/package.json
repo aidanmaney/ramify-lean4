@@ -1,9 +1,10 @@
 {
   "name": "proof-tree-companion",
-  "displayName": "Proof Tree Companion",
-  "description": "Editor-side commands for the proof-tree infoview widget: unlocks persistent settings, a slim editor under the infoview, and revealing nodes in the source.",
+  "displayName": "Ramify Companion",
+  "description": "Editor-side commands for the Ramify infoview widget: unlocks persistent settings, a slim editor under the infoview, and revealing nodes in the source.",
   "publisher": "aidan",
   "version": "0.0.10",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -16,11 +17,11 @@
     "commands": [
       {
         "command": "proofTree.openLens",
-        "title": "Proof Tree: Open Tactic in Lens"
+        "title": "Ramify: Open Tactic in Lens"
       }
     ],
     "configuration": {
-      "title": "Proof Tree Companion",
+      "title": "Ramify Companion",
       "properties": {
         "proofTree.outlineOnly": {
           "type": "boolean",

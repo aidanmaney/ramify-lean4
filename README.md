@@ -1,4 +1,4 @@
-# Proof-tree visualizer
+# Ramify
 
 A Lean 4 proof rendered as an interactive tree, live in the VS Code infoview.
 
@@ -125,3 +125,13 @@ One consequence worth knowing: **the compiled renderer bundle
 step, and Lake has no hook to run one for a dependency. Without the artifact in
 the tree, an install cannot build. It is the one generated file this repository
 tracks.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). The companion extension carries its own copy at
+`ext/proof-tree-companion/LICENSE`, because `vsce` only looks next to
+`package.json` and would otherwise ship the `.vsix` with no licence in it.
+
+Ramify builds on Paperproof (MIT), ProofWidgets (Apache-2.0) and
+`@leanprover/unicode-input` (Apache-2.0, bundled into the renderer). The
+distribution repository carries the full third-party notices.
