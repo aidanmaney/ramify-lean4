@@ -192,7 +192,7 @@ const PALETTE_CSS = `
   --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
   --ptw-link: #9aa0a6;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
-  /* Opt-in link tint (proofTree.linkTint): the neutral link ink pulled toward
+  /* Opt-in link tint (ramify.linkTint): the neutral link ink pulled toward
      the TARGET node's hue, so an edge hints at what it runs into. Written as
      recipes over the hue inputs, so the dark block's overrides flow through. */
   --ptw-link-goal: #7f95cd;
@@ -326,7 +326,7 @@ export const DANGER_FILL = "var(--ptw-danger)";
 /** Warning-severity diagnostic ink. */
 export const WARN_FILL = "var(--ptw-warn)";
 export const LINK_STROKE = "var(--ptw-link)";
-/** Tinted link inks (opt-in via proofTree.linkTint), keyed by TARGET type. */
+/** Tinted link inks (opt-in via ramify.linkTint), keyed by TARGET type. */
 export const LINK_STROKE_GOAL = "var(--ptw-link-goal)";
 export const LINK_STROKE_TACTIC = "var(--ptw-link-tactic)";
 export const MUTED_FILL = "var(--ptw-muted)";

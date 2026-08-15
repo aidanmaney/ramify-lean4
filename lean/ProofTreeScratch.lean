@@ -1,4 +1,4 @@
-import ProofTreeWidget
+import Ramify
 import Mathlib
 
 /-!
@@ -18,7 +18,7 @@ takes hours).
 `proofs/euclid.lean` is inlined below as a starting point.
 -/
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   -- Step 1: N! + 1 is divisible by some prime

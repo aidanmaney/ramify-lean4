@@ -40,7 +40,7 @@ is widget-only.
 ```
 diss/
 ├── lean/
-│   ├── ProofTreeWidget.lean    # the infoview widget: getProofTree RPC + bundled renderer
+│   ├── Ramify.lean    # the infoview widget: getProofTree RPC + bundled renderer
 │   ├── ProofTreeComments.lean  # shared syntax/source walks (comments, slots, calc, holes)
 │   ├── ProofTreeRecover.lean   # supplemental parser: failed tactics, term-mode proofs
 │   ├── Ppharness.lean, Main.lean  # the CLI harness (source → NDJSON)
@@ -51,7 +51,7 @@ diss/
 │   ├── layout.ts               # four layout modes
 │   ├── widget.tsx / App.tsx    # the two data sources
 │   └── …                       # elision, brief mode, diagnostics, editing, theming
-├── ext/proof-tree-companion/   # VS Code extension: the lens, theme/settings relay
+├── ext/ramify-companion/   # VS Code extension: the lens, theme/settings relay
 ├── dist/                       # the installable Lake package (see INSTALL.md)
 ├── proofs/                     # corpus for the CLI harness
 └── gen.sh                      # proofs/*.lean → web/public/sample.ndjson
@@ -67,8 +67,8 @@ cd web && npm install && npm run build:widget
 cd ../lean && lake exe cache get && lake build
 ```
 
-Then open a file in *this* Lake project with `import ProofTreeWidget` and
-`show_panel_widgets [ProofTreeWidget]` — `lean/ProofTreeTour.lean` is a guided
+Then open a file in *this* Lake project with `import Ramify` and
+`show_panel_widgets [Ramify]` — `lean/ProofTreeTour.lean` is a guided
 walkthrough. The panel follows the cursor.
 
 **The standalone app** (browser, reads the generated NDJSON):
@@ -121,7 +121,7 @@ none of it, which is why `dist/` is a separate, much lighter package.
 
 One consequence worth knowing: **the compiled renderer bundle
 (`web/dist/proofTreeWidget.js`) is tracked in git.** That is forced, not chosen —
-`ProofTreeWidget.lean` reads it with `include_str`, a fresh clone runs no npm
+`Ramify.lean` reads it with `include_str`, a fresh clone runs no npm
 step, and Lake has no hook to run one for a dependency. Without the artifact in
 the tree, an install cannot build. It is the one generated file this repository
 tracks.
@@ -129,7 +129,7 @@ tracks.
 ## Licence
 
 MIT — see [LICENSE](LICENSE). The companion extension carries its own copy at
-`ext/proof-tree-companion/LICENSE`, because `vsce` only looks next to
+`ext/ramify-companion/LICENSE`, because `vsce` only looks next to
 `package.json` and would otherwise ship the `.vsix` with no licence in it.
 
 Ramify builds on Paperproof (MIT), ProofWidgets (Apache-2.0) and

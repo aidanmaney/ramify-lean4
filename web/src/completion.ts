@@ -39,7 +39,7 @@ export interface CompletionPools {
  * even worth the round trip and on when a cached answer is COMPLETE (fewer
  * than the cap means nothing was truncated, so the client may keep narrowing
  * it locally instead of refetching). Keep in sync with `minCompletionQuery` /
- * `maxCompletionNames` in ProofTreeWidget.lean. */
+ * `maxCompletionNames` in Ramify.lean. */
 export const MIN_GLOBAL_PREFIX = 3;
 export const GLOBAL_MAX = 50;
 

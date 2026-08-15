@@ -18,7 +18,7 @@ web/dist-app/
 # The .vsix is BUILT into ext/ and COPIED to dist/ by package.sh; the copy in
 # dist/ is the one that ships (it sits with the rest of the install surface),
 # so only the build-side one is ignored.
-ext/proof-tree-companion/*.vsix
+ext/ramify-companion/*.vsix
 
 # Working notes, not part of the install surface or the docs that ship.
 OVERVIEW.md

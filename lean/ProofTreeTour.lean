@@ -1,7 +1,7 @@
-import ProofTreeWidget
+import Ramify
 import Init.Data.Nat.Basic
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 /-! ## 1 · Reading a proof
 

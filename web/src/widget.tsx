@@ -55,7 +55,7 @@ const DOC_SETTLE_MS = 120;
 // with a genuinely different proof text that passed the signature gate and
 // relaid the tree out (per keystroke, through broken intermediates: `ri` is a
 // failed tactic, so the recovery node and error ribbon flickered too — the
-// reported "shudder"). Default only; `proofTree.typingHoldMs` overrides it
+// reported "shudder"). Default only; `ramify.typingHoldMs` overrides it
 // over the companion channel, and 0 restores the old swap-immediately
 // behaviour.
 const DEFAULT_TYPING_HOLD_MS = 600;
@@ -165,7 +165,7 @@ const MIN_FRAME_PX = 240;
 // layout: the room below the fold is not dead (the restart-file button takes a
 // scroll perfectly well), and a tree that reaches the edge is worth more to
 // some readers than a strip they never aim at. So the default keeps the strip
-// and `proofTree.tallFrame` gives most of it back — deliberately NOT all of it,
+// and `ramify.tallFrame` gives most of it back — deliberately NOT all of it,
 // since a frame that ends flush with the fold leaves the page with no
 // wheel-target of its own inside the widget's own span.
 const FRAME_FRACTION = 0.9;
@@ -286,7 +286,7 @@ type ProofTreeData = Proof & {
   taggedGoals?: TaggedGoalEntry[];
   tacticEdits?: TacticEditEntry[];
   tokenInfos?: TacticTokenInfo[];
-  /** The declaration's diagnostics (ProofTreeWidget.lean `TreeDiag`), already
+  /** The declaration's diagnostics (Ramify.lean `TreeDiag`), already
   in the client's `{start, stop}` span shape and already scoped to this
   command's own message log. In the PAYLOAD, not read off the
   `publishDiagnostics` notification: the notification is edge-triggered and a
@@ -295,7 +295,7 @@ type ProofTreeData = Proof & {
   diagnostics?: RawDiagnostic[];
   /** The declaration's signature as SOURCE text, its colouring, and where it
   starts — the persistent header above the tree (see `declHeader` in
-  ProofTreeWidget.lean). The header's hover popups ride the ordinary
+  Ramify.lean). The header's hover popups ride the ordinary
   `tokenInfos`, which is position-keyed and so already covers them. */
   declHeader?: string;
   declHeaderTokens?: TacticToken[];
@@ -308,10 +308,10 @@ type ProofTreeData = Proof & {
   /** The column `cfDraft` starts at in the REAL document (its indent's width).
   With `cfLine` it is a real-coordinate range, which is what makes the stub
   editable without touching counterfactual bytes — see `cfDraftCol` in
-  ProofTreeWidget.lean. Out of the stable signature like `cfDraft`. */
+  Ramify.lean. Out of the stable signature like `cfDraft`. */
   cfDraftCol?: number;
   /** Syntax tokens for `cfDraft`, collected from the REAL document (see
-  `cfDraftTokens` in ProofTreeWidget.lean). Absolute real-document positions,
+  `cfDraftTokens` in Ramify.lean). Absolute real-document positions,
   like `TacticEdit.tokens`, so the stub renders through the ordinary token
   path. Out of the stable signature with the draft they describe. */
   cfDraftTokens?: TacticToken[];
@@ -326,8 +326,8 @@ type ProofTreeData = Proof & {
 };
 
 // The Lean infoview user-widget entry point. This is the default export bundled
-// into `web/dist/proofTreeWidget.js` and loaded by `ProofTreeWidget`
-// (lean/ProofTreeWidget.lean). It is the widget counterpart of App.tsx: instead
+// into `web/dist/proofTreeWidget.js` and loaded by `Ramify`
+// (lean/Ramify.lean). It is the widget counterpart of App.tsx: instead
 // of fetching NDJSON, it calls the `ProofTree.getProofTree` RPC for the theorem
 // under the cursor and feeds the result to the shared ProofTreeView, wiring the
 // two directions of the node↔source link (see below).
@@ -472,30 +472,30 @@ function useThemeTokenColors(
   };
 }
 
-/** `ProofTree.themeColors`'s reply (ProofTreeWidget.lean `ThemeColors`). */
+/** `ProofTree.themeColors`'s reply (Ramify.lean `ThemeColors`). */
 interface ThemeColorsResponse {
   theme: string;
   /** `editor.bracketPairColorization.enabled` — a setting, so it cannot come
   from the `--vscode-*` variables the six bracket COLOURS do come from. */
   brackets: boolean;
-  /** `proofTree.outlineOnly` — a setting, so it comes the same long way round. */
+  /** `ramify.outlineOnly` — a setting, so it comes the same long way round. */
   outline: boolean;
-  /** `proofTree.tallFrame` — ditto. Optional: an older companion's file has no
+  /** `ramify.tallFrame` — ditto. Optional: an older companion's file has no
   such key, and a missing one means the default (leave the strip clear). */
   tallFrame?: boolean;
-  /** `proofTree.linkTint` — the connector target-type marks' loud variant
+  /** `ramify.linkTint` — the connector target-type marks' loud variant
   (edge ink tinted toward the target's hue). Optional for the same
   older-companion reason; missing means off. */
   linkTint?: boolean;
   linkMarks?: boolean;
-  /** `proofTree.typingHoldMs` — the typing hold's quiet period (see
+  /** `ramify.typingHoldMs` — the typing hold's quiet period (see
   DEFAULT_TYPING_HOLD_MS). Optional for the older-companion reason; missing
   means the default. */
   typingHoldMs?: number;
-  /** `proofTree.counterfactual` — the live sorry-stub preview while typing.
+  /** `ramify.counterfactual` — the live sorry-stub preview while typing.
   Defaults ON (absence = an older companion = the shipped behaviour). */
   counterfactual?: boolean;
-  /** `lean4.input.*` — settings again (ProofTreeWidget.lean `InputConfig`).
+  /** `lean4.input.*` — settings again (Ramify.lean `InputConfig`).
   Optional: an older companion's file simply has no such key. */
   input?: {
     enabled: boolean;
@@ -543,7 +543,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // notification-fed ribbon drew nothing until the next edit. The diagnostics
   // ride the getProofTree PAYLOAD instead (level-triggered — they arrive with
   // every response, so the drawn errors can never be out of step with the
-  // drawn tree); see `diagnostics` below and TreeDiag in ProofTreeWidget.lean.
+  // drawn tree); see `diagnostics` below and TreeDiag in Ramify.lean.
   const [docRev, setDocRev] = useState(0);
   // The cfPending re-poll's own tick — NOT a second writer of `docRev`, whose
   // meaning ("the document re-elaborated") also keys the theme-colors fetch:
@@ -804,7 +804,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // stub now honestly dims to "…".
   const cfDraft = st.state === "resolved" ? st.value.cfDraft : undefined;
   // Its column in the real line — the other half of the range the stub's own
-  // editor commits over (see `cfDraftCol` in ProofTreeWidget.lean). Read off
+  // editor commits over (see `cfDraftCol` in Ramify.lean). Read off
   // the SAME response as the draft, so the two can never describe different
   // snapshots of the line.
   const cfDraftCol = st.state === "resolved" ? st.value.cfDraftCol : undefined;
@@ -1265,7 +1265,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // elaboration cost. The infoview's EditorApi has no executeCommand, so the
   // request rides our own RPC channel: `ProofTree.popoutEdit` has the Lean
   // server write a request file under ~/.proof-tree-companion/, which the
-  // companion extension (ext/proof-tree-companion) watches and executes.
+  // companion extension (ext/ramify-companion) watches and executes.
   // Two rejected bridges, for the record: `showDocument({external: true})`
   // (vscode-lean4 ignores the flag and silently drops non-file URIs), and a
   // synthetic click on a `vscode://…` anchor (the webview only intercepts

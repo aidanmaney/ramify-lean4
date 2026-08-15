@@ -216,7 +216,7 @@ export interface Proof {
   declaration NAME, above every tactic in the proof. */
   declRange?: ProofStepPosition;
   /** The declaration's signature as SOURCE text, its tokens, and where it
-  starts — the persistent header (see `declHeader` in ProofTreeWidget.lean).
+  starts — the persistent header (see `declHeader` in Ramify.lean).
   Widget-only in practice: the CLI wire ships none of it. */
   declHeader?: string;
   declHeaderTokens?: {
@@ -226,12 +226,12 @@ export interface Proof {
   }[];
   declHeaderStart?: { line: number; character: number };
   /** Stable identity of the proof — the declaration's name (see
-  ProofTreeWidget.lean's `declName?`). The view keys "is this a different
+  Ramify.lean's `declName?`). The view keys "is this a different
   proof?" on this rather than on a root mvarId, which re-elaboration renumbers.
   Absent on the CLI wire, where `rootIds` stands in. */
   proofId?: string;
   /** Every imported tactic's name, for the in-place editor's completion list
-  (see ProofTreeWidget.lean's `tacticNames`). Environment-only, so it rides the
+  (see Ramify.lean's `tacticNames`). Environment-only, so it rides the
   once-per-edit cache. Widget-only: the CLI ships no editor. */
   tacticNames?: string[];
   /** COUNTERFACTUAL marker (widget only): this proof was elaborated with the
@@ -242,7 +242,7 @@ export interface Proof {
   see `cfDraft` on the payload in widget.tsx. */
   cfLine?: number;
   /** Where the injected `sorry` LANDED — the stub step's own `position.start`
-  in this payload (see `cfStubPos` in ProofTreeWidget.lean). The overlay names
+  in this payload (see `cfStubPos` in Ramify.lean). The overlay names
   that node by position instead of guessing "first tactic on `cfLine`", which
   picks the CONTAINER on the `:= by` splice tier. Absent from an older server;
   the view falls back to the line rule. Moves exactly when `cfLine` does, so it

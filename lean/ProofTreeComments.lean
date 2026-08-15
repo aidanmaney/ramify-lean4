@@ -4,7 +4,7 @@ import Lean
 # ProofTreeComments
 
 Source-comment extraction shared by both data paths (the `ppharness` CLI and
-the `ProofTreeWidget` RPC). Comments are parser trivia — they never appear in
+the `Ramify` RPC). Comments are parser trivia — they never appear in
 the `InfoTree` — so the wire payload's `comments` field comes from re-lexing
 the *raw source* of just the command (theorem) that produced the proof:
 
@@ -369,7 +369,7 @@ heuristics: `intro p hpm`, `tac <;> tac`, `try simp`, `have … := by …`,
 `induction … with | … | …` (whose syntax DOES cover its alternatives, unlike
 its step range) and `· tac; tac` are each exactly one child.
 
-Deliberately NOT built from `collectTacticRanges` (ProofTreeWidget.lean): that
+Deliberately NOT built from `collectTacticRanges` (Ramify.lean): that
 is a flat, kind-less list of `TacticInfo` ranges, and a `tacticSeq` carries its
 own info node starting at the same offset as its first child — so any
 largest-container rule over it swallows the whole block for the first tactic of

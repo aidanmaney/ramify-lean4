@@ -10,10 +10,10 @@
 # The Lean sources are SHARED, not copied: `srcDir = "../lean"` points both
 # packages at the same four files, so there is exactly one copy of every module
 # and this package cannot drift from the one being developed. The same is true
-# of the renderer bundle, which `ProofTreeWidget.lean` reads with `include_str`
+# of the renderer bundle, which `Ramify.lean` reads with `include_str`
 # — see the input_file note below.
-name = "proofTree"
-defaultTargets = ["ProofTreeWidget", "Demo"]
+name = "ramify"
+defaultTargets = ["Ramify", "Demo"]
 
 # --- Paperproof's Lean library (contains `Services.BetterParser`) -------------
 # Pinned to the exact commit, so an install is reproducible. `lean/lakefile.toml`
@@ -56,7 +56,7 @@ path = "../web/dist/proofTreeWidget.js"
 text = true
 
 [[lean_lib]]
-name = "ProofTreeWidget"
+name = "Ramify"
 srcDir = "../lean"
 needs = ["proofTreeWidgetJs"]
 

@@ -21,6 +21,6 @@
    "inputRev": "c85fb0b45ce9ebaaa4715c7d043aadda80306c46",
    "inherited": false,
    "configFile": "lakefile.lean"}],
- "name": "proofTree",
+ "name": "ramify",
  "lakeDir": ".lake",
  "fixedToolchain": false}

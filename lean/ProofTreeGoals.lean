@@ -1,7 +1,7 @@
-import ProofTreeWidget
+import Ramify
 
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 theorem cong : ∀ {α β : Type} {f : α → β} {x y : α}, x = y → f x = f y := by
   intro α β f x y h

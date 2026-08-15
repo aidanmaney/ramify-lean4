@@ -31,7 +31,7 @@ export interface Elision {
 // Syntax colouring for tactic node labels (widget only), from the Lean
 // server's OWN semantic tokens — the same `collectSyntaxBasedSemanticTokens` +
 // `collectInfoBasedSemanticTokens` pair that answers the editor's
-// `textDocument/semanticTokens` request (see ProofTreeWidget.lean). So a token
+// `textDocument/semanticTokens` request (see Ramify.lean). So a token
 // means here exactly what it means in the editor; we are not re-lexing Lean in
 // JavaScript.
 //
@@ -64,7 +64,7 @@ export interface TacticToken {
   type: string;
 }
 
-/** A token's hover popup (ProofTreeWidget.lean `TacticTokenInfo`): the token's
+/** A token's hover popup (Ramify.lean `TacticTokenInfo`): the token's
 START (its extent already rides `TacticToken` on the edit entry — the join is
 by start alone) plus EXACTLY ONE of two payloads, decided server-side the way
 `handleHover` decides it. `code` is tagged text carrying the info node the

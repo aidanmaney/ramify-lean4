@@ -167,7 +167,7 @@ ${v}`:v),r.set(p,[...r.get(p)??[],{start:f.start,stop:f.stop}]))},h=[...t].sort(
   --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
   --ptw-link: #9aa0a6;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
-  /* Opt-in link tint (proofTree.linkTint): the neutral link ink pulled toward
+  /* Opt-in link tint (ramify.linkTint): the neutral link ink pulled toward
      the TARGET node's hue, so an edge hints at what it runs into. Written as
      recipes over the hue inputs, so the dark block's overrides flow through. */
   --ptw-link-goal: #7f95cd;

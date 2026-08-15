@@ -6,7 +6,7 @@ import ProofWidgets.Component.Basic
 import ProofWidgets.Component.Panel.Basic
 
 /-!
-# ProofTreeWidget
+# Ramify
 
 A Lean **infoview user-widget** that renders the same proof tree as the standalone
 web app (`web/`), but in-process: no NDJSON, no CLI. It is the RPC counterpart of
@@ -21,8 +21,8 @@ Two halves:
   `"ProofTree.getProofTree"`) with the cursor position. It returns the parsed
   proof tree for the theorem under the cursor. This is `Paperproof.getSnapshotData`
   (`.tree` mode) minus the single-tactic branch, plus `allGoals`.
-* `ProofTreeWidget` — a `@[widget_module]` bound to the bundled renderer
-  (`web/dist/proofTreeWidget.js`). Shown with `show_panel_widgets [ProofTreeWidget]`,
+* `Ramify` — a `@[widget_module]` bound to the bundled renderer
+  (`web/dist/proofTreeWidget.js`). Shown with `show_panel_widgets [Ramify]`,
   it is handed `PanelWidgetProps` (which carries the cursor `pos`, including the
   document `uri`) by the infoview on every cursor move — that is the source→tree
   half of the bidirectional link. The tree→source half (reveal a tactic's span on
@@ -345,7 +345,7 @@ private def jsonField {α : Type} [FromJson α] (j : Json) (k : String)
   | .error _ => dflt
 
 /-- Parameters for `getProofTree`: the cursor position, plus whether the client
-wants the counterfactual preview (`proofTree.counterfactual`, decided
+wants the counterfactual preview (`ramify.counterfactual`, decided
 client-side since settings ride the companion channel). The widget passes the
 whole `DocumentPosition`; the extra `uri` field is ignored when decoding as an
 `Lsp.Position`. -/
@@ -2295,7 +2295,7 @@ webview-side escape hatches fail (vscode-lean4's `showDocument` silently drops
 non-file URIs; a synthetic anchor click navigates the webview blank) — so the
 request is relayed through the filesystem: this writes a one-shot request file
 under `~/.proof-tree-companion/`, which the companion extension
-(`ext/proof-tree-companion`) watches and turns into a slim LENS editor group
+(`ext/ramify-companion`) watches and turns into a slim LENS editor group
 directly below the infoview with the range selected. The nonce lets the
 watcher dedupe double fire (fs.watch often reports one write as several
 events). -/
@@ -2374,21 +2374,21 @@ structure ThemeColors where
   so unlike the six colours it cycles it is not in the webview's `--vscode-*`
   set and has to come the long way round too. -/
   brackets : Bool := false
-  /-- `proofTree.outlineOnly` — draw node boxes as borders with no fill. Not a
+  /-- `ramify.outlineOnly` — draw node boxes as borders with no fill. Not a
   colour at all, but it rides here for the same reason `brackets` does: a
   webview cannot read a VS Code SETTING, so anything of the kind has to come
   back through the companion. -/
   outline : Bool := false
-  /-- `proofTree.tallFrame` — run the tree's frame closer to the bottom edge,
+  /-- `ramify.tallFrame` — run the tree's frame closer to the bottom edge,
   giving back most of the strip the default leaves clear below it. A setting,
   so it comes the same long way round as `outline`; which fractions the two
   states mean is the RENDERER's business (`FRAME_FRACTION*` in widget.tsx),
   since the frame is measured from the widget's own offset down. -/
   tallFrame : Bool := false
-  /-- `proofTree.linkTint` — additionally tint each connector toward its
+  /-- `ramify.linkTint` — additionally tint each connector toward its
   target's hue. Ditto. -/
   linkTint : Bool := false
-  /-- `proofTree.linkMarks` — draw the target-type marks at all. Defaults
+  /-- `ramify.linkMarks` — draw the target-type marks at all. Defaults
   TRUE, the only setting on this wire that does, and deliberately: the marks
   are the accessible baseline (the one channel that survives without colour),
   so this is an opt-OUT for readers who find them distracting and take the
@@ -2396,13 +2396,13 @@ structure ThemeColors where
   makes the field's absence — an older companion, which never wrote the key —
   mean exactly what that companion was already drawing. -/
   linkMarks : Bool := true
-  /-- `proofTree.typingHoldMs` — how long a changed proof text sits quiet
+  /-- `ramify.typingHoldMs` — how long a changed proof text sits quiet
   before the widget swaps the new tree in (the anti-shudder hold while typing
   in the buffer; see the `stable` machinery in widget.tsx, which owns the
   default and the clamp — this end just carries the number). The one
   non-Bool setting on this wire. -/
   typingHoldMs : Nat := 600
-  /-- `proofTree.counterfactual` — the live sorry-stub preview while typing
+  /-- `ramify.counterfactual` — the live sorry-stub preview while typing
   (see `maybeCounterfactual`). Defaults TRUE like `linkMarks`: absence means
   an older companion, which should get the shipped behaviour. The client
   passes it back per `getProofTree` call, since the decision is made
@@ -2477,9 +2477,9 @@ end ProofTree
 `ProofTree.getProofTree` over RPC. Turn it on in a proof file with:
 
 ```lean
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 ```
 -/
 @[widget_module]
-def ProofTreeWidget : ProofWidgets.Component ProofWidgets.PanelWidgetProps where
+def Ramify : ProofWidgets.Component ProofWidgets.PanelWidgetProps where
   javascript := include_str ".." / "web" / "dist" / "proofTreeWidget.js"

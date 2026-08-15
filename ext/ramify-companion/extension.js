@@ -14,7 +14,7 @@
 // drops non-file URIs, and a synthetic anchor click NAVIGATES the infoview
 // blank — webviews only intercept trusted clicks.)
 //
-// Secondary route, same action: a `vscode://aidan.proof-tree-companion/edit`
+// Secondary route, same action: a `vscode://aidan.ramify-companion/edit`
 // deep link (usable from the OS / other tooling, not from the infoview).
 const vscode = require("vscode");
 const fs = require("fs");
@@ -287,7 +287,7 @@ function publishThemeColors() {
     // rather than a reading gesture, which is why it is a setting and not a
     // button on the tree's rail.
     const outline =
-      vscode.workspace.getConfiguration("proofTree").get("outlineOnly") ===
+      vscode.workspace.getConfiguration("ramify").get("outlineOnly") ===
       true;
     // How close to the bottom edge the tree's frame runs. A CHECKBOX rather
     // than a number: the two answers worth having are "leave a strip to scroll
@@ -295,27 +295,27 @@ function publishThemeColors() {
     // either one means belong with the renderer, which is what knows the frame
     // is measured from its own offset rather than from the top of the page.
     const tallFrame =
-      vscode.workspace.getConfiguration("proofTree").get("tallFrame") === true;
+      vscode.workspace.getConfiguration("ramify").get("tallFrame") === true;
     // The connectors' target-type marks' hue tint: a standing look
     // preference, so a setting rather than a rail button, riding the same
     // channel for the same webview-can't-read-settings reason.
     const linkTint =
-      vscode.workspace.getConfiguration("proofTree").get("linkTint") === true;
+      vscode.workspace.getConfiguration("ramify").get("linkTint") === true;
     // Whether the marks are drawn at all. `!== false` rather than `=== true`:
     // this one DEFAULTS ON (shape is the baseline that survives without
     // colour), so it is an opt-out, and an unset value must read as on.
     const linkMarks =
-      vscode.workspace.getConfiguration("proofTree").get("linkMarks") !== false;
+      vscode.workspace.getConfiguration("ramify").get("linkMarks") !== false;
     // The typing hold's quiet period in ms — the one NUMBER on this wire.
     // Written through raw; the widget owns the default and the clamp, so a
     // bad value here degrades to the default there rather than in two places.
     const typingHoldMs = vscode.workspace
-      .getConfiguration("proofTree")
+      .getConfiguration("ramify")
       .get("typingHoldMs");
     // The counterfactual preview. `!== false`: defaults ON, so an unset value
     // must read as on (the linkMarks pattern).
     const counterfactual =
-      vscode.workspace.getConfiguration("proofTree").get("counterfactual") !==
+      vscode.workspace.getConfiguration("ramify").get("counterfactual") !==
       false;
     // The tree's in-place tactic editor has the buffer's own unicode input
     // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
@@ -715,9 +715,9 @@ function revealAtFraction(ed, selection) {
   );
 }
 
-/** A boolean setting from `proofTree.*`, defaulting when unset. */
+/** A boolean setting from `ramify.*`, defaulting when unset. */
 function flag(key, fallback) {
-  const v = vscode.workspace.getConfiguration("proofTree").get(key);
+  const v = vscode.workspace.getConfiguration("ramify").get(key);
   return typeof v === "boolean" ? v : fallback;
 }
 
@@ -1056,7 +1056,7 @@ async function popout(uri, selection) {
   say(`  popout: infoview column=${infoColumn}`);
   if (!focusCmd) {
     void vscode.window.showErrorMessage(
-      "proof-tree-companion: no Lean infoview group found to attach the lens to.",
+      "Ramify Companion: no Lean infoview group found to attach the lens to.",
     );
     return;
   }
@@ -1113,7 +1113,7 @@ function activate(context) {
       // A theme EDIT (tokenColorCustomizations) changes colours without
       // changing the active theme, so watch the customisation keys too — and
       // every SETTING the file carries alongside them, or toggling one would
-      // not be seen until the next theme change. The whole `proofTree`
+      // not be seen until the next theme change. The whole `ramify`
       // SECTION rather than one line per key: the per-key list had to be fed
       // by hand for every new setting (and a key left out shipped
       // half-working — this is the recorded failure mode), while the section
@@ -1124,7 +1124,7 @@ function activate(context) {
         e.affectsConfiguration("editor.tokenColorCustomizations") ||
         e.affectsConfiguration("editor.semanticTokenColorCustomizations") ||
         e.affectsConfiguration("editor.bracketPairColorization.enabled") ||
-        e.affectsConfiguration("proofTree") ||
+        e.affectsConfiguration("ramify") ||
         e.affectsConfiguration("lean4.input")
       )
         publishThemeColors();
@@ -1163,11 +1163,11 @@ function activate(context) {
   // companion half (group discovery, split, sizing) is proven good and the
   // fault is purely widget-side.
   context.subscriptions.push(
-    vscode.commands.registerCommand("proofTree.openLens", async () => {
+    vscode.commands.registerCommand("ramify.openLens", async () => {
       const ed = vscode.window.activeTextEditor;
       if (!ed) {
         void vscode.window.showErrorMessage(
-          "proof-tree-companion: no active editor to open in the lens.",
+          "Ramify Companion: no active editor to open in the lens.",
         );
         return;
       }
@@ -1175,7 +1175,7 @@ function activate(context) {
         await popout(ed.document.uri, ed.selection);
       } catch (e) {
         void vscode.window.showErrorMessage(
-          `proof-tree-companion: open in lens failed: ${e}`,
+          `Ramify Companion: open in lens failed: ${e}`,
         );
       }
     }),
@@ -1258,7 +1258,7 @@ function activate(context) {
     } catch (e) {
       say(`  FAILED: ${e && e.stack ? e.stack : e}`);
       void vscode.window.showErrorMessage(
-        `proof-tree-companion: ${req.action ?? "popout"} failed: ${e}`,
+        `Ramify Companion: ${req.action ?? "popout"} failed: ${e}`,
       );
     }
   };
@@ -1271,7 +1271,7 @@ function activate(context) {
     context.subscriptions.push({ dispose: () => watcher.close() });
   } catch (e) {
     void vscode.window.showErrorMessage(
-      `proof-tree-companion: request watcher failed to start: ${e}`,
+      `Ramify Companion: request watcher failed to start: ${e}`,
     );
   }
 
@@ -1293,7 +1293,7 @@ function activate(context) {
           );
         } catch (e) {
           void vscode.window.showErrorMessage(
-            `proof-tree-companion: popout failed: ${e}`,
+            `Ramify Companion: popout failed: ${e}`,
           );
         }
       },

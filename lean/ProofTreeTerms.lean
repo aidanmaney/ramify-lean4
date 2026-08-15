@@ -1,6 +1,6 @@
-import ProofTreeWidget
+import Ramify
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 /-!
 # ProofTreeTerms — term-mode proof fixtures

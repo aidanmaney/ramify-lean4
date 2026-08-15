@@ -1,4 +1,4 @@
-import ProofTreeWidget
+import Ramify
 
 /-!
 # Ramify — try it here
@@ -49,7 +49,7 @@ show them. The errors there are the exhibit, not a fault in your install.
 Neither file is a Lake target, so `lake build` stays green either way.
 -/
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 /-- A short linear proof: goal, tactic, goal, tactic. The plainest shape the
 tree draws, and the one to read first. -/

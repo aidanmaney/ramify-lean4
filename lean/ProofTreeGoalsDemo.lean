@@ -1,4 +1,4 @@
-import ProofTreeWidget
+import Ramify
 
 /-!
 # Proof-tree goals — Natural Number Game difficulty
@@ -23,7 +23,7 @@ get`. Compiles (every `sorry` is honest), so the only pill is the `sorry`
 warning each stub earns.
 -/
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 /-! ## 1 · Addition world: the one that needs induction
 

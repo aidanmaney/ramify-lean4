@@ -1,14 +1,14 @@
-import ProofTreeWidget
+import Ramify
 
 /-!
 # Proof-tree widget demo — Lean's diagnostics, drawn on the tree
 
 Open this file in VS Code with the Lean 4 extension, in *this* Lake project so
-`ProofTreeWidget` is on the import path. Build the renderer bundle first:
+`Ramify` is on the import path. Build the renderer bundle first:
 
 ```bash
 cd web && npm run build:widget
-cd ../lean && lake build ProofTreeWidget
+cd ../lean && lake build Ramify
 ```
 
 **This file does not compile, on purpose** — every theorem below is broken in a
@@ -40,7 +40,7 @@ Nothing here is a separate request to the server: this is the
 why the drawn problems keep step with the buffer as you type.
 -/
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 /-! ## 1 · One problem, one ribbon
 

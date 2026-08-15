@@ -1,4 +1,4 @@
-import ProofTreeWidget
+import Ramify
 
 /-!
 # Proof-tree widget exercises
@@ -20,7 +20,7 @@ you work — an `unsolved goals` on a goal that already wears chips is the tree
 repeating itself, so it is dropped.)
 -/
 
-show_panel_widgets [ProofTreeWidget]
+show_panel_widgets [Ramify]
 
 /-! ## 1 · Warm-up
 

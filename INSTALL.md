@@ -6,8 +6,8 @@ Ramify comes in two parts: a Lean 4 widget and a VS Code extension.[^1] ([Quicks
 
 |                                              |                                                                                                                                                                          |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Lean package** `proofTree`                 | the tree itself, control panel, renderer and Lean 4 plumbing                                                                                                             |
-| **VS Code extension** `proof-tree-companion` | adds a minimal editing pane, source code tactic highlighting, reveal tactic/goal in source, undo/redo buttons, theme-accurate syntax colours, persistent global settings |
+| **Lean package** `ramify`                 | the tree itself, control panel, renderer and Lean 4 plumbing                                                                                                             |
+| **VS Code extension** `ramify-companion` | adds a minimal editing pane, source code tactic highlighting, reveal tactic/goal in source, undo/redo buttons, theme-accurate syntax colours, persistent global settings |
 |                                              |                                                                                                                                                                          |
 
 ---
@@ -26,7 +26,7 @@ Add one dependency to your project's `lakefile.toml`:
 
 ```toml
 [[require]]
-name = "proofTree"
+name = "ramify"
 git = "https://github.com/aidanmaney/ramify-lean4.git"
 subDir = "dist"
 rev = "main"
@@ -36,7 +36,7 @@ rev = "main"
 <summary>lakefile.lean instead of lakefile.toml</summary>
 
 ```lean
-require proofTree from git
+require ramify from git
   "https://github.com/aidanmaney/ramify-lean4.git" @ "main" / "dist"
 ```
 </details>
@@ -44,7 +44,7 @@ require proofTree from git
 Then:
 
 ```bash
-lake update proofTree && lake build
+lake update ramify && lake build
 ```
 
 This will pull the **Paperproof** Lean4 library whose parser we gratefully build upon and **ProofWidgets v0.0.105**, needed for rendering javascript in the infoview (this is the same version Mathlib `v4.32.2` pins, so Mathlib projects resolve to one copy rather than conflicting). Note: neither pulls Mathlib.
@@ -54,8 +54,8 @@ A fresh build takes a few minutes; mostly building ProofWidgets. Further builds 
 To turn the panel on in a `.lean` proof file:
 
 ```lean
-import ProofTreeWidget
-show_panel_widgets [ProofTreeWidget]
+import Ramify
+show_panel_widgets [Ramify]
 
 theorem demo (a b : Nat) (h : a = b) : a + 0 = b := by
   rw [Nat.add_zero]
@@ -85,13 +85,13 @@ The extension ships as a `.vsix` file inside this package. Where that file is de
 
 ```bash
 # If you cloned this repository (the "try it" route above), from its root:
-code --install-extension dist/proof-tree-companion-0.0.10.vsix
+code --install-extension dist/ramify-companion-0.0.10.vsix
 
-# If you added proofTree as a Lake dependency, from your project's root:
-code --install-extension .lake/packages/proofTree/dist/proof-tree-companion-0.0.10.vsix
+# If you added ramify as a Lake dependency, from your project's root:
+code --install-extension .lake/packages/ramify/dist/ramify-companion-0.0.10.vsix
 ```
 
-Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `proof-tree-companion-0.0.10.vsix`. Reload the window afterwards (command palette).
+Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-companion-0.0.10.vsix`. Reload the window afterwards (command palette).
 
 ### What the Companion Adds
 
@@ -106,14 +106,14 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 - **Undo/redo from the tree** (`&#8630; &#8631;` on the rail).
 	- Edits made from the tree leave focus in the webview, where &#8984;Z won't do anything; works around this by focusing the editor.
 - **Settings** (see the extension itself for detailed descriptions):
-	- `proofTree.outlineOnly`,
-	- `proofTree.tallFrame`,
-	- `proofTree.linkMarks`,
-	- `proofTree.linkTint`,
-	- `proofTree.counterfactual`,
-	- `proofTree.typingHoldMs`,
-	- `proofTree.lensGoals`,
-	- `proofTree.lensWordWrap`,
+	- `ramify.outlineOnly`,
+	- `ramify.tallFrame`,
+	- `ramify.linkMarks`,
+	- `ramify.linkTint`,
+	- `ramify.counterfactual`,
+	- `ramify.typingHoldMs`,
+	- `ramify.lensGoals`,
+	- `ramify.lensWordWrap`,
 	- Also adds any custom `lean4.input.*` unicode-abbreviations
 
 ### Without It
@@ -139,13 +139,13 @@ dist/                       the Lake package and sample files
   lake-manifest.json        pinned dependency set
   Demo.lean                 the try-it file
   ProofTreeTour.lean        the guided tour
-  proof-tree-companion-*.vsix
+  ramify-companion-*.vsix
 lean/                       the Lean sources the package compiles
-  ProofTreeWidget.lean      the panel widget + RPC machinery
+  Ramify.lean               the panel widget + RPC machinery
   ProofTreeComments.lean    handles comments and editing
   ProofTreeRecover.lean     supplemental parser for erroring tactics and term proofs
 web/dist/proofTreeWidget.js the renderer bundle
-ext/proof-tree-companion/   the VS Code extension
+ext/ramify-companion/       the VS Code extension
 ```
 
 > [!Note]
