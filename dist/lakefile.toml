@@ -1,0 +1,71 @@
+# The INSTALLABLE package: the infoview widget and nothing else.
+#
+# `lean/lakefile.toml` is the DEVELOPMENT package — it also builds the offline
+# ppharness CLI, which needs Mathlib on LEAN_PATH so that `import Mathlib`
+# fixtures elaborate. The widget itself needs no Mathlib at all (it reads the
+# live server's InfoTree), so making people download it to try the tree would
+# be a multi-gigabyte tax on a dependency that is never used. Hence a second,
+# minimal package rather than a flag on the first.
+#
+# The Lean sources are SHARED, not copied: `srcDir = "../lean"` points both
+# packages at the same four files, so there is exactly one copy of every module
+# and this package cannot drift from the one being developed. The same is true
+# of the renderer bundle, which `Ramify.lean` reads with `include_str`
+# — see the input_file note below.
+name = "ramify"
+defaultTargets = ["Ramify", "Demo"]
+
+# --- Paperproof's Lean library (contains `Services.BetterParser`) -------------
+# Pinned to the exact commit, so an install is reproducible. `lean/lakefile.toml`
+# pins the SAME rev and says why it must never float. Core-only.
+[[require]]
+name = "Paperproof"
+git = "https://github.com/Paper-Proof/paperproof.git"
+subDir = "lean"
+rev = "c85fb0b45ce9ebaaa4715c7d043aadda80306c46"
+
+# --- ProofWidgets ------------------------------------------------------------
+# `@[widget_module] Component PanelWidgetProps` comes from here. The
+# development package gets it transitively through Mathlib; this one must ask
+# for it directly. v0.0.105 is what Mathlib v4.32.2 itself pins, so a project
+# that already has Mathlib resolves to the same package rather than a conflict.
+[[require]]
+name = "proofwidgets"
+scope = "leanprover-community"
+rev = "v0.0.105"
+
+[[lean_lib]]
+name = "ProofTreeComments"
+srcDir = "../lean"
+
+[[lean_lib]]
+name = "ProofTreeRecover"
+srcDir = "../lean"
+
+# --- The renderer bundle -----------------------------------------------------
+# `include_str` is a bare file read at elaboration time, invisible to Lake's
+# dependency graph, so `needs` is what makes a rebuild actually pick up a new
+# bundle (see the long note in lean/lakefile.toml — this is the same trap, and
+# the same fix). The path is the development build's own output directory, and
+# THAT FILE IS COMMITTED for exactly this reason: a fresh clone has no `npm`
+# step run in it, so without the artifact in the tree an install could not
+# build at all. It is the one generated file this repository tracks.
+[[input_file]]
+name = "proofTreeWidgetJs"
+path = "../web/dist/proofTreeWidget.js"
+text = true
+
+[[lean_lib]]
+name = "Ramify"
+srcDir = "../lean"
+needs = ["proofTreeWidgetJs"]
+
+# --- Try-it file (file: Demo.lean, in THIS directory) ------------------------
+# Deliberately not in `../lean` with the other demos: vscode-lean4 resolves a
+# file's Lake workspace by walking UP from the file, so anything under `lean/`
+# is served by the development package — which requires Mathlib. A file that
+# lives here is served by this one, so an install can be checked without
+# downloading a gigabyte of oleans it will never use.
+
+[[lean_lib]]
+name = "Demo"

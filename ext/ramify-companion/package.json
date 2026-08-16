@@ -1,0 +1,71 @@
+{
+  "name": "ramify-companion",
+  "displayName": "Ramify Companion",
+  "description": "Editor-side commands for the Ramify infoview widget: unlocks persistent settings, a slim editor under the infoview, and revealing nodes in the source.",
+  "publisher": "aidan",
+  "version": "0.0.10",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ramify.openLens",
+        "title": "Ramify: Open Tactic in Lens"
+      }
+    ],
+    "configuration": {
+      "title": "Ramify Companion",
+      "properties": {
+        "ramify.outlineOnly": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Draw the tree's node boxes as borders with no fill, only showing the colored outline. Purely cosmetic."
+        },
+        "ramify.tallFrame": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Let the proof tree run closer to the bottom edge of the infoview. Stops a little short by default."
+        },
+        "ramify.linkMarks": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Draw the connectors' target-type marks: a small gapped dot near either end of a line that runs into a goal, a gapped dash where it runs into a tactic — so you can tell what a line terminates at before following it."
+        },
+        "ramify.linkTint": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Tint each connector toward the colour of the node it runs INTO (the goals' blue, the tactics' green), on top of the shape marks."
+        },
+        "ramify.lensGoals": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show each tactic's resulting goal inline at the end of its line in the lens, so a proof read there carries its intermediate states. Drawn as decoration text."
+        },
+        "ramify.lensWordWrap": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Wrap long lines in the lens. Does not affect other editors or windows. Skipped when you already wrap globally."
+        },
+        "ramify.counterfactual": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "While you are typing a tactic and the proof doesn't elaborate, show the tree **as if the line you are writing were `sorry`** — elaborated in the background — so the tree keeps its full shape, marks where your tactic lands with a dashed stub carrying your draft, replaced with the real tree when the proof is fixed. Costs one re-elaboration of the current theorem per edited line (cached)."
+        },
+        "ramify.typingHoldMs": {
+          "type": "integer",
+          "default": 600,
+          "minimum": 0,
+          "maximum": 5000,
+          "markdownDescription": "How long (in milliseconds) the cursor must sit still after you type before the tree redraws to match the changed proof. Prevents redraw after every keystroke. Raise it if you type slowly and still see churn mid-edit; `0` redraws on every change. Edits made *from the tree* (committing a tactic, chips, delete, undo) always redraw ASAP."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# Lake build artifacts
+.lake/
+*.olean
+*.ilean
+*.trace
+
+# OS / editor
+.DS_Store
+.vscode/
