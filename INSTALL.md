@@ -49,7 +49,7 @@ lake update ramify && lake build
 
 This will pull the **Paperproof** Lean4 library whose parser we gratefully build upon and **ProofWidgets v0.0.105**, needed for rendering javascript in the infoview (this is the same version Mathlib `v4.32.2` pins, so Mathlib projects resolve to one copy rather than conflicting). Note: neither pulls Mathlib.
 
-A fresh build takes a few minutes; mostly building ProofWidgets. Further builds will be much faster since they need only rebuild Ramify.
+A fresh build will take a few minutes; mostly building ProofWidgets. Further builds will be much faster since they need only rebuild Ramify.
 
 To turn the panel on in a `.lean` proof file:
 
@@ -62,11 +62,11 @@ theorem demo (a b : Nat) (h : a = b) : a + 0 = b := by
   exact h
 ```
 
-Put your cursor inside the proof and the tree will appear in the infoview. It follows the cursor; the panel is on for the whole file after the initial `show_panel_widgets` line.
+Put your cursor inside the proof and the tree will appear in the infoview. It follows the cursor; the panel is on for the whole file after the top `show_panel_widgets` line.
 
 ### Quickstart
 
-If you only want to look at it without Mathlib, skip the full dependency:
+If you only want to look at it without Mathlib (omits the full dependency):
 
 ```bash
 git clone https://github.com/aidanmaney/ramify-lean4.git
@@ -74,7 +74,8 @@ cd ramify-lean4/dist && lake build
 code .
 ```
 
-then open `Demo.lean` — a simple core-only (no Mathlib) file with five small proofs and a list of things to try. Or go right to `ProofTreeTour.lean`, a longer guided walkthrough.
+then open `Demo.lean` — a simple file with five small proofs and a list of things to try. 
+OR skip to `ProofTreeTour.lean` for a longer guided walkthrough.
 
 > [!IMPORTANT]
 > The tour will not compile since it demonstrates failed/in-progress proofs.
@@ -96,13 +97,15 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 ### What the Companion Adds
 
 - **The lens** (`⧉` on a tactic's hover bar)
-	- Opens the proof in an editor pane split below the infoview, with the tactic selected and each tactic's resulting goal drawn inline at the end of its line. Same window, same document, same Lean server, so vim/LSP suggestions/keybindings all still work.
+	- Opens the proof in an editor pane split below the infoview.
+	- A tactics resulting goals are drawn inline after the tactic.
+	- Uses the same window, document, and Lean server as your original pane so vim/LSP suggestions/keybindings work.
 - **Theme-accurate syntax colours**
 	- Otherwise defaults to generic Light/Dark themes.
 - **Reveal in source** (a node click, `»` on the hover bar, &#8984;-click, or a diagnostic in the top-left pill)
 	- Jumps the editor to that tactic's range, and retargets to the lens when one is open rather than to the main buffer.
 - **Hover-highlight**
-	- Hovering a tactic node paints its range in the visible editors; arming a delete (`⊘`) previews the extent the same way.
+	- Hovering a tactic node shows its range in the visible editors; arming a delete (`⊘`) previews the extent the same way.
 - **Undo/redo from the tree** (`↶ ↷` on the rail).
 	- Edits made from the tree leave focus in the webview, where &#8984;Z won't do anything; works around this by focusing the editor.
 - **Settings** (see the extension itself for detailed descriptions):
@@ -120,7 +123,7 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 
 ## Troubleshooting
 
-If the tree says “no proof here” with the cursor inside a proof, the toolchain is the first thing to check (see [Prerequisites](#prerequisites)). If an action does nothing e.g. the lens not opening, colours not following the theme, read the Ramify Companion output channel (View &#8594; Output, pick it from the dropdown); if you cannot resolve the issue on your own raise it on GitHub.
+If the tree says “no proof here” with the cursor inside a proof, check the toolchain first (see [Prerequisites](#prerequisites)). If an action does nothing e.g. the lens not opening or colors not following the theme, read the Ramify Companion output channel (View &#8594; Output, pick it from the dropdown); if you cannot resolve the issue on your own raise it on GitHub.
 
 ---
 
