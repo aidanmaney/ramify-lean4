@@ -95,15 +95,15 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 
 ### What the Companion Adds
 
-- **The lens** (`&#10697;` on a tactic's hover bar)
+- **The lens** (`⧉` on a tactic's hover bar)
 	- Opens the proof in an editor pane split below the infoview, with the tactic selected and each tactic's resulting goal drawn inline at the end of its line. Same window, same document, same Lean server, so vim/LSP suggestions/keybindings all still work.
 - **Theme-accurate syntax colours**
 	- Otherwise defaults to generic Light/Dark themes.
-- **Reveal in source** (a node click, `&#8811;` on the hover bar, &#8984;-click, or a diagnostic in the top-left pill)
+- **Reveal in source** (a node click, `»` on the hover bar, &#8984;-click, or a diagnostic in the top-left pill)
 	- Jumps the editor to that tactic's range, and retargets to the lens when one is open rather than to the main buffer.
 - **Hover-highlight**
-	- Hovering a tactic node paints its range in the visible editors; arming a delete (`&#8856;`) previews the extent the same way.
-- **Undo/redo from the tree** (`&#8630; &#8631;` on the rail).
+	- Hovering a tactic node paints its range in the visible editors; arming a delete (`⊘`) previews the extent the same way.
+- **Undo/redo from the tree** (`↶ ↷` on the rail).
 	- Edits made from the tree leave focus in the webview, where &#8984;Z won't do anything; works around this by focusing the editor.
 - **Settings** (see the extension itself for detailed descriptions):
 	- `ramify.outlineOnly`,
