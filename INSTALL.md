@@ -116,12 +116,6 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 	- `ramify.lensWordWrap`,
 	- Also adds any custom `lean4.input.*` unicode-abbreviations
 
-### Without It
-
-The tree draws, reads and **edits** without the companion: in-place editing, the frontier chips, `calc` gestures, delete, comment editing and the `.fold`/`.none` writers all go through the editor's own edit pipeline, so &#8984;Z still undoes them from the buffer. Reading is untouched — every layout, elision, context breadth, brief labels, narration, tooltips and the error ribbon are the widget's own.
-
-What the companion alone provides is everything that has to reach *out* of the infoview panel, which the infoview's API gives a widget no way to do. Without it these are inert rather than broken: reveal-in-source, the lens (`&#10697;`), hover-highlight and the delete preview, and the rail's `&#8630;`/`&#8631;` — undo and redo still work, but from the editor with &#8984;Z, not from the tree. Syntax colours fall back to a generic Light/Dark palette, and the settings above have no home to be set in, so each takes its default.
-
 ---
 
 ## Troubleshooting
