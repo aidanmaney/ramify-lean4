@@ -4,10 +4,10 @@ import Mathlib
 # Comment-attribution sample
 
 Exercises every comment→node rule in `proofToTree.ts` / `ProofTreeComments.lean`:
-the docstring and the before-first-tactic block land on the ROOT goal; a leading
-comment block lands on the tactic below it; a same-line comment trails its
-tactic; adjacent comment lines merge. (This module doc itself must NOT appear —
-it's outside the theorem's command range.)
+the DOCSTRING lands on the ROOT goal, while the block below `by` — like every
+other leading comment — lands on the tactic under it; a same-line comment trails
+its tactic; adjacent comment lines merge. (This module doc itself must NOT
+appear — it's outside the theorem's command range.)
 -/
 
 /-- Every natural is even or odd — by induction, flipping parity each step. -/

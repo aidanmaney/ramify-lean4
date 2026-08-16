@@ -730,13 +730,30 @@ function nodeFlags(
 //    the container's end — then the comment PRECEDES code inside the same
 //    construct (`have := by` + comment + inner tactic) and reads as that
 //    inner step's LEADING comment instead.
-// 2. Entirely BEFORE the first tactic (between `by` and step 1 — including
-//    the theorem's docstring, which the command range covers) → the ROOT
-//    goal: that's the "here's the plan" narrative slot.
+// 2. The declaration's DOCSTRING → the ROOT goal: that's the "here's the
+//    plan" narrative slot, and the root box draws the STATEMENT, which is
+//    what a docstring is written about.
 // 3. LEADING — the next tactic starting at/after it (the common
 //    `-- explain, then do` shape; bullet lines land here too, since the
 //    consumed goal's tactic starts past the `·`).
 // 4. Dangling after everything (rare) → the last tactic before it.
+//
+// Rule 2 used to read "entirely before the FIRST TACTIC", which is a much
+// bigger region than a docstring: it swallowed the leading comment of the
+// first tactic too, so a proof narrated `-- Step 1` / `-- Step 2` / `-- Step
+// 3` drew steps 2 and 3 on their own tactics and step 1 on the root goal
+// (reported; `proofs/euclid.lean` has the same shape). The honest boundary is
+// the `by` — before it you are writing about the statement, after it about a
+// move — and inside a declaration's source range the only comment that can
+// precede the `by` IS the docstring, so the prefix test is that boundary
+// without a wire field for it. A `-- preamble` line written ABOVE the
+// `theorem` never reaches here at all: it lands in the PREVIOUS command's
+// trailing trivia, outside the range the comments are lexed from.
+//
+// Accepted limit: a comment written INSIDE a multi-line signature (before the
+// `by`, after the docstring) now falls to the first tactic rather than the
+// root. Not observed in the corpus, and unlike the reported case it is not a
+// shape anyone writes in a series.
 //
 // Rule 1's inner search asks "does a step BEGIN between the comment and the
 // container's end", and a step's own `position.start` cannot answer it: a
@@ -747,6 +764,12 @@ function nodeFlags(
 // `have hpfac … ` / `rw [Nat.dvd_add_right hpfac] at hpdvd`, container stop
 // 10:2, step start 10:6). `tacticSlots` is the as-written unit and answers it
 // exactly, so the bound is tested against the step's SLOT start.
+/** Is this comment a declaration's DOCSTRING rather than an ordinary one?
+`SourceComment.text` is VERBATIM source, delimiters included (`cleanLabel`
+scrubs labels by exact text, so it has to be), which makes the opening
+delimiter the whole test. */
+const isDocComment = (c: SourceComment) => c.text.startsWith("/--");
+
 function attributeComments(
   comments: SourceComment[],
   steps: ProofStep[],
@@ -861,7 +884,10 @@ function attributeComments(
       add(tacticId((inner ?? container).goalBefore.id), text);
       continue;
     }
-    if (rootId && cmpPos(c.stop, first.position.start) <= 0) {
+    // Rule 2 — the docstring alone (see the header). Anything else in this
+    // region sits inside the `by` block and introduces the tactic below it,
+    // which is rule 3's job.
+    if (rootId && isDocComment(c) && cmpPos(c.stop, first.position.start) <= 0) {
       add(rootId, text);
       continue;
     }

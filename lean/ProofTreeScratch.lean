@@ -20,6 +20,9 @@ takes hours).
 
 show_panel_widgets [Ramify]
 
+
+/-- **Euclid's theorem: there are infinitely many primes.**
+-/
 theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   -- Step 1: N! + 1 is divisible by some prime
   rcases Nat.exists_prime_and_dvd (n := (Nat.factorial N + 1)) <| by
