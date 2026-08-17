@@ -2311,6 +2311,71 @@ export default function ProofTreeView({
   // instead of cutting (see leafFoldTargets — one box for one ghost buys
   // nothing, but "put the finished step away" is still the gesture wanted).
   const leafFoldIds = useMemo(() => leafFoldTargets(baseNodes), [baseNodes]);
+  // PEEK: the source ranges of every ghost the cursor can open by entering it.
+  //
+  // A `.none` ghost is the AUTHOR's default reading, not one this reader
+  // chose — so putting the cursor inside the source it stands for is a
+  // statement that you are reading exactly that, and the ghost opens to show
+  // the tactic you are on. Leaving puts it back. Nothing is stored and no
+  // gesture is spent: the ghost is not REMOVED (that is what clicking it, ⊞
+  // and the marquee already do), it is temporarily not applied.
+  //
+  // SEEDED cuts only, and that is the whole distinction the feature turns on:
+  // a manual ◌ / ⇥ / ⇳ cut is a thing you deliberately put away, and having it
+  // spring open under a wandering cursor would be the tree fighting you. Which
+  // cuts are seeded is asked of `sourceView` rather than recorded on the cut,
+  // so the ONE translation of "what does the source say" keeps answering it
+  // (a flag deleted from the buffer stops peeking, with no state to migrate)
+  // and `ElideCut` grows no field for `remapIds` and `pruneCuts` to carry.
+  //
+  // Ranges are collected once per base tree; the cursor test below is what
+  // runs per move.
+  const peekable = useMemo(() => {
+    const byId = new Map(baseNodes.map((n) => [n.id, n]));
+    const seeded = new Set(sourceView(baseNodes).cuts.map(cutId));
+    const out: { id: string; ranges: ProofStepPosition[] }[] = [];
+    for (const cut of elideCuts) {
+      const id = cutId(cut);
+      if (!seeded.has(id)) continue;
+      const ranges = resolveCut(cut, byId)
+        .map((m) => byId.get(m)?.position)
+        .filter((p): p is ProofStepPosition => !!p);
+      if (ranges.length > 0) out.push({ id, ranges });
+    }
+    return out;
+  }, [baseNodes, elideCuts]);
+  // Which ghosts the cursor is inside, as a STRING — the overview-cursor
+  // discipline, so walking the cursor within one ghost (or anywhere outside
+  // them all) rebuilds nothing below. ALL matches, not the first: cuts nest,
+  // and `disjointCuts` drops an inner cut only while the outer one is applied,
+  // so opening the outer re-arms the inner and a single answer would strand
+  // the cursor inside a fresh ghost one level down.
+  //
+  // Containment is half-open (the accent's rule — trivia makes consecutive
+  // tactics share a boundary) OR the member STARTS on the cursor's line, and
+  // the second half is not slack: `tacticNodeAt` already gives a tactic
+  // starting on the cursor's line the node outright, so without it the accent
+  // and the peek would disagree about whether you are on the tactic — the
+  // accent resolving to it while the ghost stayed shut. It is also what makes
+  // the gesture reachable from column 0, which is where `0`, `^`, `gg` and a
+  // `j`/`k` off a short line all leave a vim user, while an indented tactic
+  // starts at column 6.
+  const peekKey = useMemo(
+    () =>
+      highlightPos
+        ? peekable
+            .filter((c) =>
+              c.ranges.some(
+                (r) =>
+                  positionContains(r, highlightPos) ||
+                  r.start.line === highlightPos.line,
+              ),
+            )
+            .map((c) => c.id)
+            .join("|")
+        : "",
+    [peekable, highlightPos],
+  );
   // The post-elision tree the engine is built from, as its own memo: the
   // overview keep set (below) has to resolve the CURSOR against exactly these
   // nodes, and doing that off `engine.allNodes()` would make the engine
@@ -2329,8 +2394,16 @@ export default function ProofTreeView({
         for (const id of resolveCut(c, byId)) manual.add(id);
       cuts = [...elideCuts, ...combineRuns(baseNodes, manual)];
     }
+    // The peeked ghosts drop out LAST, after combine has had its say: the
+    // `manual` set above is built from every stored cut, peeked ones included,
+    // so ⇉ cannot claim the members a peek just exposed and stack them into a
+    // run — opening a ghost shows the tactics it stood for, one box each.
+    if (peekKey !== "") {
+      const open = new Set(peekKey.split("|"));
+      cuts = cuts.filter((c) => !open.has(cutId(c)));
+    }
     return applyElisions(baseNodes, cuts);
-  }, [baseNodes, elideCuts, combine, combineOff]);
+  }, [baseNodes, elideCuts, combine, combineOff, peekKey]);
   // Overview: which node the cursor is on, resolved over `treeNodes` with the
   // same pure pair the accent uses (so the two resolutions cannot disagree),
   // reduced to a STRING before the set is built — the id changes only when
@@ -2727,8 +2800,9 @@ export default function ProofTreeView({
   // fold's own behaviour, and the `[nodes]` nearest-centre anchor plus the
   // cursor follow hold the view exactly as they do for a fold.
   const upToLine = upToCursor && highlightPos ? highlightPos.line : null;
-  const upToHide = useMemo(() => {
-    if (upToLine === null) return null;
+  // Each node's start line, node order — computed once per tree so the
+  // per-cursor-move work below is a scan of numbers, not of nodes.
+  const upToStarts = useMemo(() => {
     const startLine = (n: TreeNode): number | null => {
       if (n.position) return n.position.start.line;
       const parts = n.elidedCut?.parts;
@@ -2739,13 +2813,33 @@ export default function ProofTreeView({
           min = p.position.start.line;
       return min;
     };
+    return treeNodes.map(startLine);
+  }, [treeNodes]);
+  // The cursor line REDUCED to the smallest start line it excludes (null =
+  // nothing excluded). `l > cursor` ⟺ `l >= threshold`, so the hide set is a
+  // pure function of this number — and THAT is the memo key that makes a `j`
+  // over a comment line, a blank line or a multi-line tactic's continuation
+  // FREE: the raw line was the key at first, and every line moved then minted
+  // a fresh Set, re-ran computeLayout and handed the render brand-new
+  // nodes/links arrays for an identical tree — measured (harness walk over
+  // lines sharing a boundary): ~36-55ms of commit per no-op move, none once
+  // keyed on the threshold.
+  const upToThreshold = useMemo(() => {
+    if (upToLine === null) return null;
+    let min: number | null = null;
+    for (const l of upToStarts)
+      if (l !== null && l > upToLine && (min === null || l < min)) min = l;
+    return min;
+  }, [upToLine, upToStarts]);
+  const upToHide = useMemo(() => {
+    if (upToThreshold === null) return null;
     const h = new Set<string>();
-    for (const n of treeNodes) {
-      const line = startLine(n);
-      if (line !== null && line > upToLine) h.add(n.id);
-    }
-    return h.size > 0 ? h : null;
-  }, [upToLine, treeNodes]);
+    treeNodes.forEach((n, i) => {
+      const l = upToStarts[i];
+      if (l !== null && l >= upToThreshold) h.add(n.id);
+    });
+    return h;
+  }, [upToThreshold, upToStarts, treeNodes]);
   // The gallery's hide set and up-to-here's, unioned — computeLayout takes
   // ONE seed for its fixpoint sweep, and the two modes compose (page a
   // branch, and it still unrolls to the cursor).
