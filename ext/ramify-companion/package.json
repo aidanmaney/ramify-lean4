@@ -3,7 +3,7 @@
   "displayName": "Ramify Companion",
   "description": "Editor-side commands for the Ramify infoview widget: unlocks persistent settings, a slim editor under the infoview, and revealing nodes in the source.",
   "publisher": "aidan",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
