@@ -409,6 +409,20 @@ const clampScroll = (v: number, max: number) => Math.max(0, Math.min(max, v));
 // finished. Short enough to keep up with held-down cursor keys, long enough to
 // still read as movement rather than as a cut.
 const FOLLOW_MS = 130;
+// Where ⤓ up-to-here PARKS the accented node: a third from the top. In that
+// mode the tree ends at the cursor's line, so everything below the node is
+// what it spawns — the goals you have not read yet — while what sits above is
+// the parent you read as a subgoal one step ago. Two thirds of the room
+// therefore belongs below.
+//
+// This is a park, NOT a landing on the ordinary keep-in-view rule, and the
+// difference is the whole feature: that rule's comfort band is the entire
+// viewport minus 32px, so a node anywhere on screen counts as "nothing to
+// do" and no correction fires at all. Setting only where a correction lands
+// left the node wherever the unroll happened to leave it (measured: 0.71 of
+// the viewport, the reported defect) and re-parked it only on the rare move
+// that pushed it off-screen. See inViewScroll's `park`.
+const FOLLOW_TOP_FRAC = 1 / 3;
 // Trailing debounce on the global-name completion fetch: long enough that
 // mid-word typing coalesces, short enough that the tier arrives while the
 // list is still being read.
@@ -488,6 +502,17 @@ const editOverlayLayer = (zIndex: number): CSSProperties => ({
  * comfortable band, so "nothing to do" is a comparison rather than a second
  * rule each caller has to get right.
  *
+ * `park` switches the vertical DISCIPLINE, which is why it is one parameter
+ * and not a landing offset. Omitted (everyone but one caller) is keep-in-view
+ * as described above. Given a fraction — the cursor follow while ⤓
+ * up-to-here is on, passing FOLLOW_TOP_FRAC — the node is put AT that
+ * fraction of the viewport height on every call, with no band: in that mode
+ * the tree ends at the cursor, so "already visible" is not good enough, the
+ * node has to sit where the room below it is the room its own subgoals will
+ * fill. Costs nothing in stability, because the caller's own guard is a real
+ * cursor move (see trackedCursorNode) — a relayout, a fold or a scroll never
+ * reaches this. Horizontal keeps the band in both disciplines.
+ *
  * Vertical is the reading axis in both layout modes: centre the node when it
  * strays outside the band. Horizontally the modes differ, and the difference is
  * in their coordinates rather than in taste (see the `[nodes]` anchor's note).
@@ -503,6 +528,7 @@ function inViewScroll(
   padX: number,
   padY: number,
   compact: boolean,
+  park?: number,
 ): { left: number; top: number } {
   const cx = (MARGIN.left + padX + node.x) * zoom;
   const cy = (MARGIN.top + padY + node.y) * zoom;
@@ -523,11 +549,14 @@ function inViewScroll(
   const maxY = el.scrollHeight - el.clientHeight;
   let left = el.scrollLeft;
   let top = el.scrollTop;
-  if (
+  const inkMid = (inkTop + inkBot) / 2;
+  if (park !== undefined)
+    top = clampScroll(inkMid - el.clientHeight * park, maxY);
+  else if (
     inkTop < el.scrollTop + pad ||
     inkBot > el.scrollTop + el.clientHeight - pad
   )
-    top = clampScroll((inkTop + inkBot) / 2 - el.clientHeight / 2, maxY);
+    top = clampScroll(inkMid - el.clientHeight / 2, maxY);
   if (compact) {
     const leftEdge = cx - halfW;
     if (
@@ -1147,6 +1176,15 @@ export default function ProofTreeView({
   // default — it is a reading discipline, not a property of the proof, and as
   // a default it silently shuts branches the reader had deliberately opened.
   const [accordion, setAccordion] = useState(false);
+  // Up-to-here: draw only the nodes whose source line is at or above the
+  // editor cursor's, so the tree unrolls as you read (or replay) the proof
+  // downward — the Alectryon step-through, as a view mode. OFF by default for
+  // accordion's reason: a reading discipline, not a property of the proof.
+  // Like every rail toggle it is how THIS READER reads, so it survives a
+  // proof change; the hide set itself is derived per render from the cursor
+  // line and the nodes' own positions, and stores nothing (no ids — the
+  // mvarId lesson does not even arise).
+  const [upToCursor, setUpToCursor] = useState(false);
   // Context verbosity, cycled by the rail (see HYP_MODES): `used` (default)
   // shows what the proof BELOW the goal depends on, `new` what the tactic
   // above bound, `delta` what the goal gained (plus anything its own tactic
@@ -2673,6 +2711,50 @@ export default function ProofTreeView({
     return h;
   }, [splits, shownChild]);
 
+  // Up-to-here's hide set: every node whose source START line is past the
+  // cursor's. A goal carries its PRODUCER's position, so a tactic on the
+  // cursor's line shows together with the goals it leaves — the state AFTER
+  // the line, which is what the editor itself shows there. Root goals carry
+  // no position and always show (before the first tactic, the statement is
+  // all that exists); an elide MARKER has no position of its own by design
+  // (see layoutKey's tactic↔marker rule), so it stands on its members'
+  // earliest — the same substitution `srcRank` makes for sorting. Reduced to
+  // the cursor's LINE before the memo (the overview-cursor discipline), so
+  // walking the cursor within one line rebuilds nothing. No anchorRoot rides
+  // the mode: a node only moves when a branch ABOVE it in the stack grows
+  // (measured — walking the cursor through even_or_odd moves only the succ
+  // goal, pushed down by the zero branch unrolling over it), which is the
+  // fold's own behaviour, and the `[nodes]` nearest-centre anchor plus the
+  // cursor follow hold the view exactly as they do for a fold.
+  const upToLine = upToCursor && highlightPos ? highlightPos.line : null;
+  const upToHide = useMemo(() => {
+    if (upToLine === null) return null;
+    const startLine = (n: TreeNode): number | null => {
+      if (n.position) return n.position.start.line;
+      const parts = n.elidedCut?.parts;
+      if (!parts) return null;
+      let min: number | null = null;
+      for (const p of parts)
+        if (p.position && (min === null || p.position.start.line < min))
+          min = p.position.start.line;
+      return min;
+    };
+    const h = new Set<string>();
+    for (const n of treeNodes) {
+      const line = startLine(n);
+      if (line !== null && line > upToLine) h.add(n.id);
+    }
+    return h.size > 0 ? h : null;
+  }, [upToLine, treeNodes]);
+  // The gallery's hide set and up-to-here's, unioned — computeLayout takes
+  // ONE seed for its fixpoint sweep, and the two modes compose (page a
+  // branch, and it still unrolls to the cursor).
+  const hideAll = useMemo(() => {
+    if (!upToHide) return hide;
+    if (!hide) return upToHide;
+    return new Set([...hide, ...upToHide]);
+  }, [hide, upToHide]);
+
   const { nodes, links, extent } = useMemo(
     () =>
       engine.computeLayout(
@@ -2681,10 +2763,10 @@ export default function ProofTreeView({
         focusSet,
         compact,
         sideBySide,
-        hide,
+        hideAll,
         aside,
       ),
-    [engine, collapsed, only, focusSet, compact, sideBySide, hide, aside],
+    [engine, collapsed, only, focusSet, compact, sideBySide, hideAll, aside],
   );
   // Nodes with a VISIBLE child, i.e. an outgoing connector. The chip lane
   // centres its chips on the incoming trunk lane, which is also where a
@@ -4240,10 +4322,28 @@ export default function ProofTreeView({
     // Marked tracked only once actually FOUND: a node hidden at cursor-move
     // time still gets tracked when unfolding later reveals it.
     trackedCursorNode.current = hlKey;
-    const { left, top } = inViewScroll(el, node, zoom, PAD_X, PAD_Y, compact);
+    const { left, top } = inViewScroll(
+      el,
+      node,
+      zoom,
+      PAD_X,
+      PAD_Y,
+      compact,
+      upToCursor ? FOLLOW_TOP_FRAC : undefined,
+    );
     if (left === el.scrollLeft && top === el.scrollTop) return;
     animateScroll(followAnim.current, el, left, top);
-  }, [cursorNodeId, hlKey, hlDismissed, nodes, zoom, PAD_X, PAD_Y, compact]);
+  }, [
+    cursorNodeId,
+    hlKey,
+    hlDismissed,
+    nodes,
+    zoom,
+    PAD_X,
+    PAD_Y,
+    compact,
+    upToCursor,
+  ]);
 
   // A REVEAL owes a view move: the node was named, the unfold, the un-elide and
   // the gallery paging were requested synchronously, and the SCROLL has to wait
@@ -5667,6 +5767,9 @@ export default function ProofTreeView({
         }}
         accordion={accordion}
         onAccordionChange={setAccordion}
+        upToCursor={upToCursor}
+        onUpToCursorChange={setUpToCursor}
+        upToEnabled={!!highlightPos && seq.mode === "off"}
         onUndo={onUndo}
         layout={layout}
         onLayoutChange={setLayout}
@@ -9316,6 +9419,9 @@ function ControlRail({
   onCollapseAll,
   accordion,
   onAccordionChange,
+  upToCursor,
+  onUpToCursorChange,
+  upToEnabled,
   onUndo,
   layout,
   onLayoutChange,
@@ -9365,6 +9471,13 @@ function ControlRail({
   onCollapseAll: () => void;
   accordion: boolean;
   onAccordionChange: (v: boolean) => void;
+  /** Up-to-here: only the nodes at or above the editor cursor's line. */
+  upToCursor: boolean;
+  onUpToCursorChange: (v: boolean) => void;
+  /** Whether up-to-here can do anything RIGHT NOW: a cursor exists and
+  sequence mode isn't bypassing the hide sweep. Disabled-with-why otherwise
+  (the pressed/disabled rule). */
+  upToEnabled: boolean;
   onUndo?: (redo: boolean) => void;
   layout: LayoutMode;
   onLayoutChange: (v: LayoutMode) => void;
@@ -9682,6 +9795,22 @@ function ControlRail({
               "Accordion: expanding a node collapses its sibling branches",
             away: accordion,
             onClick: () => onAccordionChange(!accordion),
+          },
+          {
+            glyph: "⤓",
+            // The pressed/disabled rule (see ControlRail's doc comment): where
+            // another mode makes this inert it is DISABLED with the reason,
+            // never pressed-and-doing-nothing. Sequence mode's `only` set
+            // bypasses the hide sweep entirely (❮❯'s situation exactly), and
+            // without a cursor there is no line to stop at.
+            title: upToEnabled
+              ? "Up to here: draw only the proof down to the editor cursor's line — move the cursor and the tree unrolls with it"
+              : seqActive
+                ? "Up to here (not in sequence view)"
+                : "Up to here (needs the editor cursor)",
+            away: upToCursor,
+            disabled: !upToEnabled,
+            onClick: () => onUpToCursorChange(!upToCursor),
           },
           {
             glyph: "⋯",

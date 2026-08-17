@@ -115,11 +115,33 @@ const CF_STUB = (() => {
   const [line, ...rest] = v.split(":");
   return { line: Number(line), draft: rest.join(":") };
 })();
+// Dev-only editor-cursor stub, on `?cursor=<line>[:<char>]` (0-based, LSP
+// coordinates like the wire's): `highlightPos` is widget-only, so without
+// this the harness cannot draw the cursor accent or drive anything gated on
+// a cursor — the ⤓ up-to-here mode most of all, whose whole content is
+// "where the cursor is". A probe moves it without a reload via
+// `window.__cursor(line, char)` (the CfReplay `__cfPos` pattern).
+const CURSOR_STUB = (() => {
+  const v = QUERY.get("cursor");
+  if (v === null) return null;
+  const [l, c] = v.split(":");
+  return { line: Number(l) || 0, character: Number(c) || 0 };
+})();
 
 export default function App() {
   const [records, setRecords] = useState<ProofRecord[] | null>(null);
   const [selected, setSelected] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Dev-only stubbed cursor (see CURSOR_STUB); null when the flag is absent,
+  // in which case the prop below stays undefined and nothing here changes.
+  const [cursor, setCursor] = useState(CURSOR_STUB);
+  useEffect(() => {
+    if (CURSOR_STUB === null) return;
+    const w = window as unknown as {
+      __cursor?: (line: number, character: number) => void;
+    };
+    w.__cursor = (line, character) => setCursor({ line, character });
+  }, []);
   // Dev-only widget-payload replay; see CfReplay. Checked before the sample
   // fetch effect does anything visible, but hooks must run unconditionally,
   // so the branch sits at render time below.
@@ -253,6 +275,7 @@ export default function App() {
       // the preview harness. Paint verification only — the underlying proof
       // is whatever the NDJSON holds.
       {...(CF_STUB ? { cfStub: CF_STUB } : {})}
+      {...(cursor ? { highlightPos: cursor } : {})}
       // Dev-only signature header, on `?hdr=<text>` (use `\n` for line
       // breaks): `declHeader` is widget-only — the CLI wire ships no source
       // text — so this fakes it to make the bar, its wrapping and the floater
