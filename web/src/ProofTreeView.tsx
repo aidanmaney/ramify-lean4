@@ -2207,6 +2207,11 @@ export default function ProofTreeView({
   // re-centering. One ref: the pair is only ever written and compared together.
   // Keyed on the proof's IDENTITY, not its shape: re-centering on every
   // structural edit is what yanked the view back to the root mid-edit.
+  // The viewport size the scroll offsets were last placed against. The
+  // content's position in scroll space is measured from PAD_X/PAD_Y, which ARE
+  // that size, so a change here moves the tree and scroll must follow it (see
+  // the compensation effect).
+  const padRef = useRef<{ w: number; h: number } | null>(null);
   const centeredOn = useRef<{ proofKey: string; viewKey: string } | null>(
     null,
   );
@@ -4328,7 +4333,49 @@ export default function ProofTreeView({
       maxY,
     );
     centeredOn.current = { proofKey, viewKey };
+    // This pass has just placed the view for the CURRENT viewport, so the
+    // compensation below has nothing to undo (see padRef).
+    padRef.current = { w: viewport.w, h: viewport.h };
   }, [viewport, nodes, proofKey, viewKey, zoom, PAD_X, PAD_Y, compact]);
+
+  // THE VIEWPORT IS PART OF EVERY CONTENT COORDINATE, so a resize moves the
+  // whole tree unless scroll moves with it: `PAD_X`/`PAD_Y` are a full
+  // viewport of padding on each side (so any node can be scrolled to the
+  // edge), which puts the content at `MARGIN + PAD + x` — and PAD is the
+  // viewport's own size. Nothing compensated for that: zoom changes are held
+  // by `zoomAnchorRef` and layout changes by the `[nodes]` anchor, but a pure
+  // resize changes neither `zoom` nor `nodes`, so both sat it out while the
+  // initial centring — one-shot, keyed on (proofKey, viewKey) — declined to
+  // run again.
+  //
+  // That is the reported "sometimes I have to press Fit width to find the
+  // tree on first launch", and it is a first-launch bug because the widget's
+  // frame SETTLES: `useFrameOffset` measures at mount and again from a
+  // ResizeObserver, so the first non-zero viewport the centring runs against
+  // is routinely not the one the panel keeps. Measured in the harness at
+  // zoom 1 — viewport 1150×720 → 1033×520 moved the root box by exactly
+  // (−117, −200), the viewport delta, to screen (−101, −120): off the top and
+  // off the left, which is why only a re-fit brought it back.
+  //
+  // Shifting by `Δviewport * zoom` holds the same content point under the
+  // same screen point, the treatment a zoom change already gets. Declared
+  // AFTER the centring effect and sharing `padRef` with it, so a render that
+  // both re-centres and resizes cannot double-move: the centring stamps the
+  // new size and this sees no delta.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || viewport.w === 0) return;
+    const prev = padRef.current;
+    padRef.current = { w: viewport.w, h: viewport.h };
+    // No previous size (the centring owns the first placement), or nothing
+    // placed yet: there is no view to preserve.
+    if (!prev || centeredOn.current === null) return;
+    const dx = (viewport.w - prev.w) * zoom;
+    const dy = (viewport.h - prev.h) * zoom;
+    if (dx === 0 && dy === 0) return;
+    el.scrollLeft = clampScroll(el.scrollLeft + dx, el.scrollWidth - el.clientWidth);
+    el.scrollTop = clampScroll(el.scrollTop + dy, el.scrollHeight - el.clientHeight);
+  }, [viewport, zoom]);
 
   // Gallery follows the CURSOR: if the editor lands in a branch the gallery
   // isn't showing, page to it. Without this the tree↔source loop breaks in
