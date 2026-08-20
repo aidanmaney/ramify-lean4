@@ -14,7 +14,7 @@
 // drops non-file URIs, and a synthetic anchor click NAVIGATES the infoview
 // blank — webviews only intercept trusted clicks.)
 //
-// Secondary route, same action: a `vscode://aidan.ramify-companion/edit`
+// Secondary route, same action: a `vscode://aidan.ramify/edit`
 // deep link (usable from the OS / other tooling, not from the infoview).
 const vscode = require("vscode");
 const fs = require("fs");

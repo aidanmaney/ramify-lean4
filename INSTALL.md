@@ -7,7 +7,7 @@ Ramify comes in two parts: a Lean 4 widget and a VS Code extension.[^1] ([Quicks
 |                                              |                                                                                                                                                                          |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Lean package** `ramify`                 | the tree itself, control panel, renderer and Lean 4 plumbing                                                                                                             |
-| **VS Code extension** `ramify-companion` | adds a minimal editing pane, source code tactic highlighting, reveal tactic/goal in source, undo/redo buttons, theme-accurate syntax colours, persistent global settings |
+| **VS Code extension** `ramify` | adds a minimal editing pane, source code tactic highlighting, reveal tactic/goal in source, undo/redo buttons, theme-accurate syntax colours, persistent global settings |
 |                                              |                                                                                                                                                                          |
 
 ---
@@ -80,21 +80,21 @@ OR skip to `ProofTreeTour.lean` for a longer guided walkthrough.
 > [!IMPORTANT]
 > The tour will not compile since it demonstrates failed/in-progress proofs.
 
-## 2. The VS Code Companion
+## 2. The VS Code Extension
 
 The extension ships as a `.vsix` file inside this package. Where that file is depends on how you installed the Lean package:
 
 ```bash
 # If you cloned this repository (the "try it" route above), from its root:
-code --install-extension dist/ramify-companion-0.0.13.vsix
+code --install-extension dist/ramify-0.0.14.vsix
 
 # If you added ramify as a Lake dependency, from your project's root:
-code --install-extension .lake/packages/ramify/dist/ramify-companion-0.0.13.vsix
+code --install-extension .lake/packages/ramify/dist/ramify-0.0.14.vsix
 ```
 
-Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-companion-0.0.13.vsix`. Reload the window afterwards (command palette).
+Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-0.0.14.vsix`. Reload the window afterwards (command palette).
 
-### What the Companion Adds
+### What the Extension Adds
 
 - **The lens** (`⧉` on a tactic's hover bar)
 	- Opens the proof in an editor pane split below the infoview.
@@ -136,13 +136,13 @@ dist/                       the Lake package and sample files
   lake-manifest.json        pinned dependency set
   Demo.lean                 the try-it file
   ProofTreeTour.lean        the guided tour
-  ramify-companion-*.vsix
+  ramify-*.vsix
 lean/                       the Lean sources the package compiles
   Ramify.lean               the panel widget + RPC machinery
   ProofTreeComments.lean    handles comments and editing
   ProofTreeRecover.lean     supplemental parser for erroring tactics and term proofs
 web/dist/proofTreeWidget.js the renderer bundle
-ext/ramify-companion/       the VS Code extension
+ext/ramify/       the VS Code extension
 ```
 
 > [!Note]
