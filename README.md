@@ -1,4 +1,4 @@
-# Ramify — Installable Build
+# Ramify
 
 An interactive proof tree widget for Lean 4 drawn in the VS Code Lean infoview. It reads the tactics under your cursor and lets you read and edit the source proof from the tree. Comes in two parts: the widget and a VS Code extension.
 
