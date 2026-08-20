@@ -1,6 +1,6 @@
 # Installing Ramify
 
-An interactive proof tree visualizer for Lean 4, drawn in the VS Code infoview. Read a proof as a tree, edit it in place, and reshape what the tree shows you.
+An interactive proof tree visualizer for Lean 4, drawn in the VS Code infoview. Read a proof as a tree, edit it in place, and choose what the tree shows you.
 
 Ramify comes in two parts: a Lean 4 widget and a VS Code extension.[^1] ([Quickstart](#quickstart))
 
@@ -47,7 +47,7 @@ Then:
 lake update ramify && lake build
 ```
 
-This will pull the **Paperproof** Lean4 library whose parser we gratefully build upon and **ProofWidgets v0.0.105**, needed for rendering javascript in the infoview (this is the same version Mathlib `v4.32.2` pins, so Mathlib projects resolve to one copy rather than conflicting). Note: neither pulls Mathlib.
+This will pull the **Paperproof** Lean4 library whose parser we graciously build upon and **ProofWidgets v0.0.105**, needed for rendering javascript in the infoview (this is the same version Mathlib `v4.32.2` pins, so Mathlib projects resolve to one copy rather than conflicting). Note: neither pulls Mathlib.
 
 A fresh build will take a few minutes; mostly building ProofWidgets. Further builds will be much faster since they need only rebuild Ramify.
 
