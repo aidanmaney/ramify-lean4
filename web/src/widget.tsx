@@ -26,6 +26,7 @@ import {
 import { goalAnnotations, type GoalAnnotation } from "./lensGoals";
 import { posLE } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
+import type { HypMarkStyle } from "./theme";
 import {
   injectStyleOnce,
   makeTaggedRenderers,
@@ -366,6 +367,7 @@ function useThemeTokenColors(
   linkMarks: boolean;
   typingHoldMs: number;
   counterfactual: boolean;
+  hypMarkStyle: HypMarkStyle;
   abbrev: AbbrevConfig;
 } {
   const [colors, setColors] = useState<Record<string, string>>();
@@ -373,6 +375,7 @@ function useThemeTokenColors(
   const [outline, setOutline] = useState(false);
   const [tallFrame, setTallFrame] = useState(false);
   const [linkTint, setLinkTint] = useState(false);
+  const [hypMarkStyle, setHypMarkStyle] = useState<HypMarkStyle>("highlight");
   // Defaults ON, unlike its two neighbours: absent means an older companion
   // that never knew the key, and the marks are what it was already drawing.
   const [linkMarks, setLinkMarks] = useState(true);
@@ -405,6 +408,7 @@ function useThemeTokenColors(
           setOutline(!!r.outline);
           setTallFrame(!!r.tallFrame);
           setLinkTint(!!r.linkTint);
+          setHypMarkStyle(r.hypMarkStyle === "underline" ? "underline" : "highlight");
           setLinkMarks(r.linkMarks !== false);
           setTypingHoldMs(
             typeof r.typingHoldMs === "number" && isFinite(r.typingHoldMs)
@@ -469,6 +473,7 @@ function useThemeTokenColors(
     typingHoldMs,
     counterfactual,
     abbrev,
+    hypMarkStyle,
   };
 }
 
@@ -488,6 +493,14 @@ interface ThemeColorsResponse {
   older-companion reason; missing means off. */
   linkTint?: boolean;
   linkMarks?: boolean;
+  /** `ramify.hypMarkStyle` — how the hover answer is drawn over the context
+  lines a tactic uses: a background wash in its own hue (default), or a dashed
+  rule paired with the solid one the tactic diff takes in that mode. The
+  accessible variant: shape rather than colour. Optional for the standing
+  older-companion reason, and the string is validated CLIENT-side (the
+  `typingHoldMs` rule — the companion writes the setting raw, so exactly one
+  place owns default and validation). */
+  hypMarkStyle?: string;
   /** `ramify.typingHoldMs` — the typing hold's quiet period (see
   DEFAULT_TYPING_HOLD_MS). Optional for the older-companion reason; missing
   means the default. */
@@ -580,6 +593,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     typingHoldMs,
     counterfactual,
     abbrev,
+    hypMarkStyle,
   } = useThemeTokenColors(rs, docRev);
 
   // Re-parse whenever the cursor moves; the server's snapshot is cached, so this
@@ -1387,6 +1401,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         fetchGlobalNames={fetchGlobalNames}
         tokenColors={tokenColors}
         outline={outlineOnly}
+        hypMarkStyle={hypMarkStyle}
         linkTint={linkTint}
         linkMarks={linkMarks}
         abbrev={abbrev}

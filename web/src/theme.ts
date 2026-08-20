@@ -163,6 +163,23 @@ const PALETTE_CSS = `
   --ptw-hyp-mark: #b4763a;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
 
+  /* HOVER ANSWER background — the lines the tactic under the pointer depends
+     on, washed while you hold on its box. Its own token because it has to be
+     told apart AT A GLANCE from the tactic DIFF right beside it (and often on
+     the same line): the diff says "this changed", this says "this is used",
+     and they are different claims about the same text.
+
+     Same 22% weight as --ptw-diff-ins/del, a DIFFERENT hue. Weight, because
+     both sit under code that has to stay readable and a heavier wash of one
+     would read as the more important fact; hue, because that is the channel
+     left once extent is spoken for (the diff paints subterms, this paints the
+     whole line). The hue is the ACCENT — the gutter marker's own — since this
+     is that marker's claim made visible on demand, and it is nowhere near the
+     diff's green and red. Mixed against --ptw-surface, not --ptw-bg: it lands
+     inside a node box (the --ptw-prose lesson). */
+  --ptw-hyp-lit: #f0dcc9;
+  --ptw-hyp-lit: color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface));
+
   /* TACTIC DIFF backgrounds — what the producing tactic changed inside a goal
      box. Only a FALLBACK: wherever --vscode-diffEditor-*TextBackground exists
      (any VS Code host) taggedRender's rules take the editor's own colour, so
@@ -255,6 +272,8 @@ const PALETTE_CSS = `
   --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 62%, var(--ptw-surface));
   --ptw-hyp-mark: #d9a271;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
+  --ptw-hyp-lit: #4a3f37;
+  --ptw-hyp-lit: color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface));
   --ptw-comment: #7d8590;
   --ptw-case: #8fa3bf;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
@@ -309,6 +328,18 @@ export const ACCENT_TEXT = "var(--ptw-accent-text)";
 export const HYP_USED_FILL = "var(--ptw-hyp-used)";
 export const HYP_UNUSED_FILL = "var(--ptw-hyp-unused)";
 export const HYP_MARK_FILL = "var(--ptw-hyp-mark)";
+export const HYP_LIT_FILL = "var(--ptw-hyp-lit)";
+
+/** How the hover answer over a goal's context lines is drawn —
+`ramify.hypMarkStyle`, arriving over the companion's settings file.
+
+`"highlight"` (the default) is a background wash in `--ptw-hyp-lit`, which
+rhymes with what the infoview does to say something about part of a goal, and
+is told apart from the tactic DIFF beside it by HUE. `"underline"` is the
+accessible variant: a DASHED rule here against the SOLID one the diff takes in
+that mode, so the two claims separate by shape and survive with no colour at
+all — the reason the connectors' marks are the accessible baseline too. */
+export type HypMarkStyle = "highlight" | "underline";
 export const COMMENT_FILL = "var(--ptw-comment)";
 /** Narration mode's in-box prose (and the borders that frame it): the comment
 voice, mixed against the node SURFACE it is drawn on rather than the page. See

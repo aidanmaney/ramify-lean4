@@ -135,6 +135,30 @@ const TAGGED_CSS = [
     ".ptw-tagged span.removed-text {" +
       " background-color: var(--vscode-diffEditor-removedTextBackground, var(--ptw-diff-del));" +
       " box-shadow: inset 0 0 0 1px var(--vscode-diffEditor-removedTextBorder, transparent); }",
+    // UNDERLINE VARIANT (ramify.hypMarkStyle). The hover answer and the diff
+    // land on the same context lines and often on the SAME one, so they have
+    // to be told apart. By default that is hue — the wash beside these is
+    // --ptw-hyp-lit, a different hue at the same weight. This variant trades
+    // both for SHAPE: the hover answer draws a DASHED rule (in HypBlock) and
+    // the diff the SOLID one here, which is the pair that still separates for
+    // a reader who cannot use the colours, and the reason the connectors'
+    // marks are the accessible baseline too.
+    //
+    // The rule is an INSET box-shadow, never border-bottom or
+    // text-decoration: a border adds inline advance (the recorded geometry
+    // trap two comments up) and text-decoration is inherited by, and drawn
+    // across, nested spans. The background goes fully transparent — keeping a
+    // wash under a solid rule would put three marks on one line.
+    //
+    // Scoped on the ROOT attribute, so it costs nothing when off and needs no
+    // second sheet; `span.` for the specificity reason above, and last in the
+    // sheet so it wins over the two rules it overrides.
+    '[data-ptw-hypmark="underline"] .ptw-tagged span.inserted-text {' +
+      " background-color: transparent;" +
+      " box-shadow: inset 0 -1px 0 var(--vscode-diffEditor-insertedTextBackground, var(--ptw-diff-ins)); }",
+    '[data-ptw-hypmark="underline"] .ptw-tagged span.removed-text {' +
+      " background-color: transparent;" +
+      " box-shadow: inset 0 -1px 0 var(--vscode-diffEditor-removedTextBackground, var(--ptw-diff-del)); }",
 ].join("\n");
 
 export function ensureTaggedStyle() {

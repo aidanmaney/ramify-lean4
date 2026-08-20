@@ -95,6 +95,7 @@ import {
   cmpPos,
 } from "./proofToTree";
 import { TURNSTILE, type HypMode } from "./proofToTree";
+import type { HypMarkStyle } from "./theme";
 import {
   type ElideCut,
   applyElisions,
@@ -135,6 +136,7 @@ import {
   PROSE_FILL,
   EDIT_BG,
   EDIT_TEXT,
+  HYP_LIT_FILL,
   HYP_MARK_FILL,
   HYP_UNUSED_FILL,
   HYP_USED_FILL,
@@ -700,6 +702,18 @@ function cfStubNodeId(
 // so one constant places the stack instead of a hand-tuned offset per row.
 const FLOATER_H = 36;
 const RIBBON_W = 4;
+// How far below a context line's baseline the hover underline sits. It has to
+// clear the descenders (~2.4px at HYP_FONT_PX) and still fit the line box's
+// own leading (HYP_LINE_H 13 against an 11px em leaves ~3px under the
+// baseline), so there is exactly one gap that works and this is it — bigger
+// and the rule leaves the band the layout reserved, smaller and it strikes
+// through `hp`/`l₁`.
+const UNDERLINE_DROP = 2.5;
+// Breathing room each side of a hover wash. The infoview's own diff background
+// takes none, but it is an inline span whose padding would add advance and
+// move the text; this is a rect behind SVG text, where padding costs nothing
+// and a wash flush to the glyphs reads as a printing error.
+const HYP_LIT_PAD = 2;
 // The one the pager is on gets a wider cap. A second colour or a halo would
 // compete with the cursor accent; width is the one channel nothing else here
 // uses.
@@ -713,18 +727,33 @@ const RIBBON_W_SEL = 8;
 //
 // `taggedLines` (widget only) swaps individual lines for interactive content
 // with hover type tooltips; null entries keep the plain text for that line.
+//
+// `lit` is the hover answer: while the pointer is on the tactic BELOW this
+// box, the lines that tactic depends on take an underline. It is one boolean
+// and not a set of ids on purpose — the lines are chosen by `HypLine.used`,
+// the very field the `▸` gutter reads, so the two surfaces cannot disagree
+// about what "this tactic uses this hypothesis" means (see `hypLitGoalId`).
 function HypBlock({
   lines,
   x,
   y,
   width,
   taggedLines,
+  lit,
+  markStyle,
 }: {
   lines: HypLine[];
   x: number;
   y: number;
   width: number;
   taggedLines?: (ReactNode | null)[] | null;
+  lit?: boolean;
+  /** How the hover answer is drawn — `ramify.hypMarkStyle`, threaded from the
+  companion's settings file. `"highlight"` (default) is a background wash in
+  its own hue; `"underline"` is a dashed rule, paired with the SOLID one the
+  tactic diff takes in that mode, so the two claims are told apart by shape
+  rather than by colour. */
+  markStyle?: HypMarkStyle;
 }) {
   // Markers only when they SEPARATE something: all-used (the `used` context
   // mode) or none-used means the gutter says nothing. Mirrors sizeOf's
@@ -741,6 +770,15 @@ function HypBlock({
   const sepIndex = lines.findIndex((l) => l.sep);
   const sepOff = (j: number) =>
     sepIndex >= 0 && j >= sepIndex ? HYP_SEP_H : 0;
+  // Where line `j`'s glyphs actually sit, plus the drop that puts a rule
+  // under them. The tspans below are placed at the line box's MIDDLE and
+  // nudged by `dy="0.32em"`, so the baseline is that same sum written out —
+  // one coding, since the hover underline has to land on the text the tspans
+  // draw and cannot re-derive it. The drop stays inside the line box's own
+  // leading (HYP_LINE_H − the em), which is what keeps this paint-only.
+  const hypLineMid = (j: number) => y + sepOff(j) + (j + 0.5) * HYP_LINE_H;
+  const hypBaseline = (j: number) =>
+    hypLineMid(j) + 0.32 * HYP_FONT_PX + UNDERLINE_DROP;
   // Dim only as contrast: when nothing is marked, everything keeps full ink.
   const lineFill = (used: boolean) =>
     anyUsed && !used ? HYP_UNUSED_FILL : HYP_USED_FILL;
@@ -757,6 +795,84 @@ function HypBlock({
           strokeWidth={1}
           opacity={0.45}
         />
+      )}
+      {/* HOVER ANSWER: while the pointer is on the tactic that consumes this
+          goal, the lines it depends on take an underline. Which lines is
+          `HypLine.used` and nothing else — the same field the gutter reads
+          two blocks down — so the underline can only ever agree with the ▸.
+          What it BUYS over the ▸ is the case the ▸ deliberately declines:
+          when every shown line is used the gutter is suppressed (measured,
+          119 of the corpus's 204 context boxes), and at rest that reads
+          identically to "nothing is used". Hovering the tactic asks the
+          question and gets the answer.
+
+          UNDERLINE, not a background tint: the tint channel inside a goal box
+          is already the tactic DIFF's (--vscode-diffEditor-*TextBackground),
+          dimming is "unused", the outlines are the cursor accent and
+          not-in-the-proof-yet, so a rule under the text is the one mark left
+          — and it is a SHAPE, so it survives with no colour at all, the same
+          reason the connectors' marks are the accessible baseline.
+
+          Drawn in --ptw-hyp-mark, the ▸'s own ink: it makes the identical
+          claim, so it is the identical statement (the meaning-compatible
+          reuse ∎ already gets on the lens annotations), and it needs no new
+          theme token to drift.
+
+          PLAIN SVG in both render paths, exactly like the gutter markers
+          below — the tagged overlay replaces only the line TEXT, so one body
+          serves the foreignObject and the tspans and there is no second
+          implementation to disagree. Inside the reserved band and
+          `pointerEvents: none`: the rule sits in the line box's own descender
+          room (baseline + UNDERLINE_DROP against HYP_LINE_H's leading), so it
+          reserves nothing and moves nothing — the no-relayout-on-hover rule.
+
+          A CONTINUATION fragment IS underlined, where it takes no ▸: the
+          marker counts hypotheses (one per line), the rule marks text, and a
+          reflow-wrapped hyp whose tail went bare would read as two lines with
+          different answers. */}
+      {lit && lines.some((l) => l.used) && (
+        <g style={{ pointerEvents: "none" }}>
+          {lines.map((line, j) => {
+            if (!line.used) return null;
+            const lx = textX + (line.indent ?? 0);
+            const lw = measureText(line.text, HYP_FONT_PX);
+            // UNDERLINE variant (ramify.hypMarkStyle): DASHED, against the
+            // solid rule the tactic diff takes in this mode. The pair is a
+            // SHAPE distinction, which is the whole reason the variant
+            // exists — dash vs solid is the one channel that survives with no
+            // colour at all, where the default's two hues do not.
+            return markStyle === "underline" ? (
+              <line
+                key={j}
+                x1={lx}
+                x2={lx + lw}
+                y1={hypBaseline(j)}
+                y2={hypBaseline(j)}
+                stroke={HYP_MARK_FILL}
+                strokeWidth={1}
+                strokeDasharray="2 2"
+              />
+            ) : (
+              // DEFAULT: a background wash, because that is what the infoview
+              // does to say something about a piece of a goal, and this box is
+              // supposed to read as of a piece with it. Behind the text (this
+              // block is emitted before the tagged/plain branch), so the
+              // diff's own subterm background still paints over it and the two
+              // stay legible where they land on one line.
+              <rect
+                key={j}
+                x={lx - HYP_LIT_PAD}
+                y={
+                  hypLineMid(j) - (HYP_LINE_H - 1) / 2
+                }
+                width={lw + 2 * HYP_LIT_PAD}
+                height={HYP_LINE_H - 1}
+                rx={3}
+                fill={HYP_LIT_FILL}
+              />
+            );
+          })}
+        </g>
       )}
       {/* Gutter markers for used hyps are plain SVG in both render paths, so
           the tagged overlay only replaces the line text. */}
@@ -908,6 +1024,19 @@ export interface ProofTreeViewProps {
    * hands it back — because a webview cannot read VS Code settings either.
    */
   outline?: boolean;
+  /**
+   * `ramify.hypMarkStyle` — how the hover answer is drawn over the context
+   * lines the tactic under the pointer uses. `"highlight"` (default) washes
+   * the line in its own hue, distinct from the tactic diff's; `"underline"`
+   * draws a dashed rule and restyles the diff to a solid one, so the two are
+   * told apart by SHAPE and survive with no colour at all.
+   *
+   * A SETTING and not a rail button, for `outline`'s reason exactly: it is a
+   * standing preference about how the tree is drawn — here an accessibility
+   * one — not a gesture reached for while reading a proof. Arrives on the same
+   * companion channel, so the standalone app simply never sets it.
+   */
+  hypMarkStyle?: HypMarkStyle;
   /**
    * Widget-only settings on the same channel as `outline`. `linkTint` pulls
    * each edge's ink toward its target's hue; it defaults off and is purely
@@ -1147,6 +1276,7 @@ export default function ProofTreeView({
   fetchGlobalNames,
   tokenColors,
   outline = false,
+  hypMarkStyle = "highlight",
   linkMarks = true,
   linkTint = false,
   onPopoutEdit,
@@ -1390,6 +1520,21 @@ export default function ProofTreeView({
   // focus-subtree buttons). The bar renders inside the node's own <g>, so
   // pointer travel from box to bar never leaves the hover region (no flicker).
   const [hoverId, setHoverId] = useState<string | null>(null);
+  /** The tactic whose GREEN BOX the pointer is inside — what lights the
+  context lines above (see `hypLitGoalId`). Its own state and deliberately not
+  `hoverId`, which is the whole node's: the strip, the case badge and the clear
+  space between them are all inside the node's `<g>`, and an `<g>` hit-tests
+  only its children, so a hover tracked there answers "somewhere in this node"
+  and flickers on and off as the pointer crosses the ~13px of nothing between a
+  comment strip and the box it annotates. Reported as exactly that stuttering.
+
+  Tracked by POINTER POSITION against the box's own rect (`data-ptw-box`)
+  rather than by a handler on that rect: the label is a SIBLING of the rect,
+  not a child, so an enter/leave pair on the rect alone would drop the moment
+  the pointer reached the text inside the box — the same stutter one element
+  further in. A coordinate test has no such seam, and it makes the surface
+  exactly the shape the reader sees. */
+  const [hypHoverId, setHypHoverId] = useState<string | null>(null);
   /** The big-comment affordance under the pointer. Its own state and not
   `hoverId`: that one is the node's, and the whole point of this line is that
   it is a CONTROL sitting inside a strip whose other ink is prose. */
@@ -2409,6 +2554,26 @@ export default function ProofTreeView({
     }
     return applyElisions(baseNodes, cuts);
   }, [baseNodes, elideCuts, combine, combineOff, peekKey]);
+  /** The goal box a hovered TACTIC underlines its dependencies in: the goal
+   * that tactic consumes, which is its first parent by construction (every
+   * tactic node in `proofToTree` is emitted as `goalBefore ──▶ tactic`).
+   *
+   * This is the whole join, and it is deliberately the only new derivation:
+   * WHICH lines light is `HypLine.used`, read inside HypBlock — the field
+   * `contextFor` stamps from `consumedBy.tacticDependsOn`, i.e. from this
+   * very tactic. So the hover and the ▸ are not two readers of one fact, they
+   * are one reader consulted twice, and where the data is thin (a `decide`
+   * proof, a delayed-assigned goal — see contextFor's recorded blind spots)
+   * both surfaces go quiet together instead of contradicting each other.
+   *
+   * A COMBINED run and an elide MARKER inherit for free: they re-parent onto
+   * the same goal, whose lines were flagged against the run's first tactic —
+   * which is exactly what that box's ▸ already shows. */
+  const hypLitGoalId = useMemo(() => {
+    if (!hypHoverId) return null;
+    const n = treeNodes.find((t) => t.id === hypHoverId);
+    return n?.type === "tactic" ? (n.parents[0]?.id ?? null) : null;
+  }, [hypHoverId, treeNodes]);
   // Overview: which node the cursor is on, resolved over `treeNodes` with the
   // same pure pair the accent uses (so the two resolutions cannot disagree),
   // reduced to a STRING before the set is built — the id changes only when
@@ -2867,6 +3032,24 @@ export default function ProofTreeView({
       ),
     [engine, collapsed, only, focusSet, compact, sideBySide, hideAll, aside],
   );
+  /** Tactics whose hover underline would actually draw something: the goal
+   * they consume is DRAWN and flags at least one of its context lines as used
+   * by them. Only a hint gate — HypBlock decides what to paint from the very
+   * same `used` flags — so a tactic whose box would light nothing does not
+   * advertise the gesture in its `<title>`. Over the drawn nodes rather than
+   * the whole tree, because a folded-away goal has no lines on screen to
+   * underline. */
+  const hypLitTactics = useMemo(() => {
+    const linesOf = new Map(nodes.map((n) => [n.data.id, n.data.hyps]));
+    const out = new Set<string>();
+    for (const n of nodes)
+      if (
+        n.data.type === "tactic" &&
+        linesOf.get(n.data.parents[0]?.id ?? "")?.some((l) => l.used)
+      )
+        out.add(n.data.id);
+    return out;
+  }, [nodes]);
   // Nodes with a VISIBLE child, i.e. an outgoing connector. The chip lane
   // centres its chips on the incoming trunk lane, which is also where a
   // child's connector drops — fine on a pending LEAF (most chip bearers),
@@ -5540,6 +5723,12 @@ export default function ProofTreeView({
       // attribute.
       data-ptw-theme={themeKind}
       data-ptw-fill={outline ? "none" : undefined}
+      // Reaches the DIFF's own rules, which are CSS on infoview-owned spans
+      // rather than anything this file draws — see taggedRender's TAGGED_CSS.
+      // A root attribute and not an injected sheet, the `data-ptw-fill`
+      // precedent: both variants ship in one static stylesheet and the
+      // attribute picks, so switching repaints with no React render at all.
+      data-ptw-hypmark={hypMarkStyle === "underline" ? "underline" : undefined}
       style={{
         position: "relative",
         width: "100%",
@@ -6613,6 +6802,15 @@ export default function ProofTreeView({
               // Hovering a positioned tactic lights its range up in the editor.
               const hoverHighlights =
                 type === "tactic" && !!position && !!onHoverTactic;
+              // …and lights the hypotheses it uses in the goal box above it
+              // (see `hypLitGoalId` and HypBlock's `lit`). Its own condition
+              // and not `hasBar`'s: the bar stands down in sequence and the
+              // picking modes and on synthetic nodes, none of which stops a
+              // tactic from having dependencies worth reading. Sharing
+              // `hoverId` is safe because every consumer of it is gated on
+              // something else — the bar on `hasBar`, the peek on `isMini` —
+              // so a tactic that only lights hypotheses draws no other chrome.
+              const hypLights = type === "tactic" && !!node.data.parents.length;
               const clickable =
                 seqActive ||
                 !!elidePick ||
@@ -6647,6 +6845,7 @@ export default function ProofTreeView({
                 focusable,
                 isFocusRoot,
                 anyUsedHyp: !!hyps?.some((l) => l.used),
+                usesHyps: hypLitTactics.has(id),
               });
               // Diagnostics lead the tooltip and keep their full text: the
               // message IS the content here, where the action hints are a
@@ -6894,23 +7093,30 @@ export default function ProofTreeView({
                         }
                       : undefined
                   }
-                  // Hover drives three things: the action bar, (tactics only)
-                  // the editor-side range highlight, and (overview) the mini
-                  // chip's full-size peek — the same hoverId serves the bar
-                  // and the peek, since a node never has both.
+                  // Hover drives four things: the action bar, (tactics only)
+                  // the editor-side range highlight, (tactics only) the
+                  // dependency underlines in the goal box above, and
+                  // (overview) the mini chip's full-size peek — one `hoverId`
+                  // serves the bar, the underlines and the peek, since the
+                  // three are gated on `hasBar` / `hypLights` / `isMini` where
+                  // they are read.
                   onMouseEnter={
-                    hasBar || hoverHighlights || isMini
+                    hasBar || hoverHighlights || hypLights || isMini
                       ? () => {
-                          if (hasBar || isMini) setHoverId(id);
+                          if (hasBar || hypLights || isMini) setHoverId(id);
                           if (hoverHighlights) onHoverTactic!(position!);
                         }
                       : undefined
                   }
                   onMouseLeave={
-                    hasBar || hoverHighlights || isMini || elidable
+                    hasBar || hoverHighlights || hypLights || isMini || elidable
                       ? () => {
-                          if (hasBar || isMini)
+                          if (hasBar || hypLights || isMini)
                             setHoverId((cur) => (cur === id ? null : cur));
+                          // The box test only runs while the pointer is over
+                          // this node; leaving is the one exit it cannot see.
+                          if (hypLights)
+                            setHypHoverId((cur) => (cur === id ? null : cur));
                           if (hoverHighlights) onHoverTactic!(null);
                           if (elidable)
                             setElidePreview((p) =>
@@ -6929,8 +7135,30 @@ export default function ProofTreeView({
                   // event at all — the rail's glyph swap has the same blind
                   // spot, and the same answer: move a pixel.)
                   onMouseMove={
-                    elidable
+                    elidable || hypLights
                       ? (e) => {
+                          // Is the pointer inside the GREEN BOX? Only there
+                          // does this tactic light the context above it. The
+                          // box is found from this event rather than held in
+                          // a ref (the house lint taints every ref-touching
+                          // call), and the write is compared first, so a
+                          // pointer moving around inside one box re-renders
+                          // nothing.
+                          if (hypLights) {
+                            const box = (
+                              e.currentTarget as SVGGElement
+                            ).querySelector("[data-ptw-box]");
+                            const r = box?.getBoundingClientRect();
+                            const inBox =
+                              !!r &&
+                              e.clientX >= r.left &&
+                              e.clientX <= r.right &&
+                              e.clientY >= r.top &&
+                              e.clientY <= r.bottom;
+                            setHypHoverId((cur) =>
+                              inBox ? id : cur === id ? null : cur,
+                            );
+                          }
                           if (e.altKey) {
                             if (elidePreview?.anchor !== id) {
                               const p = elidePreviewFor(id);
@@ -6943,6 +7171,7 @@ export default function ProofTreeView({
                             // inside this <g>) with altKey false — an
                             // untagged clear here was the "flashes but
                             // nothing real" bug.
+                            elidable &&
                             elidePreview?.anchor === id &&
                             elidePreview.from === "alt"
                           )
@@ -7223,6 +7452,11 @@ export default function ProofTreeView({
                     )}
 
                   <rect
+                    // The one surface that lights the context above (see
+                    // `hypHoverId`): the pointer test reads this rect, so the
+                    // green box IS the hover target and the strip, the badge
+                    // and the band's clear space are not.
+                    data-ptw-box=""
                     x={-w / 2}
                     y={boxTop}
                     width={w}
@@ -7371,6 +7605,8 @@ export default function ProofTreeView({
                       y={contentTop}
                       width={w - 2 * NODE_PAD}
                       taggedLines={taggedHyps}
+                      lit={hypLitGoalId === id}
+                      markStyle={hypMarkStyle}
                     />
                   )}
 

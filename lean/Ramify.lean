@@ -2408,6 +2408,16 @@ structure ThemeColors where
   passes it back per `getProofTree` call, since the decision is made
   server-side but the setting rides this channel. -/
   counterfactual : Bool := true
+  /-- `ramify.hypMarkStyle` — how the widget marks the context lines the
+  hovered tactic uses: `"highlight"` (the default) washes each line in its own
+  hue, `"underline"` draws a dashed rule there and a solid one under what the
+  tactic CHANGED, separating the two claims by shape rather than by colour.
+
+  Carried as a raw String and validated CLIENT-side, the `typingHoldMs` rule:
+  the companion writes the setting through untouched and exactly one place owns
+  the default and what an unknown value means. The default here is only what an
+  absent key decodes to. -/
+  hypMarkStyle : String := "highlight"
   /-- `lean4.input.*` — unicode abbreviations for the in-place tactic editor.
   Settings again, so again the long way round. -/
   input : InputConfig := {}
@@ -2434,6 +2444,7 @@ instance : FromJson ThemeColors where
           linkMarks := jsonField j "linkMarks" true,
           typingHoldMs := jsonField j "typingHoldMs" 600,
           counterfactual := jsonField j "counterfactual" true,
+          hypMarkStyle := jsonField j "hypMarkStyle" "highlight",
           input := jsonField j "input" {},
           colors := jsonField j "colors" #[] }
 

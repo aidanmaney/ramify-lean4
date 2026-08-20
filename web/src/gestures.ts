@@ -66,6 +66,11 @@ export type NodeGates = {
   isFocusRoot: boolean;
   /** At least one context line is flagged used, so the ▸ legend is worth it. */
   anyUsedHyp: boolean;
+  /** TACTICS: the goal box above is drawn and flags at least one line as used
+  BY THIS TACTIC, so hovering it has something to mark. Same flag as
+  `anyUsedHyp` read from the other end of the edge — hence a separate gate
+  rather than a reuse: a tactic carries no context of its own. */
+  usesHyps: boolean;
 };
 
 /**
@@ -207,6 +212,21 @@ export const GESTURES: Gesture[] = [
     input: "hover",
     says: "for ⧉ lens, ◌ elide, ⊘ delete",
     needs: "popout",
+  },
+  {
+    // The ▸ legend's other end. `anyUsedHyp` says what the mark MEANS on the
+    // goal box that carries it; this says where to ask the question — and it
+    // is the only way to get an answer at all where the gutter is suppressed
+    // because the tactic uses everything shown.
+    target: "tactic",
+    input: "hover",
+    // "marks", not "highlights" or "underlines": HOW it is drawn is
+    // `ramify.hypMarkStyle` (a wash by default, a dashed rule for readers who
+    // need the shape), and this one line is the text BOTH the `?` panel and
+    // the node's own tooltip read. Naming one of the two would be wrong on
+    // screen for whoever set the other.
+    says: `marks the hypotheses it uses, in the goal above (${HYP_MARK})`,
+    when: (g) => g.usesHyps,
   },
   {
     target: "tactic",

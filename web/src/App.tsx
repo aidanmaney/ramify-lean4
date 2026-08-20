@@ -58,6 +58,7 @@ function CfReplay({
   const proof = stableProofOf(p);
   return (
     <ProofTreeView
+      hypMarkStyle={HYP_MARK_STUB}
       proof={proof}
       highlightPos={pos}
       cfStub={
@@ -128,6 +129,13 @@ const CURSOR_STUB = (() => {
   return { line: Number(l) || 0, character: Number(c) || 0 };
 })();
 
+// `ramify.hypMarkStyle`, stubbed. The real setting rides the companion's
+// settings file, which the standalone app has no route to — so without this
+// the underline VARIANT is undrawable here and the only gate on it would be
+// the editor. `?hypmark=underline` (the CURSOR_STUB pattern).
+const HYP_MARK_STUB =
+  QUERY.get("hypmark") === "underline" ? ("underline" as const) : undefined;
+
 export default function App() {
   const [records, setRecords] = useState<ProofRecord[] | null>(null);
   const [selected, setSelected] = useState(0);
@@ -194,6 +202,7 @@ export default function App() {
     // it — the same in-place swap path the infoview widget exercises, so the dev
     // harness covers it too (a `key` remount here would bypass it).
     <ProofTreeView
+      hypMarkStyle={HYP_MARK_STUB}
       proof={proof!}
       ledger={!NO_LEDGER}
       // Dev-only editing stubs, on `?stub-edit`: the widget-only gestures
