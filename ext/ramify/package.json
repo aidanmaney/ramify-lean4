@@ -3,7 +3,7 @@
   "displayName": "Ramify",
   "description": "Lean proofs-as-trees visualizer and editor that lives in the infoview",
   "publisher": "aidan",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"

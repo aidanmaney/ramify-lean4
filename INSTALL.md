@@ -86,13 +86,13 @@ The extension ships as a `.vsix` file inside this package. Where that file is de
 
 ```bash
 # If you cloned this repository (the "try it" route above), from its root:
-code --install-extension dist/ramify-0.0.14.vsix
+code --install-extension dist/ramify-0.0.15.vsix
 
 # If you added ramify as a Lake dependency, from your project's root:
-code --install-extension .lake/packages/ramify/dist/ramify-0.0.14.vsix
+code --install-extension .lake/packages/ramify/dist/ramify-0.0.15.vsix
 ```
 
-Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-0.0.14.vsix`. Reload the window afterwards (command palette).
+Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-0.0.15.vsix`. Reload the window afterwards (command palette).
 
 ### What the Extension Adds
 
