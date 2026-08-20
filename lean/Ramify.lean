@@ -2295,7 +2295,7 @@ webview-side escape hatches fail (vscode-lean4's `showDocument` silently drops
 non-file URIs; a synthetic anchor click navigates the webview blank) — so the
 request is relayed through the filesystem: this writes a one-shot request file
 under `~/.proof-tree-companion/`, which the companion extension
-(`ext/ramify-companion`) watches and turns into a slim LENS editor group
+(`ext/ramify`) watches and turns into a slim LENS editor group
 directly below the infoview with the range selected. The nonce lets the
 watcher dedupe double fire (fs.watch often reports one write as several
 events). -/

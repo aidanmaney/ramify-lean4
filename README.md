@@ -51,7 +51,7 @@ diss/
 │   ├── layout.ts               # four layout modes
 │   ├── widget.tsx / App.tsx    # the two data sources
 │   └── …                       # elision, brief mode, diagnostics, editing, theming
-├── ext/ramify-companion/   # VS Code extension: the lens, theme/settings relay
+├── ext/ramify/   # VS Code extension: the lens, theme/settings relay
 ├── dist/                       # the installable Lake package (see INSTALL.md)
 ├── proofs/                     # corpus for the CLI harness
 └── gen.sh                      # proofs/*.lean → web/public/sample.ndjson
@@ -128,8 +128,8 @@ tracks.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). The companion extension carries its own copy at
-`ext/ramify-companion/LICENSE`, because `vsce` only looks next to
+MIT — see [LICENSE](LICENSE). The extension carries its own copy at
+`ext/ramify/LICENSE`, because `vsce` only looks next to
 `package.json` and would otherwise ship the `.vsix` with no licence in it.
 
 Ramify builds on Paperproof (MIT), ProofWidgets (Apache-2.0) and

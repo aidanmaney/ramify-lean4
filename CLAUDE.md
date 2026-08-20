@@ -18,7 +18,7 @@ proofs/*.lean ──ppharness (Lean CLI)──▶ NDJSON ──proofToTree (web)
 - `lean/Ramify.lean` — the **infoview user-widget**: `@[server_rpc_method] ProofTree.getProofTree` runs the same parser over the live server's `snap.infoTree`; `@[widget_module] Ramify` `include_str`s the bundled renderer. The RPC counterpart of ppharness — no CLI, no NDJSON.
 - `web/` — React + Vite + d3-dag renderer. `ProofTreeView.tsx` is the shared, source-agnostic view; `App.tsx` feeds it a proof from NDJSON, `widget.tsx` feeds it a proof over RPC.
 - `gen.sh` — the CLI seam: runs the parser over `proofs/*.lean` and writes `web/public/sample.ndjson`.
-- `ext/ramify-companion/` — a small VS Code **companion extension** for widget gestures the infoview API can't express (see "Popout editing"); dev-installed via symlink, no build step.
+- `ext/ramify/` — a small VS Code **companion extension** for widget gestures the infoview API can't express (see "Popout editing"); dev-installed via symlink, no build step.
 
 ## Installing it elsewhere
 

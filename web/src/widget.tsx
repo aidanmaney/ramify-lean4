@@ -1279,7 +1279,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // elaboration cost. The infoview's EditorApi has no executeCommand, so the
   // request rides our own RPC channel: `ProofTree.popoutEdit` has the Lean
   // server write a request file under ~/.proof-tree-companion/, which the
-  // companion extension (ext/ramify-companion) watches and executes.
+  // companion extension (ext/ramify) watches and executes.
   // Two rejected bridges, for the record: `showDocument({external: true})`
   // (vscode-lean4 ignores the flag and silently drops non-file URIs), and a
   // synthetic click on a `vscode://…` anchor (the webview only intercepts

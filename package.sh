@@ -6,7 +6,7 @@
 #   dist/../web/dist/proofTreeWidget.js   the renderer bundle (a Lean build
 #                                         input via include_str — tracked in
 #                                         git for exactly that reason)
-#   dist/ramify-companion-<v>.vsix    the optional VS Code companion
+#   dist/ramify-<v>.vsix              the optional VS Code extension
 #
 # and one check: that dist/ — the minimal, Mathlib-free Lake package a user
 # actually depends on — really does build from those sources. See INSTALL.md.
@@ -30,8 +30,8 @@ cd "$root/dist"
 lake build Ramify
 
 echo
-echo "==> VS Code companion extension (.vsix)"
-cd "$root/ext/ramify-companion"
+echo "==> VS Code extension (.vsix)"
+cd "$root/ext/ramify"
 rm -f ./*.vsix
 # --allow-missing-repository: this is distributed as a file, not from the
 # Marketplace.
@@ -42,7 +42,7 @@ rm -f ./*.vsix
 # licence at the repo root is invisible to it. The flag silenced the warning
 # that was telling the truth, and every .vsix ever shipped went out with no
 # licence inside it. The fix is the file, not the flag:
-# `ext/ramify-companion/LICENSE` is a copy of the root MIT licence, and
+# `ext/ramify/LICENSE` is a copy of the root MIT licence, and
 # vsce packages it as `extension/LICENSE.txt` (verified by unzipping the
 # result, not by trusting the absence of a warning).
 npx --yes @vscode/vsce package --allow-missing-repository >/dev/null
