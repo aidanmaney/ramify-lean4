@@ -130,11 +130,6 @@ export function HelpPanel({
           </div>
         );
       })}
-      <div style={{ marginTop: 10, opacity: 0.72 }}>
-        The rail on the right is the whole view — hover any button for what it
-        does. Three of them open a row of more buttons when clicked, and
-        holding ⌥ swaps three others to their second gesture.
-      </div>
     </div>
   );
 }
