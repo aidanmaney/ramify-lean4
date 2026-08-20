@@ -317,6 +317,15 @@ function publishThemeColors() {
     const counterfactual =
       vscode.workspace.getConfiguration("ramify").get("counterfactual") !==
       false;
+    // How the hover answer over a goal's context lines is drawn: a background
+    // wash in its own hue (default), or a dashed rule paired with the solid
+    // one the tactic diff takes in that mode — shape instead of colour, for
+    // readers the two hues do not separate for. Written through RAW, like
+    // typingHoldMs: the widget owns the default and the validation, so an
+    // unknown string degrades in exactly one place.
+    const hypMarkStyle = vscode.workspace
+      .getConfiguration("ramify")
+      .get("hypMarkStyle");
     // The tree's in-place tactic editor has the buffer's own unicode input
     // (`\dvd` → `∣`), driven by the same upstream package vscode-lean4 uses.
     // The TABLE is bundled with the renderer, so this is only about the user's
@@ -350,6 +359,7 @@ function publishThemeColors() {
           linkMarks,
           typingHoldMs,
           counterfactual,
+          hypMarkStyle,
           input,
           colors: Object.keys(colors).map((type) => ({
             type,
@@ -370,7 +380,8 @@ function publishThemeColors() {
         `link tint ${linkTint ? "on" : "off"}, ` +
         `link marks ${linkMarks ? "on" : "off"}, ` +
         `typing hold ${typingHoldMs}ms, ` +
-        `counterfactual ${counterfactual ? "on" : "off"}): ` +
+        `counterfactual ${counterfactual ? "on" : "off"}, ` +
+        `hyp mark ${hypMarkStyle || "highlight"}): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),
