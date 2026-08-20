@@ -166,7 +166,8 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
   · -- Chain 1: rewrite to expose the square that has to be discarded, drop it,
     -- then tidy up. The middle link is the only inequality.
     have hsq : (0 : ℝ) ≤ (a - b) ^ 2 := sq_nonneg _
-    calc (a + b) ^ 2
+    calc
+      (a + b) ^ 2
       = 2 * (a ^ 2 + b ^ 2) - (a - b) ^ 2 := by ring
       _ ≤ _ := by linarith
   · -- Chain 2: the odd-sum identity again, this time as a calc chain inside the
@@ -174,11 +175,12 @@ theorem calc_workout (a b : ℝ) (n : ℕ) :
     induction n with
     | zero => simp
     | succ k ih =>
-      calc (∑ i ∈ Finset.range (k + 1 + 1), (2 * i + 1))
-          = (∑ i ∈ Finset.range (k + 1), (2 * i + 1)) + (2 * (k + 1) + 1) := Finset.sum_range_succ (fun i => 2 * i + 1) (k + 1)
+      calc
+        (∑ i ∈ Finset.range (k + 1 + 1), (2 * i + 1)) = (∑ i ∈ Finset.range (k + 1), (2 * i + 1)) + (2 * (k + 1) + 1) := Finset.sum_range_succ (fun i => 2 * i + 1) (k + 1)
         _ = (k + 1) ^ 2 + (2 * (k + 1) + 1) := by rw [ih]
-        _ = (k + 1 + 1) ^ 2 := by ring
-  · calc (0 : ℝ) < 1 := by norm_num
+        _ = _ := by ring
+  · calc
+      (0 : ℝ) < 1 := by norm_num
       _ ≤ _ := by linarith [sq_nonneg (a-b)]
       -- _ ≤ (a - b) ^ 2 + 1 := by linarith [sq_nonneg (a-b)]
 
