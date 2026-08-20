@@ -23,7 +23,7 @@ const path = require("path");
 
 // Everything the relay does is invisible by design (a file written by a Lean
 // server, read by a watcher in another process), so every step logs here.
-// Open it from Output → "Ramify Companion" when a widget gesture appears
+// Open it from Output → "Ramify" when a widget gesture appears
 // to do nothing: the log says whether the request arrived at all, and if it
 // was skipped, why.
 let log = null;
@@ -1067,7 +1067,7 @@ async function popout(uri, selection) {
   say(`  popout: infoview column=${infoColumn}`);
   if (!focusCmd) {
     void vscode.window.showErrorMessage(
-      "Ramify Companion: no Lean infoview group found to attach the lens to.",
+      "Ramify: no Lean infoview group found to attach the lens to.",
     );
     return;
   }
@@ -1089,7 +1089,7 @@ async function popout(uri, selection) {
 }
 
 function activate(context) {
-  log = vscode.window.createOutputChannel("Ramify Companion");
+  log = vscode.window.createOutputChannel("Ramify");
   context.subscriptions.push(
     log,
     highlightDecoration,
@@ -1178,7 +1178,7 @@ function activate(context) {
       const ed = vscode.window.activeTextEditor;
       if (!ed) {
         void vscode.window.showErrorMessage(
-          "Ramify Companion: no active editor to open in the lens.",
+          "Ramify: no active editor to open in the lens.",
         );
         return;
       }
@@ -1186,7 +1186,7 @@ function activate(context) {
         await popout(ed.document.uri, ed.selection);
       } catch (e) {
         void vscode.window.showErrorMessage(
-          `Ramify Companion: open in lens failed: ${e}`,
+          `Ramify: open in lens failed: ${e}`,
         );
       }
     }),
@@ -1269,7 +1269,7 @@ function activate(context) {
     } catch (e) {
       say(`  FAILED: ${e && e.stack ? e.stack : e}`);
       void vscode.window.showErrorMessage(
-        `Ramify Companion: ${req.action ?? "popout"} failed: ${e}`,
+        `Ramify: ${req.action ?? "popout"} failed: ${e}`,
       );
     }
   };
@@ -1282,7 +1282,7 @@ function activate(context) {
     context.subscriptions.push({ dispose: () => watcher.close() });
   } catch (e) {
     void vscode.window.showErrorMessage(
-      `Ramify Companion: request watcher failed to start: ${e}`,
+      `Ramify: request watcher failed to start: ${e}`,
     );
   }
 
@@ -1304,7 +1304,7 @@ function activate(context) {
           );
         } catch (e) {
           void vscode.window.showErrorMessage(
-            `Ramify Companion: popout failed: ${e}`,
+            `Ramify: popout failed: ${e}`,
           );
         }
       },

@@ -120,7 +120,7 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 
 ## Troubleshooting
 
-If the tree says “no proof here” with the cursor inside a proof, the toolchain is the first thing to check (see [Prerequisites](#prerequisites)). If an action does nothing e.g. the lens not opening, colours not following the theme, read the Ramify Companion output channel (View &#8594; Output, pick it from the dropdown); if you cannot resolve the issue on your own raise it on GitHub.
+If the tree says “no proof here” with the cursor inside a proof, the toolchain is the first thing to check (see [Prerequisites](#prerequisites)). If an action does nothing e.g. the lens not opening, colours not following the theme, read the Ramify output channel (View &#8594; Output, pick it from the dropdown); if you cannot resolve the issue on your own raise it on GitHub.
 
 ---
 
