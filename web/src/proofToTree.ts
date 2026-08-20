@@ -21,7 +21,6 @@ import type {
   NodeFlags,
   TreeNode,
 } from "./types";
-import { isLedgerHead } from "./types";
 import { collapseLabel } from "./briefLabel";
 
 // The "inside a chain, nothing drawn above you" reading of `chainCtx` (see
@@ -971,6 +970,22 @@ export interface ProofToTreeOptions {
    * PROTOTYPE. Off restores today's per-link goal boxes exactly.
    */
   ledger?: boolean;
+  /**
+   * Ledgered links whose INTERMEDIATE GOAL BOX is drawn — the hybrid's
+   * expansion state. A closed link (the default) draws only its
+   * justification, hung straight off the ledger; an open one gets its goal
+   * box back between the two, the full `⊢ LHS rel RHS` with the goal-node
+   * gestures, context following the ordinary chain rules
+   * (`hypsInheritedFrom`).
+   *
+   * Keys are `` `${ledgerId}#${settledIdx}` `` — the ledger NODE's id (a
+   * source position, `ledger:<line>:<col>`, so the set survives a re-parse
+   * for free — the mvarId lesson) plus the link's index among the SETTLED
+   * links in row order. The settled-link index, never the raw row index: the
+   * head row appears and disappears with the drawn label (brief's Rule D),
+   * and keying on rows would shift every entry when it does.
+   */
+  openLinks?: ReadonlySet<string>;
 }
 
 export function proofToTree(
@@ -981,6 +996,7 @@ export function proofToTree(
     brief = false,
     slots,
     ledger = true,
+    openLinks,
   }: ProofToTreeOptions = {},
 ): TreeNode[] {
   const goals = goalIndex(proof);
@@ -1180,11 +1196,11 @@ export function proofToTree(
     // saying what one goal box says, with the box's gestures gone.
     if (rows.length < 2) return null;
     return {
-      // The head row is the first link's LHS — the expression the chain starts
-      // from, which the source writes on the `calc` line itself. It states no
-      // link, so it carries no goal and takes no justification child. Whether
-      // it is DRAWN is the caller's call: where the `calc` node's own label
-      // already writes the LHS, this row is its second copy (see `ledgerHead`).
+      // The head row is the first link's LHS — the expression the chain
+      // starts from. It states no link, so it carries no goal and takes no
+      // justification child. Always drawn: the `calc` node's label is forced
+      // to the bare keyword whenever a ledger is (see the `led` computation),
+      // so this row is the LHS's only copy however the source line-broke it.
       rows: [
         { text: rows[0].lhs },
         ...rows.map((l) => ({
@@ -1196,29 +1212,6 @@ export function proofToTree(
       ],
       settled: new Set(rows.map((l) => l.goalId)),
     };
-  }
-
-  /** Whether a chain's ledger draws its HEAD row — the chain's starting
-   * expression — given the `calc` node's own DRAWN label.
-   *
-   * Where the label states the LHS (`calc x = y := j`, the node directly above
-   * the ledger), the head row is that same expression a second time one line
-   * lower, so it goes. The test is on the label AS DRAWN and nothing else:
-   * brief mode's Rule D collapses a long chain head to `calc …`, which states
-   * nothing, and a chain written with `calc` alone on its line never did — in
-   * both the head row is the LHS's only copy and stays.
-   *
-   * The ledger's own x used to be read off this label too (indent the box by
-   * `measureText("calc ")` and row 0 lands under the source's own LHS). That
-   * half is gone: the ledger sits on the trunk under `calc` like any other
-   * node — see `trunkLayout`. */
-  function ledgerHead(drawnLabel: string): boolean {
-    const first = drawnLabel.split("\n")[0] ?? "";
-    const m = /^calc[ \t]+/.exec(first);
-    const rest = m ? first.slice(m[0].length) : "";
-    // `…` is brief's elision mark, the one thing that can stand where the LHS
-    // was written and not be it.
-    return !(m && rest !== "" && !rest.startsWith("…"));
   }
 
   // Tactics whose several `goalsAfter` are NOT peers: the first is the
@@ -1794,16 +1787,27 @@ export function proofToTree(
       );
     // The `x = x` an `rw` leaves behind, inside a chain (see
     // TreeNode.rflResidue). Structural on both halves of the pair: the goal is
-    // a reflexivity on its relation spine, and the step consuming it is the
-    // `rw [rfl]` the macro's own `with_reducible rfl` gets prettified into.
-    // A hand-written `rw [rfl]` closing an `x = x` matches too, which is right
-    // — it is the same no-op, and the fold is one click from being undone.
+    // a reflexivity on its relation spine — LITERALLY, lhs ≡ rhs as printed,
+    // which is the narrowness that keeps a MEANINGFUL rfl safe: one closing a
+    // goal that is only definitionally reflexive prints two different sides
+    // and never matches — and the step consuming it is the `rw [rfl]` the
+    // macro's own `with_reducible rfl` gets prettified into. A hand-written
+    // `rw [rfl]` closing an `x = x` matches too, which is right — it is the
+    // same no-op.
     const rflResidue = (() => {
       if (!chainCtx || !goal || !step) return undefined;
       if (!/^rw \[rfl\](\s|$)/.test(step.tacticString)) return undefined;
       const r = spineRelation(goal.type);
       return r && r.rel === "=" && r.lhs === r.rhs ? true : undefined;
     })();
+    // A residue that closes and leaves nothing is SKIPPED outright — no goal
+    // box, no `rw [rfl]` node (it used to draw folded; reported as adding
+    // nothing, since `x = x` states no step and the tactic rewrote no goal).
+    // The guard on the step's output is what keeps this honest: a `rw [rfl]`
+    // that somehow left goals still draws, folded, as before. The full text
+    // survives in the buffer and in the parent `rw`'s delete extent (delete
+    // specs are computed from STEPS, which this never touches).
+    if (rflResidue && step && stepGoalsAfter(step).length === 0) return;
     // A settled `calc` link states itself as a row of the ledger node above,
     // so it draws no box of its own. Everything computed for it (the chips, the
     // delete spec) is dead here BY CONSTRUCTION rather than by omission: a link
@@ -1927,17 +1931,33 @@ export function proofToTree(
     // to the original for the token renderer. `null` = nothing collapsed.
     const collapsed = brief ? collapseLabel(fullLabel) : null;
     const chain = isChain(step);
-    const drawnLabel = collapsed ? collapsed.text : fullLabel;
+    // The LEDGER decision, made BEFORE the node is pushed because it forces
+    // the node's LABEL: a ledgered chain's head draws as the bare keyword
+    // `calc`, with the chain's starting expression as the ledger's own HEAD
+    // row — ALWAYS, however the source line-breaks it. One drawing whether
+    // the author wrote `calc\n  lhs\n  rel …` or packed head and first link
+    // onto the `calc` line: the head expression otherwise smushed onto the
+    // node label and the ledger lost its opening row with it (reported), and
+    // the head row's indent is also what gives the relation rows a clean
+    // strip to click left of their hover-tooltip spans. Declined on a BROKEN
+    // block: that state has its own synthesized node and repair chip, and
+    // its links are exactly the ones not to redraw.
+    const led = ledger && chain && !brokenChain ? ledgerFor(step) : null;
+    const drawnLabel = led ? "calc" : collapsed ? collapsed.text : fullLabel;
     nodes.push({
       id: tId,
       label: drawnLabel,
-      elision: collapsed
-        ? {
-            original: collapsed.original,
-            keep: collapsed.keep,
-            marks: collapsed.marks,
-          }
-        : undefined,
+      // Never alongside the forced `calc` label: the keep-map describes the
+      // brief-collapsed string, and tokens mapped through it would colour a
+      // label it no longer is. `calc` is short enough to need no elision.
+      elision:
+        collapsed && !led
+          ? {
+              original: collapsed.original,
+              keep: collapsed.keep,
+              marks: collapsed.marks,
+            }
+          : undefined,
       type: "tactic",
       parents: [{ id: ledgerParent ?? goalId }],
       // A `calc` block's children are the chain's links (see TreeNode.chain).
@@ -1979,23 +1999,13 @@ export function proofToTree(
       deleteSpec: deleteSpecFor("tactic", step, commentByNode.ranges.get(tId)),
     });
 
-    // The LEDGER: this chain's settled links, drawn as one column under the
-    // `calc` node instead of one goal box each. Emitted here — directly after
-    // the tactic node and before any child — so DFS preorder holds, which
-    // elide.ts's slot arithmetic and combineRuns rely on. Its id is the
-    // chain's own START POSITION (the synthesized `calc:` node's precedent):
-    // a source fact, never an mvarId, though the rows carry the link goal ids
-    // for the lookups that need them.
-    //
-    // Declined on a BROKEN block: that state already has its own synthesized
-    // node and repair chip, and its links are exactly the ones not to redraw.
-    const built = ledger && chain && !brokenChain ? ledgerFor(step) : null;
-    // The head row goes wherever the `calc` node's own label already writes the
-    // chain's LHS (see `ledgerHead`).
-    const led =
-      built && !ledgerHead(drawnLabel)
-        ? { ...built, rows: built.rows.filter((r) => !isLedgerHead(r)) }
-        : built;
+    // The LEDGER node: emitted here — directly after the tactic node and
+    // before any child — so DFS preorder holds, which elide.ts's slot
+    // arithmetic and combineRuns rely on. Its id is the chain's own START
+    // POSITION (the synthesized `calc:` node's precedent): a source fact,
+    // never an mvarId, though the rows carry the link goal ids for the
+    // lookups that need them. The head row is unconditional — the decision
+    // and its reasons live where `led` is computed, above the node push.
     // The chain's own context, drawn ONCE at the top of its column and then
     // subtracted from every goal inside it. The lines are the ones the goal
     // above the `calc` draws — the same call, hoisted — so the two cannot say
@@ -2058,21 +2068,24 @@ export function proofToTree(
     // LEDGERED link needs none of it: the ledger writes the chain the way the
     // source does, LHS omitted, by construction.
     const children = stepGoalsAfter(step);
-    const linkElisions =
-      brief && chain && !led
-        ? chainLhsElisions(children, step.goalBefore.type)
-        : undefined;
+    // Computed for every chain, ledgered or not: a ledgered link's goal box
+    // exists exactly when the reader OPENED it (see `openLinks`), and an open
+    // link composes with brief the way the pre-ledger chain always did.
+    // Closed links never read their entry.
+    const linkElisions = brief && chain
+      ? chainLhsElisions(children, step.goalBefore.type)
+      : undefined;
     // Everything a main-first tactic produced EXCEPT `goalsAfter[0]` is an
     // obligation it generated. Keyed on the goal id rather than the loop index
     // because `children` is `goalsAfter ++ spawnedGoals` and only the first of
     // the goalsAfter half is the main line.
     const mainGoalId = mainFirst(step) ? step.goalsAfter[0].id : undefined;
     const spawnedIds = new Set(step.spawnedGoals.map((g) => g.id));
-    // Ledgered links go FIRST and in ROW order, so each row's justification
-    // subtree sits under the row that states it; the unsettled links follow in
-    // the order they always had. Both halves are one `visitGoal` call apiece —
-    // the only difference is that a settled link's goal box is replaced by its
-    // row, which is what `ledgerParent` says.
+    // Ledgered links go FIRST and in ROW order, so their branches hang under
+    // the ledger in the order the rows state them; the unsettled links follow
+    // in the order they always had. Both halves are one `visitGoal` call
+    // apiece — the only difference is whether the link's goal box is drawn
+    // (open) or stands as its row alone (`ledgerParent`).
     const order = led
       ? [
           ...led.rows.flatMap((r) =>
@@ -2082,69 +2095,48 @@ export function proofToTree(
         ]
       : children;
     const ledgerId = `ledger:${step.position.start.line}:${step.position.start.character}`;
-    // THE SPINE, AND IT IS A GLOSS — said plainly because this repository
-    // documents its glosses. A chain's links really are INDEPENDENT goals: the
-    // `calc` step spawns all of them at once, none is reached through another,
-    // and hung off the ledger as the peers they are they fan into one sibling
-    // subtree per link. Read as a tree that is honest and useless — four
-    // parallel stubs saying nothing about the order they are read in, and under
-    // ⋔ wide a rectangle of unrelated columns.
+    // THE FAN. A chain's links really are INDEPENDENT goals — the `calc`
+    // step spawns all of them at once, none is reached through another — so
+    // each settled link hangs off the ledger as its own BRANCH, in row order.
+    // The sequential reading is the LEDGER's job (the rows are the chain,
+    // checked — RHS_i ≡ LHS_{i+1} is `ledgerFor`'s own prefix invariant);
+    // the branches below it are the justifications, one per row, and the
+    // chain flag makes compact draw them as a uniform column matching the
+    // rows while ⋔ wide fans them below the ledger. (A SPINE that re-parented
+    // each justification onto the previous link's terminal was tried and
+    // replaced by this: it glossed the peers into a chain the layout then
+    // walked down deepest-node by deepest-node, and it left no place for the
+    // link's own goal box to come back.)
     //
-    // So each link's justification is re-parented onto the PREVIOUS link's
-    // terminal node, chaining them in SOURCE order. What that draws is what the
-    // source writes and what the reader needs: link i+1 steps from where link i
-    // arrived, top to bottom, one column. The dependence is real mathematics
-    // (RHS_i ≡ LHS_{i+1} is the ledger's own prefix invariant — see
-    // `ledgerFor`); what is glossed is only that Lean reaches the links side by
-    // side rather than one through the next.
-    //
-    // Only `parents` moves. Ids, positions, the editing seam and DFS PREORDER
-    // are untouched — the new parent is always a node emitted earlier in the
-    // same array, which is what elide.ts's slot arithmetic and `combineRuns`
-    // rely on. Fold state keys on tree PATH (`pathKeys`), so it re-keys once.
-    let spine: string | undefined;
+    // A link's INTERMEDIATE GOAL BOX is the reader's call (`openLinks`,
+    // keyed ledgerId + settled index): closed — the default — draws the
+    // justification alone (`ledgerParent`, the goal box skipped by
+    // construction); open restores the ordinary goal → tactic pair under the
+    // ledger, `visitGoal`'s own emission with nothing new built. The row
+    // stays in the ledger either way — the duplication is the point: the
+    // paper reading above, the Lean reading below.
+    let settledIdx = 0;
     for (const child of order) {
       const ledgered = led?.settled.has(child.id) ?? false;
-      const parent = ledgered ? (spine ?? ledgerId) : undefined;
-      const mark = nodes.length;
+      const open =
+        ledgered && (openLinks?.has(`${ledgerId}#${settledIdx}`) ?? false);
+      if (ledgered) settledIdx++;
       visitGoal(
         child.id,
-        [{ id: tId }],
+        // An open link's goal hangs UNDER the ledger (the chain's column
+        // head), not beside it where the unsettled links sit.
+        [{ id: ledgered ? ledgerId : tId }],
         step,
         thisCase,
         linkElisions?.get(child.id),
         mainGoalId !== undefined && child.id !== mainGoalId,
         spawnedIds.has(child.id),
-        parent,
+        ledgered && !open ? ledgerId : undefined,
         chainCtxNext,
       );
-      if (ledgered) spine = chainTerminal(mark, parent!);
     }
   }
 
-  /** Where the NEXT link in a chain hangs — the deepest node of the link just
-   * emitted at `from`, walking down last-child by last-child from `parent`.
-   *
-   * It stops ABOVE an `rw`'s folded `x = x` residue, so the terminal is that
-   * link's justification and the residue stays a leaf beside the next link.
-   * That is the choice between the two properties: the residue opens FOLDED
-   * (see TreeNode.rflResidue), and a fold hides every child, so hanging the
-   * next link under the residue would take the whole rest of the chain with it
-   * the moment the proof opened. Seeding the fold to hide only the `rw [rfl]`
-   * is not expressible — `collapsed` names a node, not a subset of its
-   * children. Both properties hold this way: residues folded, chain visible,
-   * and the residue branches off a spine that carries on past it. */
-  function chainTerminal(from: number, parent: string): string {
-    const range = nodes.slice(from);
-    let cur = parent;
-    for (;;) {
-      let next: TreeNode | undefined;
-      // Last in EMISSION order: DFS preorder makes that the deepest branch.
-      for (const n of range) if (n.parents.some((p) => p.id === cur)) next = n;
-      if (!next || next.rflResidue) return cur;
-      cur = next.id;
-    }
-  }
 
   for (const rootId of roots) visitGoal(rootId, []);
   return nodes;

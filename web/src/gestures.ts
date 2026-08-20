@@ -71,6 +71,13 @@ export type NodeGates = {
   `anyUsedHyp` read from the other end of the edge — hence a separate gate
   rather than a reuse: a tactic carries no context of its own. */
   usesHyps: boolean;
+  /** A `calc` LEDGER: the box's relation rows each state a settled link, and
+  clicking one opens that link's intermediate goal box below (see
+  proofToTree's `openLinks`). */
+  ledgerRows: boolean;
+  /** A CLOSED ledgered link's justification: its bar carries `+`, the same
+  gesture as clicking the link's ledger row, reached from the other end. */
+  linkGoal: boolean;
 };
 
 /**
@@ -234,6 +241,19 @@ export const GESTURES: Gesture[] = [
     says: "to delete; first click opens prompt",
     needs: "del",
     note: "the extent lights up in the editor and the chip says how many lines",
+  },
+  {
+    target: "goal",
+    input: "click a calc row",
+    says: "to show that step's Lean goal below it (⌥: every step's)",
+    when: (g) => g.ledgerRows,
+    note: "the ledger keeps the row; click again to put the goal away",
+  },
+  {
+    target: "tactic",
+    input: "+",
+    says: "shows the goal this calc step proves, above it",
+    when: (g) => g.linkGoal,
   },
   // ── Ghosts and chips ──────────────────────────────────────────────────────
   {

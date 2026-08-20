@@ -714,6 +714,20 @@ const UNDERLINE_DROP = 2.5;
 // move the text; this is a rect behind SVG text, where padding costs nothing
 // and a wash flush to the glyphs reads as a printing error.
 const HYP_LIT_PAD = 2;
+/** Rest time before a hovered tactic lights the hypotheses it uses
+(`hypLit`). Deliberately long — the companion's editor-highlight dwell is 180
+and this is more than four times it, for two reasons that compound. That paint
+lands OUTSIDE the reader's field of view, where firing early costs nothing,
+while this one moves ink inside the very box being read past. And it fires on
+every tactic the pointer CROSSES rather than on one being aimed at, so the
+threshold has to clear an incidental pause, not a deliberate one.
+
+350 by the author's ear, and the history is why the number is trustworthy at
+that value now: 350 was tried first and read as instant, but a stale `hypLit`
+was re-lighting a revisited node with NO dwell at all, so that reading measured
+the bug rather than the number. With every visit paying the dwell, 800 was
+sluggish and 500 conservative. */
+const HYP_LIT_DWELL_MS = 350;
 // The one the pager is on gets a wider cap. A second colour or a halo would
 // compete with the cursor accent; width is the one channel nothing else here
 // uses.
@@ -1448,6 +1462,15 @@ export default function ProofTreeView({
   const [commentsExpanded, setCommentsExpanded] = useState<Set<string>>(
     new Set(),
   );
+  // Ledgered `calc` links whose INTERMEDIATE GOAL BOX is open (the hybrid's
+  // expansion state — see proofToTree's `openLinks`). Keys are
+  // `${ledgerId}#${settledIdx}`; the ledger half is a NODE id (a source
+  // position), so on a re-parse the shape branch remaps just that prefix
+  // through the same `remapIds` map every other id set rides — the live-set
+  // prune doesn't apply, since ledger ids are never step goal ids. Cleared on
+  // a proof change and by ⌥-⊞ (the source's own reading is the ledger alone).
+  // Toggled by clicking a ledger ROW; ⌥-click toggles the whole chain.
+  const [chainOpen, setChainOpen] = useState<Set<string>>(new Set());
   // Side-by-side branches (compact mode): a branching tactic's subtrees lay
   // out as columns sharing one vertical span instead of stacking down the
   // page. A computeLayout parameter, not an engine rebuild: geometry per
@@ -1520,24 +1543,21 @@ export default function ProofTreeView({
   // focus-subtree buttons). The bar renders inside the node's own <g>, so
   // pointer travel from box to bar never leaves the hover region (no flicker).
   const [hoverId, setHoverId] = useState<string | null>(null);
-  /** The tactic whose GREEN BOX the pointer is inside — what lights the
-  context lines above (see `hypLitGoalId`). Its own state and deliberately not
-  `hoverId`, which is the whole node's: the strip, the case badge and the clear
-  space between them are all inside the node's `<g>`, and an `<g>` hit-tests
-  only its children, so a hover tracked there answers "somewhere in this node"
-  and flickers on and off as the pointer crosses the ~13px of nothing between a
-  comment strip and the box it annotates. Reported as exactly that stuttering.
-
-  Tracked by POINTER POSITION against the box's own rect (`data-ptw-box`)
-  rather than by a handler on that rect: the label is a SIBLING of the rect,
-  not a child, so an enter/leave pair on the rect alone would drop the moment
-  the pointer reached the text inside the box — the same stutter one element
-  further in. A coordinate test has no such seam, and it makes the surface
-  exactly the shape the reader sees. */
-  const [hypHoverId, setHypHoverId] = useState<string | null>(null);
-  /** The big-comment affordance under the pointer. Its own state and not
-  `hoverId`: that one is the node's, and the whole point of this line is that
-  it is a CONTROL sitting inside a strip whose other ink is prose. */
+  /** `hoverId`, DWELLED, for the used-hypothesis wash alone (see
+  hypLitGoalId): the marks in the goal above light only once the pointer has
+  RESTED on the tactic for HYP_LIT_DWELL_MS, so perusing the tree does not
+  strobe the context blocks (reported). Armed and CLEARED by its own effect
+  below `hypLitTactics` — the clear lives in the cleanup, which is what makes
+  every visit pay the dwell rather than just the first. The action bar and
+  the mini peek stay on the immediate `hoverId`: they are the destinations of
+  the travel, not commentary on it. */
+  const [hypLit, setHypLit] = useState<string | null>(null);
+  /** The small-control affordance under the pointer — the big-comment "⋯ N
+  more lines" line (keyed by node id) or a `calc` ledger's relation row
+  (keyed `${ledgerId}#${idx}` — `#` occurs in no node id, so the two
+  namespaces cannot collide). Its own state and not `hoverId`: that one is
+  the node's, and these are CONTROLS sitting inside a box whose other ink is
+  content. One slot serves both because one pointer hovers one control. */
   const [moreHover, setMoreHover] = useState<string | null>(null);
   // What a ◌ would take, faded while the pointer is on the button (or ⌥ is
   // held over the tactic). Hover state like `hoverId`, and reset like it —
@@ -2448,10 +2468,11 @@ export default function ProofTreeView({
         hypGroup,
         brief,
         ledger,
+        openLinks: chainOpen,
         slots: deleteSlots,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [proof, hypMode, hypGroup, brief, ledger, codeFont, deleteSlots],
+    [proof, hypMode, hypGroup, brief, ledger, chainOpen, codeFont, deleteSlots],
   );
   // Every tactic the step cut (hover-bar ◌) is offered on. Computed in one
   // pass per base tree: the test walks a subtree, so asking it per drawn node
@@ -2570,10 +2591,39 @@ export default function ProofTreeView({
    * the same goal, whose lines were flagged against the run's first tactic —
    * which is exactly what that box's ▸ already shows. */
   const hypLitGoalId = useMemo(() => {
-    if (!hypHoverId) return null;
-    const n = treeNodes.find((t) => t.id === hypHoverId);
+    // A guard, no longer the mechanism: the arming effect's CLEANUP is what
+    // drops the light when the pointer leaves. Making a stale value merely
+    // INERT was tried and is not the same thing — the node it named was still
+    // named, so returning to it lit with no dwell (see the effect). This
+    // survives because it costs nothing and keeps the invariant local: the
+    // wash never outlives the hover that earned it.
+    const lit = hypLit === hoverId ? hypLit : null;
+    if (!lit) return null;
+    const n = treeNodes.find((t) => t.id === lit);
     return n?.type === "tactic" ? (n.parents[0]?.id ?? null) : null;
-  }, [hypHoverId, treeNodes]);
+  }, [hypLit, hoverId, treeNodes]);
+  /** A CLOSED ledgered link's justification → the `chainOpen` key that opens
+   * its goal, plus the ledger to anchor on. Joined by id — the link goal's
+   * `tacticId` IS the justification node's id — never positionally, so a
+   * fold or an elide cannot misalign the pairing. Only CLOSED links appear:
+   * an open link's tactic hangs off its own goal, not the ledger, so the map
+   * simply has no entry for it and the bar's `+` disappears with the need.
+   * (The `+` cannot collide with ◌'s leaf-fold `−` face: that face needs the
+   * parent goal to have no other child, and a ledger always has its fan.) */
+  const linkPlus = useMemo(() => {
+    const out = new Map<string, { key: string; ledgerId: string }>();
+    for (const n of treeNodes) {
+      if (!n.ledger) continue;
+      let k = 0;
+      for (const r of n.ledger) {
+        if (r.goalId === undefined) continue;
+        const key = `${n.id}#${k++}`;
+        if (!chainOpen.has(key))
+          out.set(tacticId(r.goalId), { key, ledgerId: n.id });
+      }
+    }
+    return out;
+  }, [treeNodes, chainOpen]);
   // Overview: which node the cursor is on, resolved over `treeNodes` with the
   // same pure pair the accent uses (so the two resolutions cannot disagree),
   // reduced to a STRING before the set is built — the id changes only when
@@ -2712,6 +2762,7 @@ export default function ProofTreeView({
     setCombineOff(new Set());
     setCommentsOff(new Set());
     setCommentsExpanded(new Set());
+    setChainOpen(new Set());
     // A different proof's splits are different nodes entirely. (A same-proof
     // EDIT remaps the keys instead — see the shape branch; no pruning either
     // way: `pick` is read modulo the live child count, and keys naming a
@@ -2831,6 +2882,26 @@ export default function ProofTreeView({
     setCombineOff(remapSet);
     setCommentsOff(remapSet);
     setCommentsExpanded(remapSet);
+    // Open `calc` links key `${ledgerId}#${settledIdx}` — only the LEDGER
+    // half is a node id, so translate that prefix and keep the index. The
+    // live-set prune doesn't apply (ledger ids are never step goal ids);
+    // instead an entry survives iff its remapped ledger still exists in the
+    // new base tree — a chain that vanished takes its open links with it.
+    setChainOpen((prev) => {
+      if (prev.size === 0) return prev;
+      const ledgers = new Set(
+        baseNodes.filter((n) => n.ledger).map((n) => n.id),
+      );
+      const next = new Set<string>();
+      for (const key of prev) {
+        const at = key.lastIndexOf("#");
+        const moved = to(key.slice(0, at));
+        if (ledgers.has(moved)) next.add(moved + key.slice(at));
+      }
+      return next.size === prev.size && [...prev].every((k) => next.has(k))
+        ? prev
+        : next;
+    });
     // The prose prompt anchors on a head tactic by id; follow it or drop it.
     if (flagPrompt) {
       const moved = to(flagPrompt.headId);
@@ -3050,6 +3121,25 @@ export default function ProofTreeView({
         out.add(n.data.id);
     return out;
   }, [nodes]);
+  // The dwell (see `hypLit`). Longer than the companion's editor-highlight
+  // 180ms: that one paints OUTSIDE the reader's field of view, where early is
+  // harmless, while this one moves ink inside the very box being read past.
+  useEffect(() => {
+    if (!hoverId || !hypLitTactics.has(hoverId)) return;
+    const t = setTimeout(() => setHypLit(hoverId), HYP_LIT_DWELL_MS);
+    // The CLEANUP is what drops the light, and it has to be a real clear
+    // rather than the derivation below going inert: React runs it before the
+    // next effect, so leaving cancels the pending timer AND forgets the node
+    // it had already lit — otherwise coming back to that same node found
+    // `hypLit` still naming it and lit again with no dwell at all (reported
+    // as "delay on first touch, instant after"). Allowed where the effect
+    // BODY's setState is not: this runs on teardown, so it cannot cascade
+    // into the render it belongs to.
+    return () => {
+      clearTimeout(t);
+      setHypLit(null);
+    };
+  }, [hoverId, hypLitTactics]);
   // Nodes with a VISIBLE child, i.e. an outgoing connector. The chip lane
   // centres its chips on the incoming trunk lane, which is also where a
   // child's connector drops — fine on a pending LEAF (most chip bearers),
@@ -3601,6 +3691,7 @@ export default function ProofTreeView({
     setCombineOff(new Set());
     setCommentsOff(new Set());
     setCommentsExpanded(new Set());
+    setChainOpen(new Set());
     setPick({});
     setSelection(null);
     setElidePick(null);
@@ -6791,6 +6882,10 @@ export default function ProofTreeView({
               // full-size buttons straddling a one-line chip would cover its
               // neighbours; click-gestures (fold, reveal, ⌥-focus) still work.
               const isMini = !!node.data.mini;
+              // A closed ledgered link's justification carries `+` (open the
+              // goal it proves) — a pure view gesture, so it holds in the
+              // standalone app too, where it can be the bar's only button.
+              const barLinkPlus = type === "tactic" && linkPlus.has(id);
               const hasBar =
                 !isEditing &&
                 !isMini &&
@@ -6798,7 +6893,8 @@ export default function ProofTreeView({
                   focusable ||
                   popoutable ||
                   elidable ||
-                  deletable);
+                  deletable ||
+                  barLinkPlus);
               // Hovering a positioned tactic lights its range up in the editor.
               const hoverHighlights =
                 type === "tactic" && !!position && !!onHoverTactic;
@@ -6846,6 +6942,10 @@ export default function ProofTreeView({
                 isFocusRoot,
                 anyUsedHyp: !!hyps?.some((l) => l.used),
                 usesHyps: hypLitTactics.has(id),
+                ledgerRows: !!node.data.ledger?.some(
+                  (r) => r.goalId !== undefined,
+                ),
+                linkGoal: barLinkPlus,
               });
               // Diagnostics lead the tooltip and keep their full text: the
               // message IS the content here, where the action hints are a
@@ -6933,6 +7033,77 @@ export default function ProofTreeView({
                         renderTaggedTactic,
                       );
 
+              // Ledger ROW expansion (see chainOpen): per drawn line j, the
+              // key of the settled link that row states — null on the head
+              // row, and the whole array null off a ledger. Line j IS row j:
+              // ledgerSize emits exactly one line per row, in order.
+              const rowKeys = node.data.ledger
+                ? (() => {
+                    let k = 0;
+                    return node.data.ledger.map((r) =>
+                      r.goalId !== undefined ? `${id}#${k++}` : null,
+                    );
+                  })()
+                : null;
+              const rowTitle = (j: number) =>
+                chainOpen.has(rowKeys![j]!)
+                  ? "hide this step's goal (⌥: every step's)"
+                  : "show this step's goal below (⌥: every step's)";
+              const toggleRow = (
+                e: ReactMouseEvent<Element>,
+                j: number,
+              ) => {
+                // A row click is the row's, never the box's fold beneath it.
+                e.stopPropagation();
+                const key = rowKeys?.[j];
+                if (!key || !node.data.ledger) return;
+                // The ledger itself stays put across the relayout — the goal
+                // opens BELOW what you are reading.
+                anchorOn(id);
+                // Decided here rather than inside the updater so the CLOSED
+                // keys are known: a closed row's goal takes its fold state
+                // with it, or re-opening the row brings the goal back folded
+                // shut from the previous visit — a `−`-less box swapping in
+                // where the tactic just was, with the tactic gone.
+                const all = rowKeys.filter((x): x is string => x !== null);
+                let opening: string[];
+                let closing: string[];
+                if (e.altKey) {
+                  // ⌥: the whole chain follows this row's direction — all
+                  // open unless every one already is, then all closed.
+                  const anyClosed = all.some((x) => !chainOpen.has(x));
+                  opening = anyClosed
+                    ? all.filter((x) => !chainOpen.has(x))
+                    : [];
+                  closing = anyClosed ? [] : all;
+                } else if (chainOpen.has(key)) {
+                  opening = [];
+                  closing = [key];
+                } else {
+                  opening = [key];
+                  closing = [];
+                }
+                setChainOpen((prev) => {
+                  const next = new Set(prev);
+                  for (const k of opening) next.add(k);
+                  for (const k of closing) next.delete(k);
+                  return next;
+                });
+                if (closing.length > 0) {
+                  const gone = new Set(
+                    closing
+                      .map((k) => rowKeys.indexOf(k))
+                      .map((i) => node.data.ledger![i].goalId)
+                      .filter((g): g is string => g !== undefined),
+                  );
+                  setCollapsed((prev) => {
+                    if (![...gone].some((g) => prev.has(g))) return prev;
+                    const next = new Set(prev);
+                    for (const g of gone) next.delete(g);
+                    return next;
+                  });
+                }
+              };
               const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
                 // A node click is an interaction, not a background click — it
                 // must not dismiss the cursor accent (see the scroll div).
@@ -7094,29 +7265,39 @@ export default function ProofTreeView({
                       : undefined
                   }
                   // Hover drives four things: the action bar, (tactics only)
-                  // the editor-side range highlight, (tactics only) the
-                  // dependency underlines in the goal box above, and
-                  // (overview) the mini chip's full-size peek — one `hoverId`
-                  // serves the bar, the underlines and the peek, since the
-                  // three are gated on `hasBar` / `hypLights` / `isMini` where
-                  // they are read.
+                  // the editor-side range highlight, (tactics only) the marks
+                  // over the hypotheses this tactic uses, and (overview) the
+                  // mini chip's full-size peek. One `hoverId` serves the bar,
+                  // the marks and the peek, since the three are gated on
+                  // `hasBar` / `hypLights` / `isMini` where they are read.
+                  //
+                  // THE HOVER SURFACE IS THE BOX, not this whole `<g>`. The
+                  // group also contains the comment strip and the case badge,
+                  // which are ABOUT the node without being it — resting on a
+                  // theorem's preamble comment, or on a branch's case name,
+                  // raised the options bar over text that offers no options
+                  // (reported). Long-standing rather than new: `f05ba38`
+                  // introduced the strips and the bar in one commit, with the
+                  // handler here and the strip inside it, so every surface in
+                  // the band has been live since the bar existed.
+                  //
+                  // Enter cannot answer it alone — entering the group is not
+                  // entering the box — so the test lives in `onMouseMove`
+                  // below and this only handles the editor-side highlight,
+                  // which is about the node as a whole and stays group-wide.
                   onMouseEnter={
-                    hasBar || hoverHighlights || hypLights || isMini
-                      ? () => {
-                          if (hasBar || hypLights || isMini) setHoverId(id);
-                          if (hoverHighlights) onHoverTactic!(position!);
-                        }
+                    hoverHighlights
+                      ? () => onHoverTactic!(position!)
                       : undefined
                   }
                   onMouseLeave={
                     hasBar || hoverHighlights || hypLights || isMini || elidable
                       ? () => {
+                          // The box test only runs while the pointer is over
+                          // this node, so leaving is the one exit it cannot
+                          // see for itself.
                           if (hasBar || hypLights || isMini)
                             setHoverId((cur) => (cur === id ? null : cur));
-                          // The box test only runs while the pointer is over
-                          // this node; leaving is the one exit it cannot see.
-                          if (hypLights)
-                            setHypHoverId((cur) => (cur === id ? null : cur));
                           if (hoverHighlights) onHoverTactic!(null);
                           if (elidable)
                             setElidePreview((p) =>
@@ -7135,28 +7316,41 @@ export default function ProofTreeView({
                   // event at all — the rail's glyph swap has the same blind
                   // spot, and the same answer: move a pixel.)
                   onMouseMove={
-                    elidable || hypLights
+                    elidable || hasBar || hypLights || isMini
                       ? (e) => {
-                          // Is the pointer inside the GREEN BOX? Only there
-                          // does this tactic light the context above it. The
-                          // box is found from this event rather than held in
-                          // a ref (the house lint taints every ref-touching
-                          // call), and the write is compared first, so a
-                          // pointer moving around inside one box re-renders
-                          // nothing.
-                          if (hypLights) {
-                            const box = (
-                              e.currentTarget as SVGGElement
-                            ).querySelector("[data-ptw-box]");
-                            const r = box?.getBoundingClientRect();
-                            const inBox =
-                              !!r &&
-                              e.clientX >= r.left &&
-                              e.clientX <= r.right &&
-                              e.clientY >= r.top &&
-                              e.clientY <= r.bottom;
-                            setHypHoverId((cur) =>
-                              inBox ? id : cur === id ? null : cur,
+                          // IS THE POINTER ON THE NODE ITSELF? The box, plus
+                          // the action bar when one is already open — the bar
+                          // hangs off the box's edge and overlaps it by
+                          // BAR_OVERLAP precisely so travelling onto it never
+                          // leaves the node, and a box-only test would take
+                          // the bar away the moment you reached for it, which
+                          // is the bug BAR_OVERLAP exists to prevent. Nothing
+                          // else in the band counts: the comment strip and the
+                          // case badge are ABOUT this node without being it.
+                          //
+                          // Both rects are read off this event rather than
+                          // held in refs (the house lint taints every
+                          // ref-touching call), and the write is compared
+                          // first, so a pointer moving around inside one box
+                          // re-renders nothing.
+                          if (hasBar || hypLights || isMini) {
+                            const g = e.currentTarget as SVGGElement;
+                            const hit = (sel: string) => {
+                              const r = g
+                                .querySelector(sel)
+                                ?.getBoundingClientRect();
+                              return (
+                                !!r &&
+                                e.clientX >= r.left &&
+                                e.clientX <= r.right &&
+                                e.clientY >= r.top &&
+                                e.clientY <= r.bottom
+                              );
+                            };
+                            const on =
+                              hit("[data-ptw-box]") || hit("[data-ptw-bar]");
+                            setHoverId((cur) =>
+                              on ? id : cur === id ? null : cur,
                             );
                           }
                           if (e.altKey) {
@@ -7452,10 +7646,12 @@ export default function ProofTreeView({
                     )}
 
                   <rect
-                    // The one surface that lights the context above (see
-                    // `hypHoverId`): the pointer test reads this rect, so the
-                    // green box IS the hover target and the strip, the badge
-                    // and the band's clear space are not.
+                    // THE hover target for this node (see `hoverId`'s
+                    // pointer test): the box, and the action bar that hangs
+                    // off it. Everything else drawn in the band — the comment
+                    // strip, the case badge, the clear space between them —
+                    // is about the node without being it, and does not raise
+                    // the bar, the peek, or the marks over the context above.
                     data-ptw-box=""
                     x={-w / 2}
                     y={boxTop}
@@ -7676,13 +7872,78 @@ export default function ProofTreeView({
                             // node's double-click to resolve which PART sits
                             // under the pointer.
                             data-ptw-lineidx={j}
+                            // A ledger RELATION row is a control: clicking it
+                            // opens that step's goal box below (toggleRow).
+                            // The handlers ride the row DIVS because the
+                            // foreignObject covers any SVG hit-rect behind
+                            // it; the plain-SVG path draws rects instead.
+                            onClick={
+                              rowKeys?.[j]
+                                ? (e) => toggleRow(e, j)
+                                : undefined
+                            }
+                            onDoubleClick={
+                              rowKeys?.[j]
+                                ? (e) => e.stopPropagation()
+                                : undefined
+                            }
+                            onMouseEnter={
+                              rowKeys?.[j]
+                                ? () => setMoreHover(rowKeys[j])
+                                : undefined
+                            }
+                            onMouseLeave={
+                              rowKeys?.[j]
+                                ? () =>
+                                    setMoreHover((h) =>
+                                      h === rowKeys[j] ? null : h,
+                                    )
+                                : undefined
+                            }
+                            title={rowKeys?.[j] ? rowTitle(j) : undefined}
                             style={{
                               height: LINE_H,
                               // Hanging indent for width-wrapped continuation
                               // lines — same offset the layout budgeted.
                               paddingLeft: lines[j].indent,
+                              ...(rowKeys?.[j]
+                                ? {
+                                    // Anchors the gutter glyph's absolute
+                                    // position to this row.
+                                    position: "relative" as const,
+                                    cursor: "pointer",
+                                    // Faint fill: hover feedback, HELD while
+                                    // the link is open so row ↔ goal box
+                                    // read as one thing (the commentMore
+                                    // pattern).
+                                    backgroundColor:
+                                      moreHover === rowKeys[j]
+                                        ? `color-mix(in srgb, ${style.stroke} 16%, transparent)`
+                                        : chainOpen.has(rowKeys[j])
+                                          ? `color-mix(in srgb, ${style.stroke} 9%, transparent)`
+                                          : undefined,
+                                    borderRadius: 3,
+                                  }
+                                : null),
                             }}
                           >
+                            {rowKeys?.[j] ? (
+                              // The `+`/`−` in the indent gutter (the plain
+                              // path's twin) — absolute so it occupies none
+                              // of the row's flow and cannot disturb the
+                              // measured text.
+                              <span
+                                style={{
+                                  position: "absolute",
+                                  left: 0,
+                                  top: 0,
+                                  color: style.stroke,
+                                  opacity: 0.9,
+                                }}
+                              >
+                                {chainOpen.has(rowKeys[j]) ? "−" : "+"}
+                              </span>
+                            ) : null}
                             {line}
                           </div>
                         ))}
@@ -7733,6 +7994,73 @@ export default function ProofTreeView({
                         </tspan>
                       ))}
                     </text>
+                  )}
+
+                  {/* Ledger RELATION rows are controls (see toggleRow) — on
+                      the plain-SVG path each gets a hit rect over its line:
+                      fill present so it hit-tests (visiblePainted needs a
+                      fill, whatever its opacity), invisible at rest, faint on
+                      hover, HELD faint while that link's goal box is open.
+                      The tagged path puts the same affordance on the row DIVS
+                      instead — a rect drawn here would sit over the
+                      foreignObject and eat its type tooltips. */}
+                  {rowKeys && !taggedLines && !isMini && !hideForEdit && (
+                    <g>
+                      {/* A `+`/`−` in each relation row's indent gutter — the
+                          head row's unconditional presence is what guarantees
+                          the gutter exists — so the rows read as CLICKABLE at
+                          rest, in the fold glyph's own vocabulary: `+` opens
+                          this step's goal below, `−` puts it away. Drawn
+                          before the hit rects, which paint over them and own
+                          the pointer. */}
+                      {rowKeys.map((key, j) =>
+                        key === null ? null : (
+                          <text
+                            key={`g${j}`}
+                            textAnchor="start"
+                            fontSize={NODE_FONT_PX}
+                            fontFamily={getCodeFontFamily()}
+                            fill={style.stroke}
+                            opacity={0.9}
+                            style={{ letterSpacing: 0 }}
+                            x={-w / 2 + NODE_PAD}
+                            y={labelTop + (j + 0.5) * LINE_H}
+                            dy="0.32em"
+                          >
+                            {chainOpen.has(key) ? "−" : "+"}
+                          </text>
+                        ),
+                      )}
+                      {rowKeys.map((key, j) =>
+                        key === null ? null : (
+                          <rect
+                            key={j}
+                            x={-w / 2 + NODE_PAD}
+                            y={labelTop + j * LINE_H}
+                            width={w - 2 * NODE_PAD}
+                            height={LINE_H}
+                            rx={3}
+                            fill={style.stroke}
+                            opacity={
+                              moreHover === key
+                                ? 0.16
+                                : chainOpen.has(key)
+                                  ? 0.09
+                                  : 0
+                            }
+                            style={{ cursor: "pointer" }}
+                            onMouseEnter={() => setMoreHover(key)}
+                            onMouseLeave={() =>
+                              setMoreHover((h) => (h === key ? null : h))
+                            }
+                            onClick={(e) => toggleRow(e, j)}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                          >
+                            <title>{rowTitle(j)}</title>
+                          </rect>
+                        ),
+                      )}
+                    </g>
                   )}
 
                   {/* Frontier chips: a pending goal (no consuming tactic —
@@ -8009,6 +8337,34 @@ export default function ProofTreeView({
                       x={w / 2 - BAR_OVERLAP}
                       y={type === "tactic" ? boxTop + h / 2 : boxTop}
                       actions={[
+                        // A CLOSED ledgered link's justification opens its
+                        // goal from here too — `+`, the ledger row's own
+                        // glyph, because it is the same gesture reached from
+                        // the other end: the row is the formula, the bar is
+                        // where the pointer already is when the question is
+                        // "what goal did this tactic answer". Anchored on
+                        // THIS node, not the ledger — the goal opens above,
+                        // and the box under the pointer must hold still.
+                        // (No collision with ◌'s leaf-fold `−`: that face
+                        // needs a sole-child goal parent, and a ledger always
+                        // has its fan — so a bare link tactic carries no ◌ at
+                        // all, and `+` is its first button.)
+                        ...(barLinkPlus
+                          ? [
+                              {
+                                glyph: "+",
+                                title:
+                                  "Show the goal this step proves, above it (also: click its ledger row)",
+                                onClick: () => {
+                                  const lp = linkPlus.get(id)!;
+                                  anchorOn(id);
+                                  setChainOpen((prev) =>
+                                    new Set(prev).add(lp.key),
+                                  );
+                                },
+                              },
+                            ]
+                          : []),
                         // FIRST in the bar: the reading gesture, and the one
                         // reached most often while working down a proof. The
                         // bar is entered from the box, so the first slot is
@@ -10512,7 +10868,7 @@ function NodeActionBar({
   const x0 = placement === "right" ? x : x - w;
   const y0 = placement === "right" ? y - h / 2 : y - h + BAR_OVERLAP;
   return (
-    <g>
+    <g data-ptw-bar="">
       <rect
         x={x0}
         y={y0}

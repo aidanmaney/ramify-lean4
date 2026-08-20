@@ -179,12 +179,12 @@ export interface LedgerRow {
   position?: ProofStepPosition;
 }
 
-/** Which row of a ledger is the HEAD — the chain's starting expression, the one
- * row that states no link. The test is the absence of a link goal, not the row's
- * index: the head is DROPPED whenever the `calc` node's own label already writes
- * the LHS (the one-line `calc x = y := j` formatting), and after that drop row 0
- * is an ordinary relation row that must keep the relation rows' indent. One
- * coding, read by the measurer (ledgerSize) and by anything that renders a row.
+/** Which row of a ledger is the HEAD — the chain's starting expression, the
+ * one row that states no link. The test is the absence of a link goal, not the
+ * row's index — the honest coding even now that the head is unconditional (a
+ * ledgered chain's node label is forced to the bare `calc`, so the head row is
+ * the LHS's only copy however the source line-broke it). One coding, read by
+ * the measurer (ledgerSize) and by anything that renders a row.
  */
 export const isLedgerHead = (r: LedgerRow) => r.goalId === undefined;
 

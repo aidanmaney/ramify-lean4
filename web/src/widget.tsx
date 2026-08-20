@@ -1389,7 +1389,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
             borderRadius: 3,
           }}
         >
-          proof-tree: {relayError}
+          Ramify: {relayError}
         </div>
       )}
       <ProofTreeView

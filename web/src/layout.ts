@@ -564,28 +564,27 @@ function trunkLayout(
     // follows `calc` down the trunk, and an offset that matched neither the
     // trunk nor the branch indent read as a misalignment.)
     //
-    // Below the ledger the exception's exception continues: the ledger is the
-    // chain's COLUMN HEAD, so its justifications carry that column on rather
-    // than indenting under it — the spine's first `rw` resumes the trunk at
-    // the ledger's own x, and every later one inherits it through the ordinary
-    // last-child rule. (A ledger has exactly one child, the first ledgered
-    // link's justification; the unsettled links hang off their own goals.)
+    // Below the ledger the exception applies as written: the ledger's
+    // children are the chain's link BRANCHES, one per row in row order (a
+    // justification alone, or goal → justification where the reader opened
+    // the link's goal box — see proofToTree's `openLinks`), so the ledger
+    // takes NO trunk child and every branch indents equally, the column
+    // matching the rows beside it.
     //
-    // And inside the spine an `rw`'s folded `x = x` RESIDUE never takes the
-    // trunk (TreeNode.rflResidue): it is a leaf beside the chain, not the
-    // chain continuing, so it branches off like its siblings. Without this the
-    // LAST link's residue — the one link with nothing after it — was the only
-    // residue in the chain drawn on the spine's own x. `rflResidue` is minted
-    // only inside a chain, so nothing outside one can reach this.
+    // An `rw`'s folded `x = x` RESIDUE resumes the trunk like any last
+    // child, so it sits at its `rw`'s own x — a link branch reads as ONE
+    // flat column, goal, tactic and residue alike. (Under the removed SPINE
+    // it was excluded from resumption, because the next LINK hung below it
+    // and a residue on the spine's x read as the chain continuing through a
+    // no-op; with the links fanned there is nothing below a residue but its
+    // own folded `rw [rfl]`, and the exclusion just indented it — reported.)
     const last = order[order.length - 1];
     const trunk =
       n.ledger !== undefined
-        ? order[0]
+        ? undefined
         : n.chain
           ? order.find((c) => c.ledger !== undefined)
-          : last?.rflResidue
-            ? undefined
-            : last;
+          : last;
     // Spine mode: this tactic leaves the trunk, so its children resume just
     // under the connector STUB (its box middle — where the incoming elbow's
     // horizontal lands) instead of under its whole band. That is the mode's
@@ -633,7 +632,12 @@ function trunkLayout(
       // deeply-hung `(by order)` can't walk its branch off-page. Stacked only:
       // the aside slide overwrites branch x anyway, and side-by-side packs
       // columns on contours.
-      const spawnCol = c.spawned ? srcCol(c.id) : Infinity;
+      // NEVER under a LEDGER: its branches are the chain's own column, and
+      // the extra would make an OPENED link's goal (spawned) land right of
+      // where the closed state drew its tactic (not spawned) — the reported
+      // x-shift on expanding a row.
+      const spawnCol =
+        c.spawned && n.ledger === undefined ? srcCol(c.id) : Infinity;
       const spawnExtra =
         !aside && !sideBySide && Number.isFinite(spawnCol) && n.position
           ? Math.min(
@@ -1345,11 +1349,10 @@ function miniSize(
 // the HEAD row putting the chain's LHS at indent 0, two character cells is
 // exactly where the relation lands under it.
 //
-// It is a RELATIVE shape, so it only applies where the head row is actually
-// drawn. Where the `calc` node's own label states the LHS the head row is
-// dropped (see `ledgerHead`), and indenting what remains would be a uniform pad
-// aligning the rows with nothing — the box sits on the trunk under `calc` like
-// any other node, so its text starts where every other box's does.
+// It is a RELATIVE shape, keyed on the head row's presence rather than
+// assumed: the head is unconditional today (a ledgered chain's node label is
+// forced to the bare `calc`, so the LHS always opens the ledger), and keying
+// on the rows keeps this correct rather than accidental if that ever moves.
 const LEDGER_INDENT = 2 * CHAR_W;
 function ledgerSize(
   rows: LedgerRow[],
