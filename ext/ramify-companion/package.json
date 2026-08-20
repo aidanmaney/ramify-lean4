@@ -3,7 +3,7 @@
   "displayName": "Ramify Companion",
   "description": "Editor-side commands for the Ramify infoview widget: unlocks persistent settings, a slim editor under the infoview, and revealing nodes in the source.",
   "publisher": "aidan",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -57,6 +57,16 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "While you are typing a tactic and the proof doesn't elaborate, show the tree **as if the line you are writing were `sorry`** — elaborated in the background — so the tree keeps its full shape, marks where your tactic lands with a dashed stub carrying your draft, replaced with the real tree when the proof is fixed. Costs one re-elaboration of the current theorem per edited line (cached)."
+        },
+        "ramify.hypMarkStyle": {
+          "type": "string",
+          "enum": ["highlight", "underline"],
+          "enumDescriptions": [
+            "Wash the line in its own colour — distinct in hue from the tactic diff beside it.",
+            "Draw a dashed rule under the line, and a solid one under what the tactic changed, so the two are told apart by shape rather than colour."
+          ],
+          "default": "highlight",
+          "markdownDescription": "How the tree marks the hypotheses a tactic uses when you hover its box. Both marks appear on the same context lines as the **tactic diff** (what the tactic changed), so the two have to be distinguishable: by default they differ in *colour*, and `underline` switches both to *shapes* — dashed for used, solid for changed — which stays readable without colour vision."
         },
         "ramify.typingHoldMs": {
           "type": "integer",
