@@ -86,13 +86,13 @@ The extension ships as a `.vsix` file inside this package. Where that file is de
 
 ```bash
 # If you cloned this repository (the "try it" route above), from its root:
-code --install-extension dist/ramify-companion-0.0.12.vsix
+code --install-extension dist/ramify-companion-0.0.13.vsix
 
 # If you added ramify as a Lake dependency, from your project's root:
-code --install-extension .lake/packages/ramify/dist/ramify-companion-0.0.12.vsix
+code --install-extension .lake/packages/ramify/dist/ramify-companion-0.0.13.vsix
 ```
 
-Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-companion-0.0.12.vsix`. Reload the window afterwards (command palette).
+Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-companion-0.0.13.vsix`. Reload the window afterwards (command palette).
 
 ### What the Companion Adds
 
@@ -123,7 +123,7 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 
 ## Troubleshooting
 
-If the tree says “no proof here” with the cursor inside a proof, check the toolchain first (see [Prerequisites](#prerequisites)). If an action does nothing e.g. the lens not opening or colors not following the theme, read the Ramify Companion output channel (View &#8594; Output, pick it from the dropdown); if you cannot resolve the issue on your own raise it on GitHub.
+If the tree says “no proof here” with the cursor inside a proof, check the toolchain first (see [Prerequisites](#prerequisites)). If an action does nothing e.g. the lens not opening or colors not following the theme, read the Ramify output channel (View &#8594; Output, pick it from the dropdown); if you cannot resolve the issue on your own raise it on GitHub.
 
 ---
 

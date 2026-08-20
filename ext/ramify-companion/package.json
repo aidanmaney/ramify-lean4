@@ -1,9 +1,9 @@
 {
   "name": "ramify-companion",
-  "displayName": "Ramify Companion",
-  "description": "Editor-side commands for the Ramify infoview widget: unlocks persistent settings, a slim editor under the infoview, and revealing nodes in the source.",
+  "displayName": "Ramify",
+  "description": "Lean proofs-as-trees visualizer and editor that lives in the infoview",
   "publisher": "aidan",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -21,7 +21,7 @@
       }
     ],
     "configuration": {
-      "title": "Ramify Companion",
+      "title": "Ramify",
       "properties": {
         "ramify.outlineOnly": {
           "type": "boolean",
@@ -36,17 +36,17 @@
         "ramify.linkMarks": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Draw the connectors' target-type marks: a small gapped dot near either end of a line that runs into a goal, a gapped dash where it runs into a tactic — so you can tell what a line terminates at before following it."
+          "markdownDescription": "Draw the connectors' node-type marks: a dot near either end of a line for goals, a dash for tactics."
         },
         "ramify.linkTint": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Tint each connector toward the colour of the node it runs INTO (the goals' blue, the tactics' green), on top of the shape marks."
+          "markdownDescription": "Tint each connector based on the colour of the node it terminates at (blue for goals, green for tactics)."
         },
         "ramify.lensGoals": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Show each tactic's resulting goal inline at the end of its line in the lens, so a proof read there carries its intermediate states. Drawn as decoration text."
+          "markdownDescription": "Show each tactic's resulting goal inline after the tactic line. Drawn as decoration text."
         },
         "ramify.lensWordWrap": {
           "type": "boolean",
@@ -56,24 +56,20 @@
         "ramify.counterfactual": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "While you are typing a tactic and the proof doesn't elaborate, show the tree **as if the line you are writing were `sorry`** — elaborated in the background — so the tree keeps its full shape, marks where your tactic lands with a dashed stub carrying your draft, replaced with the real tree when the proof is fixed. Costs one re-elaboration of the current theorem per edited line (cached)."
+          "markdownDescription": "While you are typing a tactic and the proof doesn't elaborate (e.g. because it has errors), show the tree as if the line you are writing were `sorry` so the tree keeps its full shape, replaced with the real tree when the proof is fixed. Costs one re-elaboration of the current theorem per edited line (cached)."
         },
         "ramify.hypMarkStyle": {
           "type": "string",
           "enum": ["highlight", "underline"],
-          "enumDescriptions": [
-            "Wash the line in its own colour — distinct in hue from the tactic diff beside it.",
-            "Draw a dashed rule under the line, and a solid one under what the tactic changed, so the two are told apart by shape rather than colour."
-          ],
           "default": "highlight",
-          "markdownDescription": "How the tree marks the hypotheses a tactic uses when you hover its box. Both marks appear on the same context lines as the **tactic diff** (what the tactic changed), so the two have to be distinguishable: by default they differ in *colour*, and `underline` switches both to *shapes* — dashed for used, solid for changed — which stays readable without colour vision."
+          "markdownDescription": "How the tree marks the hypotheses a tactic uses when you hover its box."
         },
         "ramify.typingHoldMs": {
           "type": "integer",
           "default": 600,
           "minimum": 0,
           "maximum": 5000,
-          "markdownDescription": "How long (in milliseconds) the cursor must sit still after you type before the tree redraws to match the changed proof. Prevents redraw after every keystroke. Raise it if you type slowly and still see churn mid-edit; `0` redraws on every change. Edits made *from the tree* (committing a tactic, chips, delete, undo) always redraw ASAP."
+          "markdownDescription": "How long (in milliseconds) the cursor must sit still after you type before the tree redraws to match the changed proof. Prevents redraw after every keystroke. Raise it if you type slowly and still see churn mid-edit; `0` redraws on every change. Edits made from the tree always redraw ASAP."
         }
       }
     }
