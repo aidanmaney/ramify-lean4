@@ -74,6 +74,17 @@ Then open a file in *this* Lake project with `import Ramify` and
 `show_panel_widgets [Ramify]` — `lean/ProofTreeTour.lean` is a guided
 walkthrough. The panel follows the cursor.
 
+> Several files under `lean/` **deliberately do not compile**, and that is not
+> rot: drawing proofs that are broken or unfinished is part of the tree's job,
+> so the fixtures for it have to be broken. `ProofTreeTour.lean`'s last two
+> sections are unfinished by design; `ProofTreeErrors.lean` and
+> `ProofTreeDiagnostics.lean` are each wrong on purpose, one way per recovery
+> or diagnostics surface; `ProofTreeDemo.lean` is a work-in-progress
+> development; `ProofTreeScratch.lean` is scratch. **None of them is a Lake
+> target**, so `lake build` stays green whatever state they are in — the
+> targets are `Ramify`, `ProofTreeComments`, `ProofTreeRecover`, `Ppharness`
+> and the `ppharness` exe. `CLAUDE.md` says what each fixture pins.
+
 **The standalone app** (browser, reads the generated NDJSON):
 
 ```bash
