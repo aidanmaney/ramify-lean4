@@ -129,6 +129,8 @@ import {
   type SelVerbDocKey,
 } from "./gestures";
 import { HelpPanel } from "./helpPanel";
+import { collapseLabel } from "./briefLabel";
+import { lineOffsets } from "./taggedText";
 import {
   ACCENT_TEXT,
   CASE_FILL,
@@ -1416,6 +1418,15 @@ export default function ProofTreeView({
   // (see briefLabel.ts). Like reflow this is GEOMETRY — the label text changes,
   // so it rebuilds the engine and re-measures every box.
   const [brief, setBrief] = useState(false);
+  // Hovering the rail's ⋯ button while brief is OFF underlines, in place, the
+  // label text brief would elide or replace — a PREVIEW, so the toggle stops
+  // being a leap of faith. Paint-only (the no-relayout-on-hover rule): the
+  // underlines are hairline rects over the drawn lines, nothing moves. The
+  // effective flag below also requires the reading flyout to be OPEN, because
+  // the ⋯ member unmounts without a mouseleave when the row collapses (click,
+  // Esc, background click) — gating on the flyout is what un-sticks it.
+  const [briefHover, setBriefHover] = useState(false);
+  const briefPreviewOn = briefHover && !brief && railFlyout === "reading";
   // Combine: automatically merge each maximal LINEAR tactic run into one node
   // showing the tactics stacked, dropping the pass-through goals between them
   // (syntactic, not semantic — see elide.ts combineRuns). Engine-tier geometry.
@@ -1990,9 +2001,17 @@ export default function ProofTreeView({
    * transition with its shadow copy of the left-hand side still in it, and
    * committing the right-hand side flushed that stale draft over the top —
    * typing `a` for the left side then Entering through the right wrote `a`
-   * into both. The stage is therefore part of the key. */
+   * into both. The stage is therefore part of the key.
+   *
+   * The separator is `#`, the same one the ledger's row keys use against node
+   * ids — which is the standing evidence that an id never contains one, and
+   * `stage` is a closed set (`""` | `lhs` | `rhs`), so no two distinct pairs
+   * can spell the same key. It was a literal NUL until 2026-08-28: byte-
+   * identical in behaviour, and invisible in a way that cost real time — the
+   * file rendered as BINARY on GitHub and `grep` skipped it silently. Do not
+   * reach for an exotic separator here; a printable one is provably enough. */
   const editKey = (e: typeof editing) =>
-    e === null ? null : `${e.id} ${e.calcStage?.stage ?? ""}`;
+    e === null ? null : `${e.id}#${e.calcStage?.stage ?? ""}`;
   const editingId = editKey(editing);
   const [prevEditingId, setPrevEditingId] = useState(editingId);
   if (editingId !== prevEditingId) {
@@ -2738,18 +2757,141 @@ export default function ProofTreeView({
   // ref, because the branches below run during render (the derived-state
   // pattern) and a ref must not be read there.
   const [prevBase, setPrevBase] = useState(baseNodes);
+  // Per-proof view stash, keyed by `proofKey`. Written on DEPARTURE (the
+  // proof-change branch below), read on RETURN: switching to another theorem
+  // used to reset fold, focus, elision and sequencing outright — the
+  // `remapIds` work (c91d0f5) only ever covered a SAME-proof re-elaboration,
+  // so coming back to a theorem always landed on a blank view. Only the
+  // durable reading state is stashed — never the transients (edits, picks,
+  // armed deletes hold RANGES against a document that moved). The ids in a
+  // stash were minted by the elaboration current at departure, so a restore
+  // translates them through `remapIds` against the stashed BASE tree and
+  // liveness-prunes, exactly as the shape branch does — any edit anywhere in
+  // the file renumbers every mvarId here too. Held as STATE for the reason
+  // `prevBase` is.
+  const [viewStash, setViewStash] = useState<
+    Map<
+      string,
+      {
+        base: TreeNode[];
+        collapsed: Set<string>;
+        focusId: string | null;
+        seq: Seq;
+        elideCuts: ElideCut[];
+        pick: Record<string, number>;
+        combineOff: Set<string>;
+        commentsOff: Set<string>;
+        commentsExpanded: Set<string>;
+        chainOpen: Set<string>;
+        zoom: number;
+      }
+    >
+  >(new Map());
   if (proofKey !== prevProof) {
     setPrevProof(proofKey);
     setPrevShape(shapeKey);
     setPrevBase(baseNodes);
-    setCollapsed(new Set());
-    setZoom(1);
-    setSeq({ mode: "off" });
-    setFocusId(null);
+    // Stash the outgoing proof's reading state under ITS key, against the
+    // tree those ids were minted in (`prevBase`, not the incoming
+    // `baseNodes`). Overwrites any earlier stash — the latest departure is
+    // the view to come back to.
+    setViewStash((m) => {
+      const next = new Map(m);
+      next.set(prevProof, {
+        base: prevBase,
+        collapsed,
+        focusId,
+        seq,
+        elideCuts,
+        pick,
+        combineOff,
+        commentsOff,
+        commentsExpanded,
+        chainOpen,
+        zoom,
+      });
+      return next;
+    });
+    const stash = viewStash.get(proofKey);
+    if (stash) {
+      // Returning to a proof read before: restore how the reader left it,
+      // translated by TREE POSITION and pruned to what still exists — the
+      // shape branch's own recipe, sourced from the stash instead of the
+      // live state. A stash also suppresses the `.fold`/`.none` seed below:
+      // the source's directives are a STARTING view, and this reader already
+      // has one.
+      const remap = remapIds(stash.base, baseNodes);
+      const to = (id: string) => remap.get(id) ?? id;
+      const live = new Set<string>();
+      for (const st of proof.steps) {
+        live.add(st.goalBefore.id);
+        live.add(tacticId(st.goalBefore.id));
+        for (const g of stepGoalsAfter(st)) live.add(g.id);
+      }
+      const restoreSet = (s: Set<string>) =>
+        new Set([...s].map(to).filter((id) => live.has(id)));
+      setCollapsed(restoreSet(stash.collapsed));
+      setZoom(stash.zoom);
+      const movedFocus = stash.focusId ? to(stash.focusId) : null;
+      setFocusId(movedFocus && live.has(movedFocus) ? movedFocus : null);
+      // Only a settled sequence VIEW is worth restoring; a half-made pick was
+      // a gesture in flight, and re-arming a picking mode behind the reader's
+      // back would take over every click on the tree.
+      if (stash.seq.mode === "view") {
+        const from = to(stash.seq.from);
+        const dest = to(stash.seq.to);
+        setSeq(
+          live.has(from) && live.has(dest)
+            ? { mode: "view", from, to: dest }
+            : { mode: "off" },
+        );
+      } else setSeq({ mode: "off" });
+      setElideCuts(
+        pruneCuts(
+          baseNodes,
+          stash.elideCuts.map((c) => remapCut(c, to)),
+        ),
+      );
+      // `pick` needs no liveness filter (read modulo the live child count).
+      const nextPick: Record<string, number> = {};
+      for (const [id, v] of Object.entries(stash.pick)) nextPick[to(id)] = v;
+      setPick(nextPick);
+      setCombineOff(restoreSet(stash.combineOff));
+      setCommentsOff(restoreSet(stash.commentsOff));
+      setCommentsExpanded(restoreSet(stash.commentsExpanded));
+      // Open calc links key `${ledgerId}#${settledIdx}` — translate the
+      // ledger-id prefix, keep the index (the shape branch's rule).
+      const ledgers = new Set(
+        baseNodes.filter((n) => n.ledger).map((n) => n.id),
+      );
+      const nextChain = new Set<string>();
+      for (const key of stash.chainOpen) {
+        const at = key.lastIndexOf("#");
+        const moved = to(key.slice(0, at));
+        if (ledgers.has(moved)) nextChain.add(moved + key.slice(at));
+      }
+      setChainOpen(nextChain);
+    } else {
+      setCollapsed(new Set());
+      setZoom(1);
+      setSeq({ mode: "off" });
+      setFocusId(null);
+      setElideCuts([]);
+      setCombineOff(new Set());
+      setCommentsOff(new Set());
+      setCommentsExpanded(new Set());
+      setChainOpen(new Set());
+      // A different proof's splits are different nodes entirely. (A same-proof
+      // EDIT remaps the keys instead — see the shape branch; no pruning either
+      // way: `pick` is read modulo the live child count, and keys naming a
+      // vanished split are simply never looked up.)
+      setPick({});
+    }
+    // Transients go either way — they hold ranges, drafts and half-made
+    // gestures against the proof being left.
     setEditing(null);
     setPicking(null);
     setArming(null);
-    setElideCuts([]);
     // A different proof entirely: whatever stub was waiting to be typed over
     // belongs to the old one.
     setPendingFill(null);
@@ -2759,15 +2901,6 @@ export default function ProofTreeView({
     setSelection(null);
     setFlagPrompt(null);
     setClickAccent(null);
-    setCombineOff(new Set());
-    setCommentsOff(new Set());
-    setCommentsExpanded(new Set());
-    setChainOpen(new Set());
-    // A different proof's splits are different nodes entirely. (A same-proof
-    // EDIT remaps the keys instead — see the shape branch; no pruning either
-    // way: `pick` is read modulo the live child count, and keys naming a
-    // vanished split are simply never looked up.)
-    setPick({});
   } else if (shapeKey !== prevShape) {
     setPrevShape(shapeKey);
     setPrevBase(baseNodes);
@@ -2961,9 +3094,15 @@ export default function ProofTreeView({
   const [seededFor, setSeededFor] = useState<string | null>(null);
   if (seededFor !== proofKey) {
     setSeededFor(proofKey);
-    const { folds, cuts } = sourceView(baseNodes);
-    if (folds.length > 0) setCollapsed(new Set(folds));
-    if (cuts.length > 0) setElideCuts(cuts);
+    // A stashed view suppresses the seed: the source's directives are a
+    // starting view, and a proof with a stash entry has been read before —
+    // the restore branch above just put the reader's own state back, and
+    // seeding here would overwrite it in the same render.
+    if (!viewStash.has(proofKey)) {
+      const { folds, cuts } = sourceView(baseNodes);
+      if (folds.length > 0) setCollapsed(new Set(folds));
+      if (cuts.length > 0) setElideCuts(cuts);
+    }
   }
 
   // In `view` mode, restrict the layout to the chosen path's nodes (or null if
@@ -6220,6 +6359,7 @@ export default function ProofTreeView({
           setReflow(v);
         }}
         brief={brief}
+        onBriefHover={setBriefHover}
         onBriefChange={(v) => {
           // Deliberately NO anchorRoot() (unlike reflow, which re-wraps every
           // box): brief only shortens some labels, so the structure is
@@ -7995,6 +8135,87 @@ export default function ProofTreeView({
                       ))}
                     </text>
                   )}
+
+                  {/* BRIEF PREVIEW — while the pointer rests on the rail's ⋯
+                      (and brief is OFF), hairline underlines mark exactly the
+                      label text brief would elide or replace, so the toggle
+                      can be judged before it is pressed. Paint-only (the
+                      no-relayout-on-hover rule): rects over the drawn lines,
+                      pointer-events none, drawn AFTER the label so they sit
+                      above the tagged path's foreignObject too. The ranges
+                      are the KEEP map's complement from the same
+                      `collapseLabel` the toggle would run, so the preview
+                      cannot disagree with the collapse; whitespace at a
+                      gap's edges is trimmed per line — it is spacing
+                      normalisation, not replacement. Excluded shapes are
+                      the ones brief itself never collapses here: markers,
+                      ledger heads (label forced to `calc`), combined nodes
+                      (collapsed per PART, a different coordinate space) and
+                      the synthetic calc node. */}
+                  {briefPreviewOn &&
+                    type === "tactic" &&
+                    !isMini &&
+                    !hideForEdit &&
+                    !node.data.proseLabel &&
+                    !node.data.ledger &&
+                    !node.data.elidedCut &&
+                    !node.data.synthetic &&
+                    (() => {
+                      const label = node.data.label;
+                      const c = collapseLabel(label);
+                      if (!c) return null;
+                      const offs = lineOffsets(
+                        label,
+                        lines.map((l) => l.text),
+                      );
+                      if (!offs) return null;
+                      // Elided ranges = the complement of the kept runs.
+                      const gaps: [number, number][] = [];
+                      let pos = 0;
+                      for (const k of c.keep) {
+                        if (k.srcAt > pos) gaps.push([pos, k.srcAt]);
+                        pos = Math.max(pos, k.srcAt + k.len);
+                      }
+                      if (pos < label.length) gaps.push([pos, label.length]);
+                      const rects: ReactNode[] = [];
+                      gaps.forEach(([ga, gb], gi) => {
+                        offs.forEach(([lo, hi], j) => {
+                          let a = Math.max(ga, lo);
+                          let b = Math.min(gb, hi);
+                          while (a < b && " \n".includes(label[a])) a++;
+                          while (b > a && " \n".includes(label[b - 1])) b--;
+                          if (a >= b) return;
+                          rects.push(
+                            <rect
+                              key={`${gi}:${j}`}
+                              x={
+                                -w / 2 +
+                                NODE_PAD +
+                                lines[j].indent +
+                                measureText(label.slice(lo, a), NODE_FONT_PX)
+                              }
+                              // Just under the line's baseline (the tspans
+                              // sit at (j+0.5)·LINE_H with dy 0.32em).
+                              y={
+                                labelTop +
+                                (j + 0.5) * LINE_H +
+                                0.32 * NODE_FONT_PX +
+                                2
+                              }
+                              width={measureText(
+                                label.slice(a, b),
+                                NODE_FONT_PX,
+                              )}
+                              height={1.2}
+                              fill="var(--ptw-comment)"
+                            />,
+                          );
+                        });
+                      });
+                      return (
+                        <g style={{ pointerEvents: "none" }}>{rects}</g>
+                      );
+                    })()}
 
                   {/* Ledger RELATION rows are controls (see toggleRow) — on
                       the plain-SVG path each gets a hit rect over its line:
@@ -9796,6 +10017,7 @@ function RailButton({
   glyphDy,
   title,
   onClick,
+  onHover,
   pressed,
   pressedColor,
   disabled,
@@ -9816,6 +10038,9 @@ function RailButton({
   // modifier (⌥ on the context-breadth button); callers that don't care stay
   // `() => …`, which is assignable.
   onClick: (e: React.MouseEvent) => void;
+  /** Pointer enters/leaves the button. Exists for the ⋯ brief member's
+  underline PREVIEW (paint-only); most buttons pass nothing. */
+  onHover?: (h: boolean) => void;
   pressed?: boolean;
   pressedColor?: string;
   disabled?: boolean;
@@ -9827,6 +10052,8 @@ function RailButton({
       type="button"
       title={title}
       onClick={onClick}
+      onMouseEnter={onHover ? () => onHover(true) : undefined}
+      onMouseLeave={onHover ? () => onHover(false) : undefined}
       disabled={disabled}
       style={
         disabled
@@ -9872,6 +10099,11 @@ interface FlyMember {
   disabled?: boolean;
   away: boolean;
   onClick: () => void;
+  /** Pointer enters/leaves this member — threaded to its RailButton. The ⋯
+  brief member uses it for the underline preview; the view gates the effect on
+  the flyout being OPEN, since a collapsing row unmounts the member without a
+  mouseleave. */
+  onHover?: (h: boolean) => void;
 }
 
 /** A rail slot that owns a HEAD button and, when open, a horizontal row of
@@ -9964,6 +10196,7 @@ function RailFlyout({
               pressed={m.away}
               pressedColor={m.pressedColor}
               disabled={m.disabled}
+              onHover={m.onHover}
               onClick={() => {
                 m.onClick();
                 onOpenChange(null);
@@ -10172,6 +10405,7 @@ function ControlRail({
   onFlyoutChange,
   brief,
   onBriefChange,
+  onBriefHover,
   commentMode,
   onCommentModeChange,
   combine,
@@ -10232,6 +10466,9 @@ function ControlRail({
   onFlyoutChange: (v: RailFlyoutId | null) => void;
   brief: boolean;
   onBriefChange: (v: boolean) => void;
+  /** Pointer over the ⋯ member — drives the view's underline preview of what
+  brief would elide (see briefHover). */
+  onBriefHover: (h: boolean) => void;
   commentMode: "shown" | "hidden" | "instead";
   onCommentModeChange: (v: "shown" | "hidden" | "instead") => void;
   combine: boolean;
@@ -10548,9 +10785,10 @@ function ControlRail({
           {
             glyph: "⋯",
             title:
-              "Brief: collapse boilerplate inside tactics to … (a binding's := derivation, a long [ … ] list), keeping the head and the bindings — hover a … to reveal it",
+              "Brief: collapse boilerplate inside tactics — … hides a binding's := derivation and long [ … ] lists, and command words become their symbols (rw ↪, exact ∎, intro λ, exfalso ⊥, show ⊢, unfold δ, use ∃, constructor ⟨⟩). Hovering here underlines what would go; hover a … to reveal it",
             away: brief,
             onClick: () => onBriefChange(!brief),
+            onHover: onBriefHover,
           },
         ]}
       />

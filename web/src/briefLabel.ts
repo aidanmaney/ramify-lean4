@@ -30,7 +30,7 @@ ceremony, like a namespace prefix — record no mark at all, because there is
 nothing a reader would want revealed and nothing drawn to hover. */
 export interface Mark {
   outAt: number;
-  /** Length of the marker in the collapsed text (always 1 today). */
+  /** Length of the marker in the collapsed text (1 for every glyph but `⟨⟩`). */
   len: number;
   hidden: string;
 }
@@ -58,6 +58,48 @@ context-breadth rail glyph, and `←` because it occurs INSIDE rw labels
 resolve on all eight code-font stacks (measured, 0 tofu). */
 const MARK_REWRITE = "↪";
 const MARK_CLOSE = "∎";
+/** Rule F′ — the rest of the typed-marker vocabulary: tactics whose command
+word IS a canonical symbol, replaced head-for-glyph with the arguments kept.
+Each glyph is the move's own established notation, never invented, and every
+one already occurs in the tree's rendered content (goal labels, hypotheses),
+so the font stacks that draw the tree draw these:
+
+  `λ`  intro/intros/rintro — Curry–Howard: intro IS lambda abstraction, and
+       `λ` is Lean's own binder. `intro p hp` reads `λ p hp`.
+  `⊥`  exfalso/contradiction/absurd — ex falso; `⊥` is Lean's `False`.
+  `⊢`  show/change — the tactic RESTATES the goal, and the turnstile is what
+       this tree already prefixes every goal with (the `∎` precedent:
+       meaning-compatible reuse, not a collision — a tactic box's text cannot
+       otherwise contain `⊢`, so within the box it is unambiguous).
+  `∎`  assumption — closes the goal, `exact`'s own family; bare `∎` is
+       honest, since `assumption` names no hypothesis either.
+  `δ`  unfold/delta — δ-reduction is literally the name of the move.
+  `∃`  use/exists — existential introduction: the witnesses follow the
+       quantifier, `use 5` reads `∃ 5`.
+  `⟨⟩` constructor — the anonymous-constructor brackets; the fields are the
+       child goals the tree already draws below (Rule D's argument).
+
+`bare` says whether the glyph may stand ALONE when the tactic has no
+arguments: yes exactly where the argument-less form is real Lean and the
+glyph still names the move (`exfalso` → `⊥`, `constructor` → `⟨⟩`,
+`assumption` → `∎`, `intros` → `λ`); no where a bare head is a half-typed
+tactic (`show`, `use`, `unfold`) — there the rule declines and the label
+stays whole, E1/F's gate with the same reasoning.
+
+REJECTED, so they are not re-proposed: `subst` → `▸` (the canonical symbol,
+but `▸` is the used-hypothesis gutter mark AND the context-breadth rail
+glyph — the very collision that ruled it out for rw); `push_neg` → `¬`
+(`¬ at h` reads as a malformed proposition, and `¬` is the selection pill's
+flag-verb prefix); `revert` → `∀` (the context-breadth rail glyph). */
+const HEAD_MARKS: { re: RegExp; mark: string; bare: boolean }[] = [
+  { re: /^(intro|intros|rintro)\b/, mark: "λ", bare: true },
+  { re: /^(exfalso|contradiction|absurd)\b/, mark: "⊥", bare: true },
+  { re: /^(show|change)\b/, mark: "⊢", bare: false },
+  { re: /^assumption\b/, mark: MARK_CLOSE, bare: true },
+  { re: /^(unfold|delta)\b/, mark: "δ", bare: false },
+  { re: /^(use|exists)\b/, mark: "∃", bare: false },
+  { re: /^constructor\b/, mark: "⟨⟩", bare: true },
+];
 const OPENERS = "([{⟨";
 const CLOSERS = ")]}⟩";
 
@@ -138,9 +180,13 @@ ARGUMENTS are elided instead, verb-forward, by Rule E2 below.
 EXCLUDED from E1 even though they bind: `rcases`/`cases` (Rule B already
 collapses their scrutinee, so dropping the head as well leaves a bare
 `… with h | h` — measured, exactly what it produced) and `induction` (the
-variable inducted on is the content). `calc` is Rule D's. */
+variable inducted on is the content). `calc` is Rule D's. `intro`/`intros`/
+`rintro`, `show`, `use`/`exists` have MOVED to Rule F′ (HEAD_MARKS): a typed
+glyph where the command word was is strictly better than E1's `…` — same
+bypass of the width gates, and the marker says the move instead of saying
+"something was here". */
 const BINDER_KW =
-  /^(have|let|obtain|set|suffices|show|use|exists|refine|intro|intros|rintro|by_cases|by_contra|specialize)\b/;
+  /^(have|let|obtain|set|suffices|refine|by_cases|by_contra|specialize)\b/;
 /** Rule E2's heads: tactics whose ARGUMENTS are the boilerplate. Not the
 complement of BINDER_KW by construction — an unknown or custom tactic matches
 neither, and is left entirely alone, which is the conservative default for a
@@ -213,9 +259,10 @@ function elisionRanges(label: string, short: boolean): Elision[] {
   // keyword is 4-6, so MIN_LABEL and MIN_ELIDE would between them skip almost
   // every case this rule exists for. The rule is about NOISE, not width.
   //
-  // Gated on something REMAINING: a bare `constructor` is nothing but its
-  // command word, and collapsing it to `…` would erase the step instead of
-  // shortening it — losing even that anything is there.
+  // Gated on something REMAINING: a bare command word collapsed to `…` would
+  // erase the step instead of shortening it — losing even that anything is
+  // there. (A bare word whose glyph IS the content is HEAD_MARKS' business:
+  // `constructor` → `⟨⟩`, `exfalso` → `⊥`.)
   const mE = BINDER_KW.exec(label);
   if (mE && label.slice(mE[0].length).trim() !== "")
     ranges.push([0, mE[0].length, ELLIPSIS]);
@@ -283,6 +330,26 @@ function elisionRanges(label: string, short: boolean): Elision[] {
   }
   const mH = /^(exact|apply)\s+/.exec(label);
   if (mH) pushNamespace(ranges, label, mH[0].length, label.length);
+
+  // Rule F′ — the head-marker table (see HEAD_MARKS): the command word goes,
+  // one canonical glyph stands where it was, the arguments survive verbatim.
+  // Bypasses BOTH width gates for F's reason (uniformity — the same tactic
+  // must not collapse or not by the length of its argument), and shares F's
+  // `ruleF` flag so E2 stands down (E2 would re-elide the very arguments the
+  // glyph exists to keep). Disjoint heads by construction, so at most one
+  // entry fires and order in the table is not load-bearing.
+  if (!ruleF)
+    for (const hm of HEAD_MARKS) {
+      const m = hm.re.exec(label);
+      if (!m) continue;
+      // A head with nothing after it is either the whole move (`exfalso`,
+      // `constructor` — glyph allowed to stand alone) or a half-typed tactic
+      // (`show`, `use` — decline, E1/F's own gate).
+      if (label.slice(m[0].length).trim() === "" && !hm.bare) break;
+      ranges.push([0, m[0].length, hm.mark]);
+      ruleF = true;
+      break;
+    }
 
   // Everything below is a WIDTH saving, so it keeps the short-label gate.
   if (short) return ranges;
@@ -494,8 +561,15 @@ export function collapseLabel(label: string): CollapsedLabel | null {
   emitKeep(cursor, label.length, silentGap);
 
   // A degenerate result (everything elided, or no net shortening) is not worth
-  // it — fall back to the original.
-  if (keep.length === 0 || text.length >= label.length) return null;
+  // it — fall back to the original. A TYPED marker standing alone is the one
+  // legitimate everything-elided shape: `exfalso` → `⊥` keeps no run at all,
+  // and the glyph IS the content (HEAD_MARKS' `bare` entries). A bare `…`
+  // stays refused — it says "something was here" about nothing in particular.
+  if (
+    (keep.length === 0 && (marks.length === 0 || text === ELLIPSIS)) ||
+    text.length >= label.length
+  )
+    return null;
   return { text, keep, original: label, marks };
 }
 

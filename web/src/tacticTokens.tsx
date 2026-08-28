@@ -426,8 +426,9 @@ export function renderTacticTokens(
   // Each MARKER in the collapsed label is a titled pseudo-span, so the emit
   // loop draws it muted with the text it replaced as a hover tooltip. The
   // positions are the assembler's own record (see briefLabel's `marks`), not a
-  // re-scan of the output: `…`, `↪` and `∎` all mark elisions and a silent one
-  // marks nothing, so there is no glyph to search for.
+  // re-scan of the output: `…`, the typed glyphs (`↪`, `∎`, and the HEAD_MARKS
+  // family — `λ ⊥ ⊢ δ ∃ ⟨⟩`) all mark elisions and a silent one marks nothing,
+  // so there is no glyph to search for.
   if (elision)
     for (const e of elision.marks)
       spans.push({ start: e.outAt, end: e.outAt + e.len, ellipsis: e.hidden });
