@@ -18,6 +18,9 @@ one floating rail, none of it touching the file.
 - **Using it in your own project?** See [INSTALL.md](INSTALL.md).
 - **Working on it?** [CLAUDE.md](CLAUDE.md) is the engineering record —
   constraints, measurements, and the reasons behind the non-obvious choices.
+- **Reading it to understand the system?** [OVERVIEW.md](OVERVIEW.md) is a
+  technical tour sitting between the two. It is an LLM-written secondary
+  record — useful for orientation, not authoritative over the code.
 
 ## Two data sources, one renderer
 
@@ -133,5 +136,6 @@ MIT — see [LICENSE](LICENSE). The extension carries its own copy at
 `package.json` and would otherwise ship the `.vsix` with no licence in it.
 
 Ramify builds on Paperproof (MIT), ProofWidgets (Apache-2.0) and
-`@leanprover/unicode-input` (Apache-2.0, bundled into the renderer). The
-distribution repository carries the full third-party notices.
+`@leanprover/unicode-input` (Apache-2.0, bundled into the renderer). See
+[NOTICE](NOTICE) for the full third-party notices, including which of them are
+fetched at build time and which are redistributed here.

@@ -1,7 +1,9 @@
 {
-  "name": "my-tree",
+  "name": "ramify-renderer",
   "private": true,
   "version": "0.0.0",
+  "license": "MIT",
+  "description": "Ramify's React/d3-dag proof-tree renderer: the standalone dev harness and the infoview widget bundle, from one source-agnostic view.",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -20,6 +20,12 @@ echo "building ppharness…"
 lake build ppharness >/dev/null
 
 echo "parsing $ROOT/proofs/*.lean (import Mathlib loads Mathlib — first run is slow)…"
-lake env lake exe ppharness "$ROOT"/proofs/*.lean > "$OUT"
+# ppharness records each record's `file` as the path it was HANDED, and lake has
+# to run from lean/, so the paths going in are absolute. The app shows that field
+# in its footer and the file is TRACKED, so the author's home directory would be
+# committed and displayed; strip the repo root back off on the way out, leaving
+# `proofs/euclid.lean` — the path a reader of this repository can actually use.
+lake env lake exe ppharness "$ROOT"/proofs/*.lean \
+  | sed "s|\"file\":\"$ROOT/|\"file\":\"|g" > "$OUT"
 
 echo "wrote $OUT ($(grep -c . "$OUT") proof(s))"

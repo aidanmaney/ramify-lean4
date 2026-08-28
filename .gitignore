@@ -20,9 +20,6 @@ web/dist-app/
 # so only the build-side one is ignored.
 ext/ramify/*.vsix
 
-# Working notes, not part of the install surface or the docs that ship.
-OVERVIEW.md
-
 # OS / editor
 .DS_Store
 *.log
