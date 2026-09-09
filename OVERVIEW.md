@@ -242,14 +242,15 @@ consuming tactic's `tacticDependsOn` — and this stays accurate even for
 `omega` or `simp_all`, because Paperproof computes usage from the elaborated
 proof term, so implicit uses are counted too.
 
-There are **four context breadths**, cycled by one control:
+There are **four context breadths**, named in words on the status bar's
+`Context:` item (pick one from its list, or ⌥-click the item to advance):
 
-| Mode | Glyph | Shows |
+| Mode | Bar reads | Shows |
 |---|---|---|
-| `used` (default) | `▸` | what the rest of the proof *below* this goal depends on |
-| `new` | `↓` | only what the producing tactic introduced (sometimes legitimately empty) |
-| `delta` | `Δ` | what the goal gained over its producer's input, plus older hyps the consumer uses |
-| `full` | `∀` | everything, accumulating down the tree |
+| `used` (default) | `used` | what the rest of the proof *below* this goal depends on |
+| `new` | `binders` | only what the producing tactic introduced (sometimes legitimately empty) |
+| `delta` | `diff` | what the goal gained over its producer's input, plus older hyps the consumer uses |
+| `full` | `all` | everything, accumulating down the tree |
 
 A goal with no consuming tactic falls back to `delta`'s rule while in `used`
 mode: "what the rest of the proof uses" is undefined at a live frontier, and an
@@ -281,7 +282,7 @@ There are four modes:
   goal it consumes and the goals it produces.
 - **|| tracks** — the spine with the per-tactic zigzag removed: all the
   right-hand tactics share one column.
-- **⋔ wide** — the original Sugiyama tree, normalised into the same placed
+- **⑃ wide** — the original Sugiyama tree, normalised into the same placed
   shape, with a custom decrossing pass so that folding never reshuffles
   siblings.
 
@@ -298,7 +299,7 @@ treated this way contains only what was actually measured to behave this way
 (`rw`/`erw`; `apply` is deliberately excluded because its goals are genuine
 peers).
 
-A related bug surfaced late: an elide marker has to stand in for the source
+A related bug surfaced late: a skip marker has to stand in for the source
 positions of the nodes it replaced. A marker deliberately has no position of
 its own, so the subtree-minimum of a collapsed branch fell to infinity and the
 branch swapped places with its siblings. Measured: 145 of the 784 possible cuts
@@ -333,6 +334,22 @@ both.
 A large proof is unreadable at full fidelity, so the tree offers several
 independent ways to compress it. All of them compose, and all are reversible:
 
+- **Folding and skipping are one mechanism, drawn in the two idioms readers
+  already know.** Every hiding is a cut. `−` on a goal that continues its
+  producer *skips* the step below it: the tactic and whatever it opened beside
+  the continuation (a `have`'s side proof, a rewrite's side condition) go, the
+  trunk stays, and the tactic remains in place cut down to its head in a dashed
+  box with a `+N` badge for what it swallowed (`have gap… +2`) — the preview
+  node. `−` on any other goal — a nested block's root, an `induction` case, a
+  case under a split — and on every goal in the wide layout, where there is no
+  trunk, *folds*: everything below goes and the goal itself is the reduced
+  node, its corner reading `+N` — the collapsed-tree convention. Click the
+  ghost, or the `+N`, to bring it back. The hover-bar skip on a tactic mints
+  the same cut, `.fold` and `.none` flags in the source seed cuts, `collapse
+  all` folds every branch root (the outline), and the cursor peeks a seeded cut
+  open when it enters the source it stands for. Measured on the corpus's
+  biggest proof: the goal after `have key` takes 71 nodes to 70 with the rest
+  of the proof still drawn; the root's skip 71 → 57; `collapse all` 80 → 14.
 - **Brief mode (⋯)** collapses boilerplate within a label. The rules are
   deliberately asymmetric, and getting the asymmetry right was the actual work.
   For a binder-like tactic, the keyword is dropped and the statement kept
@@ -341,28 +358,23 @@ independent ways to compress it. All of them compose, and all are reversible:
   and loses its arguments (`exact ⟨…⟩` → `exact …`): there, the keyword is
   what you skim for. A single uniform rule was tried first and measured wrong
   for half the cases.
-- **Overview mode** (currently parked: its rail slot now carries the comment
-  toggle, and the mode sits behind a state flag nothing sets — bringing it
-  back is one button). Everything outside the cursor's local neighbourhood
-  shrinks to a one-line chip. This is implemented as real geometry, not a
-  scale transform, because scaling shrinks the ink without giving back the
-  space. The neighbourhood is directed — ancestors and descendants, two levels
-  each way — rather than a radius, because a radius would pull in sibling
-  branches through the shared parent goal, which is exactly the material an
-  overview is supposed to remove.
-- **Comment strips off (`--`)** — a global rail toggle plus a per-node hide.
+- **Comment strips off** — a global status-bar toggle plus a per-node hide.
   Both take effect at the one place a strip is measured, so a hidden strip
   gives its room back to the layout; this is geometry, not just paint, and it
   was measured at −8.8% total corpus height. The per-node set survives the
   global switch being flipped, because turning comments back on globally
   should not silently undo the ones you hid individually.
-- **Elision** — three kinds of cut sharing one mechanism: a pure transform on
+- **Skip** (elision, in the code) — two kinds of cut sharing one mechanism: a pure transform on
   the node list, applied before layout, because a layout-level mask can only
   hide whole subtrees and a cut in the middle of the tree must keep what hangs
-  below it. The three are a picked **path**, a vertical **band**, and a
-  **step cut** (⬚) that removes a tactic together with everything not
-  reachable through its continuation. Which child counts as the continuation
-  is read from semantic markers on the nodes, not from geometry. Overlapping
+  below it. The two are a **band** (the marquee selection's `skip` verb, over
+  an explicit set of nodes) and a **step cut** that removes a tactic
+  together with everything not reachable through its continuation. Its button
+  is a small drawn dashed box — a picture of the ghost the gesture leaves
+  behind, where the dotted circle it replaced named nothing on screen. Which child
+  counts as the continuation is read from semantic markers on the nodes, not
+  from geometry. A leaf tactic is declined outright: it opened nothing, so
+  there is nothing to skip. Overlapping
   cuts are made disjoint before applying. Two cuts sharing a node used to
   emit two markers that pointed at each other — a two-node cycle, drawn as
   links running back up the tree through ghost boxes. Of 318 possible
@@ -372,37 +384,67 @@ independent ways to compress it. All of them compose, and all are reversible:
   cut is remembered rather than discarded — removing the survivor brings it
   back.
 - **Marquee selection** — dragging on the tree background rubber-bands a
-  rectangle, and a row of verb chips appears above the selection: elide,
-  combine, fold, hide/show notes, and the flag writers described below. The
+  rectangle, and a row of verb chips appears above the selection: skip,
+  merge, hide/show notes, and the flag writers described below. The
   chips sit on one opaque backing card, because the row lands wherever the
   selection's top edge is — routinely on top of tree ink, where outlined chips
   with the tree showing through are unreadable.
-- **Combine (⇉)** — every maximal straight-line run of tactics collapses into
+- **Merge** — every maximal straight-line run of tactics collapses into
   a single node that joins their labels, keeping per-token colouring intact.
-- **Gallery (❮❯)** — show one of a branching tactic's subtrees at a time, with
+- **Focus and path** — the two scoping views, mutually exclusive, each with a
+  breadcrumb in the header that names it and exits it. **Focus** (◎ or ⌥-click
+  on a goal) scopes to one subtree. **Path** (⊹ on any node) shows only the
+  way to that node from the root and everything under it — the reading you
+  want when a branch is the answer and the rest of the tree is context. Both
+  are view state keyed on source facts and remapped across a re-elaboration;
+  neither suspends folding.
+- **Gallery** — show one of a branching tactic's subtrees at a time, with
   a pager. It follows the editor cursor: if the cursor lands in a hidden
   branch, the gallery pages to it.
-- **Side-by-side (◫)** — a branching tactic's subtrees become columns. Columns
+- **Side-by-side** — a branching tactic's subtrees become columns. Columns
   are packed by contour: each column's ragged left profile slides left until
   it nearly touches the previous column. The contour includes the connector
   lines, mirroring exactly what the renderer draws.
-- **Reflow (¶)** — re-wraps labels and comment strips at a narrower,
+- **Width (status bar)** — re-wraps labels and comment strips at a narrower,
   slider-controlled width. The key discovery: labels were never the limiting
   factor. Most wide boxes are wide because of their widest *context* line, so
-  reflow wraps those too — at a known cost: a wrapped hypothesis line no
-  longer matches its measured text, so it loses its type tooltip.
+  the width setting wraps those too — at a known cost: a wrapped hypothesis line no
+  longer matches its measured text, so it loses its type tooltip. In the
+  **tracks** layout the same setting has a second, direct input: the boundary
+  between the goal column and the shared tactic column is drawn as a hairline
+  **seam** you can drag — right for more columns, left for fewer, with a live
+  `44 col` readout beside the pointer. The seam is not new layout state; it is
+  the column the aligned pass had already computed, published so the width can
+  be set by pulling on the thing it governs.
 
 Source comments can also carry **Alectryon-style display flags**: `-- .fold`,
-`-- .none`, `-- .no-hyps` and `-- .h#name` are directives that seed the
-initial view. The parse order matters: flags are parsed before the markdown
+`-- .none`, `-- .no-hyps`, `-- .h#name` and `-- .mark` are directives that seed
+the initial view. `-- .mark` is the odd one out: it hides nothing, it drops a
+**mark** — one stop in an ordered reading of the proof, modelled on VS Code's
+CodeTour crossed with vim marks. `.mark 3` gives a mark an explicit rank
+(explicit ranks sort ahead of bare ones, which run in source order), and the
+comment's first sentence captions it. `<` and `>` step through the marks — from
+a standing start `>` takes the first and `<` the last; the status bar's
+`Marks:` item says how far in you are (`–/5` before you have started), its two
+slots which of the two lists are on — the source's `.mark`s and your own
+temporary ones — and ⌥-click cycles them (both → source → temp → none, where
+the value reads a dimmed `off`). A mark of your own is dropped from the nub at
+a box's top-left corner; ⌥-click there writes the author's `.mark` into the
+source instead. A proof with `.mark`s wears its tabs the moment you open it.
+Esc lets go of the current mark and leaves the list where it was. A mark hidden
+inside a fold or a hop is *peeked* open for as long as you are reading it — a
+reading never destroys your folds. The parse order matters: flags are parsed before the markdown
 cleanup, because cleanup turns `` `.fold` `` into `.fold` — so prose merely
 *mentioning* a flag in backticks used to become a directive. That happened for
 real.
 
-Flags are now **written as well as read**. The marquee pill's remaining verbs
+Flags are now **written as well as read**. The marquee pill's flag verbs
 write the directives into the source — one comment line above the tactic, at
 the tactic's own column — and remove them again, closing the loop with the
-read side. Writing flags by hand remains fully supported, and is exactly what
+read side. They live behind a single expanding `flag` chip: the resting pill
+reads `skip · merge · comments · + · flag`, and clicking `flag` opens the five
+writers in place in the same card (clicking it again, Esc, or a click on the
+background shuts them). Writing flags by hand remains fully supported, and is exactly what
 the write path round-trips through. The rules for where a written flag lands
 were settled by an offline probe that patches the source, runs the real
 attribution code, and asserts which node the flag lands on: 95 of 95 passed,
@@ -435,6 +477,14 @@ file. The server therefore ships verbatim re-extracted source ranges, and
 commits go through the editor's own `applyEdit` — so undo, re-elaboration and
 every other extension behave normally.
 
+The editor stands exactly where the box stood: its border box is the box's own
+rect — same left edge, same top, same height, same corner radius — and it says
+"you are editing" with the border's *colour* (the accent, or the prose ink for
+a comment) rather than by drawing a smaller rectangle inside the one it
+replaced. Its border and padding add up to the box's own text inset, so the
+first glyph does not move when the editor opens: measured, 0.16px against
+1.16px before.
+
 Around that core sit several features with deliberate shapes:
 
 - **Syntax colouring while typing** uses a mirror element behind a transparent
@@ -461,10 +511,12 @@ Around that core sit several features with deliberate shapes:
   of the insertion (bullet, case marker, plain line) is computed from the
   producing step and shipped as data, and the insertion column is read from
   the source — both of the plausible client-side answers turn out to be wrong.
-- **Delete (⊘)** is the only destructive gesture, so it arms on the first
-  click and only writes on the second, previewing the exact text range in the
-  buffer in between. When a tactic shares a line with a neighbour, it declines
-  rather than guessing.
+- **Delete** (a trash can in the hover bar) is the only destructive gesture,
+  so it arms on the first click and only writes on the second, previewing the
+  exact text range in the buffer in between. Hovering the can *before* arming
+  fades the nodes the extent would take — the same set the armed state dims,
+  computed by the one helper both read. When a tactic shares a line with a
+  neighbour, it declines rather than guessing.
 - **Undo/redo from the tree** exists because every widget edit leaves keyboard
   focus in the webview, where ⌘Z reaches nothing.
 
@@ -600,13 +652,75 @@ don't control.
   lives inside it), the marker attribute must sit outside the `<details>` so
   the ordering rules keep matching while collapsed, and the element whose
   height is measured must sit inside it.
-- **Frame height.** The widget sizes itself as a fraction of the remaining
-  viewport. Measuring a *collapsed* panel needed two different guards, because
-  Chromium changed how a closed `<details>` hides its content and a webview
-  can be either vintage: older versions drop the boxes entirely, newer ones
-  keep stale boxes that only `checkVisibility()` admits are hidden. Whether
-  the tree should stop short of the bottom edge or run right up to it is
-  treated as a preference, not a fact — so it is a setting.
+- **Frame height.** The widget takes all the remaining viewport there is,
+  less a fixed clearance at the bottom, because the infoview's own floating
+  "Restart File" button owns that strip — and the status bar and the zoom rail
+  sit in the frame's own bottom corners. The number that clearance is
+  subtracted from is the widget root's top **in viewport
+  coordinates**, and getting that wrong is what put the frame's bottom (and
+  the status bar with it) below the fold in the real panel: the measurement
+  used to add the page's scroll offset, i.e. it reported the root's position
+  in the *document*, which agrees with the viewport only at scroll 0 and only
+  while nothing above the tree has moved — and in the infoview the blocks
+  above it resize on every cursor move. The listeners follow from the same
+  fact: a `ResizeObserver` on the body sees nothing when a section above grows
+  inside a fixed-height body, and `window`'s `scroll` event never fires for an
+  inner scroller, so the scroll listener is a capturing one and a no-dep
+  layout effect re-measures after every render. The height stays a CSS `calc`
+  over `100vh` rather than a resolved pixel number, because a webview hidden
+  while the panel is resized fires neither observer nor handler. Measuring a
+  *collapsed* panel needed two different guards, because Chromium changed how
+  a closed `<details>` hides its content and a webview can be either vintage:
+  older versions drop the boxes entirely, newer ones keep stale boxes that
+  only `checkVisibility()` admits are hidden. Whether the tree should stop
+  short of the bottom edge or run right up to it used to be a setting
+  (`ramify.tallFrame`) and then a fraction; both are gone — with an absolute
+  clearance doing the real work, each was a second number saying the same
+  thing, and the strip it left behind is real page that takes a wheel.
+  The infoview host imposes no cap of its own on a panel widget's height —
+  read off the shipped bundle after a report of a short frame: every element
+  between the widget and the page body is an auto-height block box. What the
+  frame is guarded against instead is being *shrunk*: the rule that reorders
+  the sections makes the container a flex column, where a height is only a
+  hypothetical, so the widget's item is pinned and the frame carries its
+  height as a minimum as well.
+- **The status bar floats over the tree, and it is always one row.** It is a
+  card as wide as its content, hugging the bottom-left corner and capped short
+  of the zoom rail's own column, over a tree that flows *under* it: the scroll
+  container reserves nothing for the card, and the layout's full viewport of
+  bottom padding means anything can still be scrolled clear of it. It hugs
+  rather than stretches because a card held open to a fixed right edge reads as
+  a strip claiming room it is not using. Neither of the other two answers
+  to a narrow panel survived: clipping silently loses items off the right end,
+  and wrapping buys them back by growing a second row over the tree. What a
+  narrow panel gets instead is a **compact** row — the same items, the same
+  order, the same menus, drawn as glyphs with the words moved into the
+  tooltips they were already carrying. The switch is measured rather than
+  guessed at a breakpoint: a hidden copy of the row, always rendered with the
+  full labels, reports what the words would need (492px, measured), and compact
+  is simply "that does not fit" in the *lane* — the frame less the two insets,
+  never the card's own width, which with a hugging card is just what it already
+  draws. It cannot oscillate, because the hidden copy says the same thing
+  whichever row is drawn. Each compact glyph carries its own point size, set so
+  they all ink to the same height: they come from four corners of Unicode, and
+  at one flat size the tracks mark stood 6px taller than the outline mark. There are no dividers between items. The
+  gesture
+  reference (`?`) is the bar's last item and opens upward from it; the rail in
+  the opposite (bottom-right) corner is down to zoom in, zoom out, and fit.
+  Each bar item reads `Name: value` and ⌥-clicking one advances its setting
+  instead of opening its list; a small drawn chevron says which items open a
+  list. Two names are an *icon* rather than a word even in the full row — a
+  speech bubble before `show` for comments, an outward double arrow before
+  `full` for width, and `↺` for reset — where the value already implies the
+  name and the row needs the width back; the tooltip always spells the word
+  out. The icons are drawn, not typed: a character has to be chosen for what
+  every font stack happens to have, and the two that stood here read as
+  punctuation left in by accident rather than as controls. An item is highlighted only when it
+  names a feature that is *on* (width, and the reading options): a choice
+  among equals, like which layout is drawn, says which it is and leaves it
+  at that. While a mode is up (an
+  armed delete, a staged `calc` fill) a banner says so at top-centre, so the
+  bar never changes shape underneath the pointer.
 - **Interactive tooltips.** Goal labels get the infoview's own per-subterm
   type popups. Three invariants make that safe: text equality (a tagged line
   is only used if its stripped text equals the measured string), no second
@@ -675,7 +789,7 @@ built to hold the view still, defeated by exactly the edits it was built for:
   The key is now the declaration name.
 - The relayout anchor was id-keyed. After commenting out one tactic, 8 of 69
   nodes still matched by id — versus 69 of 69 when keyed on source position.
-- Fold, focus, sequence and elision state were silently wiped by editing a
+- Fold, focus, scope and elision state were silently wiped by editing a
   *different theorem* in the same file, because not one stored id still
   resolved. Translating old ids to new ones by tree position recovered 10 of
   10, where ids alone recovered 0 of 10.

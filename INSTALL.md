@@ -110,7 +110,6 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 	- Edits made from the tree leave focus in the webview, where &#8984;Z won't do anything; works around this by focusing the editor.
 - **Settings** (see the extension itself for detailed descriptions):
 	- `ramify.outlineOnly`,
-	- `ramify.tallFrame`,
 	- `ramify.linkMarks`,
 	- `ramify.linkTint`,
 	- `ramify.counterfactual`,

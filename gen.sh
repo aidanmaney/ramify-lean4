@@ -25,7 +25,9 @@ echo "parsing $ROOT/proofs/*.lean (import Mathlib loads Mathlib — first run is
 # in its footer and the file is TRACKED, so the author's home directory would be
 # committed and displayed; strip the repo root back off on the way out, leaving
 # `proofs/euclid.lean` — the path a reader of this repository can actually use.
-lake env lake exe ppharness "$ROOT"/proofs/*.lean \
+# One process per file: a single run over the whole corpus is killed
+# (exit 137) part-way through, each file's Mathlib import staying resident.
+for f in "$ROOT"/proofs/*.lean; do lake env lake exe ppharness "$f"; done \
   | sed "s|\"file\":\"$ROOT/|\"file\":\"|g" > "$OUT"
 
 echo "wrote $OUT ($(grep -c . "$OUT") proof(s))"

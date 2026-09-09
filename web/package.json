@@ -11,7 +11,8 @@
     "build:widget": "node build-widget.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -b",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "probe": "node probe/run.mjs"
   },
   "dependencies": {
     "@leanprover/unicode-input": "^0.1.11",

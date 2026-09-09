@@ -1,91 +1,59 @@
-/**
- * The tree's gesture vocabulary, in ONE table.
- *
- * Almost everything this view can do is a click, a modifier, a double-click or
- * a drag, and until now the only place any of it was written down was the
- * node's native `<title>`. That tooltip is unreachable in the product: a
- * tagged label covers the box with a `foreignObject`, so the `<title>` retreats
- * to the `<rect>` and survives only on the `NODE_PAD` border — which means the
- * dev harness (plain SVG labels) taught the gestures and the shipping widget
- * did not. Worse, the marquee drag that gates ten source-writing verbs was
- * announced nowhere at all.
- *
- * So the table serves two readers: `nodeHints` builds a node's own `<title>`
- * from it, and `HelpPanel` renders the whole thing. Neither owns a private
- * copy, which is the point — a per-node hint and the reference cannot describe
- * the same gesture differently.
- *
- * DRIFT, honestly: rows with a `when` are derived from the very gates that
- * route the clicks, so they cannot claim a gesture the node does not offer.
- * Rows with only a `needs` have their PRESENCE derived from the host's
- * capabilities but their WORDING is prose (the background drag, the comment
- * strip, the chips, the keys) — there is no gate to read for those, and
- * pretending otherwise in a comment would be worse than saying so here.
- *
- * Pure data and pure functions: no React, no infoview imports, so it can be
- * probed offline like `deleteEdit.ts` and `flagEdit.ts`.
- */
-
-/** ⌘ on a Mac, Ctrl everywhere else — the modifier the editor itself uses for
-go-to-definition, so the tree borrows the platform's own word for it. */
 export const CMD =
   typeof navigator !== "undefined" && /Mac/.test(navigator.platform)
     ? "⌘"
     : "Ctrl";
 
-/** The gutter mark on a context line the consuming tactic uses. Lives here
-because it is also a legend entry — the one part of a box that is not
-self-explanatory. */
 export const HYP_MARK = "▸";
 
-/**
- * What one drawn node offers, read off the SAME predicates `handleClick` and
- * the hover bar branch on. Every field is a gate that already existed; this
- * type only gives them a name so the hint table can be pure.
- */
 export type NodeGates = {
-  /** A tactic whose bare click reveals its source (widget only). */
   revealable: boolean;
-  /** A goal that reveals on ⌘-click — needs a position, so NOT the root. */
+
+  /** What this goal's `−` does — elide.ts's `goalCut`, which dispatches on
+   the layout and on whether the goal is on the TRUNK: `"fold"` takes the
+   subtree below it, `"skip"` hops it over the step below, `"open"`
+   is a `+N` bringing a folded branch back, and `null` is no glyph at all. */
+  goalCut: "fold" | "skip" | "open" | null;
+
   goalRevealable: boolean;
-  /** Double-click opens the in-place editor. */
+
   editable: boolean;
-  /** A combined run: double-click edits the PART under the pointer. */
+
   partEditable: boolean;
-  /** The box is showing prose (narration mode), so double-click edits the
-  COMMENT rather than the tactic — the one gesture that changes meaning under
-  a rail toggle. */
+
   proseLabel: boolean;
-  /** ⌥-click elides. */
+
   elidable: boolean;
-  /** …except on a closing tactic, where it folds the goal above instead. */
-  leafFold: boolean;
-  /** A goal that can become the root of a focused view. */
+
   focusable: boolean;
-  /** The goal currently focused: the same two gestures lead back out. */
+
   isFocusRoot: boolean;
-  /** At least one context line is flagged used, so the ▸ legend is worth it. */
+
+  pathable: boolean;
+
+  isPathRoot: boolean;
+
   anyUsedHyp: boolean;
-  /** TACTICS: the goal box above is drawn and flags at least one line as used
-  BY THIS TACTIC, so hovering it has something to mark. Same flag as
-  `anyUsedHyp` read from the other end of the edge — hence a separate gate
-  rather than a reuse: a tactic carries no context of its own. */
+
   usesHyps: boolean;
-  /** A `calc` LEDGER: the box's relation rows each state a settled link, and
-  clicking one opens that link's intermediate goal box below (see
-  proofToTree's `openLinks`). */
+
   ledgerRows: boolean;
-  /** A CLOSED ledgered link's justification: its bar carries `+`, the same
-  gesture as clicking the link's ledger row, reached from the other end. */
+
   linkGoal: boolean;
+
+  /** This node already carries one of the READER's marks (⌥-click on its
+   numbered tab takes it back off); `tourMarkable` is whether a `.mark` can be
+   WRITTEN above it, which needs a tactic that starts its own line. */
+  tourStop: boolean;
+
+  tourMarkable: boolean;
+
+  /** This node already WEARS a numbered tab, and whose mark it is. A tab is a
+   place in the reading, so clicking one JUMPS to it whoever dropped it; only
+   your own can be taken back off, and that is the ⌥-click. `null` is a node
+   with no tab, which is where the corner nub is offered instead. */
+  tourTab: "author" | "mine" | null;
 };
 
-/**
- * What the HOST offers, from the hooks the view was handed. The standalone app
- * passes no editing hooks, so filtering the catalogue on this is what lets one
- * table serve both without a second, shorter, hand-maintained list going stale
- * beside it.
- */
 export type Caps = {
   reveal: boolean;
   edit: boolean;
@@ -107,36 +75,46 @@ export type GestureTarget =
 
 export type Gesture = {
   target: GestureTarget;
-  /** The input, as the user performs it: `click`, `⌥-click`, `drag`, `Esc`. */
+
   input: string;
-  /** What it does, phrased to follow the input: "to reveal in source". */
+
   says: string;
-  /** Present ⇒ this row is also a NODE hint, shown exactly when it holds. */
+
   when?: (g: NodeGates) => boolean;
-  /** The host capability the row needs; absent ⇒ always available. */
+
   needs?: keyof Caps;
-  /** One clause of caveat, drawn dimmer. */
+
   note?: string;
 };
 
-/** One row's full text — the form the node `<title>` has always used. */
 export const gestureText = (g: Gesture) => `${g.input} ${g.says}`;
 
 export const GESTURES: Gesture[] = [
-  // ── Goal boxes ────────────────────────────────────────────────────────────
   {
     target: "goal",
     input: "click",
-    says: "to fold or unfold the proof below it",
+    says: "to fold this branch away (the goal keeps a +N saying how much)",
+    when: (g) => g.goalCut === "fold",
+  },
+  {
+    target: "goal",
+    input: "click",
+    says: "to hop over the step below — the goal keeps a +N, and the break on the line names what went",
+    when: (g) => g.goalCut === "skip",
+    note: "the goal the next step solves stays on the trunk; click the +N or the break to restore",
+  },
+  {
+    target: "goal",
+    input: "click",
+    says: "to unfold what this goal hides",
+    when: (g) => g.goalCut === "open",
   },
   {
     target: "goal",
     input: `${CMD}-click`,
     says: "to reveal this goal in source",
     needs: "reveal",
-    // Mutually exclusive with the tactic row in practice (one is goals, the
-    // other tactics), but stated as an exclusion so the hint can never show
-    // both if that ever stops being true.
+
     when: (g) => !g.revealable && g.goalRevealable,
   },
   {
@@ -153,10 +131,40 @@ export const GESTURES: Gesture[] = [
   },
   {
     target: "goal",
+    input: "⊹",
+    says: "shows only this path: the way here from the root, and what is under it",
+    when: (g) => g.pathable,
+    note: "the header names the path; its ✕ (or Esc) shows the whole proof again",
+  },
+  {
+    target: "goal",
+    input: "⊹ (or Esc)",
+    says: "shows the whole proof again",
+    when: (g) => g.isPathRoot,
+  },
+  {
+    target: "goal",
     input: "hover",
-    // Each glyph next to the verb it performs — `◎ and focus` read as though
-    // the ◎ belonged to the conjunction.
-    says: "for » reveal and ◎ focus",
+
+    says: "for » reveal, ◎ focus and ⊹ path",
+  },
+  {
+    target: "goal",
+    input: "the corner nub",
+    says: "drops a mark here (turning the temporary list on if it was off) — the dashed tab appears when the pointer is at the box's top-left corner, and `>` and `<` then read the proof mark by mark",
+    when: (g) => !g.tourTab && !g.tourStop,
+  },
+  {
+    target: "goal",
+    input: "its numbered tab",
+    says: "goes to that mark — source and temporary marks are read as one list",
+    when: (g) => g.tourTab === "author",
+  },
+  {
+    target: "goal",
+    input: "its numbered tab",
+    says: "goes to that mark; ⌥-click on it takes the temporary mark back off",
+    when: (g) => g.tourTab === "mine",
   },
   {
     target: "goal",
@@ -164,7 +172,7 @@ export const GESTURES: Gesture[] = [
     says: "= used by the tactic below",
     when: (g) => g.anyUsedHyp,
   },
-  // ── Tactic boxes ──────────────────────────────────────────────────────────
+
   {
     target: "tactic",
     input: "click",
@@ -181,15 +189,12 @@ export const GESTURES: Gesture[] = [
     note: "⇧Enter inserts a newline, Esc cancels, Enter commits; Unicode expands automatically e.g. \\alpha -> α",
   },
   {
-    // Narration mode swaps what this gesture edits, and the hint has to swap
-    // with it — the box is showing prose, so "double-click to edit" pointed at
-    // the wrong thing entirely.
     target: "tactic",
     input: "double-click",
     says: "to edit comment-tactic prose",
     needs: "edit",
     when: (g) => g.editable && g.proseLabel,
-    note: "⌥-click `--` on the rail to show tactics normally",
+    note: "Comments: show on the status bar shows the tactics again",
   },
   {
     target: "tactic",
@@ -201,46 +206,55 @@ export const GESTURES: Gesture[] = [
   {
     target: "tactic",
     input: "⌥-click",
-    says: "to elide step(s) into the trunk",
-    when: (g) => g.elidable && !g.leafFold,
-    note: "a ghost stays behind; click to bring step(s) back",
-  },
-  {
-    target: "tactic",
-    input: "⌥-click",
-    says: "to put this step away",
-    when: (g) => g.elidable && g.leafFold,
-    // The substitution `leafFoldTargets` makes, said out loud. It is invisible
-    // otherwise — there is no glyph on a bare modifier to explain it.
-    note: "a closing step has nothing below to elide, so this folds the goal above; that goal's + brings it back",
+    says: "to skip this step: the goal above hops over it",
+    when: (g) => g.elidable,
+    note: "its goal wears +N and the break on the line names what was skipped; click either to bring the step(s) back",
   },
   {
     target: "tactic",
     input: "hover",
-    says: "for ⧉ lens, ◌ elide, ⊘ delete",
+    says: "for ⧉ lens, skip, ⊹ path and the trash can",
     needs: "popout",
   },
   {
-    // The ▸ legend's other end. `anyUsedHyp` says what the mark MEANS on the
-    // goal box that carries it; this says where to ask the question — and it
-    // is the only way to get an answer at all where the gutter is suppressed
-    // because the tactic uses everything shown.
+    target: "tactic",
+    input: "the corner nub",
+    says: "drops a mark here (turning the temporary list on if it was off) — the dashed tab appears when the pointer is at the box's top-left corner, and `>` and `<` then read the proof mark by mark",
+    when: (g) => !g.tourTab && !g.tourStop,
+  },
+  {
+    target: "tactic",
+    input: "its numbered tab",
+    says: "goes to that mark — source and temporary marks are read as one list",
+    when: (g) => g.tourTab === "author",
+  },
+  {
+    target: "tactic",
+    input: "its numbered tab",
+    says: "goes to that mark; ⌥-click on it takes the temporary mark back off",
+    when: (g) => g.tourTab === "mine",
+  },
+  {
+    target: "tactic",
+    input: "⌥-click the corner nub",
+    says: "writes `-- .mark` above this tactic, so the mark is the AUTHOR's and every reader gets it",
+    needs: "flags",
+    when: (g) => g.tourMarkable,
+    note: "`.mark 3` in the source gives a mark an explicit rank; the comment's first sentence captions it",
+  },
+  {
     target: "tactic",
     input: "hover",
-    // "marks", not "highlights" or "underlines": HOW it is drawn is
-    // `ramify.hypMarkStyle` (a wash by default, a dashed rule for readers who
-    // need the shape), and this one line is the text BOTH the `?` panel and
-    // the node's own tooltip read. Naming one of the two would be wrong on
-    // screen for whoever set the other.
+
     says: `marks the hypotheses it uses, in the goal above (${HYP_MARK})`,
     when: (g) => g.usesHyps,
   },
   {
     target: "tactic",
-    input: "⊘ + confirm",
+    input: "trash can + confirm",
     says: "to delete; first click opens prompt",
     needs: "del",
-    note: "the extent lights up in the editor and the chip says how many lines",
+    note: "hovering it fades what goes; the extent lights up in the editor and the chip says how many lines",
   },
   {
     target: "goal",
@@ -255,11 +269,12 @@ export const GESTURES: Gesture[] = [
     says: "shows the goal this calc step proves, above it",
     when: (g) => g.linkGoal,
   },
-  // ── Ghosts and chips ──────────────────────────────────────────────────────
+
   {
     target: "ghost",
     input: "click",
-    says: "to return what elide ◌ took",
+    says:
+      "to return what the marquee (or a `.none` in the source) put away — a cut the SOURCE asked for wears a leading `§` and leans, so the author's hand reads apart from your own",
   },
   {
     target: "ghost",
@@ -291,7 +306,7 @@ export const GESTURES: Gesture[] = [
     says: "fills a hole you wrote yourself",
     needs: "add",
   },
-  // ── The comment strip ─────────────────────────────────────────────────────
+
   {
     target: "strip",
     input: "double-click",
@@ -299,7 +314,7 @@ export const GESTURES: Gesture[] = [
     needs: "edit",
     note: "leaving the textbox empty removes the comment",
   },
-  // ── The background ────────────────────────────────────────────────────────
+
   {
     target: "background",
     input: "drag",
@@ -310,12 +325,21 @@ export const GESTURES: Gesture[] = [
     input: "click",
     says: "to unhighlight a node and close open prompts",
   },
-  // ── Keys ──────────────────────────────────────────────────────────────────
+
   {
     target: "keys",
     input: "Esc",
     says: "backs out of one state at a time — the most recent first",
     note: "E.g. escaping twice to stop deleting tactics then exit a focused subtree",
+  },
+  {
+    target: "keys",
+    // PUNCTUATION, not letters: the no-single-letter-keys rule exists because
+    // a bare letter collides with vim's own bindings in the editor beside us.
+    // `<` and `>` are Shift-comma and Shift-period, which nothing else claims.
+    input: "< / >",
+    says: "step back and forward through the marks — from a standing start, `>` takes the first mark and `<` the last (the status bar's Marks item says how far in, and its two slots which lists are on — source, then temporary; click it to toggle either, ⌥-click cycles both → source → temp → none, where it reads `off`)",
+    note: "Esc lets go of the current mark, keeping the list; a mark hidden inside a fold or a hop is PEEKED open, not unfolded — your own folds survive the reading",
   },
   {
     target: "keys",
@@ -335,123 +359,108 @@ export const GESTURES: Gesture[] = [
   },
 ];
 
-/** Section headings for the panel, in the order they are drawn. */
 export const GESTURE_SECTIONS: { target: GestureTarget; title: string }[] = [
   { target: "goal", title: "Goal boxes" },
   { target: "tactic", title: "Tactic boxes" },
-  { target: "ghost", title: "Ghosts (◌)" },
+  { target: "ghost", title: "Ghosts — the dashed boxes a marquee or a `.none` leaves (`§` and italics when the source asked for it)" },
   { target: "chips", title: "Unfinished goal chips" },
   { target: "strip", title: "Comment strips" },
   { target: "background", title: "Background" },
   { target: "keys", title: "Keys" },
 ];
 
-/**
- * A node's own hints — exactly the rows whose gate holds. This IS the node
- * `<title>`'s content, so the tooltip and the panel are the same table read
- * two ways, and a gate that stops holding removes the claim from both.
- */
 export function nodeHints(g: NodeGates): string[] {
-  return GESTURES.filter((x) => x.when?.(g)).map(gestureText);
+  // `nodeHints` gates on `when` ALONE — it does not know which target it is
+  // reading for, and never has: the gates themselves are what separate a
+  // goal's rows from a tactic's (`revealable` against `goalRevealable`, and
+  // so on). The mark rows are the same sentence under the same target-blind
+  // gate on BOTH targets, so they came out twice in a node's `<title>`
+  // (measured on a goal: the nub row and the tab row, each doubled). A node's hints
+  // are a set of sentences, so keep the first of each; the `?` panel reads
+  // GESTURES per section and still shows the row under both headings.
+  const seen = new Set<string>();
+  return GESTURES.filter((x) => x.when?.(g))
+    .map(gestureText)
+    .filter((t) => {
+      if (seen.has(t)) return false;
+      seen.add(t);
+      return true;
+    });
 }
 
-// ── The marquee selection's verbs ───────────────────────────────────────────
-
-/**
- * Every verb the selection pill can offer. A `Record` over the union rather
- * than a list, so a verb added without documenting it is a TYPE ERROR — the
- * strongest anti-drift guard available here, and one `npm run typecheck`
- * already runs.
- *
- * The keys are VERBS, not the payload shapes they happen to share: `.no-hyps`
- * and `.h#used` both travel as bare patches, and describing them as one thing
- * is exactly how a chip ends up with someone else's tooltip.
- */
 export type SelVerbDocKey =
   | "elide"
   | "combine"
   | "uncombine"
-  | "noteHide"
-  | "noteShow"
+  | "comments"
+  | "addNote"
   | "flagFold"
   | "flagNone"
-  | "note"
   | "noHyps"
   | "hUsed"
   | "unflag";
 
 export type SelVerbDoc = {
   label: string;
+
+  // The chip's own `<title>`. `titleAlt` is the SAME verb read the other way
+  // round — only `comments`, whose one chip both hides and restores, has one;
+  // the label is constant and the title is what says which way the click goes.
   title: string;
-  /**
-   * Whether picking this verb WRITES to the document. The pill draws the two
-   * classes apart on it — before this they were the same chip in the same ink
-   * on the same card, so `elide` (pure view state) sat two along from `unflag`
-   * (deletes the author's prose, whole lines of it).
-   */
-  writes: boolean;
+  titleAlt?: string;
 };
 
-/** The clause every writing verb ends with, written ONCE. It is the same
-sentence the armed-delete confirm chip carries, which is the point: the two
-destructive surfaces should promise the same thing in the same words. */
 const UNDO = `${CMD}Z in the editor undoes it`;
 
 export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   elide: {
-    label: "elide",
-    title: "Collapse the selection to a ◌ marker (click to restore)",
-    writes: false,
+    label: "skip",
+    title: "Put the selection away — one dashed box, or a hop when it is a straight run (click to restore)",
   },
   combine: {
-    label: "combine",
+    label: "merge",
     title: "Merge this straight run of tactics into one stacked box",
-    writes: false,
   },
   uncombine: {
-    label: "uncombine",
-    title: "Unmerge the selected combined run(s) back into their tactics",
-    writes: false,
+    label: "unmerge",
+    title: "Unmerge the selected merged run(s) back into their tactics",
   },
-  noteHide: {
-    label: "¬note",
+  comments: {
+    label: "comments",
     title:
       "Stop drawing the comment strip on the selected node(s) — the source keeps its prose",
-    writes: false,
+    titleAlt: "Draw the comment strip on the selected node(s) again",
   },
-  noteShow: {
-    label: "¬¬note",
-    title: "Draw the comment strip on the selected node(s) again",
-    writes: false,
+  addNote: {
+    label: "+",
+    title: `Add a comment above this tactic — it becomes the node's comment strip (${UNDO})`,
   },
   flagFold: {
     label: ".fold",
     title: `Write a \`-- .fold\` flag above each head tactic — folded in the SOURCE, so it starts folded every time (${UNDO})`,
-    writes: true,
   },
   flagNone: {
     label: ".none…",
-    title: `Replace this step and whatever it opened with a sentence — writes \`-- .none <your prose>\` in the source; the ghost shows your words (${UNDO})`,
-    writes: true,
-  },
-  note: {
-    label: "note…",
-    title: `Write a plain comment above this tactic — it becomes the node's comment strip (${UNDO})`,
-    writes: true,
+    title: `Replace this step and whatever it opened with a sentence — writes \`-- .none <your prose>\` in the source; your words caption the break it leaves, marked \`§\` and italic once the source is read back (${UNDO})`,
   },
   noHyps: {
     label: ".no-hyps",
     title: `Write \`-- .no-hyps\` for each selected goal: hide its context block (the goal alone is the point) (${UNDO})`,
-    writes: true,
   },
   hUsed: {
     label: ".h#used",
     title: `Pin each selected goal's context to its ${HYP_MARK}-used hypotheses — writes one \`.h#name\` per used line (${UNDO})`,
-    writes: true,
   },
   unflag: {
     label: "unflag",
     title: `Remove the selected nodes' flag comments — the WHOLE line goes, prose included upon confirming the prompt (${UNDO})`,
-    writes: true,
   },
+};
+
+// The `flag ▾` chip is not a verb — it opens and shuts the row of Alectryon
+// writers above — so it carries its own label and title rather than a
+// VERB_DOC entry nothing dispatches.
+export const FLAG_GROUP = {
+  label: "flag ▾",
+  title: "Alectryon flags: write .fold / .none / .no-hyps / .h# into the source — what they hide is drawn in the author's voice (`§`, italics, comment ink)",
 };

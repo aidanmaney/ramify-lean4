@@ -1,27 +1,12 @@
 import Ramify
 import Mathlib
 
-/-!
-# Proof-tree widget scratchpad (Mathlib proofs)
 
-The Mathlib counterpart of `ProofTreeDemo.lean` (which stays deliberately
-core-only so it opens instantly): open this file in VS Code to view any of the
-`proofs/*.lean` samples in the widget — they are CLI inputs outside this Lake
-project, so the widget can't attach to them directly. Paste a sample's theorem
-below (they all just `import Mathlib`) and put the cursor inside its proof.
-
-Elaborating this file needs Mathlib's prebuilt oleans on disk. They are a
-build-dep fetched by `lake exe cache get` — re-run it after any `lake clean`,
-which deletes them (letting the editor rebuild Mathlib from source instead
-takes hours).
-
-`proofs/euclid.lean` is inlined below as a starting point.
--/
 
 show_panel_widgets [Ramify]
 
 
-/-- **Euclid's theorem: there are infinitely many primes.**
+/-- **Euclid's theorem: theVjre are infinitely many primes.**
 -/
 theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   -- Step 1: N! + 1 is divisible by some prime
@@ -72,6 +57,7 @@ theorem sum_range_odd (n : ℕ) :
       -- Peel the last summand off the range, fold in the hypothesis, and let
       -- `ring` finish the binomial. Only `ih` is worth reading here.
       rw [Finset.sum_range_succ, ih, add_comm]
+      -- .mark hello
       ring
   -- .fold
   -- Step 2: the gap between consecutive partial sums is the next odd number.
@@ -117,10 +103,12 @@ theorem sum_range_odd (n : ℕ) :
       omega
     · -- Odd: the same, one step further along.
       rw [Nat.not_even_iff_odd] at hn
+      -- .mark
       obtain ⟨k, hk⟩ := hn
       rw [hk]
       omega
   -- The four corollaries, in the order the statement lists them.
+  -- .mark
   exact ⟨key n, parity n, gap n, residue⟩
 
 /-- Shaped for the rail's ◫ side-by-side layout (best with ¶ reflow on too):
@@ -223,7 +211,12 @@ next to two goals that mention `?m` and say nothing about where it came from.
 It cannot be written any other way. Lean refuses to finish a command with an
 unassigned natural metavariable, so this state is an `unsolved goals` ERROR,
 never a `sorry` warning — which is why it lives here and not in `proofs/`. -/
-theorem open_shared (a c : Nat) : a ≤ c := by
-  apply Nat.le_trans
-  · sorry
-  · sorry
+
+
+theorem add_comm_zero (n : ℕ) : n + 0 = 0 + n := by
+  induction n with
+  | zero =>
+    rfl
+  | succ k ih =>
+    rw [Nat.add_zero] at ih ⊢
+    rw [Nat.zero_add]

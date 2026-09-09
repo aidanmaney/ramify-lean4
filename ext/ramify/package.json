@@ -10,8 +10,7 @@
   },
   "main": "./extension.js",
   "activationEvents": [
-    "onStartupFinished",
-    "onUri"
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -28,14 +27,9 @@
           "default": false,
           "markdownDescription": "Draw the tree's node boxes as borders with no fill, only showing the colored outline. Purely cosmetic."
         },
-        "ramify.tallFrame": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Let the proof tree run closer to the bottom edge of the infoview. Stops a little short by default."
-        },
         "ramify.linkMarks": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "markdownDescription": "Draw the connectors' node-type marks: a dot near either end of a line for goals, a dash for tactics."
         },
         "ramify.linkTint": {

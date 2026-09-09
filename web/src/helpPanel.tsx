@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 import {
   GESTURES,
   GESTURE_SECTIONS,
@@ -6,62 +8,33 @@ import {
 } from "./gestures";
 import { POPUP_CHROME } from "./theme";
 
-/** The PILL's exact ink, paired with POPUP_CHROME's background — never a
-`--ptw-*` fallback, which follows the PAGE theme while that background's
-fallback is light. Measured here before it shipped: `--vscode-editorWidget-
-foreground` is undefined in the standalone app, so the `--ptw-fg` fallback gave
-`rgb(230,230,230)` on `rgba(255,255,255,0.97)`. That is the recorded
-light-on-light trap, third occurrence. */
 const INK = "var(--vscode-icon-foreground, #2d3748)";
 
-/**
- * The gesture reference — everything the tree can do, in one scrollable panel.
- *
- * It exists because the vocabulary had nowhere else to live. A node's `<title>`
- * is covered by its own tagged label in the infoview, so five of the six
- * modifier gestures were announced only in the dev harness; the marquee drag
- * that gates ten source-writing verbs was announced nowhere at all. The rail's
- * tooltips teach the rail and nothing else.
- *
- * Every row comes from `GESTURES` — the same table `nodeHints` reads for the
- * per-node tooltip — filtered by what the HOST offers, so the standalone app
- * shows a shorter and still-true list rather than promising an editor it has
- * no hooks for.
- *
- * Two things it deliberately does not do. It does not enumerate the rail:
- * twenty buttons that each already have a working tooltip would be the biggest
- * drift surface in the panel, so it says how the rail works and stops. And it
- * does not animate — a hidden webview fires no animation frames, so anything
- * that faded in could fail to arrive at all.
- */
 export function HelpPanel({
   caps,
   fontFamily,
   onClose,
+  anchor,
 }: {
   caps: Caps;
-  /** The editor's own code font, for the input column — these are keys and
-  glyphs, and they read as such only in the font the buffer uses. */
+
   fontFamily: string;
   onClose: () => void;
+  /** Where the panel hangs from its positioned ancestor. It lives on the
+  status bar's `?` item, which sits at the BOTTOM of the frame, so the default
+  is "above, right-aligned" — a panel hung downward from there would be
+  entirely below the fold. Passed in rather than hardcoded so the anchor is
+  stated where the button is. */
+  anchor?: CSSProperties;
 }) {
   const shown = GESTURES.filter((g) => !g.needs || caps[g.needs]);
   return (
     <div
-      // Stops a click inside the panel reaching the scroll container's
-      // background handler, which would close the panel out from under the
-      // pointer as you scrolled it. (`[data-ptw-edit]` does the same for the
-      // in-place editor.)
+
       onClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
-        right: "100%",
-        marginRight: 4,
-        // Anchored to the button's BOTTOM, so the panel grows UP the rail. The
-        // `?` is the last button on it, so hanging it from the top put 342px of
-        // a 504px panel below a 720px viewport (measured). Growing up, its top
-        // lands near the rail's own top, which is where the room is.
-        bottom: 0,
+        ...(anchor ?? { left: 0, bottom: "100%", marginBottom: 4 }),
         width: 420,
         maxWidth: "min(420px, 78vw)",
         maxHeight: "min(70vh, 520px)",
@@ -74,6 +47,10 @@ export function HelpPanel({
         fontSize: 12,
         lineHeight: 1.5,
         textAlign: "left",
+        // The panel now hangs off the status bar, whose card sets
+        // `white-space: nowrap` for its own one-line items — inherited here it
+        // ran every hint line straight off the panel's right edge.
+        whiteSpace: "normal",
         cursor: "default",
       }}
     >
@@ -81,11 +58,7 @@ export function HelpPanel({
         style={{
           display: "flex",
           alignItems: "baseline",
-          // No title: the section headings say what each group is and the rail
-          // button that opens this says what the panel is, so a heading here
-          // only repeated them. With the ✕ alone in the row, `flex-end` is
-          // what keeps it in its corner — `space-between` puts a lone child at
-          // the START, which would have parked it on the left.
+
           justifyContent: "flex-end",
           gap: 8,
           marginBottom: 6,
@@ -134,16 +107,11 @@ export function HelpPanel({
   );
 }
 
-/** One gesture: the input in a fixed gutter so the column of them reads as a
-key list, then what it does, then any caveat on its own dimmer line. */
 function Row({ g, fontFamily }: { g: Gesture; fontFamily: string }) {
   return (
     <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
       <span
         style={{
-          // Wide enough for the longest input, `⌥-click (or Esc)` — at 104 it
-          // ellipsized to `⌥-click (or E…`, which is the one row where the
-          // second way out was the whole point.
           flex: "0 0 126px",
           fontFamily,
           textAlign: "right",

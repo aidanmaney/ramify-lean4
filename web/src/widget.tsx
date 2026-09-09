@@ -1,4 +1,12 @@
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   EditorContext,
   useRpcSession,
@@ -42,61 +50,18 @@ import {
   type TacticTokenInfo,
 } from "./tacticTokens";
 
-// Dwell before a hovered tactic lights up in the editor. Long enough that
-// sweeping the pointer across the tree sends nothing.
 const HOVER_DWELL_MS = 180;
-// Trailing debounce on document-change re-parses: elaboration publishes
-// diagnostics several times as it progresses, and only the last one is worth
-// re-parsing at. Short enough that a committed edit redraws immediately.
+
 const DOC_SETTLE_MS = 120;
-// The TYPING HOLD: how long a changed proof text must sit quiet before the
-// tree swaps it in (see the `stable` machinery below). DOC_SETTLE_MS alone
-// cannot do this job — it coalesces the diagnostics burst WITHIN one
-// elaboration round, while typing produces a fresh round per keystroke, each
-// with a genuinely different proof text that passed the signature gate and
-// relaid the tree out (per keystroke, through broken intermediates: `ri` is a
-// failed tactic, so the recovery node and error ribbon flickered too — the
-// reported "shudder"). Default only; `ramify.typingHoldMs` overrides it
-// over the companion channel, and 0 restores the old swap-immediately
-// behaviour.
+
 const DEFAULT_TYPING_HOLD_MS = 600;
-// Ceiling on the setting: past a few seconds a "hold" reads as the tree being
-// broken, not settling.
+
 const TYPING_HOLD_MAX_MS = 5000;
-// After the widget itself writes the document (applyEdit, undo/redo), the
-// next re-elaboration is that edit's own — the tree should redraw promptly,
-// not sit out the typing hold. A window rather than a one-shot flag: the
-// first payload after an edit can be a stale elaboration finishing, and a
-// flag consumed by it would hold the real redraw instead.
+
 const EXPECT_EDIT_WINDOW_MS = 3000;
-// "clear" carries no meaningful range; the companion ignores it.
+
 const ORIGIN = { line: 0, character: 0 };
 
-/** Is the cursor still inside the declaration the drawn tree belongs to?
- *
- * This is what separates NAVIGATION (the reason a changed `proofId` bypasses
- * the typing hold) from a transient PARSE BREAK, which produces the same
- * signal and must not. Measured on `ProofTreeScratch.lean`: retyping `ring`
- * inside a `calc` link reports, for the two keystrokes where the word is
- * half-written, `proofId: "root_2_irrat_over_int"` with 17 steps — the NEXT
- * theorem in the file. A broken `calc` swallows what follows it (documented
- * under "A `calc` with no subsequent step…"), so the command containing the
- * cursor is named after a declaration the author is nowhere near. Bypassing
- * the hold there swapped a foreign theorem's tree in mid-word, and — since
- * `proofKey` is the declaration name — reset fold, zoom, focus and scroll
- * with it.
- *
- * The cursor is the honest witness: it never moved (line 162 throughout),
- * while the payload's own `declRange` jumped from 143-174 to 177-203. So a
- * `proofId` change counts as navigation only when the cursor has actually
- * LEFT the range the drawn proof occupies.
- *
- * INCLUSIVE at the stop, unlike `positionContains`' half-open rule for step
- * ranges (whose reason — trivia making consecutive tactics share a boundary —
- * is about steps, not declarations). The bias is deliberate: a false "inside"
- * costs one quiet period before a real navigation lands, a false "outside"
- * restores the bug. No range shipped → fall back to trusting `proofId`, which
- * is what this did before. */
 function cursorInDecl(
   decl: ProofStepPosition | undefined,
   p: { line: number; character: number },
@@ -105,24 +70,6 @@ function cursorInDecl(
   return posLE(decl.start, p) && posLE(p, decl.stop);
 }
 
-// The tree gets PRIMACY in the infoview: the info card's body renders its
-// sections as siblings (Tactic state, Expected type, panel widgets, then
-// Messages — see the goals fragment in @leanprover/infoview), and the blocks
-// ABOVE a widget change height on every cursor move, so the tree below them
-// jumps around. There's no API for section order, but our widget lives in
-// the same document, so a `:has()`-scoped stylesheet turns the hosting body
-// into a flex column and orders the tree first — everything else flows
-// BELOW it, so the tree's position is stable and the volatile blocks take
-// space from the bottom, not the top. Scoped entirely on [data-ptw-root] so
-// no other infoview surface is touched.
-//
-// The last rule drops the summary of an INFOVIEW-supplied <details> wrapper,
-// which would name the panel a second time. That wrapper does not currently
-// exist for us — core sets `PanelWidgetInstance.name?` only for the deprecated
-// `UserWidgetDefinition` form — so the rule is defensive. It must not be
-// widened to `details > summary`: the panel's own fold, built at the end of
-// this file, is a <details> INSIDE [data-ptw-root], and hiding its summary
-// would take the fold away.
 const SECTION_ORDER_CSS = `
   div:has(> [data-ptw-root]),
   div:has(> details > [data-ptw-root]) {
@@ -136,6 +83,17 @@ const SECTION_ORDER_CSS = `
   div:has(> [data-ptw-root]) > [data-ptw-root],
   div:has(> details > [data-ptw-root]) > details:has(> [data-ptw-root]) {
     order: 0;
+    /* And it does not YIELD. The two rules above make the host's container a
+       flex column purely to reorder it, and a flex item's default
+       flex-shrink of 1 then lets the tree be squeezed by whatever else the
+       card is carrying. Today that is inert (the container's height is
+       content-based, so there is nothing to shrink against) and it stops
+       being inert the moment any ancestor gains a definite height — a change
+       in the host we would not see coming, whose symptom is exactly the
+       reported one: the frame ending well above the fold with the sections
+       below it taking the room. Pinning the flex costs nothing and removes
+       the mechanism. */
+    flex: 0 0 auto;
   }
   details:has(> [data-ptw-root]) > summary {
     display: none;
@@ -148,308 +106,223 @@ function useSectionOrderCss() {
   }, []);
 }
 
-// Floor for the measured frame height. A transient bad measurement (the
-// infoview mid-reflow, a hidden webview reporting zeros) must degrade to a
-// short tree, never to no tree.
 const MIN_FRAME_PX = 240;
 
-// How much of the room below the tree's top the frame actually takes.
-//
-// Filling it exactly (the first version, 1.0) is worse than it sounds: the tree
-// then ends precisely at the fold, so the sections it was ordered above are all
-// off-screen, and since the tree's own scroll container swallows the wheel, the
-// only way to scroll the infoview page is to find the strip of document beside
-// it. Stopping short leaves the next heading showing — both a place to put the
-// pointer and a reminder that the column continues.
-//
-// Which of the two is right is a real preference rather than a fact about the
-// layout: the room below the fold is not dead (the restart-file button takes a
-// scroll perfectly well), and a tree that reaches the edge is worth more to
-// some readers than a strip they never aim at. So the default keeps the strip
-// and `ramify.tallFrame` gives most of it back — deliberately NOT all of it,
-// since a frame that ends flush with the fold leaves the page with no
-// wheel-target of its own inside the widget's own span.
-const FRAME_FRACTION = 0.9;
-const FRAME_FRACTION_TALL = 0.95;
+// THE FRAME TAKES ALL THE ROOM THERE IS: `max(MIN_FRAME_PX, 100vh - offset)`,
+// with no fraction and no bottom clearance. Both are gone, and each for its
+// own reason. The FRACTION (0.9) was a preference for how tall the panel sat,
+// and with the tree flowing UNDER the bar rather than reserving room for it,
+// it was only ever spending height nothing needed. The CLEARANCE (44px) kept
+// the frame's bottom out of the lane the infoview's own fixed "Restart File"
+// button owns — but it cost 44px of tree at every panel size to keep two
+// pieces of our own chrome off one button. The chrome now dodges that button
+// by PLACEMENT instead (ProofTreeView's LANE_* constants: the status card
+// sits IN the lane at the button's own inset and height and stops short of
+// its width, and the zoom rail moved up above it), which buys the whole 44px
+// back for the tree.
 
-/** The tree's frame height: the viewport MINUS the root's own offset from the
-document top, measured live.
+/** How far down the VIEWPORT the widget's own root sits — the number the frame
+height is `100vh` minus.
 
-A flat `100vh` was the first version and it overhangs: the root sits a little
-way down the infoview's document (the section-order CSS puts the tree first
-within its card, but the infoview's own chrome still stands above it), so a
-100vh frame ends exactly that far BELOW the fold — the bottom edge of the tree
-was never on screen, which is why nothing could ever be anchored to it (the
-pill lived through this) and why the view's `viewport` state over-reported by
-the same offset.
+It must be the root's top in VIEWPORT coordinates, and that is the whole of the
+fix here: it used to add `window.scrollY`, i.e. it reported the root's position
+in the DOCUMENT. The two agree only at scroll 0 and only while the widget is
+the last thing measured. In the real infoview neither holds — the blocks above
+the tree (tactic state, messages, a term goal) grow and shrink on every cursor
+move, and the page scrolls — so `100vh - documentTop` was an offset for a
+layout the panel no longer had, and it can overshoot the fold in both
+directions: below it (the frame's bottom, and with it the status card, ends up
+under the "Restart File" lane) or short of it.
 
-Measured live rather than once, because the offset MOVES: the infoview reflows
-on every cursor move as the blocks around the widget change height, and VS Code
-resizing the panel changes `100vh` but a theme banner appearing above changes
-the offset. The `ResizeObserver` on `document.body` catches the reflows (any
-content change above the tree changes the body's size); the `resize` listener
-catches the webview frame itself. Re-measuring is settled by a 1px hysteresis:
-setting the height changes the body height, which re-fires the observer, which
-re-measures the SAME offset and writes nothing — one bounce, then stable.
+The listeners follow from the same fact. A ResizeObserver on `document.body`
+sees nothing when a section above changes height inside a body of fixed height,
+and `window`'s own `scroll` event never fires for an INNER scroller — so the
+scroll listener is registered in the CAPTURE phase, where every scroll in the
+document passes through, and a no-dep layout effect re-measures after every
+render (one `getBoundingClientRect`, and the widget re-renders on each payload
+and cursor move — exactly when the blocks above it have moved).
 
-ResizeObserver delivery rides the RENDERING steps, like animation frames — so
-a hidden webview delivers nothing (measured in the preview: zero firings,
-including the mandatory on-observe one). That is fine rather than a bug to
-paper over: a hidden tree needs no remeasure, and the pending delivery lands
-on the first rendered frame when the webview becomes visible — which is
-exactly when the answer matters. The explicit `measure()` on mount covers the
-visible-from-birth case without waiting a frame.
+1px of hysteresis keeps that from looping. The height stays a CSS `calc` over
+`100vh` rather than a resolved pixel number: a webview hidden while the panel
+is resized fires neither observer nor handler, and a px height would stay wrong
+until something else moved, while `100vh` is live whatever we know.
 
-Returns the offset in px; the caller renders
-`calc((100vh - <offset>px) * FRAME_FRACTION)`. The
-ref must be ATTACHED to the element whose top is being measured (the tree's
-root div). Reads happen only in the effect — the `react-hooks/refs` line this
-codebase already walks. */
+THE HOST IMPOSES NO CAP — read off the shipped bundle rather than assumed, on a
+report of the frame ending well above the fold. `InfoDisplayContent` renders a
+panel widget through `PanelWidgetDisplay`/`DynamicComponent`, neither of which
+adds a DOM element, so the whole chain above `[data-ptw-root]` is
+`div.ma1 > details[open] > div.ml1` (plus a `<details>` of the host's own only
+when the widget carries a `name`, which a ProofWidgets Component never does).
+Every one of those is an auto-height block box with no `height`, `max-height`,
+`overflow` or `flex`; the infoview's stylesheet has no `.infoview` selector at
+all, its only `max-height` is the tooltip's (set from JS by floating-ui), and
+`html, body { height: 100% }` clips nothing because neither sets `overflow`.
+So there is no host rule to override from `useSectionOrderCss`.
+
+What that leaves is SHRINK, and the one flex container in the chain is OURS
+(the section-order rule) — hence `flex: 0 0 auto` there and a `min-height`
+beside the height on the frame itself. A `min-height` is not a hypothetical
+size: nothing can shrink it, and `overflow: hidden` on the frame would
+otherwise let its automatic minimum size fall to 0. Neither was reproducible
+outside VS Code, so both are the mechanism removed rather than a measured bug
+fixed; if a short frame survives them, the remaining suspect is the user's own
+`lean4.infoViewStyle` CSS, which the host concatenates into the webview's
+stylesheet verbatim. */
 function useFrameOffset(): {
   rootRef: React.RefObject<HTMLDivElement | null>;
   offset: number;
 } {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [offset, setOffset] = useState(0);
+  const measure = useCallback(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    if (el.getClientRects().length === 0) return;
+    if (el.checkVisibility && !el.checkVisibility()) return;
+
+    const top = el.getBoundingClientRect().top;
+    setOffset((prev) => (Math.abs(prev - top) > 1 ? top : prev));
+  }, []);
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const measure = () => {
-      // A COLLAPSED panel yields no honest answer, and the two ways a browser
-      // can say so were BOTH measured, because Chromium changed which one it
-      // uses and a VS Code webview can be either vintage:
-      //   · older — closed <details> puts `display: none` on its non-summary
-      //     children, so there are no client rects and every rect reads 0;
-      //   · current — the content is skipped via `::details-content`'s
-      //     `content-visibility: hidden`, which keeps STALE boxes: rects
-      //     survive and still report the geometry from when it was last open
-      //     (measured: rects 1, top 47, height 400 while closed and
-      //     contributing nothing to layout). Only `checkVisibility()` tells
-      //     the truth here.
-      // A zero is not an offset of zero, it is the absence of an answer, and
-      // writing it would size the frame to a full viewport and flash the tree
-      // at that height on the next expand. Both tests, so neither vintage
-      // slips through; nothing is lost when they fire, since the offset starts
-      // at 0 anyway and skipping can only ever preserve a better earlier
-      // reading.
-      if (el.getClientRects().length === 0) return;
-      if (el.checkVisibility && !el.checkVisibility()) return;
-      // Distance from the DOCUMENT's top, not the viewport's: the infoview
-      // page itself scrolls (the tree is its first section, so content below
-      // always overflows), and rect.top alone would shrink the tree by however
-      // far the user happened to have scrolled at measure time.
-      const top = el.getBoundingClientRect().top + window.scrollY;
-      setOffset((prev) => (Math.abs(prev - top) > 1 ? top : prev));
-    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(document.body);
+    if (el.parentElement) ro.observe(el.parentElement);
     window.addEventListener("resize", measure);
+    // Capture: an ancestor's scroll never reaches `window` in the bubble
+    // phase, and the infoview's own scroller is one.
+    window.addEventListener("scroll", measure, true);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
     };
-  }, []);
+  }, [measure]);
+  useLayoutEffect(measure);
   return { rootRef, offset };
 }
 
-// One tactic's in-place editing seam, computed server-side (mirror of
-// ProofTreeComments.lean's TacticEdit): the TIGHT range of the tactic text
-// proper (trailing trivia trimmed — Paperproof step ranges include it) and
-// that text verbatim. Keyed by `start`, which equals the step's
-// `position.start`.
 interface TacticEditEntry {
-  /** The STEP's own start — what this entry is keyed by. It differs from
-  `start` only for a step Paperproof split out of a tactic (`rw [a, b]` is one
-  step per rule), where the editable/colourable unit is the whole tactic. */
   stepStart: { line: number; character: number };
   start: { line: number; character: number };
   stop: { line: number; character: number };
   text: string;
-  /** The server's semantic tokens for `text` — drives the label colouring. */
+
   tokens?: TacticToken[];
-  /** Spans of the LABEL no source token can reach (see `LabelToken`): today
-  exactly the `rfl` a `rw [rfl]` node draws, which the prettifier minted from
-  the closing `]` and which therefore indexes into no source. */
+
   labelTokens?: LabelToken[];
-  /** Column where this step's line begins its tactic text — past the indent
-  and past a bullet marker (see the Lean-side `tacticIndentAt`). What (+)
-  insertions indent new sibling tactics by. */
+
   tacticIndent?: number;
 }
 
-// The RPC payload: the CLI's `Proof` shape plus `taggedGoals`, each goal's
-// interactive (tagged) pretty-print, plus `tacticEdits`. The tags hold live
-// RPC references — valid only within this session, which is why they ride the
-// RPC path and never the NDJSON one; the edits need an editor to apply to, so
-// they're RPC-only too.
 type ProofTreeData = Proof & {
   taggedGoals?: TaggedGoalEntry[];
   tacticEdits?: TacticEditEntry[];
   tokenInfos?: TacticTokenInfo[];
-  /** The declaration's diagnostics (Ramify.lean `TreeDiag`), already
-  in the client's `{start, stop}` span shape and already scoped to this
-  command's own message log. In the PAYLOAD, not read off the
-  `publishDiagnostics` notification: the notification is edge-triggered and a
-  webview that loads after elaboration finishes never hears it — measured, a
-  restart on the demo file reliably drew no ribbons until the next edit. */
+
   diagnostics?: RawDiagnostic[];
-  /** The declaration's signature as SOURCE text, its colouring, and where it
-  starts — the persistent header above the tree (see `declHeader` in
-  Ramify.lean). The header's hover popups ride the ordinary
-  `tokenInfos`, which is position-keyed and so already covers them. */
+
   declHeader?: string;
   declHeaderTokens?: TacticToken[];
   declHeaderStart?: { line: number; character: number };
-  /** The real document's current content on `cfLine` (indent stripped),
-  refreshed per request even when the tree comes from the server's cache.
-  NEVER in the stable signature — it changes per keystroke, which is exactly
-  what the typing hold exists to not redraw on. */
+
   cfDraft?: string;
-  /** The column `cfDraft` starts at in the REAL document (its indent's width).
-  With `cfLine` it is a real-coordinate range, which is what makes the stub
-  editable without touching counterfactual bytes — see `cfDraftCol` in
-  Ramify.lean. Out of the stable signature like `cfDraft`. */
+
   cfDraftCol?: number;
-  /** Syntax tokens for `cfDraft`, collected from the REAL document (see
-  `cfDraftTokens` in Ramify.lean). Absolute real-document positions,
-  like `TacticEdit.tokens`, so the stub renders through the ordinary token
-  path. Out of the stable signature with the draft they describe. */
+
   cfDraftTokens?: TacticToken[];
-  /** Hover popups for those tokens. Their own field, not an append to
-  `tokenInfos`: that array describes the SPLICED document and the draft starts
-  at the same position as the injected `sorry`, so appending would collide
-  exactly where the two disagree. */
+
   cfDraftInfos?: TacticTokenInfo[];
-  /** The server is elaborating a counterfactual in the background; re-poll
-  shortly rather than waiting for the next document event. */
+
   cfPending?: boolean;
 };
 
-// The Lean infoview user-widget entry point. This is the default export bundled
-// into `web/dist/proofTreeWidget.js` and loaded by `Ramify`
-// (lean/Ramify.lean). It is the widget counterpart of App.tsx: instead
-// of fetching NDJSON, it calls the `ProofTree.getProofTree` RPC for the theorem
-// under the cursor and feeds the result to the shared ProofTreeView, wiring the
-// two directions of the node↔source link (see below).
-
-/** The editor theme's syntax colours, refreshed whenever the theme changes.
- *
- * The long way round is forced: a webview is given `--vscode-*` variables for
- * the workbench colour REGISTRY only, and TextMate/semantic token colours are
- * not in it — the extension API has no token-colour member at all. So the
- * companion resolves them from the active theme's JSON, and the Lean server
- * reads that file back to us (`ProofTree.themeColors`).
- *
- * The refresh trigger is the same signal the palette itself watches: VS Code
- * rewrites the CSS variables on the root element in place on a theme change.
- * The companion writes its file from its own listener, so the two race — hence
- * the second read shortly after. Both are a few hundred bytes.
- *
- * The file also carries SETTINGS (`brackets`, `outline`, `input`), and changing one of
- * those moves no CSS variable, so the observer alone would never see it. There
- * is no push channel here — a file written by an extension and read by the
- * server on demand — so the refetch rides three signals that cost nothing:
- * `tick` (the document revision, i.e. any re-elaboration), the webview
- * regaining focus, and the theme observer. Between them, a toggled setting
- * lands as soon as you type in the buffer or click the tree, without adding a
- * round trip per cursor move.
- */
-function useThemeTokenColors(
-  rs: ReturnType<typeof useRpcSession>,
-  tick: number,
-): {
+interface Settings {
   colors?: Record<string, string>;
   brackets: boolean;
   outline: boolean;
-  tallFrame: boolean;
   linkTint: boolean;
   linkMarks: boolean;
   typingHoldMs: number;
   counterfactual: boolean;
   hypMarkStyle: HypMarkStyle;
   abbrev: AbbrevConfig;
-} {
-  const [colors, setColors] = useState<Record<string, string>>();
-  const [brackets, setBrackets] = useState(false);
-  const [outline, setOutline] = useState(false);
-  const [tallFrame, setTallFrame] = useState(false);
-  const [linkTint, setLinkTint] = useState(false);
-  const [hypMarkStyle, setHypMarkStyle] = useState<HypMarkStyle>("highlight");
-  // Defaults ON, unlike its two neighbours: absent means an older companion
-  // that never knew the key, and the marks are what it was already drawing.
-  const [linkMarks, setLinkMarks] = useState(true);
-  // A NUMBER, unlike the rest of the wire's settings: absent or wrong-typed
-  // falls back to the default hold, clamped so a stray settings.json value
-  // can't park the tree for a minute.
-  const [typingHoldMs, setTypingHoldMs] = useState(DEFAULT_TYPING_HOLD_MS);
-  // Defaults ON like linkMarks: absence means an older companion that never
-  // knew the key, and the counterfactual is the behaviour being shipped.
-  const [counterfactual, setCounterfactual] = useState(true);
-  // vscode-lean4's own defaults until told otherwise, so the editor's unicode
-  // input works with no companion installed — only a customised leader or a
-  // custom translation needs this trip.
-  const [abbrev, setAbbrev] = useState<AbbrevConfig>(DEFAULT_ABBREV);
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  brackets: false,
+  outline: false,
+  linkTint: false,
+  linkMarks: false,
+  typingHoldMs: DEFAULT_TYPING_HOLD_MS,
+  counterfactual: true,
+  hypMarkStyle: "highlight",
+  abbrev: DEFAULT_ABBREV,
+};
+
+interface ThemeColorsResponse {
+  brackets?: boolean;
+  outline?: boolean;
+  linkTint?: boolean;
+  linkMarks?: boolean;
+  hypMarkStyle?: string;
+  typingHoldMs?: number;
+  counterfactual?: boolean;
+  input?: {
+    enabled: boolean;
+    leader: string;
+    eager: boolean;
+    custom: { abbreviation: string; symbol: string }[];
+  };
+  colors?: { type: string; color: string }[];
+}
+
+function parseSettings(r: ThemeColorsResponse, prev: Settings): Settings {
+  return {
+    colors: r.colors?.length
+      ? Object.fromEntries(r.colors.map((c) => [c.type, c.color]))
+      : prev.colors,
+    brackets: !!r.brackets,
+    outline: !!r.outline,
+    linkTint: !!r.linkTint,
+    linkMarks: r.linkMarks === true,
+    typingHoldMs:
+      typeof r.typingHoldMs === "number" && isFinite(r.typingHoldMs)
+        ? Math.max(0, Math.min(Math.round(r.typingHoldMs), TYPING_HOLD_MAX_MS))
+        : DEFAULT_TYPING_HOLD_MS,
+    counterfactual: r.counterfactual !== false,
+    hypMarkStyle: r.hypMarkStyle === "underline" ? "underline" : "highlight",
+    abbrev: r.input
+      ? {
+          enabled: r.input.enabled !== false,
+          leader: r.input.leader || DEFAULT_ABBREV.leader,
+          eager: r.input.eager !== false,
+          custom: Object.fromEntries(
+            (r.input.custom ?? []).map((c) => [c.abbreviation, c.symbol]),
+          ),
+        }
+      : prev.abbrev,
+  };
+}
+
+// Settings ride the companion's theme file; refetched on theme change, focus and `tick`.
+function useSettings(rs: ReturnType<typeof useRpcSession>, tick: number): Settings {
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   useEffect(() => {
     let live = true;
     const fetchOnce = () => {
       void rs
-        .call<Record<string, never>, ThemeColorsResponse>(
-          "ProofTree.themeColors",
-          {},
-        )
+        .call<Record<string, never>, ThemeColorsResponse>("ProofTree.themeColors", {})
         .then((r) => {
           if (!live || !r) return;
-          // The SETTINGS ride whatever came back, including the empty reply an
-          // absent companion produces (whose defaults are the right answer);
-          // only the PALETTE falls back to the built-in one when empty, since
-          // there a missing value and "no companion" mean the same thing.
-          setBrackets(!!r.brackets);
-          setOutline(!!r.outline);
-          setTallFrame(!!r.tallFrame);
-          setLinkTint(!!r.linkTint);
-          setHypMarkStyle(r.hypMarkStyle === "underline" ? "underline" : "highlight");
-          setLinkMarks(r.linkMarks !== false);
-          setTypingHoldMs(
-            typeof r.typingHoldMs === "number" && isFinite(r.typingHoldMs)
-              ? Math.max(0, Math.min(Math.round(r.typingHoldMs), TYPING_HOLD_MAX_MS))
-              : DEFAULT_TYPING_HOLD_MS,
-          );
-          setCounterfactual(r.counterfactual !== false);
-          if (r.input) {
-            const next: AbbrevConfig = {
-              enabled: r.input.enabled !== false,
-              leader: r.input.leader || DEFAULT_ABBREV.leader,
-              eager: r.input.eager !== false,
-              custom: Object.fromEntries(
-                (r.input.custom ?? []).map((c) => [c.abbreviation, c.symbol]),
-              ),
-            };
-            // Identity-compared, because the config is a ProofTreeView PROP and
-            // a fresh object every refetch would rebuild the editor's
-            // abbreviation session mid-typing.
-            setAbbrev((prev) =>
-              JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
-            );
-          }
-          if (!r.colors?.length) return;
-          // Identity-compared like `abbrev` above and for the same reason:
-          // this is a ProofTreeView PROP, refetched once per docRev (i.e.
-          // per re-elaboration while typing), and a fresh object per fetch
-          // invalidated every tokenColors-keyed memo for a byte-identical
-          // palette.
-          const next = Object.fromEntries(
-            r.colors.map((c) => [c.type, c.color]),
-          );
-          setColors((prev) =>
-            prev && JSON.stringify(prev) === JSON.stringify(next)
-              ? prev
-              : next,
-          );
+          setSettings((prev) => {
+            const next = parseSettings(r, prev);
+            return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+          });
         })
-        .catch(() => {
-          // No companion, no file, an older server: keep the built-in palette.
-        });
+        .catch(() => {});
     };
     fetchOnce();
     const stopObserving = observeThemeChange(() => {
@@ -463,105 +336,20 @@ function useThemeTokenColors(
       window.removeEventListener("focus", fetchOnce);
     };
   }, [rs, tick]);
-  return {
-    colors,
-    brackets,
-    outline,
-    tallFrame,
-    linkTint,
-    linkMarks,
-    typingHoldMs,
-    counterfactual,
-    abbrev,
-    hypMarkStyle,
-  };
-}
-
-/** `ProofTree.themeColors`'s reply (Ramify.lean `ThemeColors`). */
-interface ThemeColorsResponse {
-  theme: string;
-  /** `editor.bracketPairColorization.enabled` — a setting, so it cannot come
-  from the `--vscode-*` variables the six bracket COLOURS do come from. */
-  brackets: boolean;
-  /** `ramify.outlineOnly` — a setting, so it comes the same long way round. */
-  outline: boolean;
-  /** `ramify.tallFrame` — ditto. Optional: an older companion's file has no
-  such key, and a missing one means the default (leave the strip clear). */
-  tallFrame?: boolean;
-  /** `ramify.linkTint` — the connector target-type marks' loud variant
-  (edge ink tinted toward the target's hue). Optional for the same
-  older-companion reason; missing means off. */
-  linkTint?: boolean;
-  linkMarks?: boolean;
-  /** `ramify.hypMarkStyle` — how the hover answer is drawn over the context
-  lines a tactic uses: a background wash in its own hue (default), or a dashed
-  rule paired with the solid one the tactic diff takes in that mode. The
-  accessible variant: shape rather than colour. Optional for the standing
-  older-companion reason, and the string is validated CLIENT-side (the
-  `typingHoldMs` rule — the companion writes the setting raw, so exactly one
-  place owns default and validation). */
-  hypMarkStyle?: string;
-  /** `ramify.typingHoldMs` — the typing hold's quiet period (see
-  DEFAULT_TYPING_HOLD_MS). Optional for the older-companion reason; missing
-  means the default. */
-  typingHoldMs?: number;
-  /** `ramify.counterfactual` — the live sorry-stub preview while typing.
-  Defaults ON (absence = an older companion = the shipped behaviour). */
-  counterfactual?: boolean;
-  /** `lean4.input.*` — settings again (Ramify.lean `InputConfig`).
-  Optional: an older companion's file simply has no such key. */
-  input?: {
-    enabled: boolean;
-    leader: string;
-    eager: boolean;
-    custom: { abbreviation: string; symbol: string }[];
-  };
-  colors: { type: string; color: string }[];
+  return settings;
 }
 
 export default function ProofTreeWidget(props: PanelWidgetProps) {
   const rs = useRpcSession();
   const ec = useContext(EditorContext);
-  const pos = props.pos; // DocumentPosition: { uri, line, character }
+  const pos = props.pos;
   useSectionOrderCss();
   const { rootRef, offset } = useFrameOffset();
-  // The panel's own fold (see the <details> at the end of this component).
-  // Plain component state: the panel widget's React key is `widget::<id>::
-  // <range>` — the `show_panel_widgets` command's span, not the cursor's — so
-  // this component is NOT remounted as the cursor moves, and the fold survives
-  // exactly as long as the infoview keeps showing this file's panel, which is
-  // the same lifetime the infoview's own sections give their disclosure state.
+
   const [panelOpen, setPanelOpen] = useState(true);
-  // The cursor is not the only thing that invalidates the tree: the DOCUMENT
-  // changes too, and a change that leaves the cursor where it is (every edit
-  // the widget itself makes via applyEdit — an in-place tactic commit, a (+)
-  // insertion, a `sorry` stub — as well as any typing in the buffer or the
-  // lens) would otherwise leave the old tree on screen until the cursor
-  // happened to move. `publishDiagnostics` is the signal that the file worker
-  // has re-elaborated and a fresh snapshot exists, which is exactly when a
-  // re-parse can return something new; it is also what the infoview's own
-  // panels refresh on. Bump a revision and let it ride the RPC's deps.
-  //
-  // Elaboration publishes diagnostics repeatedly as it progresses, so this
-  // fires in bursts. That is affordable rather than ignored: the server caches
-  // the whole payload on (uri, version, command start), and `stable` only
-  // re-lays-out when the proof's TEXT signature actually changes — an
-  // identical re-parse costs one cached round trip and no re-render of the
-  // tree. A trailing debounce keeps even that down to one call per burst.
-  //
-  // The notification is ONLY the refresh signal — deliberately not the source
-  // of the diagnostics the tree draws. It is edge-triggered, and a webview
-  // subscribes only after it loads: whenever elaboration finished first (a
-  // restart on a small file, reliably), no notification ever arrived and a
-  // notification-fed ribbon drew nothing until the next edit. The diagnostics
-  // ride the getProofTree PAYLOAD instead (level-triggered — they arrive with
-  // every response, so the drawn errors can never be out of step with the
-  // drawn tree); see `diagnostics` below and TreeDiag in Ramify.lean.
+
   const [docRev, setDocRev] = useState(0);
-  // The cfPending re-poll's own tick — NOT a second writer of `docRev`, whose
-  // meaning ("the document re-elaborated") also keys the theme-colors fetch:
-  // riding it there sent a companion RPC and a settings-file read per 800ms
-  // poll for nothing. This one joins only the getProofTree deps.
+
   const [pollRev, setPollRev] = useState(0);
   const revTimer = useRef<number | null>(null);
   useServerNotificationEffect<{ uri: string }>(
@@ -587,19 +375,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     colors: tokenColors,
     brackets: colorBrackets,
     outline: outlineOnly,
-    tallFrame,
     linkTint,
     linkMarks,
     typingHoldMs,
     counterfactual,
     abbrev,
     hypMarkStyle,
-  } = useThemeTokenColors(rs, docRev);
+  } = useSettings(rs, docRev);
 
-  // Re-parse whenever the cursor moves; the server's snapshot is cached, so this
-  // is cheap, and it is what makes the tree "follow the cursor". The server
-  // returns an EMPTY proof (`steps: []`) when the cursor isn't inside a tactic
-  // proof — that's a normal outcome, not an error (see getProofTree).
   const st = useAsyncPersistent<ProofTreeData>(
     () =>
       rs.call<{ pos: typeof pos; cf: boolean }, ProofTreeData>(
@@ -609,43 +392,12 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [rs, pos.uri, pos.line, pos.character, docRev, pollRev, counterfactual],
   );
 
-  // The latest non-empty response, if any. Both holders below key off it.
-  // A payload counts as a PROOF when it has steps OR an open block. The step
-  // count alone was the gate, and it silently dropped the one payload whose
-  // entire content is a goal: `:= by` with nothing written into it harvests no
-  // steps and carries `openBlock` — the root goal it owes, plus the chips that
-  // act on it. So the server sent the right answer, this line threw it away,
-  // and the tree read "no proof tree here" for a theorem whose body had just
-  // been deleted (the client then holding the PREVIOUS proof, which is why it
-  // also looked like a stale cache).
-  //
-  // This is the THIRD time today the same sentence has been wrong — twice in
-  // the server (the entry nudge's fallback, the header-line cf refusal) and
-  // here. The rule, now stated where the payload first enters the client: a
-  // payload's worth is not its step count. Any new "is there a proof here?"
-  // test must ask what the payload CONTAINS.
   const resolved =
     st.state === "resolved" &&
     (st.value.steps.length > 0 || st.value.openBlock !== undefined)
       ? st.value
       : null;
 
-  // Hold the last rendered NON-EMPTY proof, keyed by the payload's TEXT parts,
-  // so re-highlighting on cursor moves within a proof doesn't churn the layout
-  // or fold state, and moving the cursor out of the proof keeps the tree up.
-  // Everything here is PLAIN DATA — no RPC references (see `interactive`).
-  // We adjust this during render (React's sanctioned pattern, cf. `prevEngine`
-  // in ProofTreeView) rather than via a ref, which mustn't be read during render.
-  //
-  // The signature serializes the whole proof, so it is memoized on the RESPONSE
-  // object: `useAsyncPersistent` returns the same value identity between
-  // renders, and un-memoized this ran O(payload) on every render — each hover,
-  // zoom tick and editing keystroke — not just per response.
-  // The projection itself is `stableProofOf` (paperproof.ts) — shared with the
-  // dev replay harness, so the field list (and its deliberate omissions:
-  // `deleteSlots` as a sibling on `stable`, `tacticNames` outside the sig)
-  // has exactly one coding. Each field's stable-signature rationale is
-  // documented there and on `Proof`.
   const incoming = useMemo(() => {
     if (!resolved) return null;
     const proof = stableProofOf(resolved);
@@ -657,104 +409,46 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     tacticEdits: TacticEditEntry[];
     deleteSlots: TacticSlot[];
   } | null>(null);
-  // The full record a swap installs, memoized on the response so the typing
-  // hold below re-arms once per payload, not once per render.
+
   const candidate = useMemo(
     () =>
       resolved && incoming
         ? {
             sig: incoming.sig,
-            // `tacticNames` is attached HERE rather than in `incoming`, so it
-            // stays out of `sig`: it is ~500 strings that depend only on the
-            // imports, so stringifying them into every signature comparison
-            // would be pure cost for a value that cannot change while the
-            // file is open.
+
             proof: { ...incoming.proof, tacticNames: resolved.tacticNames },
-            // Edits derive from the same source text as the steps, so
-            // refreshing them exactly when the proof signature changes keeps
-            // their ranges in sync with the document (positions live in the
-            // steps → any shift changes the sig).
+
             tacticEdits: resolved.tacticEdits ?? [],
-            // Same reasoning as the edits: slots are positions into the same
-            // source text, so they refresh exactly when the proof's signature
-            // does and can never describe a document the tree isn't showing.
+
             deleteSlots: resolved.deleteSlots ?? [],
           }
         : null,
     [resolved, incoming],
   );
-  // Bypass window for the typing hold: written only by the widget's own
-  // document writes (the applyEdit commits and the undo/redo relay), read
-  // only inside the hold effect — never during render.
+
   const expectEditRef = useRef(0);
-  // When the user last drove the buffer, read off the CURSOR: `pos` updates
-  // per keystroke (the infoview coalesces at ~50ms, nothing suppresses it),
-  // and typing moves the cursor — the one typing signal a webview actually
-  // has. Navigation bumps it too, deliberately accepted: deferring a pending
-  // swap while the user is moving around costs one quiet period, while any
-  // attempt to tell the two apart from (line, character) deltas guesses.
+
   const lastActivityRef = useRef(0);
   const posKey = `${pos.uri}:${pos.line}:${pos.character}`;
   useEffect(() => {
     lastActivityRef.current = Date.now();
   }, [posKey]);
-  // NAVIGATION: the payload is a different declaration AND the cursor has
-  // left the one on screen. Both halves are required — see `cursorInDecl`,
-  // where a half-typed tactic reports the next theorem's proof while the
-  // cursor has not moved at all. ONE coding, read by the render path and the
-  // hold effect below, because two spellings of this test would drift and the
-  // effect's job is precisely to not re-decide what the render already did.
+
   const navigated =
     !!stable &&
     !!candidate &&
     candidate.proof.proofId !== stable.proof.proofId &&
     !cursorInDecl(stable.proof.declRange, pos);
-  // ONE coding of "the drawn tree is behind the latest payload", like
-  // `navigated` above and for the same reason: it gates the immediate-swap
-  // branch here AND the `interactive` adoption below, and the sig compare is
-  // a full string scan of the serialized proof — once per render, not once
-  // per reader.
+
   const swapPending = !!(candidate && stable && candidate.sig !== stable.sig);
-  // Immediate swap paths, adjusted during render as before: the first draw,
-  // real navigation (holding that would read as latency, and the view state
-  // resets on proofKey anyway), and a zero hold (the setting's off switch,
-  // restoring swap-on-arrival).
+
   if (
     candidate &&
     (!stable || (swapPending && (typingHoldMs <= 0 || navigated)))
   ) {
     setStable(candidate);
   }
-  // The TYPING HOLD. Same proof, new text is the shape of typing in the
-  // buffer (or the lens): every keystroke that survives long enough to
-  // elaborate lands a distinct text signature, and swapping each one in
-  // relaid the tree out per keystroke — through the broken intermediates
-  // (`ri` is a failed tactic), which is what the reported "shudder" was.
-  //
-  // The quiet measured is the CURSOR's, not the payload clock's — the first
-  // version debounced payload arrivals, and on a Mathlib file elaboration
-  // spaces payloads wider than any sane hold (1-2s per keystroke burst), so
-  // every intermediate still swapped in while a payload arriving AFTER the
-  // user went quiet was held for nothing. Now: a pending swap lands the
-  // moment `lastActivityRef` is at least `typingHoldMs` old — immediately on
-  // arrival when the user already stopped (no added latency), and only after
-  // the cursor goes still when typing continues, the timer re-checking the
-  // ref each time it fires. Accepted limit: after typing stops, ONE
-  // intermediate payload may still swap in before the final elaboration
-  // lands (two updates, not N). "Only swap payloads newer than the last
-  // keystroke" was considered and rejected — navigation bumps the activity
-  // clock too, so edit-then-navigate would strand a pending swap forever,
-  // waiting on a newer payload that is never coming.
-  //
-  // Two earlier details still carry it. The effect re-arms on the SIGNATURE,
-  // not the response object: elaboration settling down a long file bumps
-  // docRev repeatedly, each bump re-parsing to a fresh but text-identical
-  // payload — keying on identity would keep the effect churning for the
-  // whole file's elaboration. (The swap still installs the LATEST payload,
-  // via the ref below.) And the widget's own edits bypass the hold through
-  // `expectEditRef`, a time window rather than a consumed flag: the first
-  // payload after an applyEdit can be a stale elaboration finishing, and a
-  // one-shot flag spent on it would hold the real redraw.
+
   const candidateRef = useRef<typeof candidate>(null);
   useEffect(() => {
     candidateRef.current = candidate;
@@ -763,7 +457,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   useEffect(() => {
     if (candSig === null || !stable) return;
     if (stable.sig === candSig) return;
-    // The render path above already took these cases.
+
     if (typingHoldMs <= 0 || navigated) return;
     const swap = () => {
       const c = candidateRef.current;
@@ -788,52 +482,15 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     };
   }, [candSig, navigated, stable, typingHoldMs]);
 
-  // The RPC-REFERENCE-carrying half of the payload, deliberately NOT kept in
-  // `stable`. Refs (`WithRpcRef`) live in the file's RPC session store, and
-  // `Lean.Widget.InteractiveDiagnostics.infoToInteractive` resolves them there
-  // when a popup opens. A session dies on a worker crash/exit, a
-  // RpcNeedsReconnect, a server restart or the file closing — and the client
-  // then transparently opens a NEW one, whose store knows nothing of the old
-  // ids. Any ref issued before that point is permanently dead.
-  //
-  // `stable` only updates when the proof TEXT changes, so pinning the tags
-  // there meant rendering one arbitrarily old response's refs forever: after a
-  // reconnect every popup failed with "RPC reference 'N' is not valid" and
-  // nothing short of editing the proof could recover it. (`tokenInfos` made it
-  // far more visible — one ref per identifier token rather than per goal.)
-  //
-  // So these track the LATEST successful in-proof response instead. Cursor
-  // moves refresh them, which is exactly what makes a dead session self-heal:
-  // the next call after the reconnect installs live refs. Identity-compared
-  // against the response object, so the persistent value returned while a
-  // refetch is in flight doesn't loop.
-  // The counterfactual DRAFT — the buffer line's live content — read off
-  // every response UNGATED, unlike `interactive` below: it is paint-only (the
-  // stub overlay's text; nothing in layout reads it), and its whole point is
-  // to track the keystrokes the hold is refusing to relayout on. Derived, not
-  // latched in state: `useAsyncPersistent` already keeps the previous
-  // resolved value while a refetch is in flight (the ref-lifetime comment
-  // above leans on the same fact), so a useState copy only bought an extra
-  // render per response — and a stale draft after a rejected call, where the
-  // stub now honestly dims to "…".
   const cfDraft = st.state === "resolved" ? st.value.cfDraft : undefined;
-  // Its column in the real line — the other half of the range the stub's own
-  // editor commits over (see `cfDraftCol` in Ramify.lean). Read off
-  // the SAME response as the draft, so the two can never describe different
-  // snapshots of the line.
+
   const cfDraftCol = st.state === "resolved" ? st.value.cfDraftCol : undefined;
-  // The draft's colouring and popups, from the same response for the same
-  // reason: they describe the draft, so a mismatch would paint one snapshot's
-  // tokens onto another's text and `alignInLabel` would simply decline.
+
   const cfDraftTokens =
     st.state === "resolved" ? st.value.cfDraftTokens : undefined;
   const cfDraftInfos =
     st.state === "resolved" ? st.value.cfDraftInfos : undefined;
-  // cfPending: the counterfactual is elaborating in the background. Re-poll
-  // shortly — without this, an author who stops typing before the elaboration
-  // finishes would wait for the next document event to see the preview.
-  // (The server never caches a pending payload as an answer, so this cannot
-  // loop on a stale flag.)
+
   useEffect(() => {
     if (!(st.state === "resolved" && st.value.cfPending)) return;
     const t = window.setTimeout(() => setPollRev((r) => r + 1), 800);
@@ -841,30 +498,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   }, [st]);
 
   const [interactive, setInteractive] = useState<ProofTreeData | null>(null);
-  // Adoption is GATED on the typing hold: while a swap is pending, the latest
-  // response describes a document the drawn tree does not show, and adopting
-  // it flashed every surface this feeds against the held tree — the error
-  // ribbons per response, and the tagged goal labels in and out of colour
-  // (mvarIds renumber per elaboration, so the text-equality guard dropped
-  // them to plain SVG until the swap landed). Freezing here makes the swap
-  // ATOMIC: `stable` changes, the very next render adopts the same response,
-  // and layout, colours, tooltips and diagnostics move together once. The
-  // consumers stay CONSISTENT during the hold, not merely quiet — everything
-  // reading this already pairs it against `stable.proof`. (`swapPending` is
-  // the shared coding computed above the immediate-swap branch.)
+
   if (resolved && interactive !== resolved && !swapPending) {
     setInteractive(resolved);
   } else if (st.state === "rejected" && interactive !== null) {
-    // A failed call is the one signal we get that the session may be gone;
-    // holding its refs afterwards can only produce dead popups. Deliberately
-    // NOT gated on the hold: session self-heal must not wait one out, and
-    // after a worker restart with unchanged text the sig matches anyway, so
-    // re-adoption is immediate.
     setInteractive(null);
   }
 
-  // The tagged (hover-interactive) label renderers for this proof; see
-  // taggedRender.tsx.
   const renderers = useMemo(
     () =>
       stable
@@ -873,20 +513,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [stable, interactive],
   );
 
-  // This proof's diagnostics, from the LATEST response's payload (see
-  // ProofTreeData.diagnostics for why they ride the payload and not the
-  // notification). Filtering is here (the wire shape and the proof's own span
-  // are widget-side facts) and ATTACHING is in the view, which is the half
-  // that knows what is drawn — see `diagnostics.ts` for why the two split.
-  //
-  // Off `interactive`, not `stable`, on purpose: `stable` refreshes only when
-  // the proof's TEXT changes, and diagnostics can change without it (a `sorry`
-  // warning appearing as elaboration settles). They are plain data, so unlike
-  // the ref-carrying halves nothing about session lifetime applies — riding
-  // the latest response is just what keeps them current. The span filter still
-  // runs against `stable`'s proof (the tree being drawn): a response from a
-  // different theorem contributes nothing rather than the wrong theorem's
-  // errors while `stable` holds the old tree on screen.
   const diagnostics: TreeDiagnostic[] = useMemo(
     () =>
       stable
@@ -898,32 +524,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [interactive, stable],
   );
 
-  // Completion candidates for the in-place editor, drawn from the goal's own
-  // tagged print — the SAME payload the hover tooltips use, so this costs one
-  // tree walk and nothing on the wire. The goal's subterms come first (a `calc`
-  // link restates part of its goal, which is the case that motivated this),
-  // then each hypothesis's type.
-  //
-  // It lives here rather than in ProofTreeView because `taggedGoals` carries
-  // live RPC refs and so belongs to the widget half; the view stays
-  // source-agnostic and just receives strings.
-  // The walk runs once per RESPONSE, not once per lookup. The lookup is called
-  // from the editor's onChange/onSelect — once per keystroke — and the goal
-  // being edited cannot change while you type into it, so walking on demand
-  // re-derived the same subterm tree (and every hypothesis's) on every
-  // character. Doing every goal eagerly costs more per response than the lazy
-  // form did for one goal, and a response is once per EDIT (debounced, and
-  // server-cached), which is the cheaper side to pay on.
-  // The environment tier of the in-place editor's completion (see the view's
-  // `fetchGlobalNames` prop and ProofTree.completionNames). The `pos` here
-  // only picks the file-worker snapshot whose environment answers — any
-  // position in the file serves, so the cursor's is fine — and the view owns
-  // every gate (prefix length, debounce, cache, stale guard). Memoised on the
-  // session and DOCUMENT only, deliberately not the cursor coordinates: any
-  // in-file position serves (above), and this function's identity is a dep of
-  // the view's debounce effect, so a per-cursor-move identity would cancel
-  // and restart a pending fetch timer for nothing. The captured `pos` going
-  // stale within the file is exactly the harmless case.
   const fetchGlobalNames = useMemo(
     () => (query: string) =>
       rs.call<{ pos: typeof pos; query: string }, string[]>(
@@ -944,12 +544,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     return (goalId: string): string[] => byId.get(goalId) ?? [];
   }, [interactive]);
 
-  // Every companion request rides this one call. `void rs.call(...)` used to
-  // swallow rejections whole, which made a broken relay indistinguishable from
-  // a dead button — the RPC can fail for real (no HOME, unwritable request
-  // dir, a stale RPC session after the server restarts), and none of it
-  // surfaced. Failures now land in the widget's own error banner AND the
-  // webview console, so "nothing happened" always has a reason attached.
   const [relayError, setRelayError] = useState<string | null>(null);
   const callCompanion = (
     action: string,
@@ -966,22 +560,16 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       () => setRelayError(null),
       (e: unknown) => {
         console.error(`[proof-tree] ${action} RPC failed:`, e);
-        // mapRpcError: the infoview's own RPC-error formatter (used for the
-        // load-failure banner below) — no hand-rolled instanceof dance.
+
         setRelayError(`${action} failed: ${mapRpcError(e).message}`);
       },
     );
   };
 
-
-  // In-place editing: resolve a step's tight edit seam (double-click opens
-  // the editor overlay pre-filled with `text`)…
   const editByStart = useMemo(
     () =>
       new Map(
         (stable?.tacticEdits ?? []).map((e): [string, TacticEditEntry] => [
-          // Keyed by the STEP, which is what a node's `position.start` is;
-          // `start` may be the wider surface tactic (see TacticEditEntry).
           `${(e.stepStart ?? e.start).line}:${(e.stepStart ?? e.start).character}`,
           e,
         ]),
@@ -992,19 +580,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     const e = editByStart.get(`${p.start.line}:${p.start.character}`);
     return e ? { pos: { start: e.start, stop: e.stop }, text: e.text } : null;
   };
-  // Syntax colouring for tactic labels, from the same per-step entry: the
-  // tokens index into `text` (the verbatim source), which `renderTacticTokens`
-  // aligns into the node's label — Paperproof's prettified `tacticString` and
-  // the step's source disagree in both directions, so the label is passed too.
-  // Hover popups ride the same call. `tokenInfos` is a flat list over the whole
-  // proof, keyed by ABSOLUTE token position — so it is indexed once, globally,
-  // and every tactic looks its own tokens up by position.
-  //
-  // It emphatically must NOT be bucketed by "the tactic whose range contains
-  // this token": tactic ranges NEST (a structured `induction`/`have` contains
-  // every tactic in its branches), so containment picks an ancestor rather than
-  // the owner. Measured on sample.ndjson, 53 of 86 tactics had their tokens
-  // attributed to an enclosing tactic and so rendered no popups at all.
+
   const infoAt = useMemo(
     () =>
       new Map(
@@ -1016,9 +592,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [interactive],
   );
 
-  // Built (with its internal result cache) exactly when its inputs refresh —
-  // the same factory pattern as makeTaggedRenderers; see makeTacticRenderer
-  // for why the cache exists.
   const renderTaggedTactic = useMemo(
     () =>
       makeTacticRenderer(
@@ -1029,15 +602,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [editByStart, infoAt, colorBrackets],
   );
 
-  // The counterfactual stub's own colouring. Same renderer as every tactic
-  // label, fed from a DIFFERENT source: the tokens describe the real
-  // document's line, not the spliced payload the stub is drawn in, so they
-  // cannot come through `editByStart`/`infoAt` (which index the counterfactual
-  // elaboration and, on this line, describe the injected `sorry`).
-  //
-  // A one-line label, so `lines` is `[draft]` and nothing wraps —
-  // `alignInLabel` is then an identity and any failure falls back to plain
-  // SVG text, exactly as it does for a tactic whose tokens do not line up.
   const renderCfDraft = useMemo(() => {
     const toks = cfDraftTokens;
     if (!toks || toks.length === 0) return undefined;
@@ -1057,10 +621,6 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       );
   }, [cfDraftTokens, cfDraftInfos, colorBrackets]);
 
-  // The persistent signature header. It reads off `stable`, not the latest
-  // response: it names the proof the tree is DRAWING, and during a typing hold
-  // those are deliberately different — a header that ran ahead of the tree
-  // would label it with a theorem it is not showing.
   const declHeader = stable?.proof.declHeader ?? "";
   const declHeaderStart = stable?.proof.declHeaderStart;
   const renderDeclHeader = useMemo(() => {
@@ -1068,13 +628,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     const start = stable?.proof.declHeaderStart;
     const text = stable?.proof.declHeader ?? "";
     if (!toks || toks.length === 0 || !start || text === "") return undefined;
-    // `label` defaults to the whole statement, and the header passes a
-    // TRUNCATED one when it is collapsed — `alignInLabel` returns the segments
-    // where label and source agree character for character, so the head that
-    // survives the cut keeps its colouring and its popups and the `…` past it
-    // simply aligns to nothing. Same mechanism a split `rw` label rides; the
-    // alternative (plain ink while focused) was the reported "obviously not
-    // ideal".
+
     return (lines: string[], label?: string) =>
       renderTacticTokens(
         text,
@@ -1088,21 +642,10 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       );
   }, [stable, infoAt, colorBrackets]);
 
-  // Every handler that writes the document stamps this before the write, so
-  // the resulting re-elaboration bypasses the typing hold (see the hold
-  // effect above): the user asked for this redraw, so it should be prompt.
-  // Handler-phase only — writing a ref during render is the banned direction.
   const expectOwnEdit = () => {
     expectEditRef.current = Date.now() + EXPECT_EDIT_WINDOW_MS;
   };
 
-  // The ONE door for the widget's own document writes: stamps the hold bypass
-  // and applies through the editor's own pipeline (undo stack,
-  // re-elaboration; the tree redraws off the next RPC). Route every future
-  // write here — a gesture calling `ec.api.applyEdit` directly would work and
-  // silently sit out the typing hold, a lag the stub harness (which has no
-  // hold) can never surface. The undo/redo relay below keeps its own stamp:
-  // it writes through the companion, not applyEdit.
   const applyDocEdit = (
     start: { line: number; character: number },
     end: { line: number; character: number },
@@ -1114,19 +657,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     });
   };
 
-  // …and commit by replacing the tight range in the document. Comment edits
-  // and the flag writers route through here too.
   const editTactic = (p: ProofStepPosition, newText: string) =>
     applyDocEdit(p.start, p.stop, newText);
 
-  // A (+) chip commit: INSERT a new tactic for a pending goal. The insertion
-  // point is the end of the LINE holding the anchor step's TIGHT stop —
-  // resolved through `tacticEdits` so trailing trivia can't push the anchor
-  // onto the next tactic's line, and taken to end-of-line so a trailing
-  // comment stays glued to its own tactic instead of jumping to the new line.
-  // The huge character value is deliberate: positions beyond a line's end are
-  // clamped by the editor when the edit applies, and the true line length
-  // isn't known here (the widget never holds the document text).
   const addTactic = (
     spec: AddSpec,
     text: string,
@@ -1134,17 +667,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   ): AddResult => {
     const at2 = (p: { line: number; character: number }) =>
       editByStart.get(`${p.line}:${p.character}`);
-    // The `calc` forms act on a range of their own rather than on a line
-    // anchor: `hole`/`calc-link` on the hole's, `calc-append`/`calc-first` on
-    // the chain's last link (see calcEdit — kept pure and separate so a probe
-    // can elaborate what it produces). Opening a chain is NOT one of them; it
-    // is an ordinary line insertion, so it falls through below.
+
     const calc = calcEdit(spec, text);
     if (calc) {
       applyDocEdit(calc.range.start, calc.range.end, calc.newText);
-      // Where the `sorry` this just wrote landed, so the view can open the
-      // second half of the gesture on it (see calcEdit's STUB) — and, when the
-      // edit left both ends of a link open, where those `_`s landed.
+
       const to = (s: TextSlot) =>
         offsetToPosition(calc.range.start, calc.newText, s.at, s.len);
       return {
@@ -1159,13 +686,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     const e = at2(spec.after.start);
     const stop = e?.stop ?? spec.after.stop;
     const at = { line: stop.line, character: 1e5 };
-    // Where the PRODUCER's line starts its tactic text, not `spec.indent`.
-    // A step's start column lies whenever Paperproof split the tactic —
-    // `rw [a, b]` is one step per rule, so the step for `b` starts at the rule
-    // inside the brackets and indenting by its column put a new tactic 7
-    // columns too deep. The bare line indent lies the other way on a bulleted
-    // line (`  · constructor`), so the server measures past both (see
-    // tacticIndentAt).
+
     const cols = at2(spec.producer.start)?.tacticIndent ?? spec.indent;
     const indent = " ".repeat(cols);
     const prefix =
@@ -1174,13 +695,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         : spec.kind === "case"
           ? `| ${spec.caseName ?? "_"} => `
           : "";
-    // Multi-line input: continuation lines sit one level inside the first
-    // line's CONTENT, which is past the prefix — not past the bare indent.
-    // With a `· ` bullet (or a `| case => ` marker) the two differ, and
-    // indenting by the bare indent put a continuation at the very column its
-    // own tactic starts at, so Lean read it as a sibling tactic:
-    // `  · have h : p := by` / `    exact hp` fails with "expected '{' or
-    // indented tactic sequence" (elaborated, not reasoned about).
+
     const inner = " ".repeat(indent.length + prefix.length + 2);
     const body = text
       .split("\n")
@@ -1188,14 +703,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       .join("\n");
     const newText = "\n" + body;
     applyDocEdit(at, at, newText);
-    // The `calc` opener is the one line-inserted text that carries a stub (the
-    // view assembles it — see calcOpenText). Anything else has no `sorry` in
-    // it, which fillRange reports as null — except the `sorry` CHIP, whose
-    // whole point is to stop there, so it opts out explicitly.
+
     const start = { line: at.line, character: 0 };
-    // Slots are offsets into `text`, which landed on the first line behind the
-    // leading newline, the indent and any `· `/`| case => ` prefix — so shift
-    // by exactly that much to index into `newText`.
+
     const lead = 1 + indent.length + prefix.length;
     const to = (s: TextSlot) =>
       offsetToPosition(start, newText, s.at + lead, s.len);
@@ -1205,40 +715,22 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     };
   };
 
-  // Committing a delete. The extent maths lives in `deleteEdit` (pure, so a
-  // probe can elaborate what it produces — the calcEdit precedent), and this
-  // only applies the result through the editor's own pipeline, so it lands as
-  // ONE undo entry like every other write here.
   const deleteTactic = (spec: DeleteSpec) => {
     const e = deleteEdit(spec, stable?.deleteSlots ?? []);
     if (!e) return;
     applyDocEdit(e.range.start, e.range.end, e.newText);
   };
 
-  // The region an armed delete would take, painted in the buffer. NOT the
-  // hover relay: the companion clamps that one to a single line, which is
-  // right for "the tactic you are pointing at" and defeats this entirely.
   const previewRange = (r: ProofStepPosition | null) => {
     if (r) callCompanion("preview", r);
     else callCompanion("preview-clear", { start: ORIGIN, stop: ORIGIN });
   };
 
-  // Undo/redo, relayed because the tree's own edits leave focus in the
-  // webview where ⌘Z reaches nothing (see runEditorCommand in the companion —
-  // it activates the editor group first, since undo acts on what is focused).
   const undo = (redo: boolean) => {
-    // A document write like the applyEdit handlers (the companion runs the
-    // editor's own undo), so it takes the same hold bypass.
     expectOwnEdit();
     callCompanion(redo ? "redo" : "undo", { start: ORIGIN, stop: ORIGIN });
   };
 
-  // Hovering a tactic node paints a decoration over its range in the editor.
-  // DEBOUNCED here rather than in the view: every request is a file write by
-  // the Lean server plus an fs.watch wake-up in the companion, so firing on
-  // each node the pointer crosses would hammer the relay. A dwell of
-  // HOVER_DWELL_MS means only a deliberate hover sends anything, and the
-  // "clear" is sent only if a highlight actually went out.
   const hoverTimer = useRef<number | null>(null);
   const highlighted = useRef(false);
   const hoverTactic = (p: ProofStepPosition | null) => {
@@ -1254,17 +746,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     hoverTimer.current = window.setTimeout(() => {
       hoverTimer.current = null;
       highlighted.current = true;
-      // The TIGHT range, not the node's own: a Paperproof step range includes
-      // trailing trivia (it runs to the next tactic's first token), so
-      // painting it bleeds past the tactic's text and onto the next line's
-      // indent. `tacticEdits` already carries the server's trimmed span —
-      // which also drops a trailing comment, something the companion's
-      // geometric clamp can't see. It falls back to the node span for a
-      // tactic that isn't in the edit map.
+
       callCompanion("highlight", getTacticEdit(p)?.pos ?? p);
     }, HOVER_DWELL_MS);
   };
-  // Leaving the widget entirely (unmount) must not strand a decoration.
+
   useEffect(
     () => () => {
       if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
@@ -1272,28 +758,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [],
   );
 
-  // Rich editing (a tactic's hover-bar ⧉): open the tactic in the LENS — a slim
-  // editor group the companion splits off directly below the infoview — with
-  // the tactic's tight range selected. The real buffer in the same window,
-  // so vim mode/LSP/keybindings all apply and edits sync with zero re-
-  // elaboration cost. The infoview's EditorApi has no executeCommand, so the
-  // request rides our own RPC channel: `ProofTree.popoutEdit` has the Lean
-  // server write a request file under ~/.proof-tree-companion/, which the
-  // companion extension (ext/ramify) watches and executes.
-  // Two rejected bridges, for the record: `showDocument({external: true})`
-  // (vscode-lean4 ignores the flag and silently drops non-file URIs), and a
-  // synthetic click on a `vscode://…` anchor (the webview only intercepts
-  // TRUSTED clicks, so the synthetic one NAVIGATES the iframe — blank
-  // infoview).
-  // Inline goal state for the lens, computed from the proof we are already
-  // holding (see lensGoals.ts). It rides the popout itself — one payload per
-  // gesture, no extra round trip — and is refreshed by the effect below.
   const lensGoals = useMemo(() => {
     if (!stable) return [];
-    // A failed or never-ran tactic must not annotate its line: `∎` (both goal
-    // lists empty) is exactly what a recovered leaf looks like, and it is a
-    // lie there. Term-mode recovered steps stay in — a complete terminal term
-    // really did close its goal.
+
     const recovered = new Set(
       (stable.proof.recovered ?? [])
         .filter((r) => r.kind !== "term")
@@ -1315,48 +782,25 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       (start) => editByStart.get(`${start.line}:${start.character}`)?.stop,
     );
   }, [stable, editByStart]);
-  // Declared BEFORE its readers: the React Compiler bails on a memo whose
-  // closure references a binding declared later (the completion work hit this).
+
   const lensOpened = useRef(false);
-  // tree→source: clicking a tactic node reveals its span in the editor —
-  // routed through the COMPANION, not `ec.revealLocation`: vscode-lean4's
-  // reveal targets the FIRST visible editor for the uri (always the main
-  // buffer), while the companion targets the lens when one is open, which is
-  // what closes the tree↔lens loop (the lens cursor move it causes flows
-  // back as highlightPos). Without the companion installed, reveal is inert.
-  // The TIGHT span again (see hoverTactic): a raw step range runs into the
-  // next tactic, so revealing it would select past the tactic in the lens and,
-  // for a structured tactic, select its whole block. The start is what matters
-  // most — it becomes the cursor, and the accent lookup depends on it landing
-  // at the range's start — and tightening never moves it.
+
   const reveal = (p: ProofStepPosition) =>
-    // `lensGoals` rides along for the same reason `popout` sends it: the
-    // companion re-paints the lens's inline goal state after a reveal, so
-    // omitting it here published an EMPTY list and wiped the annotations on
-    // every ⌘-click until some later edit happened to refire them.
+
     callCompanion("reveal", getTacticEdit(p)?.pos ?? p, lensGoals);
 
   const popoutEdit = (p: ProofStepPosition) => {
     lensOpened.current = true;
     callCompanion("popout", p, lensGoals);
   };
-  // Annotations are POSITIONAL, so an edit invalidates every one below it. The
-  // companion drops them on the first document change and waits for these; the
-  // widget re-sends whenever the proof it is holding changes, which is exactly
-  // when the lines could have moved. Gated on having opened a lens at least
-  // once this session — otherwise every re-elaboration would write a relay file
-  // for a pane that does not exist. The companion no-ops when no lens is found,
-  // so a closed lens costs one file write per edit burst and nothing more.
+
   useEffect(() => {
     if (!lensOpened.current || lensGoals.length === 0) return;
     callCompanion("annotate", { start: ORIGIN, stop: ORIGIN }, lensGoals);
-    // callCompanion is re-created every render; the payload is what matters.
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lensGoals]);
 
-  // Until a proof has rendered, surface the three transient states: a genuine
-  // RPC failure, the empty "not in a proof" result, or still loading. Once a
-  // tree is up, all three quietly keep the last proof on screen instead.
   const body = !stable ? (
     <div style={{ fontFamily: "monospace", fontSize: 12, color: "#888", padding: 4 }}>
       {st.state === "rejected"
@@ -1366,13 +810,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
           : "Loading proof tree…"}
     </div>
   ) : (
-    // `rootRef` measures the TREE's top, so it goes below the summary — a ref
-    // on the outer element would report the section's top and the frame would
-    // overhang the fold by exactly the height of the disclosure line.
     <div ref={rootRef}>
-      {/* A failed companion request is otherwise invisible — the gesture just
-          does nothing. Surfaced inline (dismissible) rather than as a console
-          line nobody opens. */}
+
       {relayError && (
         <div
           onClick={() => setRelayError(null)}
@@ -1422,29 +861,17 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
           stable?.proof.cfLine != null
             ? {
                 line: stable.proof.cfLine,
-                // The stub's exact position when the server ships it; the
-                // view falls back to the line rule when it doesn't.
+
                 pos: stable.proof.cfStubPos,
                 draft: cfDraft ?? "",
-                // Absent from an older server, and the view treats absence as
-                // "not editable" rather than guessing a column — a guessed
-                // one would write the author's line at the wrong offset.
+
                 col: cfDraftCol,
                 render: renderCfDraft,
               }
             : null
         }
-        // The room below our own top (see useFrameOffset — NOT a flat 100vh,
-        // which overhangs by exactly that offset), less the deliberate strip
-        // kept clear at the bottom. `max(…)` is the transient-measurement
-        // floor. Left as CSS rather than resolved here on purpose: a webview
-        // that is hidden when the panel is resized fires neither observer nor
-        // resize handler, and a px height computed at the last measurement
-        // would stay wrong until something else moved — the units re-resolve
-        // on their own.
-        height={`max(${MIN_FRAME_PX}px, calc((100vh - ${offset}px) * ${
-          tallFrame ? FRAME_FRACTION_TALL : FRAME_FRACTION
-        }))`}
+
+        height={`max(${MIN_FRAME_PX}px, calc(100vh - ${offset}px))`}
         renderTaggedGoal={renderers?.renderTaggedGoal}
         renderTaggedHyps={renderers?.renderTaggedHyps}
         renderTaggedTactic={renderTaggedTactic}
@@ -1459,32 +886,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     </div>
   );
 
-  // The panel folds like the infoview's own sections, and the disclosure has to
-  // be OURS: the infoview wraps a widget in <details> only when the instance
-  // carries `name?`, and core fills that field for the DEPRECATED
-  // `UserWidgetDefinition` form alone (Lean/Widget/UserWidget.lean's
-  // `getWidgets` — the `.filter (·.type.isConstOf ``UserWidgetDefinition)`),
-  // never for a ProofWidgets `Component`. So the wrapper this widget gets is no
-  // wrapper at all; SECTION_ORDER_CSS's summary rule covers only the case where
-  // one appears. Same markup and utility classes as "Tactic state" above it, so
-  // it reads as a sibling section rather than as the tree growing its own bar.
-  //
-  // Folding must not UNMOUNT the tree: fold, zoom, scroll, focus and elide
-  // state all live in ProofTreeView, and a disclosure that reset the view every
-  // time it was closed would cost far more than the line of chrome it buys.
-  // `<details>` hides its content without removing it, so the subtree keeps
-  // its state — and `data-ptw-root` keeps its slot in the section order, which
-  // is why the attribute sits on the wrapper rather than on the content: when
-  // collapsed the content is invisible to layout, and a `:has()` rule anchored
-  // on it would stop matching and drop the collapsed section back among the
-  // volatile blocks it was ordered above.
   return (
     <div data-ptw-root style={{ marginTop: "0.25rem" }}>
       <details
         open={panelOpen}
-        // `onToggle`, not a click handler on the summary: the browser owns this
-        // state, and this way the keyboard (Enter/Space on a focused summary)
-        // goes through the same path as the pointer.
+
         onToggle={(e) => setPanelOpen(e.currentTarget.open)}
       >
         <summary className="mv2 pointer">Proof tree</summary>

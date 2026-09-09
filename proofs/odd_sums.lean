@@ -13,7 +13,7 @@ theorem sum_range_odd (n : ℕ) :
       ∧ (∑ i ∈ Finset.range (n + 1), (2 * i + 1))
           = (∑ i ∈ Finset.range n, (2 * i + 1)) + (2 * n + 1)
       ∧ (n % 2 = 0 ∨ n % 2 = 1) := by
-  -- Step 1: the identity itself. Everything below is a corollary of it.
+  -- .mark Step 1: the identity itself. Everything below is a corollary of it.
   have key : ∀ m : ℕ, (∑ i ∈ Finset.range m, (2 * i + 1)) = m ^ 2 := by
     intro m
     induction m with
@@ -36,9 +36,9 @@ theorem sum_range_odd (n : ℕ) :
         = (∑ i ∈ Finset.range m, (2 * i + 1)) + (2 * m + 1) := by
     intro m
     exact Finset.sum_range_succ (fun i => 2 * i + 1) m
-  -- Step 3: parity survives squaring in both directions. This is the one part
-  -- that really splits: forward is a construction, backward a case analysis on
-  -- the parity of m.
+  -- .mark Step 3: parity survives squaring in both directions. This is the one
+  -- part that really splits: forward is a construction, backward a case
+  -- analysis on the parity of m.
   have parity : ∀ m : ℕ, Even m ↔ Even (m ^ 2) := by
     intro m
     constructor
@@ -76,5 +76,6 @@ theorem sum_range_odd (n : ℕ) :
       obtain ⟨k, hk⟩ := hn
       rw [hk]
       omega
-  -- The four corollaries, in the order the statement lists them.
+  -- .mark 1 The four corollaries, in the order the statement lists them. Read
+  -- this first: it says what the four `have`s above are for.
   exact ⟨key n, parity n, gap n, residue⟩

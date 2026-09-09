@@ -26,3 +26,6 @@ ext/ramify/*.vsix
 
 # Claude Code personal settings
 .claude/settings.local.json
+
+# The probe runner's node bundle of the pure src modules (npm run probe)
+web/probe/lib.mjs

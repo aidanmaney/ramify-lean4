@@ -22,7 +22,10 @@ the infoview prints them; green boxes are tactics. Try, in order:
   type/doc popups.
 -/
 theorem tour_reading (n m : Nat) : n ≤ m ∨ m ≤ n := by
-  -- tree shows the split: each case left/right is its own branch
+  -- .mark The split is the whole proof. `Nat.le_total` hands back one of two
+  -- cases, and each branch closes with the hypothesis it was given.
+  -- (A `.mark` flag makes this an author's TOUR STOP: turn the status bar's
+  -- Tour item to `author` and `<` / `>` walk the stops in order.)
   rcases Nat.le_total n m with h | h
   · left
     exact h

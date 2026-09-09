@@ -1,48 +1,5 @@
 import { injectStyleOnce } from "./taggedRender";
 
-// Colour palette, resolved from the EDITOR's theme rather than hardcoded.
-//
-// Everything drawable is a CSS custom property on `[data-ptw-theme]`, so the
-// render sites carry `var(--ptw-…)` strings and the browser recomputes them
-// when VS Code rewrites its variables — no re-render, no observer on the paint
-// path. (The chrome already did this with `--vscode-editorWidget-*`; this
-// extends it to the node fills, the text, and the syntax colours.)
-//
-// **Everything is anchored to the theme's own background and foreground.** That
-// is what makes this work for a theme nobody here has seen: `--ptw-bg` and
-// `--ptw-fg` are the editor's, and every other colour is a `color-mix` of a hue
-// INTO one of them. Hue is used sparingly and only where it carries meaning —
-// which box is a goal, which is a tactic, which token is a keyword. A first
-// attempt mixed saturated hues at full strength and used VS Code's Dark+ token
-// palette verbatim; against a soft theme (Catppuccin, Solarized, Nord) that
-// reads as neon, because those palettes are calibrated for their OWN
-// background and foreground, not for someone else's. Mixing toward the live
-// `--ptw-fg` desaturates every hue by exactly as much as the theme is soft.
-//
-// The structure is deliberate: the RECIPES below are written once, in the base
-// block, and the dark block overrides only their INPUTS (`--ptw-surface`, the
-// hues, the bg/fg fallbacks). Custom properties substitute lazily at use time,
-// so a recipe defined once picks up whichever inputs are in scope.
-//
-// **The light/dark split is ONE decision, deliberately.** Node fills used to be
-// fixed light pastels, which forced the token palette to be fixed light too —
-// theme-following token colours would have gone light-on-light and vanished.
-// Fixing only one half swaps that for the mirror bug (a dark node under a
-// light-palette token), so both halves hang off the same `data-ptw-theme`
-// stamp: either both switch or neither does, and they can never disagree.
-//
-// That stamp comes from the background's LUMINANCE (below), not from VS Code's
-// `vscode-dark` body class. The luminance is the honest question — "will light
-// ink read on this?" — and it answers correctly for a custom theme, a
-// high-contrast theme, and any host that isn't a VS Code webview at all.
-//
-// Nodes stay a shade LIGHTER than the page (`--ptw-surface`: in a dark theme
-// the background lifted toward the foreground, the elevation step themes like
-// Catppuccin build in as surface0) so a box still reads as a raised card. Each
-// derived value declares a flat fallback first and the `color-mix` second, so
-// a browser without `color-mix` keeps a sane flat colour.
-
-/** Is a colour dark enough that light ink reads on it? Null when unparseable. */
 function luminanceOf(color: string): number | null {
   const s = color.trim();
   let r: number, g: number, b: number;
@@ -59,20 +16,15 @@ function luminanceOf(color: string): number | null {
     const parts = rgb[1].split(/[\s,/]+/).filter(Boolean).map(Number);
     if (parts.length < 3 || parts.slice(0, 3).some(Number.isNaN)) return null;
     [r, g, b] = parts;
-    // A fully transparent background tells us nothing about what shows through.
+
     if (parts.length >= 4 && parts[3] === 0) return null;
   }
-  // Rec. 601 luma, which is plenty to separate "dark theme" from "light theme".
+
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
 export type ThemeKind = "light" | "dark";
 
-/**
- * The theme kind, from whatever background the tree is actually drawn on:
- * VS Code's `--vscode-editor-background` when in the webview, else the
- * document's own computed background (the standalone app).
- */
 export function resolveThemeKind(): ThemeKind {
   if (typeof document === "undefined") return "light";
   const rootStyle = getComputedStyle(document.documentElement);
@@ -88,10 +40,6 @@ export function resolveThemeKind(): ThemeKind {
   return "light";
 }
 
-// Scoped on `data-ptw-theme`, which ProofTreeView stamps on its OWN root — not
-// on widget.tsx's `data-ptw-root` (the section-order marker), which the
-// standalone app has no wrapper for and whose `:has(> …)` selectors a second
-// copy would disturb.
 const PALETTE_CSS = `
 [data-ptw-theme] {
   /* ---- Inputs. The dark block overrides only these. ---- */
@@ -304,8 +252,6 @@ export function ensurePaletteStyle() {
   injectStyleOnce("ptw-palette", PALETTE_CSS);
 }
 
-// Render-site handles. Every one is a `var()` reference, so a theme change is
-// repainted by the browser rather than re-rendered by React.
 export const NODE_STYLES = {
   goal: {
     fill: "var(--ptw-node-goal-fill)",
@@ -322,7 +268,7 @@ export const NODE_STYLES = {
 };
 
 export const NODE_TEXT = "var(--ptw-node-text)";
-/** Accent outline for sequence endpoints and the cursor's tactic node. */
+
 export const SEQ_STROKE = "var(--ptw-accent)";
 export const ACCENT_TEXT = "var(--ptw-accent-text)";
 export const HYP_USED_FILL = "var(--ptw-hyp-used)";
@@ -330,34 +276,20 @@ export const HYP_UNUSED_FILL = "var(--ptw-hyp-unused)";
 export const HYP_MARK_FILL = "var(--ptw-hyp-mark)";
 export const HYP_LIT_FILL = "var(--ptw-hyp-lit)";
 
-/** How the hover answer over a goal's context lines is drawn —
-`ramify.hypMarkStyle`, arriving over the companion's settings file.
-
-`"highlight"` (the default) is a background wash in `--ptw-hyp-lit`, which
-rhymes with what the infoview does to say something about part of a goal, and
-is told apart from the tactic DIFF beside it by HUE. `"underline"` is the
-accessible variant: a DASHED rule here against the SOLID one the diff takes in
-that mode, so the two claims separate by shape and survive with no colour at
-all — the reason the connectors' marks are the accessible baseline too. */
 export type HypMarkStyle = "highlight" | "underline";
 export const COMMENT_FILL = "var(--ptw-comment)";
-/** Narration mode's in-box prose (and the borders that frame it): the comment
-voice, mixed against the node SURFACE it is drawn on rather than the page. See
-the recipe for why the strip's own ink is too dim once it moves inside a box. */
+
 export const PROSE_FILL = "var(--ptw-prose)";
-/** Case-name badge on a branch goal — hue-free, like the context lines. */
+
 export const CASE_FILL = "var(--ptw-case)";
-/** The `sorry` frontier chip. Shares the syntax palette's sorry colour, so a
-stub reads the same in the tree as the keyword does in a tactic label. */
+
 export const SORRY_FILL = "var(--ptw-tok-sorry)";
-/** The armed-delete confirm chip — the only destructive control in the tree.
-Also the ink for an ERROR-severity diagnostic (see diagnostics.ts): both mean
-"this spot is wrong", and the editor's own error colour is behind them both. */
+
 export const DANGER_FILL = "var(--ptw-danger)";
-/** Warning-severity diagnostic ink. */
+
 export const WARN_FILL = "var(--ptw-warn)";
 export const LINK_STROKE = "var(--ptw-link)";
-/** Tinted link inks (opt-in via ramify.linkTint), keyed by TARGET type. */
+
 export const LINK_STROKE_GOAL = "var(--ptw-link-goal)";
 export const LINK_STROKE_TACTIC = "var(--ptw-link-tactic)";
 export const MUTED_FILL = "var(--ptw-muted)";
@@ -365,13 +297,6 @@ export const EDIT_BG = "var(--ptw-edit-bg)";
 export const EDIT_TEXT = "var(--ptw-edit-text)";
 export const RAIL_PRESSED = "var(--ptw-rail-pressed)";
 
-/** Chrome for the custom floating popups (the diagnostic ribbon's message,
- * the token doc tip): editorWidget background over a light fallback, one
- * shadow, one padding. One constant because the background half of the
- * recorded light-on-light trap lives here — a popup pairing its background
- * and ink from two different places is exactly how that bug happens. Borders
- * are per-surface (severity ink vs. editorWidget-border), so they stay at the
- * call sites. */
 export const POPUP_CHROME = {
   padding: "6px 9px",
   borderRadius: 3,
@@ -379,11 +304,6 @@ export const POPUP_CHROME = {
   boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
 } as const;
 
-/**
- * Semantic-token type → colour. Keyed by the LSP token-type names the server
- * sends (`SemanticTokenType.names`); an unmapped type inherits the label's own
- * colour, which is the right default for punctuation and the long tail.
- */
 export const TOKEN_COLOR: Record<string, string> = {
   keyword: "var(--ptw-tok-keyword)",
   function: "var(--ptw-tok-function)",
@@ -397,31 +317,12 @@ export const TOKEN_COLOR: Record<string, string> = {
   leanSorryLike: "var(--ptw-tok-sorry)",
 };
 
-/** Token types whose colour is a variable of their OWN (`--ptw-tok-<type>`), so
-an editor-supplied palette can override it directly. Derived from TOKEN_COLOR
-rather than listed again, so the two cannot drift: `namespace` is excluded
-because it shares `--ptw-tok-type`, and `leanSorryLike` because it is ours (a
-`sorry` marker), not a thing the editor's theme has an opinion about. */
 export const TOKEN_VARS = new Set(
   Object.entries(TOKEN_COLOR)
     .filter(([type, v]) => v === `var(--ptw-tok-${type})`)
     .map(([type]) => type),
 );
 
-/**
- * Watch for a live VS Code theme change, calling `onChange` each time.
- *
- * There is no event for this: VS Code does NOT reload the webview on a theme
- * switch, it rewrites the CSS custom properties on the root element's `style`
- * attribute in place (and stamps the light/dark KIND on the body, which a
- * light↔dark switch can land on first). So the signal is a MutationObserver
- * over exactly those two, which is what the infoview's own components do.
- *
- * Shared because two independent things need it — the view's own palette and
- * code font, and the widget's refetch of the companion-resolved token colours —
- * and "how do you detect a theme flip" should have one answer, not one per
- * caller. Returns the disconnect, so it drops straight into a `useEffect`.
- */
 export function observeThemeChange(onChange: () => void): () => void {
   const obs = new MutationObserver(onChange);
   obs.observe(document.documentElement, {
