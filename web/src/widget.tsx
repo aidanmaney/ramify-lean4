@@ -17,6 +17,7 @@ import {
 } from "@leanprover/infoview";
 import {
   stableProofOf,
+  type AutomationTrace,
   type Proof,
   type ProofStepPosition,
   type TacticSlot,
@@ -25,6 +26,9 @@ import type { AddResult, AddSpec, DeleteSpec, TextSlot } from "./types";
 import { DEFAULT_ABBREV, type AbbrevConfig } from "./abbreviation";
 import { calcEdit, fillRange, offsetToPosition } from "./calcEdit";
 import { deleteEdit } from "./deleteEdit";
+import type { RewriteEdit } from "./rewrite";
+import type { Lint } from "./lints";
+import type { PolishLine } from "./narrate";
 import {
   filterDiagnostics,
   proofSpan,
@@ -45,6 +49,7 @@ import { observeThemeChange } from "./theme";
 import {
   makeTacticRenderer,
   renderTacticTokens,
+  type Elision,
   type LabelToken,
   type TacticToken,
   type TacticTokenInfo,
@@ -227,6 +232,8 @@ type ProofTreeData = Proof & {
   declHeader?: string;
   declHeaderTokens?: TacticToken[];
   declHeaderStart?: { line: number; character: number };
+  declHeaderNameStop?: { line: number; character: number };
+  declHeaderSigStop?: { line: number; character: number };
 
   cfDraft?: string;
 
@@ -249,7 +256,37 @@ interface Settings {
   counterfactual: boolean;
   hypMarkStyle: HypMarkStyle;
   abbrev: AbbrevConfig;
+  /** C4/D6 — what the companion says about the two model channels. `ready`
+   is the whole answer to "can this be asked at all"; the key never appears
+   here or anywhere else this side of the extension. */
+  ai: { polish: boolean; propose: boolean; ready: boolean; why: string };
 }
+
+/** How often the companion's answer file is asked for, and how long before the
+ ask is abandoned. Paid only while a request is out.
+
+ The first few ticks are close together — a cached answer comes back almost at
+ once and the reader should not wait a beat for it — and then the interval
+ BACKS OFF to a ceiling, because a model round trip takes seconds and fifty
+ RPCs spent watching a file is fifty re-renders of the infoview for nothing.
+ The give-up is unchanged: the caller draws the templated line, which was
+ never wrong. */
+const COMPANION_POLL_MS = 400;
+const COMPANION_POLL_MAX_MS = 2_000;
+const COMPANION_POLL_GROWTH = 1.5;
+const COMPANION_GIVE_UP_MS = 20_000;
+
+/** A request id: this session's own, so a response file left behind by an
+ earlier window is never mistaken for an answer. */
+const companionId = (tag: string) =>
+  `${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const DEFAULT_AI = {
+  polish: false,
+  propose: false,
+  ready: false,
+  why: "",
+};
 
 const DEFAULT_SETTINGS: Settings = {
   brackets: false,
@@ -260,6 +297,7 @@ const DEFAULT_SETTINGS: Settings = {
   counterfactual: true,
   hypMarkStyle: "highlight",
   abbrev: DEFAULT_ABBREV,
+  ai: DEFAULT_AI,
 };
 
 interface ThemeColorsResponse {
@@ -276,6 +314,7 @@ interface ThemeColorsResponse {
     eager: boolean;
     custom: { abbreviation: string; symbol: string }[];
   };
+  ai?: { polish?: boolean; propose?: boolean; ready?: boolean; why?: string };
   colors?: { type: string; color: string }[];
 }
 
@@ -304,6 +343,12 @@ function parseSettings(r: ThemeColorsResponse, prev: Settings): Settings {
           ),
         }
       : prev.abbrev,
+    ai: {
+      polish: r.ai?.polish === true,
+      propose: r.ai?.propose === true,
+      ready: r.ai?.ready === true,
+      why: r.ai?.why ?? "",
+    },
   };
 }
 
@@ -381,6 +426,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     counterfactual,
     abbrev,
     hypMarkStyle,
+    ai,
   } = useSettings(rs, docRev);
 
   const st = useAsyncPersistent<ProofTreeData>(
@@ -534,6 +580,177 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     [rs, pos.uri],
   );
 
+  // B4 — AUTOMATION TRACES, on demand. Deliberately NOT on the payload: a
+  // trace costs one re-elaboration of the declaration, and a proof with ten
+  // `simp`s must not pay ten of them on every cursor move. The server answers
+  // for the WHOLE declaration in one pass (a `?` form behaves exactly as the
+  // bare one, so every site can be rewritten together), so the first ask pays
+  // for all of them and the rest are free.
+  //
+  // The answers are held HERE and passed to the view as a sibling, not folded
+  // into `Proof`: `stableProofOf` would drop them on the next swap, and the
+  // view already takes `automationTraces` as an argument with the field as
+  // fallback (the `deleteSlots` rule).
+  // Keyed on the DECLARATION, in state and not a ref (no ref reads during
+  // render): a trace belongs to the proof it was read from, so navigating to
+  // another one simply stops matching and the list falls away — no effect, no
+  // reset, nothing to clear.
+  const [traces, setTraces] = useState<{
+    key: string;
+    list: AutomationTrace[];
+  }>({ key: "", list: [] });
+  const proofKey = stable?.proof.proofId ?? "";
+  const shownTraces = traces.key === proofKey ? traces.list : [];
+  const requestTrace = useMemo(
+    () => async (at: { start: { line: number; character: number } }) => {
+      const res = await rs.call<
+        { pos: typeof pos; stepStart: { line: number; character: number } },
+        { traces?: AutomationTrace[]; note?: string }
+      >("ProofTree.getAutomationTrace", { pos, stepStart: at.start });
+      const list = res?.traces ?? [];
+      if (list.length === 0) return false;
+      setTraces({ key: proofKey, list });
+      return list.some(
+        (t) =>
+          t.stepStart.line === at.start.line &&
+          t.stepStart.character === at.start.character,
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rs, pos.uri, pos.line, pos.character, proofKey],
+  );
+
+  // D4 — MATHLIB'S LINTERS, on demand. Same seam and same reason as B4's
+  // traces: `ProofTree.lintDecl` re-elaborates the declaration with the style
+  // linters on, which is far too much to pay on every cursor move, so it is
+  // fired only when the reader turns the `lints` reading option ON and it
+  // answers for the WHOLE declaration in one pass.
+  //
+  // Held HERE and passed to the view as a SIBLING, keyed on the declaration
+  // like the traces: navigating to another proof simply stops matching and
+  // the list falls away.
+  const [lints, setLints] = useState<{ key: string; list: Lint[] }>({
+    key: "",
+    list: [],
+  });
+  const shownLints = lints.key === proofKey ? lints.list : [];
+  const requestLints = useMemo(
+    () => async () => {
+      const res = await rs.call<
+        { pos: typeof pos },
+        { lints?: Lint[]; note?: string; linters?: string[] }
+      >("ProofTree.lintDecl", { pos });
+      return res?.lints ?? [];
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rs, pos.uri, pos.line, pos.character],
+  );
+  // The reader's ASK arms the request and KEEPS it armed: turning `lints` on
+  // is a standing question about whatever proof is being read, so walking to
+  // the next declaration asks it again. The guard is `proofKey`, which moves
+  // only when the DECLARATION does — a cursor move inside one proof costs
+  // nothing, which is the whole reason these are not on the payload.
+  const [lintsWanted, setLintsWanted] = useState(false);
+  const wantLints = (on: boolean) => setLintsWanted(on);
+  // The requester is memoised on the cursor and so is a fresh closure on
+  // every move; the effect must not be. A ref written in an effect is the
+  // `toastRef` pattern — nothing reads it during render.
+  const lintReqRef = useRef(requestLints);
+  useEffect(() => {
+    lintReqRef.current = requestLints;
+  }, [requestLints]);
+  useEffect(() => {
+    if (!lintsWanted || !proofKey || lints.key === proofKey) return;
+    let live = true;
+    void lintReqRef.current().then(
+      (list) => live && setLints({ key: proofKey, list }),
+      () => live && setLints({ key: proofKey, list: [] }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [lintsWanted, proofKey, lints.key]);
+
+  // C4 / D6 — THE COMPANION CHANNEL, and the only place in this client that
+  // knows it is a round trip at all.
+  //
+  // The request goes out through an RPC that writes a file the companion
+  // watches; there is no route back from the extension into this session, so
+  // the answer is POLLED. `setTimeout`, never rAF — a hidden webview fires no
+  // frames, and this is exactly the case that would hang there. Twenty
+  // seconds and then give up: the caller draws the templated line, which was
+  // never wrong, and nothing retries on its own.
+  const askCompanion = useMemo(
+    () =>
+      async <T extends { status?: string; note?: string }>(
+        method: string,
+        params: Record<string, unknown>,
+        poll: string,
+        id: string,
+      ): Promise<T> => {
+        await rs.call(method, { id, ...params });
+        const t0 = Date.now();
+        return await new Promise<T>((resolve, reject) => {
+          let wait = COMPANION_POLL_MS;
+          const tick = () => {
+            rs.call<{ id: string }, T>(poll, { id }).then((r) => {
+              if (r && r.status && r.status !== "pending") {
+                if (r.status === "error")
+                  reject(new Error(r.note || "the companion reported an error"));
+                else resolve(r);
+                return;
+              }
+              if (Date.now() - t0 > COMPANION_GIVE_UP_MS) {
+                reject(new Error("the companion did not answer in 20s"));
+                return;
+              }
+              wait = Math.min(wait * COMPANION_POLL_GROWTH, COMPANION_POLL_MAX_MS);
+              window.setTimeout(tick, wait);
+            }, reject);
+          };
+          window.setTimeout(tick, wait);
+        });
+      },
+    [rs],
+  );
+
+  const askPolish = useMemo(
+    () => async (lines: PolishLine[]) => {
+      const res = await askCompanion<{
+        status?: string;
+        lines?: { nodeId: string; text: string }[];
+      }>(
+        "ProofTree.polishRequest",
+        { proofKey, lines },
+        "ProofTree.polishResult",
+        companionId("plsh"),
+      );
+      return res.lines ?? [];
+    },
+    [askCompanion, proofKey],
+  );
+
+  const askPropose = useMemo(
+    () =>
+      async (req: {
+        text: string;
+        primitives: { nodeId: string; kind: string; title: string }[];
+      }) =>
+        await askCompanion<{
+          status?: string;
+          nodeId?: string;
+          kind?: string;
+          reason?: string;
+          note?: string;
+        }>(
+          "ProofTree.proposeRequest",
+          { proofKey, ...req },
+          "ProofTree.proposeResult",
+          companionId("prop"),
+        ),
+    [askCompanion, proofKey],
+  );
+
   const getGoalTerms = useMemo(() => {
     const byId = new Map<string, string[]>();
     for (const { goalId, goal } of interactive?.taggedGoals ?? []) {
@@ -576,10 +793,22 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       ),
     [stable],
   );
-  const getTacticEdit = (p: ProofStepPosition) => {
-    const e = editByStart.get(`${p.start.line}:${p.start.character}`);
-    return e ? { pos: { start: e.start, stop: e.stop }, text: e.text } : null;
-  };
+  // Memoised on `editByStart` because D1's `rewrites` pass takes it as a memo
+  // dependency: a fresh closure every render would recompute both proposals
+  // for every node on every render.
+  const getTacticEdit = useMemo(
+    () => (p: ProofStepPosition) => {
+      const e = editByStart.get(`${p.start.line}:${p.start.character}`);
+      return e
+        ? {
+            pos: { start: e.start, stop: e.stop },
+            text: e.text,
+            indent: e.tacticIndent,
+          }
+        : null;
+    },
+    [editByStart],
+  );
 
   const infoAt = useMemo(
     () =>
@@ -629,7 +858,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     const text = stable?.proof.declHeader ?? "";
     if (!toks || toks.length === 0 || !start || text === "") return undefined;
 
-    return (lines: string[], label?: string) =>
+    return (lines: string[], label?: string, elision?: Elision) =>
       renderTacticTokens(
         text,
         start,
@@ -637,7 +866,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         label ?? text,
         lines,
         infoAt,
-        undefined,
+        elision,
         colorBrackets,
       );
   }, [stable, infoAt, colorBrackets]);
@@ -715,6 +944,111 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     };
   };
 
+  // D1 — VERIFY, THEN OFFER. The candidate edits go to the server, which
+  // splices them into a COPY of the file's text and re-elaborates the one
+  // declaration through the same seam the counterfactual uses; nothing is
+  // written by this call. The client shows the verdict in a pill and writes
+  // only what came back `benign`.
+  const checkRewrite = useMemo(
+    () => async (edits: RewriteEdit[]) => {
+      const res = await rs.call<
+        { pos: typeof pos; edits: RewriteEdit[] },
+        {
+          verdict?: string;
+          ok?: boolean;
+          message?: string;
+          steps?: number;
+          before?: number;
+        }
+      >("ProofTree.checkRewrite", {
+        pos,
+        edits: edits.map((e) => ({
+          start: e.range.start,
+          stop: e.range.end,
+          newText: e.newText,
+        })) as never,
+      });
+      return {
+        verdict: res?.verdict ?? "structural",
+        ok: !!res?.ok,
+        message: res?.message,
+        steps: res?.steps ?? 0,
+        before: res?.before ?? 0,
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rs, pos.uri, pos.line, pos.character],
+  );
+
+  // D2a — ASK WHETHER ONE TACTIC CLOSES A RUN. The client hands over the
+  // run's first and last step; the server looks the extent up in the payload's
+  // own slots, splices each candidate in turn and re-elaborates. At most nine
+  // elaborations, only on a click, cached per run — and, like `checkRewrite`,
+  // nothing is written by the call.
+  const tryClose = useMemo(
+    () => async (
+      from: { line: number; character: number },
+      to: { line: number; character: number },
+    ) => {
+      const res = await rs.call<
+        {
+          pos: typeof pos;
+          from: { line: number; character: number };
+          to: { line: number; character: number };
+        },
+        {
+          tactic?: string;
+          verdict?: string;
+          message?: string;
+          tried?: string[];
+          before?: number;
+          steps?: number;
+        }
+      >("ProofTree.tryClose", { pos, from, to });
+      return {
+        tactic: res?.tactic,
+        verdict: res?.verdict ?? "structural",
+        message: res?.message,
+        tried: res?.tried,
+        before: res?.before,
+        steps: res?.steps,
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rs, pos.uri, pos.line, pos.character],
+  );
+
+  const applyRewrite = (
+    edits: RewriteEdit[],
+    renameAt?: { line: number; character: number },
+  ) => {
+    expectOwnEdit();
+    void ec.api
+      .applyEdit({
+        changes: {
+          [pos.uri]: edits.map((e) => ({
+            range: { start: e.range.start, end: e.range.end },
+            newText: e.newText,
+          })),
+        },
+      })
+      .then(
+        // D1 extract → RENAME FOLLOW-UP (2026-09-17): the hoisted `have` is
+        // named `this`, and the companion opens VS Code's own Rename Symbol on
+        // that binder so the author types the name. Best-effort: only after
+        // the write resolved, never a condition of it, and the companion
+        // itself waits until the text and Lean's rename both answer for it.
+        () => {
+          if (!renameAt) return;
+          callCompanion("rename", {
+            start: renameAt,
+            stop: { line: renameAt.line, character: renameAt.character + "this".length },
+          });
+        },
+        (e: unknown) => console.error("[proof-tree] rewrite applyEdit failed:", e),
+      );
+  };
+
   const deleteTactic = (spec: DeleteSpec) => {
     const e = deleteEdit(spec, stable?.deleteSlots ?? []);
     if (!e) return;
@@ -761,20 +1095,42 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const lensGoals = useMemo(() => {
     if (!stable) return [];
 
+    // The lens annotates ONE goal per source line, so a step that is not a
+    // line of tactic script must not speak there: a failed/skipped
+    // reconstruction, and a SUBTERM — several of which share the line of the
+    // `exact` that supplied them and would otherwise overwrite its reading
+    // with the last component's. Part B's `term` steps ARE the script (a
+    // term-mode proof has no other), so they stay.
     const recovered = new Set(
       (stable.proof.recovered ?? [])
         .filter((r) => r.kind !== "term")
         .map((r) => `${r.start.line}:${r.start.character}`),
     );
+    const key = (p: { line: number; character: number }) =>
+      `${p.line}:${p.character}`;
+    // …and the goals those steps hang off are grafts, not what the tactic
+    // left: strip them from the host's `spawnedGoals` too, or a closing
+    // `exact` reads as leaving four goals open.
+    const grafted = new Set(
+      stable.proof.steps
+        .filter((s) => recovered.has(key(s.position.start)))
+        .map((s) => s.goalBefore.id),
+    );
     const proof = recovered.size
       ? {
           ...stable.proof,
-          steps: stable.proof.steps.filter(
-            (s) =>
-              !recovered.has(
-                `${s.position.start.line}:${s.position.start.character}`,
-              ),
-          ),
+          steps: stable.proof.steps
+            .filter((s) => !recovered.has(key(s.position.start)))
+            .map((s) =>
+              s.spawnedGoals.some((g) => grafted.has(g.id))
+                ? {
+                    ...s,
+                    spawnedGoals: s.spawnedGoals.filter(
+                      (g) => !grafted.has(g.id),
+                    ),
+                  }
+                : s,
+            ),
         }
       : stable.proof;
     return goalAnnotations(
@@ -847,6 +1203,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onPopoutEdit={popoutEdit}
         highlightPos={{ line: pos.line, character: pos.character }}
         declHeader={declHeader}
+        declHeaderStart={declHeaderStart}
+        declHeaderNameStop={stable?.proof.declHeaderNameStop}
+        declHeaderSigStop={stable?.proof.declHeaderSigStop}
         renderDeclHeader={renderDeclHeader}
         onRevealHeader={
           declHeaderStart
@@ -878,10 +1237,24 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onAddTactic={addTactic}
         onHoverTactic={hoverTactic}
         deleteSlots={stable?.deleteSlots}
+        automationTraces={shownTraces}
+        onTrace={requestTrace}
         onDeleteTactic={deleteTactic}
+        onCheckRewrite={checkRewrite}
+        onTryClose={tryClose}
+        onApplyRewrite={applyRewrite}
         onPreviewRange={previewRange}
         onUndo={undo}
         diagnostics={diagnostics}
+        lints={shownLints}
+        onLints={wantLints}
+        onPolish={askPolish}
+        polishReady={ai.ready}
+        polishDefault={ai.polish}
+        polishWhy={ai.why || undefined}
+        onPropose={askPropose}
+        proposeReady={ai.ready && ai.propose}
+        proposeWhy={ai.why || undefined}
       />
     </div>
   );

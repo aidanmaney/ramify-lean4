@@ -40,14 +40,6 @@ structure TacticTokenInfo where
   doc   : Option String := none
   deriving Server.RpcEncodable
 
-partial def declName? (stx : Syntax) : Option Name :=
-  match stx with
-  | .node _ k args =>
-    if k == ``Lean.Parser.Command.declId && args.size > 0 then
-      some args[0]!.getId
-    else args.foldl (fun acc a => acc <|> declName? a) none
-  | _ => none
-
 structure ProofTreeData where
   steps       : List Paperproof.Services.ProofStep
   allGoals    : List Paperproof.Services.GoalInfo
@@ -75,7 +67,26 @@ structure ProofTreeData where
 
   recovered     : Array ProofTree.Recover.RecoveredStep := #[]
 
+  -- B1/Part E — the LEDGER a structured term draws as, one row per component.
+  -- Plain data, so it rides both wires and the offline probes see it.
+  termLedgers   : Array ProofTree.Recover.TermLedger := #[]
+
+  hypOrigins    : Array ProofTree.HypOrigin := #[]
+
+  -- D1 — how many steps use each `have`/`obtain`-introduced hypothesis, and
+  -- which. `hypOrigins` ∘ `tacticDependsOn`; the input the inline move needs.
+  haveUses      : Array ProofTree.HaveUse := #[]
+
+  lemmaRefs     : Array ProofTree.LemmaRef := #[]
+
+  branches      : Array ProofTree.BranchInfo := #[]
+
   openBlock     : Option ProofTree.Recover.OpenBlock := none
+
+  -- C1 (seam only): a LaTeX reading of each goal print, keyed by goal id.
+  -- Always EMPTY on this toolchain — the printer (kmill/LeanTeX) does not
+  -- build against v4.32.2. See ProofTreeComments.LatexGoal.
+  latex         : Array ProofTree.LatexGoal := #[]
 
   diagnostics   : Array TreeDiag := #[]
 
@@ -91,6 +102,17 @@ structure ProofTreeData where
   declHeaderTokens : Array TacticToken := #[]
 
   declHeaderStart : Option Lsp.Position := none
+
+  /-- Where the header's name ENDS and its binders begin: the start of the
+  declaration's `declSig`/`optDeclSig` node, found by KIND. Absent where the
+  signature is empty (`example := …`) or no signature node is found. -/
+  declHeaderNameStop : Option Lsp.Position := none
+
+  /-- Where the header's TYPE SPEC begins: the `:` of the `typeSpec` inside the
+  `declSig`/`optDeclSig`, found by KIND. Without a type spec, the end of the
+  binders; with neither, the end of the keyword/`declId`. The widget's resting
+  header is the text up to here (keyword, name, binders). -/
+  declHeaderSigStop : Option Lsp.Position := none
 
   cfDraftTokens : Array TacticToken := #[]
 
@@ -181,14 +203,12 @@ partial def collectNumberTokens (stx : Syntax) : Array FileWorker.LeanSemanticTo
   | .node _ _ args => args.flatMap collectNumberTokens
   | _ => #[]
 
+-- ONE predicate, shared with `lemmaRefs` (B3): what paints as a constant and
+-- what appears in a step's reference list are the same set of identifiers, by
+-- construction rather than by two matching guards.
 def collectConstIdentTokens (tree : InfoTree) : Array FileWorker.LeanSemanticToken :=
-  List.toArray <| tree.deepestNodes fun _ info _ => do
-    let .ofTermInfo ti := info | none
-    let .original .. := ti.stx.getHeadInfo | none
-    guard ti.stx.isIdent
-
-    guard ti.expr.getAppFn.isConst
-    return { stx := ti.stx, type := Lsp.SemanticTokenType.function }
+  (constIdentNodes tree).toArray.map fun (stx, _) =>
+    { stx, type := Lsp.SemanticTokenType.function }
 
 def semanticTokensFor (fileMap : FileMap) (stx : Syntax) (tree : InfoTree)
     : Array FileWorker.AbsoluteLspSemanticToken :=
@@ -400,11 +420,15 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
 
     let recovD ← Recover.recoverCalcLinks fileMap snap.infoTree remapped.steps
       (extra := some snap.stx)
+
+    let recovE ← Recover.recoverTermInStep fileMap snap.infoTree remapped.steps
     let recov : Recover.Recovery := {
-      steps := recovA.steps ++ recovB.steps ++ recovD.steps
-      goals := recovA.goals ++ recovB.goals ++ recovD.goals
-      grafts := recovA.grafts ++ recovB.grafts ++ recovD.grafts
-      recovered := recovA.recovered ++ recovB.recovered ++ recovD.recovered }
+      steps := recovA.steps ++ recovB.steps ++ recovD.steps ++ recovE.steps
+      goals := recovA.goals ++ recovB.goals ++ recovD.goals ++ recovE.goals
+      grafts := recovA.grafts ++ recovB.grafts ++ recovD.grafts ++ recovE.grafts
+      recovered := recovA.recovered ++ recovB.recovered ++ recovD.recovered
+                     ++ recovE.recovered
+      ledgers := recovE.ledgers }
 
     let openBlock ← Recover.recoverOpenBlock fileMap snap.infoTree (some snap.stx)
       slots
@@ -462,6 +486,23 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
     let mut seenTok : Std.HashSet (Nat × Nat) := {}
 
     let tacticRanges := collectTacticRanges snap.infoTree
+
+    -- The tight source of one written tactic, by its start.  A step whose
+    -- macro expands to NESTED tactics (`intro h h2` → `intro h; intro h2`) is
+    -- harvested at the inner node's range, and `surfaceTacticRange` cannot
+    -- widen it: the outer node begins at the same byte, and the rule there
+    -- deliberately takes the smallest container starting STRICTLY before the
+    -- step (loosening it would swallow `induction … with`'s whole block).
+    -- The slot knows the answer, so the slot is asked — but only where its
+    -- own text reads exactly the step's LABEL, which is what tells one
+    -- tactic written long (`intro h h2`) from a slot that owns more than the
+    -- step (`induction … with`, a `<;>` combinator).
+    let slotStops : Std.HashMap (Nat × Nat) Lsp.Position :=
+      slots.foldl (init := {}) fun acc sl =>
+        acc.insert (sl.start.line, sl.start.character) sl.stop
+    let tightOf (t : String) : String :=
+      String.Pos.Raw.extract t ⟨0⟩ (trimmedEnd t)
+
     for s in parsedTree.steps do
       let key := (s.position.start.line, s.position.start.character)
       unless seen.contains key do
@@ -478,6 +519,17 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
           | some (rb, re) =>
             (⟨rb⟩, ⟨re⟩, fileMap.utf8PosToLspPos ⟨rb⟩)
           | none => (b0, e0, s.position.start)
+
+        let (b, e) : String.Pos.Raw × String.Pos.Raw :=
+          match slotStops[(start.line, start.character)]? with
+          | some sstop =>
+            let se := fileMap.lspPosToUtf8Pos sstop
+            if se.byteIdx > e.byteIdx
+                && tightOf (String.Pos.Raw.extract src b se) == tightOf s.tacticString then
+              (b, se)
+            else (b, e)
+          | none => (b, e)
+
         let raw := String.Pos.Raw.extract src b e
         let tight := trimmedEnd raw
         let stop := fileMap.utf8PosToLspPos ⟨b.byteIdx + tight.byteIdx⟩
@@ -543,6 +595,31 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       match hdrStx.getRange? with
       | some r => some (fileMap.utf8PosToLspPos r.start)
       | none   => none
+    -- The signature split, by syntax KIND: the first `declSig`/`optDeclSig`
+    -- in preorder (the declaration's own; a nested `by` holds none), then the
+    -- `typeSpec` inside it.
+    let sigNode? : Option Syntax :=
+      (ProofTree.nodesOfKind [``Lean.Parser.Command.declSig,
+          ``Lean.Parser.Command.optDeclSig] snap.stx)[0]?
+    let declHeaderNameStop? : Option Lsp.Position :=
+      sigNode?.bind (·.getPos?) |>.map fileMap.utf8PosToLspPos
+    let declHeaderSigStop? : Option Lsp.Position := Id.run do
+      let some sig := sigNode? | return none
+      let specs := ProofTree.nodesOfKind [``Lean.Parser.Term.typeSpec] sig
+      if let some p := specs[0]? |>.bind (·.getPos?) then
+        return some (fileMap.utf8PosToLspPos p)
+      if let some p := sig.getTailPos? then
+        return some (fileMap.utf8PosToLspPos p)
+      let ids := ProofTree.nodesOfKind [``Lean.Parser.Command.declId] snap.stx
+      if let some p := ids[0]? |>.bind (·.getTailPos?) then
+        return some (fileMap.utf8PosToLspPos p)
+      -- `example := …`: nothing but the keyword, the head atom of the
+      -- declaration's own node.
+      let decls := ProofTree.nodesOfKind [``Lean.Parser.Command.example,
+        ``Lean.Parser.Command.instance, ``Lean.Parser.Command.definition,
+        ``Lean.Parser.Command.abbrev, ``Lean.Parser.Command.theorem] snap.stx
+      return decls[0]? |>.bind (·.getHead?) |>.bind (·.getTailPos?)
+        |>.map fileMap.utf8PosToLspPos
     let mut headerToks : Array TacticToken := #[]
     let mut declHeader : String := ""
     if let some dStart := declStart? then
@@ -602,6 +679,11 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       | some n => n.toString
       | none   => s!"@{snapStart}"
 
+    let lemmaRefs ← ProofTree.lemmaRefs snap.env fileMap snap.infoTree
+      parsedTree.steps (declName? snap.stx)
+
+    let branches ← ProofTree.branches fileMap snap.infoTree parsedTree.steps
+
     let tacticNames ← match anyGoalContext snap.infoTree with
       | some (ctx, _) => tacticNames ctx
       | none => pure #[]
@@ -612,6 +694,8 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
         ⟨fileMap.utf8PosToLspPos r.start, fileMap.utf8PosToLspPos r.stop⟩,
       declHeader, declHeaderTokens := headerToks,
       declHeaderStart := declStart?,
+      declHeaderNameStop := declHeaderNameStop?,
+      declHeaderSigStop := declHeaderSigStop?,
       diagnostics := treeDiags,
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
@@ -621,6 +705,11 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       tokenInfos,
       deleteSlots := slots
       recovered   := recov.recovered
+      termLedgers := recov.ledgers
+      hypOrigins  := ProofTree.hypOrigins parsedTree.steps
+      haveUses    := ProofTree.haveUses parsedTree.steps
+      lemmaRefs
+      branches
       openBlock
       holes       := collectHoles fileMap snap.infoTree slots (extra := some snap.stx)
       calcChains
@@ -743,20 +832,49 @@ private def tokensInSpan (snap : Snapshots.Snapshot) (fileMap : FileMap)
     if let some info := info? then infos := infos.push info
   return (toks, infos)
 
-private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
-    (draftCol : Nat)
-    (cfText : String) (stubByte : Nat) : RequestM (Option ProofTreeData) := do
-  let fileMap := doc.meta.text
-  let lineStart := fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩
+/-- The RE-ELABORATION SEAM, shared by the counterfactual pipeline and B4's
+automation traces. Given a whole-file text that differs from the document's own
+only INSIDE one declaration, re-parse and re-elaborate that single declaration
+against the snapshot standing before it, and hand back the synthetic snapshot
+plus the messages it produced.
+
+`anchorByte` is the byte the declaration must contain — the same offset in both
+texts, since every rewrite either splices one line (`cfSplice`) or inserts `?`
+characters (`traceRewrite`), neither of which touches anything before the
+declaration's own start.
+
+`needInfoTree` is what the cf path wants and the trace path does not: cf reads
+the synthetic tree with `BetterParser_Tree`, while a trace reads only messages,
+and a `sorry`-free re-elaboration can legitimately leave more than one tree. -/
+private structure ReElab where
+  snap  : Snapshots.Snapshot
+  map   : FileMap
+  /-- Parse messages and elaboration messages together, in that order. -/
+  msgs  : List Message
+  /-- How many of `msgs` came from the PARSE phase, i.e. the prefix. An error
+  in that prefix is a STRUCTURAL failure of a candidate rewrite (the text no
+  longer parses); one after it is a semantic failure (it parses and does not
+  check). D1's classifier is the only reader. -/
+  nParse : Nat := 0
+
+private def reElabDecl (doc : FileWorker.EditableDocument) (text : String)
+    (anchorByte : Nat) (needInfoTree : Bool := true)
+    -- D4: `opts` is what the re-elaboration runs under, on top of the scope's
+    -- own.  The one caller that passes anything is `lintDecl`, which turns
+    -- Mathlib's linters on; `Elab.async` is forced off either way, which is
+    -- what makes `runLintersAsync` run the linters SYNCHRONOUSLY and log them
+    -- into the state this returns.
+    (opts : Options → Options := id) :
+    RequestM (Option ReElab) := do
   let (snaps, _, _) ← doc.cmdSnaps.getFinishedPrefix
 
   let prev? := snaps.foldl (init := none) fun acc s =>
-    if s.endPos.byteIdx ≤ lineStart.byteIdx then some s else acc
+    if s.endPos.byteIdx ≤ anchorByte then some s else acc
   let some prev := prev? | return none
-  let ictx := Parser.mkInputContext cfText doc.meta.uri
-  let cfMap := ictx.fileMap
+  let ictx := Parser.mkInputContext text doc.meta.uri
+  let map := ictx.fileMap
   let scopes := prev.cmdState.scopes.map fun sc =>
-    { sc with opts := Elab.async.set sc.opts false }
+    { sc with opts := opts (Elab.async.set sc.opts false) }
   let cmdState0 : Command.State := { prev.cmdState with
     scopes, messages := {}, traceState := {}, snapshotTasks := #[],
     infoState := { enabled := true } }
@@ -768,23 +886,45 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
     Parser.parseCommand ictx pmctx prev.mpState {}
   unless stx.getKind == ``Lean.Parser.Command.declaration do return none
   let some r := stx.getRange? | return none
-  unless r.start.byteIdx ≤ lineStart.byteIdx
-      && lineStart.byteIdx < r.stop.byteIdx do
+  unless r.start.byteIdx ≤ anchorByte && anchorByte < r.stop.byteIdx do
     return none
   let cmdCtx : Command.Context := {
-    fileName := doc.meta.uri, fileMap := cfMap,
+    fileName := doc.meta.uri, fileMap := map,
     cmdPos := prev.mpState.pos, snap? := none, cancelTk? := none }
   let ref ← IO.mkRef cmdState0
   Command.withLoggingExceptions
     (Elab.getResetInfoTrees *> Command.elabCommandTopLevel stx) cmdCtx ref
   let stFinal ← ref.get
+  if needInfoTree && stFinal.infoState.trees.size != 1 then return none
+  return some {
+    snap := { stx, mpState := mpState', cmdState := stFinal }
+    map
+    msgs := parseMsgs.toList ++ stFinal.messages.toList
+    nParse := parseMsgs.toList.length }
 
-  unless stFinal.infoState.trees.size == 1 do return none
-  let synth : Snapshots.Snapshot :=
-    { stx, mpState := mpState', cmdState := stFinal }
+/-- The RAW parser's step count over a snapshot.  D1 and D2a both report step
+counts before and after a candidate rewrite, and both count them this way: the
+raw parser over the declaration as written.  `real.steps` has the recovery
+parser's own steps (subterms, term proofs, failed tactics) folded in, and the
+rewritten text gets no recovery pass, so comparing the two would report a
+saving that is really a difference of pipelines. -/
+private def rawStepsIn (sn : Snapshots.Snapshot) (fm : FileMap) : RequestM Nat := do
+  match ← RequestM.runTermElabM sn
+    (liftM <| Paperproof.Services.BetterParser_Tree fm sn.infoTree) with
+  | some r => pure r.steps.length
+  | none => pure 0
+
+private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
+    (draftCol : Nat)
+    (cfText : String) (stubByte : Nat) : RequestM (Option ProofTreeData) := do
+  let fileMap := doc.meta.text
+  let lineStart := fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩
+  let some re ← reElabDecl doc cfText lineStart.byteIdx | return none
+  let cfMap := re.map
+  let synth := re.snap
   let mut cfDiags : Array TreeDiag := #[]
   let mut errPos : Array Lsp.Position := #[]
-  for m in parseMsgs.toList ++ stFinal.messages.toList do
+  for m in re.msgs do
     let text ← m.data.toString
 
     if m.severity == .warning && text.startsWith "declaration uses " then
@@ -912,6 +1052,25 @@ private def cfNudgePos? (fileMap : FileMap) (pos : Lsp.Position) :
     if body.isEmpty then none
     else some (fileMap.lspPosToUtf8Pos ⟨pos.line, max 1 ws.length⟩)
 
+/-- The declaration's start byte, read off the SNAPSHOT alone.  It is the same
+number `declByteOf` reads off the payload: `declRange` is minted in
+`mkTreePayload` as this very range put through `utf8PosToLspPos`, and
+`realPayloadFor`'s cache key pins a payload to its own snapshot's start, so the
+round trip back through `lspPosToUtf8Pos` lands here and the `none` fallback is
+this number too.  That is what lets `lintDecl` answer from its cache without
+asking for the harvest at all. -/
+private def declAnchorByte (snap : Snapshots.Snapshot) : Nat :=
+  (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
+
+/-- The declaration's anchor byte: where `reElabDecl` is told the declaration
+starts.  The payload's own `declRange` where the harvest found one, and the
+snapshot's syntax range otherwise — the same fallback in all four callers. -/
+private def declByteOf (fileMap : FileMap) (snap : Snapshots.Snapshot)
+    (real : ProofTreeData) : Nat :=
+  match real.declRange with
+  | some r => (fileMap.lspPosToUtf8Pos r.start).byteIdx
+  | none => declAnchorByte snap
+
 private def realPayloadFor (doc : FileWorker.EditableDocument) (fileMap : FileMap)
     (snap : Snapshots.Snapshot) : RequestM ProofTreeData := do
     let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
@@ -972,6 +1131,380 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
 
         if real.steps.isEmpty && real.openBlock.isNone then atCursor
         else withCf real)
+
+/-! ## B4 — automation traces, on demand
+
+WHAT `simp` USED. The reader's question about an automation step is the one
+the source cannot answer: the author wrote no lemma name, and the premises are
+whatever the search found. Core's own `?` forms report exactly that, so a trace
+is the declaration re-elaborated with its automation tactics rewritten to
+`simp?`/`simp_all?`/`grind?`/`aesop?` and the `Try this` suggestions read back
+(`ProofTree.collectTraces`).
+
+LAZY, and PER DECLARATION rather than per step. Lazy because an extra
+elaboration of a Mathlib declaration on every cursor move is not affordable and
+most readers never ask; per declaration because a `?` form behaves exactly as
+the bare one, so ONE re-elaboration with every site rewritten answers for the
+whole proof — the brief's per-step splice would pay that cost once per `simp`.
+The client asks about one step and is handed the declaration's whole list,
+which is also what makes a second step's trace free.
+
+Cached on `(uri, version, declaration start)`: the same key `proofTreeCache`
+uses minus the diagnostics count, since a trace does not depend on them.
+Synchronous, unlike the counterfactual — the reader asked for this one and is
+watching a pending affordance, where cf fires unbidden on a cursor move. -/
+
+structure GetAutomationTraceParams where
+  pos : Lsp.Position
+  /-- The step the reader asked about. Carried for the log and for a future
+  narrowing; the answer is the whole declaration's list either way. -/
+  stepStart : Option Lsp.Position := none
+  deriving ToJson, FromJson, Server.RpcEncodable
+
+structure AutomationTraces where
+  traces : Array ProofTree.AutomationTrace := #[]
+  /-- Why the list is short of what was asked for, where it is. -/
+  note   : Option String := none
+  deriving Server.RpcEncodable
+
+initialize automationTraceCache :
+    IO.Ref (Option ((String × Nat × Nat) × AutomationTraces)) ←
+  IO.mkRef none
+
+private def computeTraces (doc : FileWorker.EditableDocument)
+    (snap : Snapshots.Snapshot) (real : ProofTreeData) (declByte : Nat) :
+    RequestM AutomationTraces := do
+  let fileMap := doc.meta.text
+  let sites := ProofTree.traceSites fileMap real.steps
+  if sites.isEmpty then return {}
+  match ProofTree.traceRewrite fileMap.source sites with
+  | none =>
+
+    return { traces := ← ProofTree.collectTraces snap.env sites #[] }
+  | some text =>
+    let some re ← reElabDecl doc text declByte (needInfoTree := false)
+      | return { traces := ← ProofTree.collectTraces snap.env sites #[]
+                 note := some "the declaration could not be re-elaborated" }
+    let mut msgs : Array (Lsp.Position × String) := #[]
+    for m in re.msgs do
+      msgs := msgs.push (re.map.leanPosToLspPos m.pos, ← m.data.toString)
+    return { traces := ← ProofTree.collectTraces snap.env sites msgs }
+
+@[server_rpc_method]
+def getAutomationTrace (params : GetAutomationTraceParams) :
+    RequestM (RequestTask AutomationTraces) := do
+  let doc ← readDoc
+  let fileMap : FileMap := doc.meta.text
+  let cursorPos := fileMap.lspPosToUtf8Pos params.pos
+  RequestM.bindWaitFindSnap doc (fun s => s.endPos >= cursorPos)
+    (notFoundX := throw ⟨.invalidParams, s!"no snapshot found at {params.pos}"⟩)
+    (x := fun snap => RequestM.pureTask do
+      let real ← realPayloadFor doc fileMap snap
+      if real.steps.isEmpty then
+        return ({ note := some "no steps to trace" } : AutomationTraces)
+      let declByte := declByteOf fileMap snap real
+      let key := (doc.meta.uri, doc.meta.version, declByte)
+      if let some (k, cached) ← automationTraceCache.get then
+        if k == key then return cached
+      let out ← computeTraces doc snap real declByte
+      automationTraceCache.set (some (key, out))
+      return out)
+
+/-! ## D4 — the linters, asked of the elaborator (`lintDecl`)
+
+Mathlib's style rules ship as `linter.*` options that run at elaboration and
+log a warning at the syntax they object to, so D4 reimplements nothing: the
+declaration is re-elaborated ONCE with `ProofTree.withLinters` on the scope's
+options and the linter messages come back with their own ranges and their own
+option names (read off the message's tag, not scraped out of its text).
+
+LAZY, on the same seam and for the same reason as B4's traces: an extra
+elaboration of a Mathlib declaration on every cursor move is not affordable
+and most readers never ask. The client asks once per declaration, when the
+reader turns `lints` on.
+
+Two things the CLAUDE.md warnings predicted and that hold here:
+
+* **`Elab.async` is ON on the server**, and `runLintersAsync` would then post
+  the linters to a snapshot task whose messages this call never sees.
+  `reElabDecl` already forces it off, so `runLinters` runs inline and the
+  messages land in the command state this reads.
+* **`snap.msgLog` is empty on the server**, which is why the messages are the
+  re-elaboration's own (`re.msgs`) and not the file's.
+
+Cached on `(uri, version, declaration start)` — the automation trace's key,
+and for the same reason: the answer depends on the declaration's text alone. -/
+
+structure LintDeclParams where
+  pos : Lsp.Position
+  deriving ToJson, FromJson, Server.RpcEncodable
+
+structure LintDeclResult where
+  lints : Array ProofTree.Lint := #[]
+  /-- Why the list is short of what was asked for, where it is. -/
+  note  : Option String := none
+  /-- The options that were on, so the `?` panel can name them. -/
+  linters : Array String := #[]
+  deriving Server.RpcEncodable
+
+initialize lintCache :
+    IO.Ref (Option ((String × Nat × Nat) × LintDeclResult)) ←
+  IO.mkRef none
+
+@[server_rpc_method]
+def lintDecl (params : LintDeclParams) :
+    RequestM (RequestTask LintDeclResult) := do
+  let doc ← readDoc
+  let fileMap : FileMap := doc.meta.text
+  let cursorPos := fileMap.lspPosToUtf8Pos params.pos
+  let names := ProofTree.lintLinters.map (·.toString)
+  RequestM.bindWaitFindSnap doc (fun s => s.endPos >= cursorPos)
+    (notFoundX := throw ⟨.invalidParams, s!"no snapshot found at {params.pos}"⟩)
+    (x := fun snap => RequestM.pureTask do
+      -- The cache is asked BEFORE anything is elaborated or harvested: the
+      -- key is the declaration's own start byte, which `declAnchorByte` reads
+      -- off the snapshot, so a repeat ask costs nothing.  Nothing below this
+      -- needs the payload.
+      let declByte := declAnchorByte snap
+      let key := (doc.meta.uri, doc.meta.version, declByte)
+      if let some (k, cached) ← lintCache.get then
+        if k == key then return cached
+      let some re ← reElabDecl doc fileMap.source declByte
+          (needInfoTree := false) (opts := ProofTree.withLinters)
+        | return ({ note := some "the declaration could not be re-elaborated"
+                    linters := names } : LintDeclResult)
+      let out : LintDeclResult :=
+        { lints := ← ProofTree.lintsOf re.map re.msgs, linters := names }
+      lintCache.set (some (key, out))
+      return out)
+
+/-! ## D1 — verify a candidate rewrite before it is offered (`checkRewrite`)
+
+The Sledgehammer "preplay" discipline: a restructuring is a set of TEXT EDITS
+computed on the client (`web/src/rewrite.ts`), and it is not offered to the
+reader until the elaborator has been asked whether the rewritten declaration
+still checks. Nothing is written to the document by this RPC — the edits are
+applied to a COPY of the file's text and re-elaborated through the same seam
+the counterfactual and the automation traces use (`reElabDecl`), so a rejected
+proposal costs one elaboration and changes nothing.
+
+The verdict is the delete gesture's three-way classification, decided here
+because only here are the parse messages distinguishable from the elaboration
+ones:
+
+* `structural` — the rewritten text does not PARSE (no declaration came back,
+  or an error message from the parse prefix). The rewrite is malformed; the
+  reader is told nothing beyond "it does not parse", because a parse error
+  inside a rewrite we generated is our bug and not their proof's.
+* `semantic` — it parses and does not check: `unsolved goals`, a type error,
+  an unknown identifier. The FIRST error's first line is handed back, since
+  that is the sentence a reader can act on.
+* `benign` — no error at all. `sorry` warnings are ignored the way `computeCf`
+  ignores them, and `steps` comes back so the pill can say how much shorter
+  the proof got.
+
+NOT cached. A trace is asked for once per declaration and reused; a rewrite is
+asked for once per proposal, and the proposals differ by their edits, which is
+the whole key — caching them would mean keying on the edit text for a saving
+of at most one repeat click. -/
+
+structure RewriteEdit where
+  start   : Lsp.Position
+  stop    : Lsp.Position
+  newText : String
+  deriving FromJson, ToJson, Server.RpcEncodable
+
+structure CheckRewriteParams where
+  pos   : Lsp.Position
+  edits : Array RewriteEdit
+  deriving FromJson, ToJson, Server.RpcEncodable
+
+structure CheckRewriteResult where
+  /-- `benign` | `semantic` | `structural`. -/
+  verdict : String := "structural"
+  ok      : Bool := false
+  /-- The first error's first line, where there is one. -/
+  message : Option String := none
+  /-- Steps in the REWRITTEN proof (0 unless the verdict is `benign`). -/
+  steps   : Nat := 0
+  /-- Steps in the proof as written. -/
+  before  : Nat := 0
+  deriving Server.RpcEncodable
+
+/-- Splice every edit into the file's text, latest first so earlier offsets
+stay valid. Edits are expected to be pairwise disjoint (the client computes
+them from tight tactic ranges); an overlap simply loses the earlier one. -/
+private def applyRewriteEdits (fileMap : FileMap) (edits : Array RewriteEdit) :
+    String := Id.run do
+  let sorted := edits.qsort fun a b => (compare a.start b.start).isGT
+  let mut text := fileMap.source
+  for e in sorted do
+    let s := (fileMap.lspPosToUtf8Pos e.start)
+    let t := (fileMap.lspPosToUtf8Pos e.stop)
+    if s.byteIdx ≤ t.byteIdx && t.byteIdx ≤ text.rawEndPos.byteIdx then
+      text := String.Pos.Raw.extract text ⟨0⟩ s ++ e.newText
+        ++ String.Pos.Raw.extract text t text.rawEndPos
+  return text
+
+@[server_rpc_method]
+def checkRewrite (params : CheckRewriteParams) :
+    RequestM (RequestTask CheckRewriteResult) := do
+  let doc ← readDoc
+  let fileMap : FileMap := doc.meta.text
+  let cursorPos := fileMap.lspPosToUtf8Pos params.pos
+  RequestM.bindWaitFindSnap doc (fun s => s.endPos >= cursorPos)
+    (notFoundX := throw ⟨.invalidParams, s!"no snapshot found at {params.pos}"⟩)
+    (x := fun snap => RequestM.pureTask do
+      let real ← realPayloadFor doc fileMap snap
+      let before ← rawStepsIn snap fileMap
+      if params.edits.isEmpty then
+        return ({ verdict := "structural", before
+                  message := some "no edits" } : CheckRewriteResult)
+      let declByte := declByteOf fileMap snap real
+      let text := applyRewriteEdits fileMap params.edits
+      let some re ← reElabDecl doc text declByte
+        | return ({ verdict := "structural", before
+                    message := some "the rewritten declaration did not parse"
+                  } : CheckRewriteResult)
+      let mut i := 0
+      let mut firstErr : Option (Bool × String) := none
+      for m in re.msgs do
+        if m.severity == .error then
+          let t ← m.data.toString
+          if firstErr.isNone then firstErr := some (i < re.nParse, t)
+        i := i + 1
+      match firstErr with
+      | some (isParse, t) =>
+        let line := (t.trim.splitOn "\n").headD t
+        return { verdict := if isParse then "structural" else "semantic"
+                 before, message := some line }
+      | none =>
+        return { verdict := "benign", ok := true, before
+                 steps := ← rawStepsIn re.snap re.map })
+
+/-! ## D2a — collapse a run of steps to one automation tactic (`tryClose`)
+
+`tryAtEachStep`'s trick, asked of a RUN rather than of a step, and on the same
+seam D1 and B4 already use. The client finds the LINEAR RUNS (`linearRuns` in
+web/src/rewrite.ts — consecutive trunk steps, each producing exactly one
+ordinary goal, the last of them closing it) and asks this RPC whether any one
+tactic closes the run's first goal on its own. The run's own text extent — the
+first step's tight start to the last step's tight stop — is spliced to the
+candidate and the declaration re-elaborated; the FIRST candidate that comes
+back benign is the offer, and nothing is written by this call.
+
+`from`/`to` are the first and last step's `position.start`, and the extent is
+looked up here from the payload's own `deleteSlots`: the wire carries two
+positions rather than a range, so a client cannot ask for the splice of a
+range it did not compute from the tree.
+
+Cost is bounded by construction: at most `tactics.size` re-elaborations, one
+run at a time, only when the reader clicks. Cached on
+`(uri, version, from, to)` — the answer for one run cannot change while the
+document does not. -/
+
+structure TryCloseParams where
+  pos    : Lsp.Position
+  /-- The first step of the run (its `position.start`). -/
+  «from» : Lsp.Position
+  /-- The last step of the run. -/
+  to     : Lsp.Position
+  /-- Overrides the default candidate list, in order. -/
+  tactics : Option (Array String) := none
+  deriving FromJson, ToJson, Server.RpcEncodable
+
+structure TryCloseResult where
+  /-- The first candidate that elaborated benignly, where there was one. -/
+  tactic  : Option String := none
+  /-- `benign` (a candidate closed it) | `none` (none did) | `structural`. -/
+  verdict : String := "structural"
+  ok      : Bool := false
+  message : Option String := none
+  /-- Every candidate tried, in order, and the milliseconds each one cost. -/
+  tried   : Array String := #[]
+  ms      : Array Nat := #[]
+  /-- Raw parser step counts, as `checkRewrite` reports them. -/
+  before  : Nat := 0
+  steps   : Nat := 0
+  deriving Server.RpcEncodable
+
+/-- The candidates, in order, MIRRORED from `AUTOMATION_CANDIDATES` in
+web/src/rewrite.ts. `omega` first because it is the cheapest and the most
+common answer; `aesop` last because it is the most expensive. -/
+def closingCandidates : Array String :=
+  #["omega", "simp", "linarith", "norm_num", "grind", "decide", "ring",
+    "simp_all", "aesop"]
+
+initialize tryCloseCache :
+    IO.Ref (Option ((String × Nat × Nat × Nat) × TryCloseResult)) ←
+  IO.mkRef none
+
+@[server_rpc_method]
+def tryClose (params : TryCloseParams) :
+    RequestM (RequestTask TryCloseResult) := do
+  let doc ← readDoc
+  let fileMap : FileMap := doc.meta.text
+  let cursorPos := fileMap.lspPosToUtf8Pos params.pos
+  RequestM.bindWaitFindSnap doc (fun s => s.endPos >= cursorPos)
+    (notFoundX := throw ⟨.invalidParams, s!"no snapshot found at {params.pos}"⟩)
+    (x := fun snap => RequestM.pureTask do
+      let real ← realPayloadFor doc fileMap snap
+      let slotAt (p : Lsp.Position) :=
+        real.deleteSlots.find? fun s =>
+          s.start.line == p.line && s.start.character == p.character
+      let some a := slotAt params.from
+        | return { message := some "the run's first step has no extent" }
+      let some b := slotAt params.to
+        | return { message := some "the run's last step has no extent" }
+      let s := (fileMap.lspPosToUtf8Pos a.start).byteIdx
+      let t := (fileMap.lspPosToUtf8Pos b.stop).byteIdx
+      if t < s then
+        return { message := some "the run's extent runs backwards" }
+      let key := (doc.meta.uri, doc.meta.version, s, t)
+      if let some (k, cached) ← tryCloseCache.get then
+        if k == key then return cached
+      let declByte := declByteOf fileMap snap real
+      let before ← rawStepsIn snap fileMap
+      let src := fileMap.source
+      let pre := String.Pos.Raw.extract src ⟨0⟩ ⟨s⟩
+      let post := String.Pos.Raw.extract src ⟨t⟩ src.rawEndPos
+      let cands := match params.tactics with
+        | some c => if c.isEmpty then closingCandidates else c
+        | none => closingCandidates
+      let mut tried : Array String := #[]
+      let mut times : Array Nat := #[]
+      let mut lastMsg : Option String := none
+      let nothing := s!"nothing closes it (tried {cands.size})"
+      let mut out : TryCloseResult :=
+        { before := before, verdict := "none", message := some nothing }
+      for cand in cands do
+        let t0 ← IO.monoMsNow
+        let text := pre ++ cand ++ post
+        let re? ← reElabDecl doc text declByte
+        let dt := (← IO.monoMsNow) - t0
+        tried := tried.push cand
+        times := times.push dt
+        match re? with
+        | none => lastMsg := some "the spliced declaration did not parse"
+        | some re =>
+          let mut i := 0
+          let mut firstErr : Option String := none
+          for m in re.msgs do
+            if m.severity == .error && firstErr.isNone then
+              firstErr := some (← m.data.toString)
+            i := i + 1
+          match firstErr with
+          | some e => lastMsg := some ((e.trim.splitOn "\n").headD e)
+          | none =>
+            out := { tactic := some cand, verdict := "benign", ok := true,
+                     before := before, steps := ← rawStepsIn re.snap re.map,
+                     tried := tried, ms := times }
+            break
+      if !out.ok then
+        let msg := out.message.orElse fun _ => lastMsg
+        out := { out with tried := tried, ms := times, message := msg }
+      tryCloseCache.set (some (key, out))
+      return out)
 
 partial def ciPrefix (pref s : String) : Bool :=
   go ⟨0⟩ ⟨0⟩
@@ -1047,13 +1580,43 @@ structure PopoutEditParams where
   annotations : Array GoalAnnotation := #[]
   deriving FromJson, ToJson
 
+/-! ## The companion's request directory
+
+`~/.proof-tree-companion/` is named HERE and nowhere else: the lens/reveal
+channel (`popoutEdit`), the two model channels (C4's polish, D6's propose) and
+every response read all go through these three. -/
+
+/-- The companion's directory, without creating it — the read side, which must
+not mint a directory just to find it empty. -/
+private def companionHome : IO (Option System.FilePath) := do
+  let some home ← IO.getEnv "HOME" | return none
+  return some (System.FilePath.mk home / ".proof-tree-companion")
+
+/-- The companion's directory, created if absent — the write side. -/
+private def companionDir : IO System.FilePath := do
+  let some dir ← companionHome | throw <| IO.userError "no HOME"
+  IO.FS.createDirAll dir
+  return dir
+
+/-- Write one request file for the companion's `fs.watch` to pick up. -/
+private def writeCompanionRequest (name : String) (payload : Json) : IO Unit := do
+  let dir ← companionDir
+  IO.FS.writeFile (dir / name) payload.compress
+
+/-- Read a companion response file, or `none` where it is absent or unparseable
+(the companion writes it whole, but a read can still land mid-write). -/
+private def readCompanionFile (name : String) : IO (Option Json) := do
+  let some dir ← companionHome | return none
+  let file := dir / name
+  unless ← file.pathExists do return none
+  let txt ← IO.FS.readFile file
+  match Json.parse txt with
+  | .error _ => return none
+  | .ok j => return some j
+
 @[server_rpc_method]
 def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
   RequestM.asTask do
-    let some home ← IO.getEnv "HOME"
-      | throw <| RequestError.internalError "popoutEdit: no HOME"
-    let dir := System.FilePath.mk home / ".proof-tree-companion"
-    IO.FS.createDirAll dir
     let nonce ← IO.monoNanosNow
     let payload := Json.mkObj [
       ("nonce", toJson nonce),
@@ -1063,8 +1626,173 @@ def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
       ("action", toJson params.action),
       ("annotations", toJson params.annotations)
     ]
-    IO.FS.writeFile (dir / "popout-request.json") payload.compress
+    -- `rename` (the D1 extract's follow-up) gets a file of its own: it is
+    -- written as the pointer leaves the accepted pill, so a hover `clear` or
+    -- `preview-clear` landing in `popout-request.json` a moment later would
+    -- overwrite it before the companion's watcher read it.
+    let file := if params.action == "rename" then "rename-request.json" else "popout-request.json"
+    writeCompanionRequest file payload
     return "ok"
+
+/-! ## C4 / D6 — the companion channel, in the direction the widget cannot go
+
+The infoview's webview reaches no network; the companion extension does. So
+the widget ASKS through the file idiom `popoutEdit` already established — the
+server writes a request file into `~/.proof-tree-companion/`, the companion's
+`fs.watch` picks it up — and then POLLS for the answer, because there is no
+route from the extension back into a running RPC session.
+
+Two channels, one shape each way:
+
+* `polish-request.json` / `polish-response.json`   (C4, narration)
+* `propose-request.json` / `propose-response.json` (D6, restructuring)
+
+Every request carries an `id` the widget minted; a response is only ever read
+as the answer to the id that is being waited on, so a stale file left by an
+earlier session is simply pending forever rather than wrong. Nothing here
+knows an API key exists — that stays in the extension's secret storage. -/
+
+structure PolishLine where
+  nodeId     : String
+  template   : String
+  goalBefore : String := ""
+  goalAfter  : Option String := none
+  tactic     : String := ""
+  deriving ToJson
+
+instance : FromJson PolishLine where
+  fromJson? j :=
+    .ok { nodeId := jsonField j "nodeId" "",
+          template := jsonField j "template" "",
+          goalBefore := jsonField j "goalBefore" "",
+          goalAfter := jsonField j "goalAfter" (none : Option String),
+          tactic := jsonField j "tactic" "" }
+
+structure PolishRequestParams where
+  id       : String
+  proofKey : String := ""
+  lines    : Array PolishLine := #[]
+  deriving ToJson
+
+instance : FromJson PolishRequestParams where
+  fromJson? j :=
+    .ok { id := jsonField j "id" "",
+          proofKey := jsonField j "proofKey" "",
+          lines := jsonField j "lines" #[] }
+
+@[server_rpc_method]
+def polishRequest (params : PolishRequestParams) : RequestM (RequestTask String) := do
+  RequestM.asTask do
+    writeCompanionRequest "polish-request.json" <| Json.mkObj [
+      ("id", toJson params.id),
+      ("proofKey", toJson params.proofKey),
+      ("lines", toJson params.lines)
+    ]
+    return "ok"
+
+structure PolishedLine where
+  nodeId : String
+  text   : String
+  deriving ToJson
+
+instance : FromJson PolishedLine where
+  fromJson? j :=
+    .ok { nodeId := jsonField j "nodeId" "", text := jsonField j "text" "" }
+
+structure PolishResult where
+  /-- `"ok"`, `"pending"` or `"error"`. -/
+  status : String := "pending"
+  lines  : Array PolishedLine := #[]
+  note   : String := ""
+  deriving ToJson
+
+instance : FromJson PolishResult where
+  fromJson? j :=
+    .ok { status := jsonField j "status" "pending",
+          lines := jsonField j "lines" #[],
+          note := jsonField j "note" "" }
+
+structure ResultParams where
+  id : String
+  deriving ToJson
+
+instance : FromJson ResultParams where
+  fromJson? j := .ok { id := jsonField j "id" "" }
+
+@[server_rpc_method]
+def polishResult (params : ResultParams) : RequestM (RequestTask PolishResult) := do
+  RequestM.asTask do
+    let some j ← readCompanionFile "polish-response.json" | return {}
+    if jsonField j "id" "" != params.id then return {}
+    let err := jsonField j "error" ""
+    if err != "" then return { status := "error", note := err }
+    return { status := "ok", lines := jsonField j "lines" #[] }
+
+structure ProposePrimitive where
+  nodeId : String
+  kind   : String
+  title  : String
+  deriving ToJson
+
+instance : FromJson ProposePrimitive where
+  fromJson? j :=
+    .ok { nodeId := jsonField j "nodeId" "",
+          kind := jsonField j "kind" "",
+          title := jsonField j "title" "" }
+
+structure ProposeRequestParams where
+  id         : String
+  proofKey   : String := ""
+  text       : String := ""
+  primitives : Array ProposePrimitive := #[]
+  deriving ToJson
+
+instance : FromJson ProposeRequestParams where
+  fromJson? j :=
+    .ok { id := jsonField j "id" "",
+          proofKey := jsonField j "proofKey" "",
+          text := jsonField j "text" "",
+          primitives := jsonField j "primitives" #[] }
+
+@[server_rpc_method]
+def proposeRequest (params : ProposeRequestParams) : RequestM (RequestTask String) := do
+  RequestM.asTask do
+    writeCompanionRequest "propose-request.json" <| Json.mkObj [
+      ("id", toJson params.id),
+      ("proofKey", toJson params.proofKey),
+      ("text", toJson params.text),
+      ("primitives", toJson params.primitives)
+    ]
+    return "ok"
+
+structure ProposeResult where
+  status : String := "pending"
+  nodeId : String := ""
+  kind   : String := ""
+  reason : String := ""
+  note   : String := ""
+  deriving ToJson
+
+instance : FromJson ProposeResult where
+  fromJson? j :=
+    .ok { status := jsonField j "status" "pending",
+          nodeId := jsonField j "nodeId" "",
+          kind := jsonField j "kind" "",
+          reason := jsonField j "reason" "",
+          note := jsonField j "note" "" }
+
+@[server_rpc_method]
+def proposeResult (params : ResultParams) : RequestM (RequestTask ProposeResult) := do
+  RequestM.asTask do
+    let some j ← readCompanionFile "propose-response.json" | return {}
+    if jsonField j "id" "" != params.id then return {}
+    let err := jsonField j "error" ""
+    if err != "" then return { status := "error", note := err }
+    return { status := "ok",
+             nodeId := jsonField j "nodeId" "",
+             kind := jsonField j "kind" "",
+             reason := jsonField j "reason" "",
+             note := jsonField j "note" "" }
 
 structure ThemeTokenColor where
   type  : String
@@ -1095,6 +1823,29 @@ instance : FromJson InputConfig where
           eager := jsonField j "eager" true,
           custom := jsonField j "custom" #[] }
 
+/-- What the companion says about the two opt-in model channels. `ready` is the
+whole answer to "can this be asked at all" — the extension is running, and an
+API key is in its secret storage or the environment; `why` is what the disabled
+row says instead. The key itself is never here and never anywhere else the
+widget can see. -/
+structure AiConfig where
+
+  polish : Bool := false
+
+  propose : Bool := false
+
+  ready : Bool := false
+
+  why : String := ""
+  deriving ToJson
+
+instance : FromJson AiConfig where
+  fromJson? j :=
+    .ok { polish := jsonField j "polish" false,
+          propose := jsonField j "propose" false,
+          ready := jsonField j "ready" false,
+          why := jsonField j "why" "" }
+
 structure ThemeColors where
 
   theme  : String := ""
@@ -1114,6 +1865,8 @@ structure ThemeColors where
   hypMarkStyle : String := "highlight"
 
   input : InputConfig := {}
+
+  ai : AiConfig := {}
   colors : Array ThemeTokenColor := #[]
   deriving ToJson
 
@@ -1128,6 +1881,7 @@ instance : FromJson ThemeColors where
           counterfactual := jsonField j "counterfactual" true,
           hypMarkStyle := jsonField j "hypMarkStyle" "highlight",
           input := jsonField j "input" {},
+          ai := jsonField j "ai" {},
           colors := jsonField j "colors" #[] }
 
 structure ThemeColorsParams where
@@ -1136,8 +1890,8 @@ structure ThemeColorsParams where
 @[server_rpc_method]
 def themeColors (_ : ThemeColorsParams) : RequestM (RequestTask ThemeColors) := do
   RequestM.asTask do
-    let some home ← IO.getEnv "HOME" | return {}
-    let file := System.FilePath.mk home / ".proof-tree-companion" / "theme-colors.json"
+    let some dir ← companionHome | return {}
+    let file := dir / "theme-colors.json"
 
     unless ← file.pathExists do return {}
     let txt ← IO.FS.readFile file

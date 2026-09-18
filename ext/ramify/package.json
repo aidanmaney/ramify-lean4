@@ -3,7 +3,7 @@
   "displayName": "Ramify",
   "description": "Lean proofs-as-trees visualizer and editor that lives in the infoview",
   "publisher": "aidan",
-  "version": "0.0.15",
+  "version": "0.0.17",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -17,6 +17,10 @@
       {
         "command": "ramify.openLens",
         "title": "Ramify: Open Tactic in Lens"
+      },
+      {
+        "command": "ramify.setNarrationKey",
+        "title": "Ramify: Set narration API key"
       }
     ],
     "configuration": {
@@ -57,6 +61,26 @@
           "enum": ["highlight", "underline"],
           "default": "highlight",
           "markdownDescription": "How the tree marks the hypotheses a tactic uses when you hover its box."
+        },
+        "ramify.narration.polish": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "In `Comments: narrate`, send each generated line to a model to be rewritten as fluent English (shown with `≈` instead of `∴`). The rewrite is constrained: it keeps every symbol and name, adds no facts, and never sees anything you wrote yourself — your own comments are not sent. Needs an API key (`Ramify: Set narration API key`). Off by default; the tree's own templated narration needs nothing."
+        },
+        "ramify.narration.model": {
+          "type": "string",
+          "default": "claude-haiku-4-5-20251001",
+          "markdownDescription": "The model that does the rewriting. Polish is a rewriting task, not a reasoning one, so the cheap model is the default."
+        },
+        "ramify.restructure.propose": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Let `suggest a rewrite` (in the tree's reading options) ask a model to pick one of the restructurings the tree already offers, with a one-line reason. The model chooses among offered moves and never writes text; whatever it picks is still re-elaborated before you are offered it. Needs an API key (`Ramify: Set narration API key`). Off by default."
+        },
+        "ramify.restructure.renameAfterHoist": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "After you accept an **extract** (the tree's `⤴`, which hoists a `(by …)` into `have this : … := by …`), open the editor's own **Rename Symbol** on the new `this`, so you can type the name you want. Lean renames the binder and every use; press Escape to keep `this`."
         },
         "ramify.typingHoldMs": {
           "type": "integer",

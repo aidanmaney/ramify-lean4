@@ -71,6 +71,7 @@ theorem sum_range_odd (n : ℕ) :
   -- that really splits: forward is a construction, backward a case analysis on
   -- the parity of m.
   -- .none
+  -- .mark
   have parity : ∀ m : ℕ, Even m ↔ Even (m ^ 2) := by
     intro m
     constructor
@@ -130,7 +131,7 @@ theorem three_column_demo (n : ℕ) :
       refine ⟨k + m + 1, ?_⟩
       show (m + 1) * (m + 2) = 2 * (k + m + 1)
       have h : (m + 1) * (m + 2) = m * (m + 1) + 2 * (m + 1) := by ring
-      grind
+      grind only
 
 /-- **A `calc`-mode workout.** Three chained computations, contrived on purpose:
 the shapes are the point. A `calc` block reaches the tree as ONE tactic node —

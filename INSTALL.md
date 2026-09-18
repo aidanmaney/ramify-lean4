@@ -86,13 +86,13 @@ The extension ships as a `.vsix` file inside this package. Where that file is de
 
 ```bash
 # If you cloned this repository (the "try it" route above), from its root:
-code --install-extension dist/ramify-0.0.15.vsix
+code --install-extension dist/ramify-0.0.17.vsix
 
 # If you added ramify as a Lake dependency, from your project's root:
-code --install-extension .lake/packages/ramify/dist/ramify-0.0.15.vsix
+code --install-extension .lake/packages/ramify/dist/ramify-0.0.17.vsix
 ```
 
-Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-0.0.15.vsix`. Reload the window afterwards (command palette).
+Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-0.0.17.vsix`. Reload the window afterwards (command palette).
 
 ### What the Extension Adds
 
@@ -108,6 +108,10 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 	- Hovering a tactic node shows its range in the visible editors; arming a delete (`⊘`) previews the extent the same way.
 - **Undo/redo from the tree** (`↶ ↷` on the rail).
 	- Edits made from the tree leave focus in the webview, where &#8984;Z won't do anything; works around this by focusing the editor.
+- **Name a hoisted `have`** (`⤴` on the hover bar)
+	- Hoisting a `(by …)` writes `have this : … := by …`; the companion then opens the editor's own Rename Symbol on `this` once Lean has caught up, so you type the name and Lean renames every use. Escape keeps `this`. `ramify.restructure.renameAfterHoist` turns it off.
+- **Optional model polish of the generated narration** (off by default)
+	- In `Comments: narrate` the tree writes a sentence per step from the step itself; turning on `ramify.narration.polish` sends those sentences — and nothing you wrote yourself — to be rewritten as fluent English, shown with `≈` instead of `∴`. Run **Ramify: Set narration API key** once from the command palette (the key is kept in VS Code's secret storage, never in a setting and never logged); `ramify.narration.model` chooses the model and `ramify.restructure.propose` lets `suggest a rewrite` ask for one of the restructurings the tree already offers.
 - **Settings** (see the extension itself for detailed descriptions):
 	- `ramify.outlineOnly`,
 	- `ramify.linkMarks`,
@@ -116,6 +120,8 @@ Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… 
 	- `ramify.typingHoldMs`,
 	- `ramify.lensGoals`,
 	- `ramify.lensWordWrap`,
+	- `ramify.narration.polish`, `ramify.narration.model`, `ramify.restructure.propose`,
+	- `ramify.restructure.renameAfterHoist`,
 	- Also adds any custom `lean4.input.*` unicode-abbreviations
 
 ---

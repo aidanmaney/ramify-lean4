@@ -758,6 +758,125 @@ def calcRelationGoals (steps : Array CalcGoalStep) (chains : Array CalcChain)
         unless out.contains i.goalBefore do out := out.push i.goalBefore
   return out
 
+/-! ## Statement rendering (C1) — the seam only
+
+A goal's statement in LaTeX, beside Lean's own print, so a reader can meet
+`∑_{i ∈ [0,n)}` where the tree draws `∑ i ∈ Finset.range n`. The producer is
+kmill's LeanTeX (`LeanTeX.run_latexPP : Expr → Config → MetaM String`), which
+does NOT build on this toolchain — see the 2026-09-09 design-record entry for
+the exact three incompatibilities and the fork that carries the fix.
+
+The TYPE ships anyway, and it ships EMPTY. It is plain data (a goal id and a
+string), so it rides both wires, and the client's reading option is drawn and
+disabled against it rather than against a compile-time flag: the day the
+printer is wired in, nothing downstream has to learn a new shape. Keyed on the
+GOAL ID the tree already draws, because a goal print is what is rendered — not
+on `position.start`, which is the producer step's key.
+-/
+
+structure LatexGoal where
+
+  goalId : String
+
+  tex : String
+  deriving ToJson, FromJson, Inhabited
+
+/-! ## D4 — the linters, run by the elaborator and reported on the node they name
+
+Mathlib's style rules are already programs: they ship as `linter.*` options
+that run at elaboration and log a warning at the syntax they object to. So
+nothing here reimplements a rule — the declaration is re-elaborated once with
+the chosen linters ON and their own messages are carried back with their own
+positions.
+
+**The set is explicit and it is the TACTIC-LEVEL half of `mathlibStandardSet`
+plus two that Mathlib leaves off by default.** A lint is re-elaborated out of
+ONE declaration rather than out of its file, so every linter that judges the
+FILE — `style.header`, `style.longFile`, `style.missingEnd`,
+`style.openClassical`, `style.setOption`, `privateModule`, `hashCommand`,
+`minImports`, `upstreamableDecl`, `auxLemma` — would answer about a file that
+does not exist and is left out. `unusedTactic` and `haveLet` are not in
+Mathlib's own set (they are informational there); they are the two whose
+findings a READER most wants, and they are in.
+
+`linter.haveLet` is a `Nat` and not a `Bool` (0 off, 1 noisy declarations
+only, 2 always); it is set to 2, since a reader asking for lints has asked
+about this declaration. -/
+
+structure Lint where
+  start : Lsp.Position
+  stop  : Lsp.Position
+  /-- The option's own name, e.g. `linter.unusedTactic`. -/
+  linter : String
+  /-- The linter's message, without the "can be disabled with" note. -/
+  message : String
+  deriving ToJson, FromJson, Inhabited
+
+/-- The boolean linter options D4 turns on. Order is the reading order of the
+`?` panel's table, not a priority. -/
+def lintBoolLinters : Array Name := #[
+  `linter.unusedTactic,
+  `linter.unnecessarySeqFocus,
+  `linter.style.multiGoal,
+  `linter.flexible,
+  `linter.style.cases,
+  `linter.style.cdot,
+  `linter.style.refine,
+  `linter.style.induction,
+  `linter.style.show,
+  `linter.style.lambdaSyntax,
+  `linter.style.dollarSyntax,
+  `linter.style.longLine,
+  `linter.oldObtain,
+  `linter.style.admit,
+  `linter.style.nativeDecide ]
+
+/-- Every option name a lint can be tagged with (the booleans plus
+`linter.haveLet`). -/
+def lintLinters : Array Name := lintBoolLinters.push `linter.haveLet
+
+/-- Turn the D4 linters on in a set of options. Handed to `reElabDecl` on the
+server and to `Command.mkState` in the CLI, so both wires see one list. -/
+def withLinters (o : Options) : Options := Id.run do
+  let mut o := o
+  for n in lintBoolLinters do
+    o := o.setBool n true
+  return o.insert `linter.haveLet (.ofNat 2)
+
+/-- Core appends "\n\nNote: This linter can be disabled with …" to every lint
+(`Lean.Linter.logLint`). It is chrome for a compiler log and noise on a node,
+so it is cut; the linter's NAME is carried structurally instead, off the
+message's own tag.  The tag is the test and `MessageData.isLinterMessage` is
+NOT: Mathlib's `logLint0Disable` (the `Nat`-valued linters, `haveLet` among
+them) never adds core's `linterMessageTag`, so a guard on it would have
+dropped exactly the lint whose fix is the simplest one D4 offers. -/
+def stripLintNote (s : String) : String :=
+  let marker := "Note: This linter can be disabled"
+  match (List.range (s.length - marker.length + 1)).find? fun i =>
+      (s.drop i).startsWith marker with
+  | some i => ((s.take i).trimAsciiEnd).toString
+  | none => s
+
+/-- A lint, where the message is one. `MessageData` carries the linter's own
+option name as a TAG (`Lean.Linter.logLint`), so the name is read off the
+message rather than scraped out of its text. -/
+def lintOf (fileMap : FileMap) (m : Message) : IO (Option Lint) := do
+  unless m.severity matches .warning do return none
+  let some name := lintLinters.find? fun n => m.data.hasTag (· == n) | return none
+  let text ← m.data.toString
+  let s := fileMap.leanPosToLspPos m.pos
+  let e := match m.endPos with
+    | some e => fileMap.leanPosToLspPos e
+    | none => s
+  return some { start := s, stop := e, linter := name.toString,
+                message := stripLintNote text }
+
+def lintsOf (fileMap : FileMap) (msgs : List Message) : IO (Array Lint) := do
+  let mut out : Array Lint := #[]
+  for m in msgs do
+    if let some l ← lintOf fileMap m then out := out.push l
+  return out
+
 def collectCalcRelations (tree : Elab.InfoTree) (goalIds : Array String) :
     IO (Array CalcRelations) := do
   let ctxs := goalContexts tree

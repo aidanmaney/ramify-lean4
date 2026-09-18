@@ -3,22 +3,29 @@ import type { CombinedPart, ParentEdge, TreeNode } from "./types";
 /** The ONE hiding mechanism, in TWO standard idioms. The fourth kind
  (`combine`) is a display mode and keeps its full box.
 
+ THE VERB DECIDES THE IDIOM, NOT THE GOAL'S POSITION (user direction,
+ 2026-09-17: "while reading to the end I go for skip; while taking a
+ high-level look I go for hide"). `−` on a goal HIDES — always a `fold`, in
+ every layout, trunk goals included. ◌ on a step SKIPS — always a `hop`,
+ wherever the step has exactly one continuation, inside branches as on the
+ trunk. So the look names the verb: `+N` with a break on the line was
+ skipped, `+N` without one was hidden.
+
  - `hop` and `fold` are GOAL-keyed and leave NO node at all: the goal itself
-   is the reduced node, wearing `+N` in the corner its `−` came from (the
-   outliner idiom). A `fold` takes the subtree strictly BELOW the goal; a
-   `hop` takes its consuming step and what that step opened, and keeps the
-   continuation goal, re-parented — the link out of the goal then carries the
-   axis break, captioned with what went (`hopCaption`).
+   is the reduced node, wearing `+N` in its corner (the outliner idiom). A
+   `fold` takes the subtree strictly BELOW the goal; a `hop` takes its
+   consuming step and what that step opened, and keeps the continuation goal,
+   re-parented — the link out of the goal then carries the axis break,
+   captioned with what went (`hopCaption`).
  - `step` is a SKIP of one tactic and everything it opened beside its
    continuation, drawn as a GHOST — the tactic reduced in place to a dashed
-   box carrying its head and a `+N` badge for the rest. It is no longer what
-   ◌ mints: skipping a step and folding the goal above it reached the SAME
-   position with two different looks, so ◌ on any step is now the hop (see
-   `hopForStep`). What is left for `step` is the case a hop cannot carry: a
-   `.none` seed on a step with no continuation, whose author's sentence needs
-   a box to stand in, and a `.fold` target that is a tactic of the same shape.
- - `band` is the marquee's explicit id set. On a straight trunk run it is
-   rewritten as a hop (`hopForBand`); anywhere else it keeps the ghost.
+   box carrying its head and a `+N` badge for the rest. ◌ no longer mints it
+   under a goal; what is left for it is a `.none` seed on a SPLIT (no
+   continuation to keep, not a leaf), a step hanging off a tactic rather than
+   a goal, and a `.fold`/residue target that is a tactic of that shape.
+ - `band` is the marquee's explicit id set. Exactly one goal's strict subtree
+   becomes that goal's fold, a straight run becomes a hop (`cutForBand`);
+   anything else keeps the ghost.
 
  Every kind goes on the one list, so seeds, reset, the stash, `remapCut`,
  `pruneCuts`, `disjointCuts`, peek and anchoring all have a single door. */
@@ -41,10 +48,12 @@ export interface Seeded {
 
 export type ElideCut =
   | ({ kind: "band"; ids: string[] } & Seeded)
-  | ({ kind: "fold"; id: string } & Seeded)
-  // A HOP: the trunk goal's own fold — its consuming step, everything that
-  // step opened beside its continuation, AND the continuation goal itself,
-  // so the goal wears `+N` and the NEXT spine tactic follows it directly.
+  // `note` is a `.none` seed's prose on a LEAF step, whose skip is the fold
+  // of the goal above it; it rides the goal's `<title>`.
+  | ({ kind: "fold"; id: string; note?: string } & Seeded)
+  // A HOP: the SKIP of a goal's consuming step(s) — the step and everything
+  // it opened beside its continuation go, the continuation goal stays,
+  // re-parented, so the goal wears `+N` and its line carries the break.
   // `note` is a `.none` seed's prose, which captions the break.
   | ({ kind: "hop"; id: string; steps?: number; note?: string } & Seeded)
   | ({ kind: "step"; id: string; note?: string } & Seeded)
@@ -90,16 +99,35 @@ export const foldSeedCuts = (
   targets: Iterable<string>,
 ): ElideCut[] => cutsForTargets(byId, targets).map((c) => seedCut(c, "fold"));
 
-/** The cut a `.none` above the step `id` asks for, already stamped: a hop off
- the goal above with the note captioning its break, or — where no hop can be
- read — the ghost that carries the author's sentence in a box of its own. */
+/** The cut a `.none` above the step `id` asks for, already stamped — the
+ author's "skip this step when reading", so the same answer ◌ gives: a hop
+ off the goal above with the note captioning its break where a continuation
+ exists, the fold of the goal above where the step is a LEAF (the note rides
+ the goal's title), and — only where neither applies, a split — the ghost
+ that carries the author's sentence in a box of its own. */
 export const noneSeedCut = (
   byId: Map<string, TreeNode>,
   id: string,
   note?: string,
   idx?: Map<string, TreeNode[]>,
 ): ElideCut =>
-  seedCut(hopForStep(byId, id, idx ?? childIndex(byId), note) ?? { kind: "step", id, note }, "none");
+  seedCut(withNote(tacticCut(byId, id, idx ?? childIndex(byId)), note), "none");
+
+/** ◌'s ladder, with the ghost as the floor. `stepCut` returns `null` where no
+ idiom reads (a split with no tactic above it), and there the author's `.none`
+ still has to say something — the ghost carries their sentence in a box of its
+ own. ONE ladder, so the seed and the gesture cannot answer differently. */
+const tacticCut = (
+  byId: Map<string, TreeNode>,
+  id: string,
+  idx: Map<string, TreeNode[]>,
+): ElideCut => stepCut(byId, id, idx) ?? { kind: "step", id };
+
+/** The author's note, onto whichever cut the ladder chose. */
+const withNote = (c: ElideCut, note?: string): ElideCut =>
+  note === undefined || c.kind === "combine" || c.kind === "band"
+    ? c
+    : { ...c, note };
 
 /** What the SOURCE asks for, as cuts. `.fold` and an `rw`'s `x = x` residue
  name TARGETS rather than a kind, so both go through `cutsForTargets`; `.none`
@@ -121,62 +149,91 @@ export function sourceView(nodes: TreeNode[]): ElideCut[] {
   return cuts;
 }
 
+/** The goal a step hangs off, when the step is that goal's ONLY consumer.
+ A goal with several consumers is a LEDGER node (one justification per row):
+ no one row is "the step below" it, so neither a hop nor the leaf's fold can
+ honestly stand for one row — the per-row gesture is the row itself. */
+function soleConsumedGoal(
+  byId: Map<string, TreeNode>,
+  tacticId: string,
+  idx: Map<string, TreeNode[]>,
+): TreeNode | null {
+  const t = byId.get(tacticId);
+  if (!t || t.type !== "tactic") return null;
+  const g = t.parents[0] ? byId.get(t.parents[0].id) : undefined;
+  if (!g || g.type !== "goal") return null;
+  const kids = idx.get(g.id) ?? [];
+  return kids.length === 1 && kids[0].id === tacticId ? g : null;
+}
+
+/** ◌ on a LEAF is the fold of the goal above it — reading to the end of a
+ branch by skips (user direction, 2026-09-08). `null` for a non-leaf, or a
+ leaf that is not its goal's sole consumer (a ledger row). */
+function leafFoldFor(
+  byId: Map<string, TreeNode>,
+  tacticId: string,
+  idx: Map<string, TreeNode[]>,
+): { kind: "fold"; id: string } | null {
+  if ((idx.get(tacticId) ?? []).length > 0) return null;
+  const g = soleConsumedGoal(byId, tacticId, idx);
+  return g ? { kind: "fold", id: g.id } : null;
+}
+
 /** A step's skip, AS THE GOAL ABOVE IT HOPPING OVER IT — the one answer ◌
- gives now, wherever it is asked. Skipping a step and folding the goal above
- it used to reach the same position by two different routes and draw it two
- different ways (a dashed ghost of the tactic, or the goal wearing `+N` with
- an axis break below it); the ghost went, and this is the door both routes go
- through. `null` where a hop cannot be read: the step has no continuation to
- keep (a closing tactic, or a split), or it is not the goal's first child —
- there the caller folds instead, except for a `.none`, whose sentence needs a
- box of its own and so keeps its ghost. */
+ gives wherever the step has exactly ONE continuation, on the trunk or inside
+ a branch, in every layout. `null` where a hop cannot be read: no single
+ continuation (a leaf, a closing step with side obligations, a split), or the
+ step is not its goal's sole consumer (a ledger row). */
 export function hopForStep(
   byId: Map<string, TreeNode>,
   tacticId: string,
   idx: Map<string, TreeNode[]> = childIndex(byId),
   note?: string,
 ): ElideCut | null {
-  const t = byId.get(tacticId);
-  if (!t || t.type !== "tactic") return null;
-  const g = t.parents[0]?.id;
-  if (!g || byId.get(g)?.type !== "goal") return null;
-  // `resolveCut` walks the goal's FIRST child, so a hop can only stand for a
-  // step that is that child.
-  if ((idx.get(g) ?? [])[0]?.id !== tacticId) return null;
+  const g = soleConsumedGoal(byId, tacticId, idx);
+  if (!g) return null;
   if (!continuationOf(byId, tacticId, idx)) return null;
-  return note ? { kind: "hop", id: g, note } : { kind: "hop", id: g };
+  return note ? { kind: "hop", id: g.id, note } : { kind: "hop", id: g.id };
 }
 
-/** What ◌ on a step mints, in ONE place so the click, the hover preview and
- the probes cannot answer differently: the hop above it, or — where no hop can
- be read (a closing tactic, a split with no continuation) — whatever the goal
- above would do on its own, asked of `goalCut` rather than re-derived. `null`
- only if there is nothing to take. The caller adds the one thing that needs
- the DRAWN tree: a step hanging off the goal a standing hop kept extends that
- hop's `steps` instead of opening a second break below the first. */
+/** What ◌ on a step mints, in ONE place so the click, the hover preview, the
+ gate (`stepElidable`) and the probes cannot answer differently. The rule is
+ "skip is offered only where there is exactly one continuation, or the step
+ is a leaf":
+
+ - one continuation under a goal → the HOP above it (`hopForStep`);
+ - a LEAF, its goal's sole consumer → the FOLD of that goal;
+ - one continuation under a TACTIC (a broken chain's synthetic `calc`) → the
+   ghost, since there is no goal above to hop from;
+ - anything else → `null`, and ◌ is not offered: a SPLIT (`constructor`,
+   `cases`, `induction`…), a closing step whose goal left side obligations,
+   and a LEDGER row (calc or ctor — the ledger node has one consumer per row,
+   so no row is its continuation; the row click and its `−` are the gesture).
+
+ The caller adds the one thing that needs the DRAWN tree: a step hanging off
+ the goal a standing hop kept extends that hop's `steps` instead of opening a
+ second break directly below the first. */
 export function stepCut(
   byId: Map<string, TreeNode>,
   tacticId: string,
-  opts: { trunk: boolean; stepElidable: ReadonlySet<string> },
   idx: Map<string, TreeNode[]> = childIndex(byId),
 ): ElideCut | null {
   const hop = hopForStep(byId, tacticId, idx);
   if (hop) return hop;
-  const g = byId.get(tacticId)?.parents[0]?.id;
-  const above = g ? byId.get(g) : undefined;
-  if (above?.type === "goal")
-    return goalCut(byId, above.id, opts, idx) ?? { kind: "step", id: tacticId };
-  // A CALC-CHAIN step hangs off the ledger tactic rather than off a goal, so
-  // there is no goal above to hop from: the reduced-in-place ghost is what is
-  // left, and it is the one place ◌ still mints one on its own.
-  return { kind: "step", id: tacticId };
+  const leaf = leafFoldFor(byId, tacticId, idx);
+  if (leaf) return leaf;
+  const t = byId.get(tacticId);
+  const above = t?.parents[0] ? byId.get(t.parents[0].id) : undefined;
+  if (above?.type === "tactic" && continuationOf(byId, tacticId, idx))
+    return { kind: "step", id: tacticId };
+  return null;
 }
 
 /** A marquee band read as a hop: its members must be EXACTLY one straight
- trunk run — the consuming steps of a chain of continuation goals, starting at
- the parent goal of the first member. The test is the honest one (resolve the
+ run — the consuming steps of a chain of continuation goals, starting at the
+ parent goal of the first member. The test is the honest one (resolve the
  candidate hop and compare the two member sets), so a band that reaches beside
- the trunk, or skips a step in the middle, keeps its ghost. */
+ the run, or skips a step in the middle, is no hop. */
 export function hopForBand(
   byId: Map<string, TreeNode>,
   ids: Iterable<string>,
@@ -206,6 +263,42 @@ export function hopForBand(
     : null;
 }
 
+/** A marquee band read as a FOLD: its members are EXACTLY one goal's strict
+ subtree. The candidate goal is the parent of the band's first member in
+ preorder (the topmost node swept), so the test is one comparison. */
+export function foldForBand(
+  byId: Map<string, TreeNode>,
+  ids: Iterable<string>,
+  idx: Map<string, TreeNode[]> = childIndex(byId),
+): ElideCut | null {
+  const want = new Set(ids);
+  const members = [...byId.keys()].filter((id) => want.has(id));
+  if (members.length === 0) return null;
+  const g = byId.get(members[0])?.parents[0]?.id;
+  if (!g || byId.get(g)?.type !== "goal") return null;
+  const below = subtreeBelow(byId, g, idx);
+  return below.length === members.length && below.every((m) => want.has(m))
+    ? { kind: "fold", id: g }
+    : null;
+}
+
+/** What a marquee band mints — the band follows the verb too. A band that is
+ exactly one goal's subtree is that goal's FOLD; a straight run is a HOP;
+ anything else keeps its ghost. The fold is asked FIRST: a run that ends by
+ closing its goal is both, and a hop with no continuation left to keep would
+ draw no break, so the look would lie about the verb. */
+export function cutForBand(
+  byId: Map<string, TreeNode>,
+  ids: Iterable<string>,
+  idx: Map<string, TreeNode[]> = childIndex(byId),
+): ElideCut {
+  const list = [...ids];
+  return (
+    foldForBand(byId, list, idx) ??
+    hopForBand(byId, list, idx) ?? { kind: "band", ids: list }
+  );
+}
+
 /** A cut per target, chosen by the target's own TYPE: a goal folds, a tactic
  skips. The tactic case is not a curiosity — `foldTargetsOf` returns the
  flagged TACTIC itself when its consumed goal is the root, and a fold of a
@@ -224,7 +317,7 @@ export function cutsForTargets(
     out.push(
       n.type === "goal"
         ? { kind: "fold", id }
-        : (hopForStep(byId, id, idx, note) ?? { kind: "step", id, note }),
+        : withNote(tacticCut(byId, id, idx), note),
     );
   }
   return out;
@@ -247,9 +340,16 @@ export function combineMemberIds(markerId: string): string[] | null {
     : null;
 }
 
-function childIndex(byId: Map<string, TreeNode>): Map<string, TreeNode[]> {
+/** The ONE parent→children index. Every module that walks the tree downwards
+ wants it and each used to build its own; taking either a node list or the
+ `byId` map keeps the one builder usable from all of them, and the children of
+ a parent stay in the order the nodes were given (DFS preorder, which the
+ `+N` counts and the ledger rows both read). */
+export function childIndex(
+  nodes: Iterable<TreeNode> | Map<string, TreeNode>,
+): Map<string, TreeNode[]> {
   const kids = new Map<string, TreeNode[]>();
-  for (const n of byId.values())
+  for (const n of nodes instanceof Map ? nodes.values() : nodes)
     for (const p of n.parents)
       (kids.get(p.id) ?? kids.set(p.id, []).get(p.id)!).push(n);
   return kids;
@@ -296,79 +396,27 @@ function subtreeBelow(
 
 /** The ONE gate a goal's `−` reads — the glyph, the click, the hint row and
  the hover preview all ask this and nothing else, so no surface can offer a
- cut another one would refuse. `null` means the goal carries no `−` at all.
+ cut another one would refuse. `null` means the goal carries no `−` at all:
+ a childless goal has nothing to hide.
 
- It dispatches on LAYOUT and on TRUNK-NESS, and both halves were forced.
+ `−` HIDES, and so it always FOLDS — in every layout, trunk goals and roots
+ included (user direction, 2026-09-17: the verb decides the idiom, not the
+ goal's position). On a trunk goal that hides the rest of the proof below it,
+ which is what "taking a high-level look" asks for; READING ON past one step
+ is ◌'s job, and ◌ on the step below mints the hop (`stepCut`).
 
- `trunk: false` is ⑃ wide, which has no trunk lane and no continuation to
- keep: every goal with children simply FOLDS, which is what folding a subtree
- has always meant there.
-
- On a compact layout a goal's fold used to hide everything below it, which ON
- THE TRUNK is the REST OF THE PROOF: the reader asks to put one step away and
- the proof ends there. So a TRUNK goal — one that CONTINUES its producer's
- lane, roots included — instead HOPS over its consumer: the step and whatever
- it opened beside the trunk go, the continuation goal stays, and the link out
- of this goal carries the axis break, captioned with the head words of what
- went. That caption is what retires the old objection to a step fold (two goal
- boxes with nothing between them saying what happened) — the ghost box that
- used to do it went, because ◌ on the step below mints THIS cut too and one
- position must not have two looks.
-
- A BRANCH root is the other thing a goal can be — a split's child, a nested
- by-block's spawned root, a generated side condition — and there the subtree
- IS the branch, so it folds. Without that test the rule fires on exactly what
- a `.fold` flag names: measured, `flag_demo`'s seeded fold hid NOTHING (the
- side proof's `rw` splits, and so "continues") and an `induction` case could
- no longer be put away at all.
-
- "On the trunk" is "its producer's CONTINUATION", asked of `continuationOf` —
- the rule the skip itself reads — and NOT "its producer's sole child", which
- is what shipped first: the two differ on exactly the goal after a
- `have … := by`, whose spawned side proof is a SIBLING of the continuation,
- so the sole-child test failed there and the most common trunk goal there is
- fell through to hiding the rest of the proof (reported, on the goal after
- `have key`).
-
- The last answer is the honest one: a trunk goal whose sole child is not a
- PLAIN tactic — a ghost, a merged run, a goal, or several consumers — gets no
- `−` at all. There is nothing to skip from up here that the reader cannot say
- better below (a ghost already carries its own restore click), and a control
- that does nothing is worse than no control. */
+ History, in the record: until 2026-09-17 a trunk goal's `−` HOPPED its
+ consumer in the compact layouts (so `−` and ◌ drew the same thing), with a
+ `trunk` option for ⑃ wide and a tangle of cases for ghosts, merged runs and
+ closing consumers. All of that went with the rule. */
 export function goalCut(
   byId: Map<string, TreeNode>,
   id: string,
-  opts: { trunk: boolean; stepElidable: ReadonlySet<string> },
   idx: Map<string, TreeNode[]> = childIndex(byId),
 ): ElideCut | null {
   const n = byId.get(id);
   if (!n || n.type !== "goal") return null;
-  const kids = idx.get(id) ?? [];
-  if (kids.length === 0) return null;
-  if (!opts.trunk) return { kind: "fold", id };
-  if (n.spawned || n.side) return { kind: "fold", id };
-  if (!n.parents.every((p) => continuationOf(byId, p.id, idx)?.id === id))
-    return { kind: "fold", id };
-  // EVERY goal with children can be put away (user direction: the corner
-  // control on all goal nodes, the root included). Where the consumer is a
-  // plain tactic that opened something, the trunk goal SKIPS it; anywhere
-  // else — a closing tactic (`omega`, `exact …`), a ghost already standing
-  // below, several consumers — there is no continuation to keep, so the goal
-  // FOLDS what little is under it and wears its `+N`.
-  if (kids.length !== 1) return { kind: "fold", id };
-  const t = kids[0];
-  if (t.type !== "tactic") return { kind: "fold", id };
-  // A GHOST below (a skipped step) or a MERGED run: the goal's `−` absorbs it
-  // — a hop through the step(s) it stands for, so the trunk below stays.
-  // (Treating it as "fold everything" killed the rest of the proof from the
-  // goal above a `.none` ghost — reported.)
-  if (t.elidedCut)
-    return t.elidedCut.combined
-      ? { kind: "hop", id, steps: t.elidedCut.parts?.length ?? 1 }
-      : { kind: "hop", id };
-  return opts.stepElidable.has(t.id) && continuationOf(byId, t.id, idx)
-    ? { kind: "hop", id }
-    : { kind: "fold", id };
+  return (idx.get(id) ?? []).length > 0 ? { kind: "fold", id } : null;
 }
 
 /** The OUTLINE: every goal that starts a BRANCH — a nested by-block's
@@ -429,23 +477,17 @@ function stepIds(
   return out;
 }
 
-/** Every tactic ◌ can act on: a step with something under it (hop or, failing
- that, the fold of its goal), and a LEAF closing a goal — ◌ there is the fold
- of the goal above, so a branch can be shortened from its end by skips alone
- (user direction; a leaf hanging off a calc ledger has no goal to fold). */
+/** Every tactic ◌ is OFFERED on — exactly the steps `stepCut` answers for,
+ asked of it rather than re-derived: one continuation (the hop), a leaf that
+ is its goal's sole consumer (the fold above), a continuation under a tactic
+ (the ghost). A split, a closing step with side obligations and a ledger row
+ are absent, so no button, ⌥-click or hint promises a skip there. */
 export function stepElidable(nodes: TreeNode[]): Set<string> {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const idx = childIndex(byId);
   const out = new Set<string>();
-  for (const n of nodes) {
-    if (n.type !== "tactic") continue;
-    if (stepIds(byId, n.id, idx).length > 0) out.add(n.id);
-    else if (
-      (idx.get(n.id) ?? []).length === 0 &&
-      byId.get(n.parents[0]?.id ?? "")?.type === "goal"
-    )
-      out.add(n.id);
-  }
+  for (const n of nodes)
+    if (n.type === "tactic" && stepCut(byId, n.id, idx)) out.add(n.id);
   return out;
 }
 
@@ -501,7 +543,11 @@ export function combineRuns(
     (exclude?.has(id) ?? false) ||
     !!byId.get(id)?.synthetic ||
     !!byId.get(id)?.recovered ||
-    !!byId.get(id)?.chain;
+    !!byId.get(id)?.chain ||
+    // A LEDGER host: its sole child is the ledger, not a goal the reader can
+    // go on from, so a merged run walking through it would swallow the rows.
+    // `chain` covered the calc host on its own; `ledgerKind` covers both.
+    !!byId.get(id)?.ledgerKind;
 
   const runs: ElideCut[] = [];
   const seen = new Set<string>();
@@ -844,7 +890,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
         ? // A hop takes its note from the CUT alone: over a run of several
           // steps, the first member's own `.none` would caption the lot.
           cut.note
-        : ((cut.kind === "step" ? cut.note : undefined) ??
+        : ((cut.kind === "step" || cut.kind === "fold" ? cut.note : undefined) ??
           (about?.flags?.elide ? about.flags.note : undefined));
     const seeded = isSeededCut(cut) ? (true as const) : undefined;
     const seededBy = seeded ? seedKindOf(cut) : undefined;

@@ -99,6 +99,17 @@ export const HYP_MARK_W = 11;
 
 export const HYP_SEP_H = 7;
 
+/** The vertical CENTRE of hyp line `j`, measured from the top of the context
+ block. The ONE coding of that arithmetic: `HypBlock` paints marks, washes and
+ hit strips from it, and the provenance connector anchors on it — measurer and
+ renderer paired, as the separator's extra height is easy to forget. */
+export function hypLineOffset(lines: readonly HypLine[], j: number): number {
+  const sepIndex = lines.findIndex((l) => l.sep);
+  return (
+    (sepIndex >= 0 && j >= sepIndex ? HYP_SEP_H : 0) + (j + 0.5) * HYP_LINE_H
+  );
+}
+
 export const TRUNK_INDENT = 56;
 
 const SPAWN_INDENT_MAX = 4;
@@ -339,7 +350,14 @@ function trunkLayout(
         ? undefined
         : n.chain
           ? order.find((c) => c.ledger !== undefined)
-          : last;
+          : // B4 — a trace's leaves are ALL side-work: not one of them
+            // continues the proof, so none of them takes the trunk lane. The
+            // default (`last` resumes the trunk) put the sixth lemma of a
+            // `simp` under the step and the other five beside it, which read
+            // as though that one were the step's continuation.
+            last?.traceLeaf
+            ? undefined
+            : last;
 
     const stubY = y0 + n.caseH + cB + n.h / 2;
     const boxBottom = y0 + band + n.chipH;
@@ -794,6 +812,16 @@ function hypBlockSize(
             cont: w.cont,
             indent: w.indent,
             sep: w.cont ? undefined : l.sep,
+            // Provenance rides every wrapped piece: a hypothesis that spills
+            // over two lines came from ONE step, and hovering either half must
+            // say so.
+            origin: l.origin,
+            originText: l.originText,
+            originLine: l.originLine,
+            // D5 — and the hypothesis itself, for the same reason: the rename
+            // reads the WHOLE type from whichever piece the pointer is on.
+            hypName: l.hypName,
+            hypType: l.hypType,
           }),
         ),
       );

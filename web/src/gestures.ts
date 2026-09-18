@@ -8,11 +8,11 @@ export const HYP_MARK = "▸";
 export type NodeGates = {
   revealable: boolean;
 
-  /** What this goal's `−` does — elide.ts's `goalCut`, which dispatches on
-   the layout and on whether the goal is on the TRUNK: `"fold"` takes the
-   subtree below it, `"skip"` hops it over the step below, `"open"`
-   is a `+N` bringing a folded branch back, and `null` is no glyph at all. */
-  goalCut: "fold" | "skip" | "open" | null;
+  /** What this goal's corner does — elide.ts's `goalCut`: `"fold"` hides the
+   subtree below it (always, in every layout — `−` hides, ◌ skips), `"open"`
+   is a `+N` bringing a folded or skipped stretch back, and `null` is no glyph
+   at all. */
+  goalCut: "fold" | "open" | null;
 
   goalRevealable: boolean;
 
@@ -34,7 +34,26 @@ export type NodeGates = {
 
   anyUsedHyp: boolean;
 
+  /** At least one context line here knows which step introduced it (B2). */
+  hypOrigins: boolean;
+
   usesHyps: boolean;
+
+  /** This step names at least one constant (B3 `lemmaRefs`); the title lists
+   them under `uses:`. */
+  usesLemmas: boolean;
+
+  /** B5 — this step branches, and the sidecar decoded its arms; the title
+   names the form, what it split on and what each arm binds. */
+  branches: boolean;
+
+  /** B4 — this step is an automation call (`simp`, `grind`, `omega`, …), so
+   the bar can offer "what did it use?": the declaration is re-elaborated with
+   the tactic's `?` form and core's own `Try this` read back. `traceOpen` is
+   whether that subtree is currently showing. */
+  automation: boolean;
+
+  traceOpen: boolean;
 
   ledgerRows: boolean;
 
@@ -52,6 +71,34 @@ export type NodeGates = {
    your own can be taken back off, and that is the ⌥-click. `null` is a node
    with no tab, which is where the corner nub is offered instead. */
   tourTab: "author" | "mine" | null;
+
+  /** D1 — this step is a `have` whose one use can be inlined into the step
+   that names it, / this step carries a parenthesised `(by …)` that can be
+   hoisted out as a `have this`. Both are PROPOSALS: the gesture asks the
+   elaborator first and only writes what checks. */
+  inlinable: boolean;
+
+  extractable: boolean;
+
+  /** D2 — this node heads a LINEAR RUN that closes its goal (or is a folded
+   goal whose `+N` hides one), so the run can be offered to automation; /
+   this automation step has (or can fetch) a lemma list core will write out
+   for it. Both are PROPOSALS, like D1's pair. */
+  collapsible: boolean;
+
+  expandable: boolean;
+
+  /** D4 — a lint on this node has a ONE-EDIT answer (or, for
+   `linter.flexible`, one the click can reach by reading B4's trace first).
+   A PROPOSAL like the rest of D: the elaborator is asked before anything is
+   written. */
+  lintFixable: boolean;
+
+  /** D5 — at least one context line in this goal is a generically-named
+   hypothesis whose type has a shape Mathlib has a name for. The offer is the
+   LINE's ⌥-click, not a bar button: a context line already has a hit target
+   and a title, and the move is about one word in it. */
+  renamable: boolean;
 };
 
 export type Caps = {
@@ -61,6 +108,9 @@ export type Caps = {
   popout: boolean;
   del: boolean;
   flags: boolean;
+  /** D1 — the two restructuring moves can be verified and written from here
+   (the widget: an `applyEdit`, a source lookup and the delete slots). */
+  restructure: boolean;
   undo: boolean;
 };
 
@@ -93,20 +143,14 @@ export const GESTURES: Gesture[] = [
   {
     target: "goal",
     input: "click",
-    says: "to fold this branch away (the goal keeps a +N saying how much)",
+    says: "to hide everything below this goal (it keeps a +N saying how much)",
     when: (g) => g.goalCut === "fold",
+    note: "to read on past one step instead, ⌥-click the step below: it is skipped, and the break on the line names what went",
   },
   {
     target: "goal",
     input: "click",
-    says: "to hop over the step below — the goal keeps a +N, and the break on the line names what went",
-    when: (g) => g.goalCut === "skip",
-    note: "the goal the next step solves stays on the trunk; click the +N or the break to restore",
-  },
-  {
-    target: "goal",
-    input: "click",
-    says: "to unfold what this goal hides",
+    says: "to bring back what this goal's +N stands for",
     when: (g) => g.goalCut === "open",
   },
   {
@@ -172,7 +216,91 @@ export const GESTURES: Gesture[] = [
     says: "= used by the tactic below",
     when: (g) => g.anyUsedHyp,
   },
+  {
+    target: "goal",
+    input: "hover a context line",
+    says: "names the step that introduced it, lights that step and points at it",
+    when: (g) => g.hypOrigins,
+  },
+  {
+    target: "goal",
+    input: "⌥-click a context line",
+    says: "offers to rename a generically-named hypothesis to Mathlib's own name for its type (`h` → `hab`) — the title says which, the elaborator is asked, and a pill offers to write it",
+    needs: "restructure",
+    when: (g) => g.renamable,
+    note: "every step the elaborator says reads the hypothesis is rewritten with it, whole identifiers only; a name the author chose is never touched, and neither is one that would shadow a name already bound",
+  },
 
+  {
+    target: "tactic",
+    input: "hover",
+    says: "lists the lemmas and definitions the step names, under `uses:`",
+    when: (g) => g.usesLemmas,
+  },
+  {
+    target: "tactic",
+    input: "hover",
+    says: "names the cases the step splits into and what each one binds — the case badge on a goal says the same for that case alone",
+    when: (g) => g.branches,
+  },
+  {
+    target: "tactic",
+    input: "⁇ on the bar",
+    says: "shows what the automation used — the lemmas `simp?`/`grind?`/`aesop?` report, as a dashed list under the step (again to hide it)",
+    when: (g) => g.automation && !g.traceOpen,
+  },
+  {
+    target: "tactic",
+    input: "hover",
+    says: "names the cases the step splits into and what each one binds — the case badge on a goal says the same for that case alone",
+    when: (g) => g.branches,
+  },
+  {
+    target: "tactic",
+    input: "⁇ on the bar",
+    says: "hides the lemma list again",
+    when: (g) => g.automation && g.traceOpen,
+  },
+  {
+    target: "tactic",
+    input: "⤵ on the bar",
+    says: "offers to inline this `have`: the elaborator is asked whether the rewrite still checks, and only then does a pill offer to write it",
+    needs: "restructure",
+    when: (g) => g.inlinable,
+    note: "the hypothesis is used exactly once and the step that uses it names it; the `have`'s own comment goes with it, and the editor's undo takes it all back",
+  },
+  {
+    target: "tactic",
+    input: "⤴ on the bar",
+    says: "offers to hoist the `(by …)` in this step out as `have this : … := by …` on the line above, leaving `this` behind",
+    needs: "restructure",
+    when: (g) => g.extractable,
+    note: "the name is `this` — Lean's own anonymous idiom, and yours to rename; the `have` states the goal the elaborator gave the block",
+  },
+  {
+    target: "tactic",
+    input: "⇓ on the bar",
+    says: "offers to replace this run of steps — or, on a folded goal, everything its `+N` hides — with one automation tactic — `omega`, `simp`, `linarith`, `norm_num`, `grind`, `decide`, `ring`, `simp_all`, `aesop` are tried in that order and the first that closes the goal is proposed",
+    needs: "restructure",
+    when: (g) => g.collapsible,
+    note: "the run is consecutive steps that each leave one goal and end by closing it; folding a goal first (`+N`) picks a shorter run — its own — and offers the collapse there",
+  },
+  {
+    target: "tactic",
+    input: "⇑ on the bar",
+    says: "offers to write what this automation used into the source (`simp` → `simp only [\u2026]`), in core's own words — the lemma list is read back first if it is not already in",
+    needs: "restructure",
+    when: (g) => g.expandable,
+    note: "the replacement is the suggestion verbatim, never a list rebuilt from the names shown under `⁇`",
+  },
+  {
+    target: "tactic",
+    input: "✎ on the bar",
+    says: "offers the one edit a style linter's message asks for — Mathlib's own rules, read off the message's own tag and answered at its own range",
+    needs: "restructure",
+    when: (g) => g.lintFixable,
+    note: "the lints are the `lints` reading option, which is off until you ask for it (it costs one re-elaboration); a rule whose answer is not one token — `style.cases`, `style.longLine` — is shown and left to you",
+  },
   {
     target: "tactic",
     input: "click",
@@ -206,9 +334,9 @@ export const GESTURES: Gesture[] = [
   {
     target: "tactic",
     input: "⌥-click",
-    says: "to skip this step: the goal above hops over it",
+    says: "to skip this step: the goal above hops over it, and the goal it leaves stays",
     when: (g) => g.elidable,
-    note: "its goal wears +N and the break on the line names what was skipped; click either to bring the step(s) back",
+    note: "its goal wears +N and the break on the line names what was skipped (on a step that closes its goal, the goal just folds); click either to bring the step(s) back — a step that splits the proof has no skip",
   },
   {
     target: "tactic",
@@ -314,6 +442,12 @@ export const GESTURES: Gesture[] = [
     needs: "edit",
     note: "leaving the textbox empty removes the comment",
   },
+  {
+    target: "strip",
+    input: "Comments: narrate",
+    says: "writes a strip for every step the author left unremarked — one templated sentence per tactic KIND, marked `∴` so the generated voice is never mistaken for the author's",
+    note: "a folded goal's strip then summarises what it hides, so a `+N` says how much AND what; generated lines are not editable — the source has no comment to edit",
+  },
 
   {
     target: "background",
@@ -415,7 +549,7 @@ const UNDO = `${CMD}Z in the editor undoes it`;
 export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   elide: {
     label: "skip",
-    title: "Put the selection away — one dashed box, or a hop when it is a straight run (click to restore)",
+    title: "Put the selection away — a goal's whole subtree folds, a straight run is skipped, anything else is one dashed box (click to restore)",
   },
   combine: {
     label: "merge",

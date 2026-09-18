@@ -54,7 +54,7 @@ Keep the dwell labels already added (`NodeAction.label`, `BAR_LABEL_DWELL_MS`).
 
 ### Verification
 `?stub-edit&cursor=…` harness: bar renders every item, lists open/close via `layers` (Esc order: list → mode → selection), each toggle accents only when it changes the drawing (wide: side-by-side disabled), picking modes show the modal indicator and exit on Esc/✕; keys cycle with toast; tracks seam drag changes `reflow` and the readout, clamped; frame heights 240/580/760 — the bar is one line, so nothing clips. Layout sweep unchanged (no `viewKey` change except reflow, which already re-centres). Then `npm run typecheck && npm run lint`, `build:widget`, `lake build Ramify`.
-## Workstream B — Extend the parser (own additive walks over `snap.infoTree`, never a fork)
+## Workstream B — Extend the parser (additive walks over `snap.infoTree` first; forking Paperproof's `BetterParser` is allowed since 2026-09-09)
 
 Paperproof's `BetterParser` is 253 lines and harvests *only* `TacticInfo` goal deltas. Things the tree cannot currently see, each recoverable from data the request already holds:
 

@@ -15,6 +15,27 @@ export interface HypLine {
   used: boolean;
 
   sep?: boolean;
+
+  /** The id of the TACTIC NODE that introduced this hypothesis (B2 provenance,
+      resolved from the `hypOrigins` sidecar's position). Absent for the
+      declaration's own binders and for any origin whose step is not drawn. */
+  origin?: string;
+
+  /** That tactic's head word, for the line's `<title>` — carried here so the
+      renderer needs no second lookup. */
+  originText?: string;
+
+  /** The introducing step's line, 1-based as the editor counts. */
+  originLine?: number;
+
+  /** D5 — the hypothesis this line prints, as the ELABORATOR gave it: the
+      name the author bound and the type it stands for. Carried structurally
+      rather than parsed back out of `text`, because the rename move must read
+      the WHOLE type from a line the reflow may have cut in half, and because
+      `text` is a rendering (`h : T := v`) rather than a pair. Copied onto
+      every wrapped piece, exactly as the provenance fields are. */
+  hypName?: string;
+  hypType?: string;
 }
 
 export interface DeleteSpec {
@@ -118,6 +139,12 @@ export interface TreeNode {
 
   ledger?: LedgerRow[];
 
+  /** Which LEDGER this is — the one flag anything downstream of the rows
+   branches on. Set on BOTH the host tactic and the ledger node it opened, so
+   a reader of either can tell a calc chain from a structured term without
+   walking the tree. */
+  ledgerKind?: "calc" | "ctor";
+
   hypGoalId?: string;
 
   hypsInheritedFrom?: string;
@@ -130,7 +157,52 @@ export interface TreeNode {
 
   synthetic?: boolean;
 
-  recovered?: "failed" | "skipped" | "term";
+  recovered?: "failed" | "skipped" | "term" | "subterm";
+
+  /** B3 — the constants this step's tactic text names, in source order of
+      first occurrence, deduped by name. Attributed INNERMOST server-side, so a
+      lemma inside a nested `by` is on the inner step only and never repeated
+      on its host. Tactic nodes only. */
+  lemmas?: { name: string; doc?: string; kind?: string }[];
+
+  /** D1 — this step is a `have`/`obtain` whose hypothesis the elaborator says
+      is read by exactly `count` later steps, `users` being their node ids (the
+      ones that are drawn). The input the inline move reads; a `count` of 0 is
+      a hypothesis nothing uses. Tactic nodes only. */
+  uses?: { name: string; count: number; users: string[] };
+
+  /** D5 — EVERY name this step bound, with its own use list. `obtain ⟨k, hk⟩`
+      and `intro m n` bind two, and `uses` can only be one of them; the rename
+      move starts from a hypothesis LINE and needs that line's own entry.
+      Same shape, same source (`haveUses`); `uses` is the last of these. */
+  usesEach?: { name: string; count: number; users: string[] }[];
+
+  /** B5 — what this branching tactic did, decoded from its SYNTAX KIND
+      server-side. Tactic nodes only. An `arms` array that is EMPTY means the
+      form was recognised and its arms were not (`match`, `split`, a nested
+      `rcases` alternation): the client keeps its pre-B5 answer there. */
+  branch?: import("./paperproof").BranchInfo;
+
+  /** B5 — the arm of the branch above that produced THIS goal, resolved by
+      `goalId` server-side. Goal nodes only; what makes the case badge read
+      `succ k ih` rather than `succ`. */
+  arm?: import("./paperproof").BranchArm;
+
+  /** B5 — how a multi-goal tactic's child order and side-obligation marking
+      were decided: `branch` (the sidecar answered), `regex` (the label-family
+      fallback had to), `none` (nothing to decide). Probe-facing; the `counts`
+      probe asserts no drawn tactic node still reads `regex`. */
+  shapeSource?: "branch" | "regex" | "none";
+
+  /** B4 — this step's automation trace, once the reader has asked for it and
+      the RPC (or `ppharness --traces`) has answered. Tactic nodes only. */
+  trace?: import("./paperproof").AutomationTrace;
+
+  /** B4 — a LEAF of an open trace: one lemma the automation used, or the one
+      line that says why there is no list. Minted onto the DRAWN tree by
+      `applyTraces`, so elide.ts never sees it; positionless, so nothing offers
+      to edit, reveal, delete or flag it. */
+  traceLeaf?: { title: string; tactic: string; kind: string };
 
   // A FOLD leaves no node of its own: the GOAL is the reduced node, and this
   // is what it now stands for. The corner that carried `−` reads `+N` over

@@ -5,6 +5,8 @@ import {
   type Proof,
   type ProofRecord,
 } from "./paperproof";
+import type { Lint } from "./lints";
+import type { PolishLine } from "./narrate";
 import { proofTitle } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
 
@@ -97,6 +99,67 @@ const CURSOR_STUB = (() => {
   return { line: Number(l) || 0, character: Number(c) || 0 };
 })();
 
+/** `?trace-stub` — B4 without a server. The harness has no RPC, so `onTrace`
+ answers YES for every automation step and the view finds the trace in
+ `proof.automationTraces` (`gen.sh --traces`). Without it the affordance is
+ offered only where the corpus already carries a trace, which is what a reader
+ of an untraced NDJSON should see. */
+const TRACE_STUB = QUERY.has("trace-stub");
+
+/** `?lint-stub` — D4 without a server. `ProofTree.lintDecl` re-elaborates the
+ declaration with Mathlib's style linters on, and the harness has no server at
+ all, so the `lints` reading option would have nothing to draw. This
+ SYNTHESISES two lints from the record's own slot table — one shaped like
+ `linter.style.cdot` (a one-token rewrite at the linter's own range) and one
+ like `linter.unusedTactic` (the delete gesture's extent) — so the ribbon, the
+ `<title>`, the bar's pager and the `✎` proposal can be seen and screenshotted
+ offline. They are FICTIONS about the text they point at, and where the NDJSON
+ carries real lints (`gen.sh --lint`) those win instead. */
+const LINT_STUB = QUERY.has("lint-stub");
+
+/** `?polish-stub` — C4 without a companion and without a key. The real path
+ is widget → RPC → `polish-request.json` → the companion's API call →
+ `polish-response.json` → a poll RPC, none of which exists here, so this
+ FABRICATES the rewrite the model is asked for: the same sentence with its
+ first letter raised and a full stop on the end. That is enough to see the
+ `≈` strip, its wrap and its 2-line clamp, and to screenshot the path. The
+ lines it was handed land in `window.__polish` so a probe can read them. */
+const POLISH_STUB = QUERY.has("polish-stub");
+
+/** `?propose-stub` — D6's hook without an agent. Picks the FIRST primitive the
+ view offered (they arrive in DFS order, so that is the earliest move in the
+ proof) and gives a reason naming it. The point is the plumbing: a choice
+ among offered primitives, never free text. */
+const PROPOSE_STUB = QUERY.has("propose-stub");
+
+function stubLints(proof: Proof): Lint[] {
+  // Only slots in a block of more than one tactic: deleting the sole tactic of
+  // a block is not a fix (`lints.ts` declines it), and the stub should show
+  // what the real thing shows.
+  const usable = (proof.deleteSlots ?? []).filter((s) => s.count > 1);
+  const out: Lint[] = [];
+  const first = usable[0];
+  if (first)
+    out.push({
+      start: first.start,
+      stop: {
+        line: first.start.line,
+        character: first.start.character + 1,
+      },
+      linter: "linter.style.cdot",
+      message: "Please, use `·` (typed as \\.) instead of `.` as 'cdot'.",
+    });
+  const last = usable[usable.length - 1];
+  if (last && last !== first)
+    out.push({
+      start: last.start,
+      stop: last.stop,
+      linter: "linter.unusedTactic",
+      message: "this tactic does nothing",
+    });
+  return out;
+}
+
 const HYP_MARK_STUB =
   QUERY.get("hypmark") === "underline" ? ("underline" as const) : undefined;
 
@@ -172,10 +235,13 @@ function installDriver() {
       await wait(400);
       return gs().length;
     },
-    /** Click a button by the start of its `title` (rail, bar, pill chips). */
+    /** Click a button by the start of its tooltip text — `aria-label`, which
+     is where the in-page tip reads it (rail, bar), else `title`. */
     button: async (titlePrefix: string, mods?: { alt?: boolean }) => {
       const b = [...document.querySelectorAll("button")].find((x) =>
-        (x.getAttribute("title") ?? "").startsWith(titlePrefix),
+        (x.getAttribute("aria-label") ?? x.getAttribute("title") ?? "").startsWith(
+          titlePrefix,
+        ),
       );
       const ok = fire(b ?? null, "click", mods);
       await wait(500);
@@ -292,15 +358,31 @@ export default function App() {
             // glyph) a measurement of the stub instead of the editor.
             getTacticEdit: (p: {
               start: { line: number; character: number };
-            }) => ({
-              pos: p as never,
-              text:
-                proof!.steps.find(
-                  (st) =>
-                    st.position?.start.line === p.start.line &&
-                    st.position?.start.character === p.start.character,
-                )?.tacticString ?? "«stub tactic»",
-            }),
+            }) => {
+              // The TIGHT range, taken from `deleteSlots` — the widget's real
+              // `tacticEdits` are tight, and a step's own `position` runs to
+              // the next tactic through the trailing trivia. D1's rewrites
+              // check the text against the range it claims before they cut
+              // anything out of it, so a trivia-inclusive stop here would
+              // decline every rewrite in the harness.
+              const slot = (proof!.deleteSlots ?? []).find(
+                (s) =>
+                  s.start.line === p.start.line &&
+                  s.start.character === p.start.character,
+              );
+              return {
+                pos: (slot
+                  ? { start: slot.start, stop: slot.stop }
+                  : p) as never,
+                text:
+                  proof!.steps.find(
+                    (st) =>
+                      st.position?.start.line === p.start.line &&
+                      st.position?.start.character === p.start.character,
+                  )?.tacticString ?? "«stub tactic»",
+                indent: p.start.character,
+              };
+            },
             onEditTactic: (
               pos: unknown,
               text: string,
@@ -314,6 +396,32 @@ export default function App() {
             onDeleteTactic: (spec: unknown) => {
               const w = window as unknown as { __deletes?: unknown[] };
               w.__deletes = [...(w.__deletes ?? []), spec];
+            },
+
+            // D1 — the WRITE is stubbed; the CHECK is not wired at all, which
+            // is deliberate: with no `onCheckRewrite` the proposal goes
+            // straight to ✓, so the pill and both gestures can be seen and
+            // measured offline while the verdict stays the server's alone.
+            // Note that the harness's `getTacticEdit` above answers with
+            // Paperproof's pretty-print rather than verbatim source, so
+            // `rewrite.ts`'s verbatim guard declines every multi-line tactic
+            // here that the widget would offer.
+            // D2's writes land in the same place, and so does the run the
+            // collapse would splice: `__rewrites` is every proposal the
+            // reader accepted, in order.
+            onApplyRewrite: (edits: unknown, renameAt?: unknown) => {
+              const w = window as unknown as {
+                __rewrites?: unknown[];
+                __companion?: unknown[];
+              };
+              w.__rewrites = [...(w.__rewrites ?? []), edits];
+              // The extract's rename follow-up: what widget.tsx hands the
+              // companion (`action: "rename"` at the written `this` binder).
+              if (renameAt)
+                w.__companion = [
+                  ...(w.__companion ?? []),
+                  { action: "rename", pos: renameAt },
+                ];
             },
 
             onAddTactic: (spec: unknown, text: string) => {
@@ -331,13 +439,85 @@ export default function App() {
           }
         : {})}
 
+      {...(TRACE_STUB
+        ? {
+            onTrace: async (pos: { start: { line: number; character: number } }) => {
+              const w = window as unknown as { __traces?: unknown[] };
+              w.__traces = [...(w.__traces ?? []), pos];
+              return (proof!.automationTraces ?? []).some(
+                (t) =>
+                  t.stepStart.line === pos.start.line &&
+                  t.stepStart.character === pos.start.character,
+              );
+            },
+          }
+        : {})}
+
+      {...(LINT_STUB
+        ? {
+            lints: proof!.lints?.length ? proof!.lints : stubLints(proof!),
+          }
+        : {})}
+
+      {...(POLISH_STUB
+        ? {
+            polishReady: true,
+            polishDefault: false,
+            onPolish: async (lines: PolishLine[]) => {
+              const w = window as unknown as { __polish?: PolishLine[] };
+              w.__polish = lines;
+              return lines.map((l) => ({
+                nodeId: l.nodeId,
+                text:
+                  l.template.charAt(0).toUpperCase() +
+                  l.template.slice(1) +
+                  (/[.!?]$/.test(l.template) ? "" : "."),
+              }));
+            },
+          }
+        : {})}
+
+      {...(PROPOSE_STUB
+        ? {
+            proposeReady: true,
+            onPropose: async (req: {
+              text: string;
+              primitives: { nodeId: string; kind: string; title: string }[];
+            }) => {
+              const w = window as unknown as { __proposals?: unknown[] };
+              w.__proposals = [...(w.__proposals ?? []), req];
+              const first = req.primitives[0];
+              return first
+                ? {
+                    nodeId: first.nodeId,
+                    kind: first.kind,
+                    reason: `the earliest move offered (${first.kind})`,
+                  }
+                : { note: "no primitive offered" };
+            },
+          }
+        : {})}
+
       {...(CF_STUB ? { cfStub: CF_STUB } : {})}
       {...(cursor ? { highlightPos: cursor } : {})}
 
       {...(QUERY.get("hdr")
         ? {
             declHeader: QUERY.get("hdr")!.replace(/\\n/g, "\n"),
-            onRevealHeader: () => {},
+            // The server's by-kind split, stubbed: `&hdr-name=l:c&hdr-sig=l:c`
+            // against a header starting at 0:0 (the NDJSON carries no header).
+            declHeaderStart: { line: 0, character: 0 },
+            ...(QUERY.get("hdr-name")
+              ? { declHeaderNameStop: stubPos(QUERY.get("hdr-name")!) }
+              : {}),
+            ...(QUERY.get("hdr-sig")
+              ? { declHeaderSigStop: stubPos(QUERY.get("hdr-sig")!) }
+              : {}),
+            // Records each reveal-in-source in `window.__reveals`.
+            onRevealHeader: () => {
+              const w = window as unknown as { __reveals?: number };
+              w.__reveals = (w.__reveals ?? 0) + 1;
+            },
           }
         : {})}
       headerExtra={
@@ -349,6 +529,11 @@ export default function App() {
       }
     />
   );
+}
+
+function stubPos(q: string): { line: number; character: number } {
+  const [line, character] = q.split(":").map(Number);
+  return { line: line || 0, character: character || 0 };
 }
 
 function ProofPicker({

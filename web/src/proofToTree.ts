@@ -1,5 +1,6 @@
 import type {
   CalcChain,
+  TermLedger,
   Hole,
   CalcRelOption,
   CalcRelations,
@@ -11,6 +12,8 @@ import type {
   ProofStepPosition,
   SourceComment,
   TacticSlot,
+  BranchInfo,
+  BranchArm,
 } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import type {
@@ -22,6 +25,16 @@ import type {
   TreeNode,
 } from "./types";
 import { collapseLabel } from "./briefLabel";
+import { tacticHead } from "./elide";
+
+/** Where a hypothesis line came from, resolved to something the view can draw:
+    the id of the introducing TACTIC NODE, that tactic's head word, and the
+    editor line it sits on. */
+export interface HypOriginRef {
+  origin: string;
+  originText: string;
+  originLine: number;
+}
 
 const EMPTY_CTX: ReadonlySet<string> = new Set<string>();
 
@@ -105,6 +118,8 @@ function contextFor(
   group = false,
 
   inherited?: ReadonlySet<string>,
+
+  originOf?: (h: Hypothesis) => HypOriginRef | undefined,
 ): HypLine[] {
   if (flags?.noHyps) return [];
   const used = new Set(consumedBy?.tacticDependsOn ?? []);
@@ -143,12 +158,21 @@ function contextFor(
     shown = shown.filter((h) => flags.onlyHyps!.includes(h.username));
 
   if (!group)
-    return shown.map((h) => ({ text: hypLine(h), used: used.has(h.id) }));
+    return shown.map((h) => ({
+      text: hypLine(h),
+      used: used.has(h.id),
+      hypName: h.username,
+      hypType: h.type,
+      ...originOf?.(h),
+    }));
   const data = shown.filter((h) => h.isProof !== "proof");
   const props = shown.filter((h) => h.isProof === "proof");
   return [...data, ...props].map((h, i) => ({
     text: hypLine(h),
     used: used.has(h.id),
+    hypName: h.username,
+    hypType: h.type,
+    ...originOf?.(h),
     sep: data.length > 0 && props.length > 0 && i === data.length
       ? true
       : undefined,
@@ -210,7 +234,23 @@ function caseName(goal: GoalInfo | undefined): string | undefined {
   return name;
 }
 
+/** The case badge's text: the goal's own tag, plus what B5's arm says the
+    branch bound there — the pattern the author wrote (`inl ⟨k, hk⟩`) where
+    there is one, else the names (`succ k ih`). A badge is only ever GROWN,
+    never minted, so no goal gains a line of chrome it did not already have. */
+function armLabel(base: string | undefined, arm?: BranchArm): string | undefined {
+  if (!base || !arm) return base;
+  const extra = arm.pattern ?? (arm.binders.length ? arm.binders.join(" ") : "");
+  return extra === "" || extra === base ? base : `${base} ${extra}`;
+}
+
 export const posLE = (a: LspPos, b: LspPos) => cmpPos(a, b) <= 0;
+
+/** The one spelling of a POSITION AS A KEY — `<line>:<character>`. Every
+ sidecar is filed under a step's own start (`traceKey`, the slot table, the
+ fold's parts), so the string that keys them is written once and every reader
+ of it agrees by construction. */
+export const posKey = (p: LspPos) => `${p.line}:${p.character}`;
 
 export function positionContains(r: ProofStepPosition, p: LspPos): boolean {
   return posLE(r.start, p) && !posLE(r.stop, p);
@@ -552,12 +592,114 @@ export function proofToTree(
 ): TreeNode[] {
   const goals = goalIndex(proof);
 
-  const recoveredAt = new Map<string, "failed" | "skipped" | "term">();
+  const recoveredAt = new Map<
+    string,
+    "failed" | "skipped" | "term" | "subterm"
+  >();
   for (const r of proof.recovered ?? [])
     recoveredAt.set(`${r.start.line}:${r.start.character}`, r.kind);
 
+  // B3 — LEMMA REFERENCES. The `lemmaRefs` sidecar is keyed by the innermost
+  // containing step's `position.start`, the same key `recoveredAt` uses; one
+  // pass turns it into a per-position list in wire order (source order of
+  // first occurrence, already deduped by name server-side).
+  const lemmasAt = new Map<string, { name: string; doc?: string; kind?: string }[]>();
+  for (const r of proof.lemmaRefs ?? []) {
+    const k = `${r.stepStart.line}:${r.stepStart.character}`;
+    const cur = lemmasAt.get(k);
+    const one = { name: r.name, doc: r.doc, kind: r.kind };
+    if (cur) cur.push(one);
+    else lemmasAt.set(k, [one]);
+  }
+
+  // B5 — CASE/BRANCH SEMANTICS. `branches` is the syntax kind's own answer to
+  // what a branching tactic did, keyed on `position.start` like every other
+  // sidecar. It replaces the label-family regexes that used to decide which of
+  // several goals-after continues the proof (`MAIN_FIRST_RE`) and whether a
+  // producer takes `| case =>` alternatives (`label.endsWith("with")`), and it
+  // is what lets a case badge read `succ k ih` / `inl ⟨k, hk⟩` where before it
+  // could only read the goal's own username.
+  //
+  // An `arms` array that is EMPTY means the server recognised the FORM and
+  // could not decode its arms (`match`, `split`, a nested `rcases`
+  // alternation): everything below then falls back to what it did before,
+  // which is why the fallbacks are still here.
+  const branchAt = new Map<string, BranchInfo>();
+  for (const b of proof.branches ?? [])
+    branchAt.set(`${b.stepStart.line}:${b.stepStart.character}`, b);
+  const branchOf = (s: ProofStep): BranchInfo | undefined =>
+    branchAt.get(`${s.position.start.line}:${s.position.start.character}`);
+  const armByGoal = new Map<string, BranchArm>();
+  for (const b of proof.branches ?? [])
+    for (const a of b.arms) if (a.goalId) armByGoal.set(a.goalId, a);
+
   const stepByGoal = new Map<string, ProofStep>();
   for (const step of proof.steps) stepByGoal.set(step.goalBefore.id, step);
+
+  // B2 — HYPOTHESIS PROVENANCE. The `hypOrigins` sidecar names the SOURCE
+  // POSITION of the step that first bound each fvarId; the tactic node drawn
+  // for a step is `tacticId(step.goalBefore.id)`, so one position→step map
+  // turns the sidecar into node ids.
+  //
+  // Matching is BY ID ALONE — no username fallback, unlike the used-set's
+  // `deepUsed`. There the fallback is needed because a subtree's ids drift
+  // from the goal's (`rw … at h` re-mints `h`); here the drift is the POINT:
+  // the re-minting step registers the new id, so the table's key is always the
+  // id as the goal in hand carries it, and an id-miss means the hypothesis was
+  // never introduced by any step. A name fallback was written, measured on the
+  // corpus, and REMOVED: it fired twice in 1300 context lines and was wrong
+  // both times, pointing `commented.lean`'s statement binder `h` at the
+  // `rw [hb] at h` that would later rewrite it. A hyp with no answer is one of
+  // the declaration's own binders — "from the statement", said by silence.
+  const stepAtPos = new Map<string, ProofStep>();
+  for (const s of proof.steps) {
+    const k = `${s.position.start.line}:${s.position.start.character}`;
+    if (!stepAtPos.has(k)) stepAtPos.set(k, s);
+  }
+  const originById = new Map<string, HypOriginRef>();
+  for (const o of proof.hypOrigins ?? []) {
+    const s = stepAtPos.get(`${o.start.line}:${o.start.character}`);
+    if (!s) continue;
+    originById.set(o.id, {
+      origin: tacticId(s.goalBefore.id),
+      originText: tacticHead(s.tacticString),
+      originLine: o.start.line + 1,
+    });
+  }
+  const originOf = (h: Hypothesis): HypOriginRef | undefined =>
+    originById.get(h.id);
+
+  // D1 — USE COUNTS. `haveUses` is keyed on the introducing step's position
+  // like every other sidecar, and its `users` are positions; the node id of a
+  // step is `tacticId(step.goalBefore.id)`, so `stepAtPos` turns both ends
+  // into node ids. A user position that names no step (nothing is drawn for
+  // it) is dropped from `users` but still counted — `count` is the
+  // ELABORATOR's number and must not shrink because the view hid a step.
+  //
+  // TWO stampings, because a step can bind more than one name: `obtain
+  // ⟨k, hk⟩` and `intro m n` each ship one `haveUses` entry PER NAME at the
+  // same position. `uses` is the LAST of them and is what D1's inline reads
+  // (it declines anything but a `have`, which binds one); `usesEach` is all of
+  // them in source order, which is what the D5 rename asks — it starts from a
+  // hypothesis LINE and needs that line's own name, not its step's.
+  const usesAt = new Map<string, { name: string; count: number; users: string[] }>();
+  const usesEachAt = new Map<
+    string,
+    { name: string; count: number; users: string[] }[]
+  >();
+  for (const u of proof.haveUses ?? []) {
+    const users: string[] = [];
+    for (const p of u.users) {
+      const s = stepAtPos.get(`${p.line}:${p.character}`);
+      if (s) users.push(tacticId(s.goalBefore.id));
+    }
+    const one = { name: u.name, count: u.users.length, users };
+    const k = `${u.stepStart.line}:${u.stepStart.character}`;
+    usesAt.set(k, one);
+    const all = usesEachAt.get(k);
+    if (all) all.push(one);
+    else usesEachAt.set(k, [one]);
+  }
 
   function subtreeLastStep(goalId: string): ProofStep | undefined {
     const s = stepByGoal.get(goalId);
@@ -617,9 +759,53 @@ export function proofToTree(
     return min;
   }
 
+  const termLedgerByTactic = new Map<string, TermLedger>(
+    (proof.termLedgers ?? []).map((l) => [
+      `${l.tacticStart.line}:${l.tacticStart.character}`,
+      l,
+    ]),
+  );
+
+  /** B1/Part E — a STRUCTURED TERM's ledger, the calc idiom applied to an
+   `exact ⟨…⟩`. Same shape, same node, same gestures; the only difference is
+   where the rows come from. A calc chain threads them out of the relation
+   (`spineRelation` down the links, with the head `lhs` as row 0); a
+   constructor has no relation to thread, so the SERVER names the components
+   — that is all `termLedgers` carries — and the row's text is still read off
+   the goal here, exactly as a link's is.
+
+   The gates are the calc ones, asked of the same things: a row needs a
+   justification step that is neither a `sorry` stub nor a hole, and below two
+   rows the component is better served by the branch box it already had. */
+  function ctorLedgerFor(
+    step: ProofStep,
+  ): { rows: LedgerRow[]; settled: Set<string>; kind: "ctor" } | null {
+    const spec = termLedgerByTactic.get(
+      `${step.position.start.line}:${step.position.start.character}`,
+    );
+    if (!spec) return null;
+    const available = new Map(stepGoalsAfter(step).map((g) => [g.id, g]));
+    const rows: LedgerRow[] = [];
+    const settled = new Set<string>();
+    for (const r of spec.rows) {
+      const g = available.get(r.goalId);
+      if (!g || settled.has(g.id)) continue;
+      const just = stepByGoal.get(g.id);
+      if (!just || isStub(just) || holeByGoal.has(g.id)) continue;
+      rows.push({
+        goalId: g.id,
+        text: goals.get(g.id)?.type ?? "",
+        position: just.position,
+      });
+      settled.add(g.id);
+    }
+    if (rows.length < 2) return null;
+    return { rows, settled, kind: "ctor" };
+  }
+
   function ledgerFor(
     step: ProofStep,
-  ): { rows: LedgerRow[]; settled: Set<string> } | null {
+  ): { rows: LedgerRow[]; settled: Set<string>; kind: "calc" } | null {
     const links: {
       goalId: string;
       lhs: string;
@@ -666,12 +852,31 @@ export function proofToTree(
         })),
       ],
       settled: new Set(rows.map((l) => l.goalId)),
+      kind: "calc",
     };
   }
 
+  // Which of a multi-goal step's children is the proof's CONTINUATION and
+  // which are obligations the tactic made on the way. The rewrite family is
+  // the one form where the first goal-after is the continuation; before B5
+  // that was a regex over the label, and it is now the sidecar's `form`
+  // (which the server read off `rwSeq`/`rewriteSeq`/`erw`'s syntax kind, and
+  // which rides EVERY step the `rw`'s syntax covers, since `rw [a, b]` is
+  // harvested one step per rule). The regex survives ONLY where no branch
+  // reached the step at all.
   const MAIN_FIRST_RE = /^(rw|rewrite|erw)\b/;
-  const mainFirst = (step: ProofStep) =>
-    MAIN_FIRST_RE.test(step.tacticString) && step.goalsAfter.length >= 2;
+  const shapeSource = (step: ProofStep): "branch" | "regex" | "none" => {
+    if (step.goalsAfter.length < 2 && stepGoalsAfter(step).length < 2)
+      return "none";
+    if (branchOf(step)) return "branch";
+    return MAIN_FIRST_RE.test(step.tacticString) ? "regex" : "none";
+  };
+  const mainFirst = (step: ProofStep) => {
+    if (step.goalsAfter.length < 2) return false;
+    const b = branchOf(step);
+    if (b) return b.form === "rewrite";
+    return MAIN_FIRST_RE.test(step.tacticString);
+  };
 
   const relsByGoal = new Map<string, CalcRelations>(
     (proof.calcRelations ?? []).map((r) => [r.goalId, r]),
@@ -851,9 +1056,11 @@ export function proofToTree(
     if (!step) return undefined;
 
     if (
-      recoveredAt.get(
-        `${step.position.start.line}:${step.position.start.character}`,
-      ) === "term"
+      ["term", "subterm"].includes(
+        recoveredAt.get(
+          `${step.position.start.line}:${step.position.start.character}`,
+        ) ?? "",
+      )
     )
       return undefined;
     const anchors = [step.position];
@@ -892,7 +1099,14 @@ export function proofToTree(
       if (b && cmpPos(b.position.stop, anchor.position.stop) > 0) anchor = b;
     }
 
-    if (label.endsWith("with"))
+    // Does this producer take `| case =>` alternatives? The sidecar knows,
+    // because the `inductionAlts` block is part of the tactic's own syntax;
+    // the trailing-`with` text test is what answers where it does not reach.
+    const prodBranch = branchOf(prod);
+    const takesAlts = prodBranch
+      ? prodBranch.withAlts === true
+      : label.endsWith("with");
+    if (takesAlts)
       return {
         kind: "case",
         indent: base,
@@ -958,6 +1172,7 @@ export function proofToTree(
     const goal = goals.get(goalId);
     const step = stepByGoal.get(goalId);
     const thisCase = caseName(goal);
+    const arm = armByGoal.get(goalId);
 
     const openRoot = !step && !producedBy && goalId === proof.openBlock?.goal.id;
     const pending =
@@ -992,6 +1207,7 @@ export function proofToTree(
         hypMode === "used" ? subtreeUsed(goalId) : undefined,
         hypGroup,
         chainCtx,
+        originOf,
       );
 
     const rflResidue = (() => {
@@ -1035,12 +1251,22 @@ export function proofToTree(
         (hypFlags.get(goalId)?.onlyHyps?.length ?? 0) > 0 ||
         undefined,
 
-      caseLabel:
+      // The case badge. Its BASE is what it always was — the goal's own tag,
+      // minus the parent's prefix — and B5's arm is what it now says beside
+      // it: the names the arm binds (`succ k ih`) or the pattern the author
+      // wrote (`inl ⟨k, hk⟩`). Only a badge that would be drawn ANYWAY grows;
+      // an arm under a goal that shares its parent's tag adds no badge, so no
+      // node gains height it did not have.
+      caseLabel: armLabel(
         thisCase === parentCase
           ? undefined
           : parentCase && thisCase?.startsWith(parentCase + ".")
             ? thisCase.slice(parentCase.length + 1)
             : thisCase,
+        arm,
+      ),
+
+      arm,
 
       addSpec:
         pending && !brokenChainByGoal.has(goalId)
@@ -1087,17 +1313,34 @@ export function proofToTree(
     const tId = tacticId(goalId);
     const fullLabel = cleanLabel(step.tacticString, proof.comments ?? []);
 
-    const collapsed = brief ? collapseLabel(fullLabel) : null;
+    const collapsed = brief
+      ? collapseLabel(fullLabel, branchOf(step)?.form)
+      : null;
     const chain = isChain(step);
 
-    const led = ledger && chain && !brokenChain ? ledgerFor(step) : null;
-    const drawnLabel = led ? "calc" : collapsed ? collapsed.text : fullLabel;
+    // ONE ledger, two sources of rows. A calc chain reads its own links; a
+    // structured term (`exact ⟨a, b, c⟩`) reads the server's row list.
+    // Everything below this line — the node, the row gestures, the layout, the
+    // paint — cannot tell them apart, and nothing here is calc-only except the
+    // label: `calc` stands for its chain, while a constructor's tactic keeps
+    // its own text (and its brief-mode elision) with the parts listed under it.
+    const led = !ledger || brokenChain
+      ? null
+      : chain
+        ? ledgerFor(step)
+        : ctorLedgerFor(step);
+    const calcLed = led?.kind === "calc";
+    const drawnLabel = calcLed
+      ? "calc"
+      : collapsed
+        ? collapsed.text
+        : fullLabel;
     nodes.push({
       id: tId,
       label: drawnLabel,
 
       elision:
-        collapsed && !led
+        collapsed && !calcLed
           ? {
               original: collapsed.original,
               keep: collapsed.keep,
@@ -1109,10 +1352,23 @@ export function proofToTree(
 
       chain,
 
+      ledgerKind: led?.kind,
+
       position: step.position,
       recovered: recoveredAt.get(
         `${step.position.start.line}:${step.position.start.character}`,
       ),
+      lemmas: lemmasAt.get(
+        `${step.position.start.line}:${step.position.start.character}`,
+      ),
+      uses: usesAt.get(
+        `${step.position.start.line}:${step.position.start.character}`,
+      ),
+      usesEach: usesEachAt.get(
+        `${step.position.start.line}:${step.position.start.character}`,
+      ),
+      branch: branchOf(step),
+      shapeSource: shapeSource(step),
       comment: commentByNode.text.get(tId),
       commentRanges: commentByNode.ranges.get(tId),
 
@@ -1134,7 +1390,7 @@ export function proofToTree(
     });
 
     const chainCtxNext = chain
-      ? led && goalHyps
+      ? calcLed && goalHyps
         ? new Set(goalHyps.map((h) => h.text))
         : EMPTY_CTX
       : chainCtx;
@@ -1149,13 +1405,14 @@ export function proofToTree(
 
         position: step.position,
         ledger: led.rows,
+        ledgerKind: led.kind,
 
         hyps: goalHyps,
         hypGoalId: goalId,
         hypsInheritedFrom:
           hypMode !== "full" && goalHyps?.length ? goalId : undefined,
 
-        chain: true,
+        chain: calcLed || undefined,
       });
     }
 
@@ -1168,6 +1425,24 @@ export function proofToTree(
     const mainGoalId = mainFirst(step) ? step.goalsAfter[0].id : undefined;
     const spawnedIds = new Set(step.spawnedGoals.map((g) => g.id));
 
+    // Children in SOURCE ORDER of the branch's arms, where the sidecar
+    // resolved every one of them to a child of this very step; anything short
+    // of that (a `match`, a nested `rcases`, a spawned goal no arm claims)
+    // keeps the harvest's own order, which is what was drawn before B5.
+    const armOrder = (() => {
+      const b = branchOf(step);
+      if (!b || b.arms.length === 0 || b.arms.length !== children.length)
+        return undefined;
+      const byId = new Map(children.map((c) => [c.id, c]));
+      const out: typeof children = [];
+      for (const a of b.arms) {
+        const c = a.goalId ? byId.get(a.goalId) : undefined;
+        if (!c) return undefined;
+        out.push(c);
+      }
+      return out;
+    })();
+
     const order = led
       ? [
           ...led.rows.flatMap((r) =>
@@ -1175,7 +1450,7 @@ export function proofToTree(
           ),
           ...children.filter((c) => !led.settled.has(c.id)),
         ]
-      : children;
+      : (armOrder ?? children);
     const ledgerId = `ledger:${step.position.start.line}:${step.position.start.character}`;
 
     let settledIdx = 0;

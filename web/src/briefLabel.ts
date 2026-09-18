@@ -35,6 +35,24 @@ const HEAD_MARKS: { re: RegExp; mark: string; bare: boolean }[] = [
   { re: /^(use|exists)\b/, mark: "∃", bare: false },
   { re: /^constructor\b/, mark: "⟨⟩", bare: true },
 ];
+/** B5 — the marks a KIND earns, where the branch sidecar named it. The
+    `HEAD_MARKS` table below is the same reading done by label family, and is
+    what still answers offline records with no `branches` array, ghost labels
+    and combined markers. */
+const FORM_MARKS: Record<string, { mark: string; bare: boolean }> = {
+  constructor: { mark: "⟨⟩", bare: true },
+  rintro: { mark: "λ", bare: true },
+};
+
+/** Where the head word of a label ends — a LEXICAL scan, not a family test:
+    leading space, then everything up to the next space. */
+function headEnd(label: string): number {
+  let i = 0;
+  while (i < label.length && label[i] === " ") i++;
+  while (i < label.length && label[i] !== " ") i++;
+  return i;
+}
+
 const OPENERS = "([{⟨";
 const CLOSERS = ")]}⟩";
 
@@ -121,7 +139,11 @@ function pushNamespace(
   if (m) out.push([i, i + m[0].length, ""]);
 }
 
-function elisionRanges(label: string, short: boolean): Elision[] {
+function elisionRanges(
+  label: string,
+  short: boolean,
+  form?: string,
+): Elision[] {
   const s = scan(label);
   const ranges: Elision[] = [];
 
@@ -165,6 +187,15 @@ function elisionRanges(label: string, short: boolean): Elision[] {
   const mH = /^(exact|apply)\s+/.exec(label);
   if (mH) pushNamespace(ranges, label, mH[0].length, label.length);
 
+  const fm = form ? FORM_MARKS[form] : undefined;
+  if (!ruleF && fm) {
+    const end = headEnd(label);
+    if (end > 0 && (fm.bare || label.slice(end).trim() !== "")) {
+      ranges.push([0, end, fm.mark]);
+      ruleF = true;
+    }
+  }
+
   if (!ruleF)
     for (const hm of HEAD_MARKS) {
       const m = hm.re.exec(label);
@@ -185,8 +216,18 @@ function elisionRanges(label: string, short: boolean): Elision[] {
     if (rest.trim() !== "" && !/^by(\s|$)/.test(rest)) push(rhs, label.length);
   }
 
-  const mB = /^(\s*)(rcases|cases)\s+/.exec(label);
-  if (mB && s.withKw > mB[0].length) push(mB[0].length, s.withKw);
+  // The discriminant between `rcases`/`cases` and its `with` is the least
+  // readable part of the line and the first thing brief mode drops. WHICH
+  // tactic this is comes from the kind where B5 named it, and from the label
+  // family only where it did not.
+  const casesHead =
+    form === "rcases" || form === "cases"
+      ? headEnd(label) + 1
+      : (() => {
+          const mB = /^(\s*)(rcases|cases)\s+/.exec(label);
+          return mB ? mB[0].length : -1;
+        })();
+  if (casesHead > 0 && s.withKw > casesHead) push(casesHead, s.withKw);
 
   const beforeC = ranges.length;
   for (const g of s.lists) {
@@ -207,8 +248,11 @@ function elisionRanges(label: string, short: boolean): Elision[] {
   return ranges;
 }
 
-export function collapseLabel(label: string): CollapsedLabel | null {
-  const raw = elisionRanges(label, label.length < MIN_LABEL);
+export function collapseLabel(
+  label: string,
+  form?: string,
+): CollapsedLabel | null {
+  const raw = elisionRanges(label, label.length < MIN_LABEL, form);
   if (raw.length === 0) return null;
 
   raw.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -314,4 +358,46 @@ export function mapRange(
 
 export function elisionsOf(c: CollapsedLabel): Mark[] {
   return c.marks;
+}
+
+/** The declaration header's RESTING text: the source from the header's start
+ up to `stop` (a position the server found by syntax kind — the `typeSpec`'s
+ `:` for the rest line, the signature's start for the keyword + name), on ONE
+ line — every whitespace run, newlines and continuation indents included,
+ becomes a single space and the tail is trimmed. `keep` maps each kept run
+ back to its source offset, so the header's token colouring (which is keyed on
+ source positions) still lands on the collapsed text as an `Elision`.
+ `null` where the position does not fall inside the text (an older server, a
+ kind the server did not recognise): the caller falls back rather than
+ guessing a split. */
+export function headerPrefix(
+  text: string,
+  origin: { line: number; character: number },
+  stop: { line: number; character: number } | undefined,
+): { text: string; keep: KeepSeg[] } | null {
+  if (!stop) return null;
+  const row = stop.line - origin.line;
+  if (row < 0) return null;
+  let at = 0;
+  for (let r = 0; r < row; r++) {
+    const nl = text.indexOf("\n", at);
+    if (nl < 0) return null;
+    at = nl + 1;
+  }
+  const col = row === 0 ? stop.character - origin.character : stop.character;
+  const end = at + col;
+  if (col < 0 || end > text.length || end <= 0) return null;
+  const nl = text.indexOf("\n", at);
+  if (nl >= 0 && end > nl) return null;
+
+  const keep: KeepSeg[] = [];
+  let out = "";
+  const re = /\S+/g;
+  const src = text.slice(0, end);
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    if (out) out += " ";
+    keep.push({ outAt: out.length, srcAt: m.index, len: m[0].length });
+    out += m[0];
+  }
+  return out ? { text: out, keep } : null;
 }

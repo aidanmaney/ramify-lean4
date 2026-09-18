@@ -29,3 +29,7 @@ ext/ramify/*.vsix
 
 # The probe runner's node bundle of the pure src modules (npm run probe)
 web/probe/lib.mjs
+# `probe eval`'s own fixture corpus: the two lean/ files it elaborates that
+# gen.sh deliberately does not (they are not in proofs/, so they never reach
+# the tracked sample.ndjson). Regenerated from their sources' mtimes.
+web/probe/eval-extra.ndjson

@@ -93,7 +93,7 @@ One rule keeps the split honest: `proofToTree.ts`, `layout.ts` and
 When Lean elaborates a file it produces an `InfoTree`: a trace that records,
 for each tactic, the goals before and after it and the metavariable context
 needed to print them. Both pipelines read proofs out of that trace through an
-upstream dependency, **Paperproof** — pinned to an exact commit, never forked —
+upstream dependency, **Paperproof** — pinned to an exact commit (forking it is allowed as of 2026-09-09 where post-processing runs out) —
 whose `BetterParser_Tree` turns an `InfoTree` into a list of proof steps.
 
 - `lean/Ppharness.lean` + `Main.lean` — the CLI. It elaborates a file to
@@ -104,7 +104,7 @@ whose `BetterParser_Tree` turns an `InfoTree` into a list of proof steps.
   The same file embeds the compiled renderer bundle with `include_str` as a
   `@[widget_module]`.
 
-The standing rule: **never fork the vendored parser.** Anything the project
+The former standing rule was **never fork the vendored parser** (struck 2026-09-09; post-processing remains the first choice). Anything the project
 needs beyond upstream's output is added by post-processing — fixing up labels,
 shipping extra payloads alongside the steps, and running separate walks over
 the same `InfoTree`. That keeps the project able to track upstream, and it
@@ -879,7 +879,7 @@ vanish exactly when a proof was going wrong.
 Distilled from the codebase's own recorded rationale; each was learned the
 hard way:
 
-1. **Never fork the vendored parser** — post-process instead.
+1. **Post-process the vendored parser before forking it** (the outright ban was lifted 2026-09-09).
 2. **Key identity on source facts, never on elaboration artifacts.**
 3. **Decompose syntax by kind, never by argument index** — the index is the
    current shape, not a contract. This one bit twice.

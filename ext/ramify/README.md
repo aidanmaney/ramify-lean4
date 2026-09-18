@@ -7,6 +7,7 @@ The editor side of [Ramify](https://github.com/aidanmaney/ramify-lean4), a proof
 - **Live highlights** — hovering a tactic highlights it in the editor
 - **Undo / redo** — the tree’s `↶` `↷` buttons work by routing it through the editor
 - **Native Theming** — syntax colors in the tree are resolved from your theme; without this they fall back to generic light/dark palettes
+- **Optional model polish** — with `ramify.narration.polish` on and a key set (**Ramify: Set narration API key**), the tree's own generated narration is rewritten as fluent English; nothing you wrote yourself is ever sent, and the key lives in VS Code's secret storage
 - **Additional Settings** — permanent widget display settings
 
 ## Troubleshooting

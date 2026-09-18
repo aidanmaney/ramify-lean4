@@ -71,6 +71,18 @@ export function structural(nodes, tag, fail) {
     }
 }
 
+/** Every cut a READER can mint on a base tree, one per list: each goal's
+ `−` (a fold) and each step's ◌ (a hop, a leaf's fold, a ghost) — the sweep
+ the layout probes run, so hops inside branches are in it. */
+export function readerCuts(lib, nodes) {
+  const byId = byIdOf(nodes), kids = kidsOf(nodes), out = [];
+  for (const n of nodes) {
+    const c = n.type === "goal" ? lib.goalCut(byId, n.id, kids) : n.type === "tactic" ? lib.stepCut(byId, n.id, kids) : null;
+    if (c && !out.some((x) => lib.cutId(x) === lib.cutId(c))) out.push(c);
+  }
+  return out;
+}
+
 /** A tiny assertion harness: `const t = tally(); t.ok(cond, msg); t.done()`. */
 export function tally() {
   let fails = 0;

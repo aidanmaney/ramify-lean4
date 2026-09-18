@@ -14,6 +14,7 @@ import {
   HYP_FONT_PX,
   HYP_LINE_H,
   hypGutterW,
+  hypLineOffset,
   HYP_SEP_H,
   LINE_H,
   NODE_FONT_PX,
@@ -57,11 +58,19 @@ import {
   type AbbrevSpan,
 } from "./abbreviation";
 import type {
+  AutomationTrace,
   CalcRelOption,
   Proof,
   ProofStepPosition,
   TacticSlot,
 } from "./paperproof";
+import {
+  applyTraces,
+  isAutomationNode,
+  traceIndex,
+  traceKey,
+  traceTip,
+} from "./trace";
 import { stepGoalsAfter } from "./paperproof";
 import {
   PLACEHOLDER,
@@ -91,7 +100,35 @@ import type {
   WrappedLine,
 } from "./types";
 import { deleteExtent, type DeleteExtent } from "./deleteEdit";
-import { attachDiagnostics, type TreeDiagnostic } from "./diagnostics";
+import {
+  inlineRewrite,
+  extractRewrite,
+  collapseRewrite,
+  expandRewrite,
+  linearRuns,
+  runForFold,
+  hasSlot,
+  ctxNode,
+  AUTOMATION_CANDIDATES,
+  type LinearRun,
+  type Rewrite,
+  type RewriteCtx,
+  type RewriteEdit,
+  type Pos as RewritePos,
+} from "./rewrite";
+import { renamesFor, type NameRule } from "./rename";
+import {
+  attachDiagnostics,
+  lintDiagnostics,
+  type TreeDiagnostic,
+} from "./diagnostics";
+import {
+  LINT_FIXES,
+  firstLintFix,
+  lintFixesFor,
+  lintsByNode,
+  type Lint,
+} from "./lints";
 import {
   positionContains,
   proofToTree,
@@ -122,7 +159,7 @@ import {
   outlineCuts,
   noneSeedCut,
   seedCut,
-  hopForBand,
+  cutForBand,
   stepCut,
   hopCaption,
   seedTitle,
@@ -148,6 +185,8 @@ import {
   type SelVerbDocKey,
 } from "./gestures";
 import { HelpPanel } from "./helpPanel";
+import { TipLayer } from "./tip";
+import { TipContext, TipController, useTip } from "./tipController";
 import {
   tourList,
   authorStops,
@@ -156,7 +195,15 @@ import {
   type TourLists,
   type TourStop,
 } from "./tour";
-import { collapseLabel } from "./briefLabel";
+import {
+  applyNarrationLines,
+  narrationOf,
+  polishCacheKey,
+  polishKey,
+  polishLinesOf,
+  type PolishLine,
+} from "./narrate";
+import { collapseLabel, headerPrefix, type KeepSeg } from "./briefLabel";
 import { lineOffsets } from "./taggedText";
 import {
   ACCENT_TEXT,
@@ -309,7 +356,7 @@ const LAYOUT_MODES: Record<
   },
 };
 
-type CommentMode = "shown" | "hidden" | "instead";
+type CommentMode = "shown" | "hidden" | "instead" | "narrate";
 
 // One coding of the comment switch's three stops: the word the bar prints and
 // the ⌥-cycle's order. StatusBar's own row list keeps its per-row titles, but
@@ -318,7 +365,12 @@ const COMMENT_MODES: Record<CommentMode, { name: string; next: CommentMode }> =
   {
     shown: { name: "show", next: "hidden" },
     hidden: { name: "hide", next: "instead" },
-    instead: { name: "narrate", next: "shown" },
+    // `instead` used to print the word "narrate"; C2/C3 took that word for the
+    // GENERATED prose, which is what a reader means by it, and gave this mode
+    // back the name it has always had in the code — the author's comment
+    // standing in INSTEAD of the tactic's own text.
+    instead: { name: "instead", next: "narrate" },
+    narrate: { name: "narrate", next: "shown" },
   };
 
 // A mode change confirms itself top-centre for this long, then vanishes.
@@ -414,7 +466,10 @@ const NUB_SLACK = 8;
 // ONE coding, so an overlay standing in for a box cannot paint a different
 // colour than the box it replaced.
 function nodeBoxFill(d: LayoutNode): string {
-  return isGhostNode(d) || d.recovered === "failed" || d.recovered === "skipped"
+  return isGhostNode(d) ||
+    d.recovered === "failed" ||
+    d.recovered === "skipped" ||
+    d.traceLeaf
     ? "transparent"
     : (NODE_STYLES[d.type] ?? NODE_STYLES.default).fill;
 }
@@ -592,6 +647,14 @@ const FLOATER_H = 36;
 // while one is drawn.
 const HDR_REST_H = LINE_H + 13;
 
+// The header's `▾` (open the full signature): a fixed box at the band's right
+// edge, and the right padding both header states keep clear for it.
+const HDR_BTN_W = 22;
+const HDR_BTN_RIGHT = 6;
+const HDR_BTN_LANE = HDR_BTN_W + HDR_BTN_RIGHT + 8;
+// The resting text's right-edge fade where it is wider than the band.
+const HDR_FADE = "linear-gradient(to right, #000 calc(100% - 24px), transparent)";
+
 const RIBBON_W = 4;
 
 const UNDERLINE_DROP = 2.5;
@@ -599,6 +662,10 @@ const UNDERLINE_DROP = 2.5;
 const HYP_LIT_PAD = 2;
 
 const HYP_LIT_DWELL_MS = 350;
+
+/** How far LEFT of both boxes the provenance connector's vertical run sits,
+ so the elbow clears the node it leaves and the node it arrives at. */
+const ORIGIN_CHANNEL = 12;
 
 const RIBBON_W_SEL = 8;
 
@@ -610,6 +677,9 @@ function HypBlock({
   taggedLines,
   lit,
   markStyle,
+  onLine,
+  lineTitle,
+  onLineClick,
 }: {
   lines: HypLine[];
   x: number;
@@ -619,6 +689,18 @@ function HypBlock({
   lit?: boolean;
 
   markStyle?: HypMarkStyle;
+
+  /** Pointer entered/left hyp line `j` (null on leave). Paint only — B2's
+      provenance hover; nothing downstream of it relayouts. */
+  onLine?: (j: number | null) => void;
+
+  /** That line's `<title>` — where the hypothesis came from. */
+  lineTitle?: (j: number) => string | undefined;
+
+  /** D5 — a click on hyp line `j`, with whether ⌥ was held. The rename move
+      is the ⌥-click; a plain click is left alone so a context line still
+      behaves like part of the goal box it is drawn in. */
+  onLineClick?: (j: number, alt: boolean) => void;
 }) {
   const anyUsed = hypGutterW(lines) > 0;
 
@@ -628,7 +710,7 @@ function HypBlock({
   const sepOff = (j: number) =>
     sepIndex >= 0 && j >= sepIndex ? HYP_SEP_H : 0;
 
-  const hypLineMid = (j: number) => y + sepOff(j) + (j + 0.5) * HYP_LINE_H;
+  const hypLineMid = (j: number) => y + hypLineOffset(lines, j);
   const hypBaseline = (j: number) =>
     hypLineMid(j) + 0.32 * HYP_FONT_PX + UNDERLINE_DROP;
 
@@ -722,8 +804,25 @@ function HypBlock({
             }}
           >
             {lines.map((line, j) => (
+              // The provenance hover rides the LINE'S OWN `<div>` here rather
+              // than an SVG rect over it: a rect on top would swallow the
+              // `InteractiveCode` popups the tagged hyp types carry, and the
+              // div's own enter/leave fire just the same when the pointer is
+              // inside one of them.
               <div
                 key={j}
+                title={lineTitle?.(j)}
+                onMouseEnter={onLine ? () => onLine(j) : undefined}
+                onMouseLeave={onLine ? () => onLine(null) : undefined}
+                onClick={
+                  onLineClick
+                    ? (e) => {
+                        if (!e.altKey) return;
+                        e.stopPropagation();
+                        onLineClick(j, true);
+                      }
+                    : undefined
+                }
                 style={{
                   height: HYP_LINE_H,
                   color: lineFill(line.used),
@@ -758,6 +857,43 @@ function HypBlock({
           ))}
         </text>
       )}
+
+      {/* PER-LINE HIT STRIPS — only on the plain `<text>` path, where the
+          glyphs alone are hit-testable and the gaps between them are not (a
+          rect BEHIND the text would flicker as the pointer crossed a letter).
+          On the tagged path the line's own `<div>` carries the hover instead,
+          so nothing is laid over `InteractiveCode`. Geometry is the block's
+          own: `hypLineOffset` and `HYP_LINE_H`, the numbers the measurer
+          sized the block with. */}
+      {onLine && !taggedLines && (
+        <g>
+          {lines.map((_line, j) => (
+            <rect
+              key={j}
+              x={x}
+              y={hypLineMid(j) - HYP_LINE_H / 2}
+              width={width}
+              height={HYP_LINE_H}
+              fill="transparent"
+              data-ptw-hyp={j}
+              style={{ pointerEvents: "all" }}
+              onMouseEnter={() => onLine(j)}
+              onMouseLeave={() => onLine(null)}
+              onClick={
+                onLineClick
+                  ? (e) => {
+                      if (!e.altKey) return;
+                      e.stopPropagation();
+                      onLineClick(j, true);
+                    }
+                  : undefined
+              }
+            >
+              {lineTitle?.(j) ? <title>{lineTitle(j)}</title> : null}
+            </rect>
+          ))}
+        </g>
+      )}
     </>
   );
 }
@@ -769,7 +905,13 @@ export interface ProofTreeViewProps {
 
   getTacticEdit?: (
     pos: ProofStepPosition,
-  ) => { pos: ProofStepPosition; text: string } | null;
+  ) => {
+    pos: ProofStepPosition;
+    text: string;
+    /** D1 — the column the tactic's own line starts it at, which is where a
+     hoisted `have` goes and what an inlined block is re-indented under. */
+    indent?: number;
+  } | null;
 
   onEditTactic?: (pos: ProofStepPosition, newText: string) => void;
 
@@ -791,11 +933,21 @@ export interface ProofTreeViewProps {
   highlightPos?: { line: number; character: number } | null;
 
   declHeader?: string;
+  /** Where `declHeader` starts in the source, and the two positions the
+   server found in it by syntax KIND (paperproof.ts): the signature's start
+   (the name ends there) and the type spec's `:` (the resting header ends
+   there). Absent → the header falls back to its first source line. */
+  declHeaderStart?: { line: number; character: number };
+  declHeaderNameStop?: { line: number; character: number };
+  declHeaderSigStop?: { line: number; character: number };
 
   renderDeclHeader?: (
     lines: string[],
 
     label?: string,
+    /** A label that is not the source verbatim (the collapsed one-line rest
+     text) maps back to source offsets through this. */
+    elision?: { original: string; keep: KeepSeg[]; marks: [] },
   ) => ReactNode[] | null;
 
   onRevealHeader?: () => void;
@@ -840,9 +992,86 @@ export interface ProofTreeViewProps {
 
   deleteSlots?: TacticSlot[];
 
+  /** B4 — the automation traces already in hand. In the WIDGET this is the
+      RPC's answers, held by the caller and passed as a sibling (the payload
+      does not carry them: a proof with ten `simp`s must not re-elaborate on
+      every cursor move); offline it falls back to `proof.automationTraces`,
+      which `ppharness --traces` puts on the wire. */
+  automationTraces?: AutomationTrace[];
+
+  /** Ask for one step's trace. Resolving with `false` means the server said
+      nothing useful and the reader should be told; absent, the affordance is
+      offered only where a trace is already in hand (the harness). */
+  onTrace?: (pos: ProofStepPosition) => Promise<boolean>;
+
   ledger?: boolean;
 
   onDeleteTactic?: (spec: DeleteSpec) => void;
+
+  /** D1 — ask the ELABORATOR whether a candidate rewrite still checks
+      (`ProofTree.checkRewrite`). Nothing is written: the edits are applied to
+      a copy of the file's text and the declaration re-elaborated through the
+      cf seam. Absent (the harness) the proposal is shown with a stubbed ✓ so
+      the gesture can still be seen. */
+  onCheckRewrite?: (edits: RewriteEdit[]) => Promise<{
+    verdict: string;
+    ok: boolean;
+    message?: string;
+    steps: number;
+    before: number;
+  }>;
+
+  /** D2a — ask the elaborator whether ONE automation tactic closes a linear
+      run (`ProofTree.tryClose`). The run is named by its first and last
+      step's start; the server splices the run's own extent and tries each
+      candidate in order. Absent (the harness) the offer is stubbed with the
+      first candidate so the gesture and the pill can still be seen. */
+  onTryClose?: (
+    from: { line: number; character: number },
+    to: { line: number; character: number },
+  ) => Promise<{
+    tactic?: string;
+    verdict: string;
+    message?: string;
+    tried?: string[];
+    before?: number;
+    steps?: number;
+  }>;
+
+  /** D1 — write an ACCEPTED rewrite, through the one `applyEdit` every other
+      write goes through. Every intermediate state is a valid file and the
+      editor's own undo takes it back. `renameAt` is an extract's `this`
+      binder in the WRITTEN text: the widget follows the write with the
+      companion's Rename Symbol there (best-effort — the write never waits on
+      it, and without a companion nothing more happens). */
+  onApplyRewrite?: (edits: RewriteEdit[], renameAt?: RewritePos) => void;
+
+  /** C4 — LLM POLISH of the templated narration, through the companion. The
+      widget cannot reach the network; the companion can, so the view hands it
+      the templated lines and is handed sentences back. Absent, or with
+      `polishReady` false, the `polish` row is drawn disabled with
+      `polishWhy` as its title — a reader who has met the setting should find
+      out where it went. */
+  onPolish?: (lines: PolishLine[]) => Promise<{ nodeId: string; text: string }[]>;
+  /** Is there a companion with an API key behind `onPolish`? */
+  polishReady?: boolean;
+  /** Why not, in the reader's words, when it is not. */
+  polishWhy?: string;
+  /** The `ramify.narration.polish` setting — the SESSION's default, which the
+      row then overrides for this session alone. */
+  polishDefault?: boolean;
+
+  /** D6 — ASK AN AGENT to choose among the rewrites the primitives already
+      offer. The view hands over the offered rewrites (never free text) and is
+      handed back one node id, one kind and a one-line reason; the choice then
+      goes through `onCheckRewrite` like every other proposal. */
+  onPropose?: (req: {
+    text: string;
+    primitives: { nodeId: string; kind: Rewrite["kind"]; title: string }[];
+  }) => Promise<{ nodeId?: string; kind?: string; reason?: string; note?: string }>;
+  /** Is `ramify.restructure.propose` on, with a companion and a key behind it? */
+  proposeReady?: boolean;
+  proposeWhy?: string;
 
   onPreviewRange?: (range: ProofStepPosition | null) => void;
 
@@ -853,6 +1082,19 @@ export interface ProofTreeViewProps {
   abbrev?: AbbrevConfig;
 
   diagnostics?: TreeDiagnostic[];
+
+  /** D4 — Mathlib's own style linters for THIS declaration. In the widget
+      they arrive from `ProofTree.lintDecl` (a re-elaboration, so it is fired
+      only when the reader asks) and are passed as a SIBLING; offline they fall
+      back to `proof.lints`, which `ppharness --lint` puts on the wire. The
+      `deleteSlots` rule, said again: read the argument, fall back to the
+      field. */
+  lints?: Lint[];
+
+  /** Tell the caller the `lints` reading option went on or off. Turning it ON
+      is what asks the server; nothing here fires it unasked. Absent (the
+      harness) the option simply draws whatever `lints` already holds. */
+  onLints?: (on: boolean) => void;
 }
 
 export default function ProofTreeView({
@@ -870,6 +1112,9 @@ export default function ProofTreeView({
   onPopoutEdit,
   highlightPos,
   declHeader,
+  declHeaderStart,
+  declHeaderNameStop,
+  declHeaderSigStop,
   renderDeclHeader,
   onRevealHeader,
   cfStub,
@@ -881,12 +1126,26 @@ export default function ProofTreeView({
   onAddTactic,
   onHoverTactic,
   deleteSlots,
+  automationTraces,
+  onTrace,
   ledger = true,
   onDeleteTactic,
+  onCheckRewrite,
+  onTryClose,
+  onApplyRewrite,
+  onPolish,
+  polishReady = false,
+  polishWhy,
+  polishDefault = false,
+  onPropose,
+  proposeReady = false,
+  proposeWhy,
   onPreviewRange,
   onUndo,
   abbrev = DEFAULT_ABBREV,
   diagnostics,
+  lints,
+  onLints,
 }: ProofTreeViewProps) {
   const [upToCursor, setUpToCursor] = useState(false);
 
@@ -908,6 +1167,10 @@ export default function ProofTreeView({
 
   const [helpOpen, setHelpOpen] = useState(false);
 
+  // The in-page tooltip's controller (tipController.ts). Held OUTSIDE React
+  // state on purpose: a tip showing re-renders `TipLayer` and nothing else.
+  const [tipCtl] = useState(() => new TipController());
+
   const caps: Caps = {
     reveal: !!onReveal,
     edit: !!getTacticEdit && !!onEditTactic,
@@ -915,6 +1178,7 @@ export default function ProofTreeView({
     popout: !!onPopoutEdit,
     del: !!onDeleteTactic && !!deleteSlots,
     flags: !!onEditTactic && !!deleteSlots,
+    restructure: !!onApplyRewrite && !!getTacticEdit && !!deleteSlots,
     undo: !!onUndo,
   };
 
@@ -927,6 +1191,30 @@ export default function ProofTreeView({
   const briefPreviewOn = briefHover && !brief;
 
   const [combine, setCombine] = useState(false);
+
+  // D4 — the LINTS reading option. OFF by default and off until the reader
+  // asks: the answer costs the server one re-elaboration of the declaration,
+  // exactly as B4's traces do, so nothing fires it on arrival. The lints
+  // themselves live with the caller (a sibling prop) and fall back to the
+  // NDJSON's own field; this is only whether they are being read.
+  const [lintsOn, setLintsOn] = useState(false);
+
+  // C4 — the POLISH reading option. The setting (`ramify.narration.polish`,
+  // off by default) is the DEFAULT and the row overrides it for this session,
+  // so the state is an OVERRIDE and not a copy: a copy would have to be
+  // synced from an effect when the companion's answer arrives late, and the
+  // setting would then quietly lose to a value nobody chose.
+  const [polishOverride, setPolishOverride] = useState<boolean | null>(null);
+  const polishOn = (polishOverride ?? polishDefault) && polishReady;
+  // The polished sentences, keyed by the SENTENCE they rewrote (node id plus
+  // its templated text) and not by the tree: a cut changes which nodes are
+  // drawn, and asking again for lines that were already answered would spend
+  // a round trip on every fold. An answered line that came back empty is
+  // stored as `""`, so it is not asked twice either.
+  const [polished, setPolished] = useState<Map<string, string>>(new Map());
+  // D6 — whether an agent proposal is in flight, so the row can say so and
+  // two clicks cannot start two.
+  const [proposeBusy, setProposeBusy] = useState(false);
 
   const [combineOff, setCombineOff] = useState<Set<string>>(new Set());
 
@@ -1058,6 +1346,15 @@ export default function ProofTreeView({
 
   const [hypLit, setHypLit] = useState<string | null>(null);
 
+  // B2 — HYPOTHESIS PROVENANCE, paint only. `hoverHyp` is the line under the
+  // pointer, `hypOrigin` the one that has been DWELT on long enough to draw
+  // the wash and the connector (the same dwell the used-hyp wash uses, so the
+  // two hovers feel like one gesture). Both are `nodeId\u0000lineIndex`
+  // strings rather than objects, so the effect below can depend on a
+  // primitive; neither reaches the engine, the cut list or any anchor.
+  const [hoverHyp, setHoverHyp] = useState<string | null>(null);
+  const [hypOrigin, setHypOrigin] = useState<string | null>(null);
+
   const [moreHover, setMoreHover] = useState<string | null>(null);
 
   const [elidePreview, setElidePreview] = useState<{
@@ -1124,6 +1421,28 @@ export default function ProofTreeView({
     spec: DeleteSpec;
   } | null>(null);
 
+  // The PROPOSAL being shown. One at a time, on the node it was asked from:
+  // `checking` while the elaborator is out, then `ok` (with how many steps the
+  // proof loses) or `bad` (with the first error's first line). The pill is the
+  // armed delete's pill — a rewrite is the same kind of promise, and it should
+  // look like one.
+  const [proposal, setProposal] = useState<{
+    id: string;
+    kind: Rewrite["kind"];
+    rewrite: Rewrite;
+    phase: "checking" | "ok" | "bad";
+    message?: string;
+    delta?: number;
+    /** D2a — a collapse has no title until the server names the candidate
+     that closed the run, so the pill's line is set when the answer lands. */
+    title?: string;
+    /** D6 — where an AGENT chose this move, the one line it gave for why.
+     It rides the `<title>`, not the pill's own label: the label says what
+     will be written and whether the elaborator agreed, which is the promise,
+     and the reason is the thing you hover to read. */
+    why?: string;
+  } | null>(null);
+
   const [pendingVerb, setPendingVerb] = useState<SelVerb | null>(null);
 
   // The `flag ▾` chip's disclosure: whether the pill is also showing the row
@@ -1133,8 +1452,34 @@ export default function ProofTreeView({
 
   const [hoverDiag, setHoverDiag] = useState<string | null>(null);
 
-  type Layer = { id: string; up: boolean; off: () => void; bg: boolean };
+  // The full signature, OPENED BY CLICK on the header's `▾` (never by hover):
+  // closed by the same button, Esc, a pointerdown anywhere outside it, and a
+  // proof change (the `proofKey` block below).
+  const [hdrOpen, setHdrOpen] = useState(false);
+
+  // `upNow`, where present, is read at Esc time instead of `up`: the TIP's
+  // visibility lives outside the view's state (so showing one never renders
+  // the tree), and a value captured at render would be stale.
+  type Layer = {
+    id: string;
+    up: boolean;
+    upNow?: () => boolean;
+    off: () => void;
+    bg: boolean;
+  };
   const layers: Layer[] = [
+    // FIRST: a standing tooltip is the topmost thing on screen, and Esc takes
+    // it before the popover it may be describing.
+    { id: "tip", up: false, upNow: tipCtl.shown, off: tipCtl.dismiss, bg: false },
+    // The open signature overlays the tree from the top (z 11), above every
+    // popover below it, so it goes next. Its outside-click close is its own
+    // document listener, not `bg` — a click on a node is outside it too.
+    {
+      id: "signature",
+      up: hdrOpen,
+      off: () => setHdrOpen(false),
+      bg: false,
+    },
     {
       id: "barPopover",
       up: barOpen !== null,
@@ -1150,6 +1495,12 @@ export default function ProofTreeView({
       bg: true,
     },
     { id: "arming", up: !!arming, off: () => setArming(null), bg: true },
+    {
+      id: "proposal",
+      up: !!proposal,
+      off: () => setProposal(null),
+      bg: true,
+    },
     {
       id: "pendingVerb",
       up: !!pendingVerb,
@@ -1234,7 +1585,7 @@ export default function ProofTreeView({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      layersRef.current.find((l) => l.up)?.off();
+      layersRef.current.find((l) => (l.upNow ? l.upNow() : l.up))?.off();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -1610,6 +1961,17 @@ export default function ProofTreeView({
   );
 
   const elidableIds = useMemo(() => stepElidable(baseNodes), [baseNodes]);
+  // Where a BARE `.none` (no sentence) is worth writing: anywhere ◌ is
+  // offered, and on a SPLIT too — its `.none` is the ghost of the whole split,
+  // which hides something. Refused where the ghost would only restate one box.
+  const noneBareIds = useMemo(() => {
+    const out = new Set(elidableIds);
+    const parents = new Set(baseNodes.flatMap((n) => n.parents.map((p) => p.id)));
+    for (const n of baseNodes)
+      if (n.type === "tactic" && parents.has(n.id)) out.add(n.id);
+    return out;
+  }, [baseNodes, elidableIds]);
+  const noneBareOk = (id: string) => noneBareIds.has(id);
 
   // Both tours, off the BASE tree: a stop must exist even while a cut hides
   // it, since reaching a hidden stop is exactly what the jump is for.
@@ -1673,6 +2035,27 @@ export default function ProofTreeView({
     [peekable, highlightPos],
   );
 
+  // B4 — the traces in hand (the RPC's, or the corpus's), and which steps have
+  // their subtree open. `traceBusy` is the pending state the affordance shows
+  // while the server re-elaborates.
+  const traces = useMemo(
+    () => traceIndex(automationTraces ?? proof.automationTraces),
+    [automationTraces, proof.automationTraces],
+  );
+  // D2b asks for a trace and then reads it back in the SAME gesture, so the
+  // freshly-arrived index has to be reachable from a click's closure. The
+  // `toastRef` pattern: written in an effect, read only from handlers.
+  const traceRef = useRef(traces);
+  useEffect(() => {
+    traceRef.current = traces;
+  }, [traces]);
+  const [traceOpen, setTraceOpen] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const [traceBusy, setTraceBusy] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+
   const treeNodes = useMemo(() => {
     let cuts = elideCuts;
     if (combine) {
@@ -1691,46 +2074,140 @@ export default function ProofTreeView({
     // the stop being read are held open while it is the stop, and come back
     // by themselves when the reading moves on or leaves.
     if (tourPeek.size > 0) cuts = cuts.filter((c) => !tourPeek.has(cutId(c)));
-    return applyElisions(baseNodes, cuts);
-  }, [baseNodes, elideCuts, combine, combineOff, peekKey, tourPeek]);
+    // …and B4's trace leaves LAST, onto the drawn tree: elide.ts must not see
+    // them (a closing `simp` with its trace open would stop being a leaf and
+    // the goal above would hop where it used to fold), and a step a cut has
+    // hidden takes its trace with it for nothing.
+    return applyTraces(applyElisions(baseNodes, cuts), traceOpen, traces);
+  }, [
+    baseNodes,
+    elideCuts,
+    combine,
+    combineOff,
+    peekKey,
+    tourPeek,
+    traceOpen,
+    traces,
+  ]);
+
+  // C2/C3 — the DRAWN tree with generated strips, and ONLY for the engine:
+  // every other reader (the cut rules, the selection verbs, comment editing)
+  // must keep seeing the real tree, so a generated line is never something a
+  // gesture offers to edit, hide or delete. Narration is text like any other
+  // comment, so it goes through `commentSize` and the 2-line clamp unchanged.
+  //
+  // C4 — and where POLISH is on and an answer has come back, the polished
+  // sentence stands in its place, wearing `≈` instead of `∴`. The map is
+  // keyed by the templated text itself (`polishKey`), so a re-parse that
+  // changed nothing about the sentences keeps the answer and one that did
+  // asks again; a stale key simply draws the template, which is always right.
+  const narration = useMemo(
+    () =>
+      commentMode === "narrate" ? narrationOf(baseNodes, treeNodes) : null,
+    [commentMode, baseNodes, treeNodes],
+  );
+  const polishReq = useMemo(
+    () =>
+      narration && polishOn && onPolish
+        ? polishLinesOf(treeNodes, narration)
+        : null,
+    [narration, polishOn, onPolish, treeNodes],
+  );
+  const polishNow = polishReq === null ? "" : polishKey(polishReq);
+  const polishedMap = useMemo(() => {
+    if (!polishReq) return undefined;
+    const out = new Map<string, string>();
+    for (const l of polishReq) {
+      const t = polished.get(polishCacheKey(l));
+      if (t) out.set(l.nodeId, t);
+    }
+    return out;
+  }, [polishReq, polished]);
+  // The ASK. `onPolish` is the companion round trip (RPC out, a poll on a
+  // `setTimeout` ladder, 20s and then give up), so nothing here knows about
+  // timers: the promise either lands or it does not.
+  //
+  // Only the lines NOBODY HAS ASKED FOR go out. `askedRef` is what makes that
+  // true across a cut — folding a goal changes which nodes are drawn, and
+  // without it every fold would spend a round trip re-asking for sentences
+  // already in hand. A line that failed or came back empty stays marked, so
+  // nothing retries on its own; the strip draws the template, which was never
+  // wrong. The requester is a fresh closure on every render, so the effect
+  // reads it through a ref rather than listing it as a dependency — the ask
+  // fires on the lines changing, never on the identity of the asker.
+  const askedRef = useRef<Set<string>>(new Set());
+  const polishReqRef = useRef<{
+    ask: typeof onPolish;
+    lines: PolishLine[] | null;
+  }>({ ask: onPolish, lines: polishReq });
+  useEffect(() => {
+    polishReqRef.current = { ask: onPolish, lines: polishReq };
+  });
+  useEffect(() => {
+    if (!polishNow) return;
+    const { ask, lines } = polishReqRef.current;
+    if (!ask || !lines) return;
+    const asked = askedRef.current;
+    const want = lines.filter((l) => !asked.has(polishCacheKey(l)));
+    if (want.length === 0) return;
+    for (const l of want) asked.add(polishCacheKey(l));
+    let live = true;
+    void ask(want).then(
+      (out) => {
+        if (!live) return;
+        const got = new Map(out.map((o) => [o.nodeId, o.text]));
+        setPolished((prev) => {
+          const next = new Map(prev);
+          for (const l of want) next.set(polishCacheKey(l), got.get(l.nodeId) ?? "");
+          return next;
+        });
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [polishNow]);
+  // A polish answer landing changes the WORDS and nothing about the tree, so
+  // it re-runs this `.map` alone — the narration walk above it is memoised on
+  // the drawn tree and is not paid again.
+  const narratedNodes = useMemo(
+    () =>
+      narration
+        ? applyNarrationLines(treeNodes, narration.text, polishedMap)
+        : treeNodes,
+    [narration, treeNodes, polishedMap],
+  );
 
   // The DRAWN tree indexed for elide.ts's cut rules — by id, and by parent.
-  // Drawn, not base: `goalCut` has to see a ghost or a merged run standing
-  // below a goal to decline it, and `cutExtentIds` fades what is on screen.
+  // Drawn, not base: `stepCut` has to see what a standing cut left below a
+  // goal (a hop's kept goal, a ghost), and `cutExtentIds` fades what is on
+  // screen.
   const treeIdx = useMemo(() => {
-    const byId = new Map(treeNodes.map((n) => [n.id, n]));
+    // B4's trace leaves are deliberately ABSENT from this index: it is what
+    // elide.ts's cut rules read, and an open trace must not change what a `−`
+    // or a `◌` does.
+    const drawn = treeNodes.filter((n) => !n.traceLeaf);
+    const byId = new Map(drawn.map((n) => [n.id, n]));
     const kids = new Map<string, TreeNode[]>();
-    for (const n of treeNodes)
+    for (const n of drawn)
       for (const p of n.parents)
         (kids.get(p.id) ?? kids.set(p.id, []).get(p.id)!).push(n);
     return { byId, kids };
   }, [treeNodes]);
 
   // What a goal's `−` does, per goal — the ONE gate the glyph, the click, the
-  // hint row and the hover fade all read (see elide.ts's `goalCut`). `trunk`
-  // is the compact layouts: ⑃ wide has no trunk to keep, so every goal there
-  // simply folds.
+  // hint row and the hover fade all read (see elide.ts's `goalCut`). `−`
+  // hides, so it is a fold in every layout; the layout no longer enters.
   const goalCuts = useMemo(() => {
     const out = new Map<string, ElideCut>();
     for (const n of treeNodes) {
       if (n.type !== "goal") continue;
-      const c = goalCut(
-        treeIdx.byId,
-        n.id,
-        { trunk: compact, stepElidable: elidableIds },
-        treeIdx.kids,
-      );
+      const c = goalCut(treeIdx.byId, n.id, treeIdx.kids);
       if (c) out.set(n.id, c);
     }
     return out;
-  }, [treeNodes, treeIdx, compact, elidableIds]);
-
-  const hypLitGoalId = useMemo(() => {
-    const lit = hypLit === hoverId ? hypLit : null;
-    if (!lit) return null;
-    const n = treeNodes.find((t) => t.id === lit);
-    return n?.type === "tactic" ? (n.parents[0]?.id ?? null) : null;
-  }, [hypLit, hoverId, treeNodes]);
+  }, [treeNodes, treeIdx]);
 
   const linkPlus = useMemo(() => {
     const out = new Map<string, { key: string; ledgerId: string }>();
@@ -1749,7 +2226,7 @@ export default function ProofTreeView({
 
   const engine = useMemo(
     () =>
-      createLayoutEngine(treeNodes, {
+      createLayoutEngine(narratedNodes, {
         reflow: forcedReflow ?? reflow,
 
         chips: !!onAddTactic,
@@ -1764,7 +2241,7 @@ export default function ProofTreeView({
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      treeNodes,
+      narratedNodes,
       codeFont,
       reflow,
       forcedReflow,
@@ -1807,6 +2284,7 @@ export default function ProofTreeView({
   >(new Map());
   if (proofKey !== prevProof) {
     setPrevProof(proofKey);
+    setHdrOpen(false);
     setPrevShape(shapeKey);
     setPrevBase(baseNodes);
 
@@ -2146,6 +2624,21 @@ export default function ProofTreeView({
     return out;
   }, [nodes]);
 
+  // Every PLACED node by id. One map, built where the layout lands, so the
+  // per-hover lookups below it (and the anchoring further down) are gets
+  // rather than linear scans of the whole drawing.
+  const placed = useMemo(
+    () => new Map(nodes.map((n) => [n.data.id, n])),
+    [nodes],
+  );
+
+  const hypLitGoalId = useMemo(() => {
+    const lit = hypLit === hoverId ? hypLit : null;
+    if (!lit) return null;
+    const n = placed.get(lit)?.data;
+    return n?.type === "tactic" ? (n.parents[0]?.id ?? null) : null;
+  }, [hypLit, hoverId, placed]);
+
   const hypLitTactics = useMemo(() => {
     const linesOf = new Map(nodes.map((n) => [n.data.id, n.data.hyps]));
     const out = new Set<string>();
@@ -2171,6 +2664,32 @@ export default function ProofTreeView({
       setHypLit(null);
     };
   }, [hoverId, hypLitTactics]);
+
+  // B2 — the dwelt hyp line resolved against the DRAWN tree: the goal node it
+  // sits in, its wrapped lines, and the introducing tactic node. A line whose
+  // origin is folded away (or is one of the declaration's own binders) resolves
+  // to nothing: the `<title>` still says where the hypothesis came from, and
+  // no ink is spent claiming a box that is not there.
+  const hypOriginHit = useMemo(() => {
+    if (!hypOrigin || hypOrigin !== hoverHyp) return null;
+    const sep = hypOrigin.indexOf("\u0000");
+    const gn = placed.get(hypOrigin.slice(0, sep));
+    const j = Number(hypOrigin.slice(sep + 1));
+    const lines = gn?.data.hyps;
+    const line = lines?.[j];
+    if (!gn || !lines || !line?.origin) return null;
+    const tn = placed.get(line.origin);
+    return tn ? { gn, lines, j, tn } : null;
+  }, [hypOrigin, hoverHyp, placed]);
+
+  useEffect(() => {
+    if (!hoverHyp) return;
+    const t = setTimeout(() => setHypOrigin(hoverHyp), HYP_LIT_DWELL_MS);
+    return () => {
+      clearTimeout(t);
+      setHypOrigin(null);
+    };
+  }, [hoverHyp]);
 
   const drawnParentIds = useMemo(
     () => new Set(links.map((l) => l.source.data.id)),
@@ -2248,6 +2767,404 @@ export default function ProofTreeView({
     }
     return { delExtents, delSpecs };
   }, [nodes, baseNodes, deleteSlots, onDeleteTactic]);
+
+  // D1 — THE TWO RESTRUCTURING PROPOSALS, computed once per drawn TREE — and
+  // the tree, deliberately, rather than the LAYOUT's node list: focus, the
+  // gallery, compact and up-to-cursor all change which nodes are placed and
+  // none of them changes a word of the author's source, so keying the pass on
+  // the layout re-ran every proposal for a move that could not alter one.
+  // `rewrite.ts` is pure text over the tactic's own verbatim source, so both
+  // moves are decided here without a round trip and the bar can offer them
+  // before anything is asked of the server; the ELABORATOR's answer comes
+  // later, when the reader clicks, and is what turns a proposal into an edit.
+  // Nothing here reserves space or changes the drawing.
+  const rewriteCtx = useMemo((): RewriteCtx | null => {
+    if (!deleteSlots || !onApplyRewrite || !getTacticEdit) return null;
+    return {
+      nodes: treeNodes,
+      slots: deleteSlots,
+      src: (p) => {
+        const e = getTacticEdit({ start: p, stop: p });
+        return e
+          ? {
+              start: e.pos.start,
+              stop: e.pos.stop,
+              text: e.text,
+              indent: e.indent ?? e.pos.start.character,
+            }
+          : null;
+      },
+    };
+  }, [treeNodes, deleteSlots, onApplyRewrite, getTacticEdit]);
+
+  const rewrites = useMemo(() => {
+    const out = new Map<string, { inline?: Rewrite; extract?: Rewrite }>();
+    const ctx = rewriteCtx;
+    if (!ctx) return out;
+    const data = ctx.nodes;
+    for (const d of data) {
+      if (d.type !== "tactic" || !d.position || d.traceLeaf) continue;
+      const inline = d.uses ? inlineRewrite(d, ctx) : null;
+      const extract = extractRewrite(d, ctx);
+      if (inline?.ok || extract.ok)
+        out.set(d.id, {
+          inline: inline?.ok ? inline.rewrite : undefined,
+          extract: extract.ok ? extract.rewrite : undefined,
+        });
+    }
+    return out;
+  }, [rewriteCtx]);
+
+  // D4 — the lints in hand for this proof, as the reader asked for them. The
+  // SIBLING wins over the field (the `deleteSlots` rule) and the option gates
+  // both: with the option off there are no lint diagnostics at all, so the
+  // ribbon, the pager and the fix gesture all fall away together.
+  const lintList = useMemo(
+    () => (lintsOn ? (lints ?? proof.lints ?? []) : []),
+    [lintsOn, lints, proof.lints],
+  );
+
+  /** D4 — every lint the reader is being shown, by the node it landed on.
+   The fix gesture reads it; `diag.byNode` holds the DIAGNOSTIC form, and the
+   fix needs the lint itself (its linter name and its own range). */
+  const lintsFor = useMemo(
+    () =>
+      lintList.length > 0
+        ? lintsByNode(treeNodes, lintList)
+        : new Map<string, Lint[]>(),
+    [treeNodes, lintList],
+  );
+
+  // D4 — THE LINT FIXES. `lints.ts` answers each lint with at most one edit,
+  // computed from the LINTER'S OWN RANGE and the slot table — no search, no
+  // round trip — so the bar can offer the gesture before anything is asked of
+  // the server, exactly as D1's pair are offered. The elaborator's verdict
+  // comes later, on the click, through the same proposal pill.
+  // ONE answer per node, asked once: the bar's affordance, the agent's
+  // primitive list and the click all read this map rather than each running
+  // the fix pass again. `ready: false` is the `linter.flexible` promise.
+  const lintFixes = useMemo(() => {
+    const out = new Map<
+      string,
+      { title: string; ready: boolean; rewrite?: Rewrite }
+    >();
+    const ctx = rewriteCtx;
+    if (!ctx || lintsFor.size === 0) return out;
+    for (const [id, ls] of lintsFor) {
+      const n = ctxNode(ctx, id);
+      if (!n) continue;
+      const hit = firstLintFix(n, ls, ctx);
+      if (hit) {
+        out.set(id, { title: hit.rewrite.title, ready: true, rewrite: hit.rewrite });
+        continue;
+      }
+      // `linter.flexible`'s answer IS D2b's expand, so it needs B4's trace and
+      // says "the trace has not been read yet" until one is in hand. The
+      // click is what reads it (D2b's own idiom), so the button is offered on
+      // the promise rather than withheld until a trace nobody asked for.
+      if (ls.some((l) => l.linter === "linter.flexible"))
+        out.set(id, { title: LINT_FIXES["linter.flexible"], ready: false });
+    }
+    return out;
+  }, [rewriteCtx, lintsFor]);
+
+  // D5 — THE RENAMES, one pass over the drawn goals' context lines. A rename
+  // is offered on the LINE and not on a node, so the map is keyed by the goal
+  // and then by the line's index in that goal's own (possibly reflowed)
+  // `hyps`: a hypothesis that spilled over two lines offers the same rename
+  // from either half, exactly as B2's provenance reads from either half.
+  // Nothing here reserves space or changes the drawing — the offer lives in
+  // the line's `<title>` and in the ⌥-click.
+  const renames = useMemo(() => {
+    const out = new Map<
+      string,
+      Map<number, { rewrite: Rewrite; to: string; rule: NameRule }>
+    >();
+    const ctx = rewriteCtx;
+    if (!ctx) return out;
+    for (const d of ctx.nodes) {
+      if (d.type !== "goal" || !d.hyps?.length) continue;
+      const m = renamesFor(d, ctx);
+      if (m.size > 0) out.set(d.id, m);
+    }
+    return out;
+  }, [rewriteCtx]);
+
+  // D2 — THE RUNS, AND THE TWO MOVES THAT ACT ON THEM.
+  //
+  // Runs are a SOURCE fact (consecutive trunk steps in the author's own text),
+  // so they are computed on the BASE tree and not the drawn one: a reader's
+  // cut hides steps, it does not join or split them, and the offer must read
+  // the same with any cuts standing. Two entry points, keyed by the id the
+  // gesture is offered on: the run's FIRST STEP, and any FOLDED goal whose
+  // `+N` hides a linear chain — the second is where the reader has already
+  // said they do not want to read it, and the extent is theirs.
+  // A collapse reads the SLOTS and nothing else — no tactic text, so no
+  // `getTacticEdit`: the splice is one range and one word.
+  const collapseCtx = useMemo(
+    (): RewriteCtx | null =>
+      deleteSlots ? { nodes: [], slots: deleteSlots, src: () => null } : null,
+    [deleteSlots],
+  );
+
+  const collapses = useMemo(() => {
+    const out = new Map<string, LinearRun>();
+    if (!deleteSlots || !onApplyRewrite) return out;
+    for (const r of linearRuns(baseNodes, hasSlot(deleteSlots)))
+      if (r.closes) out.set(r.steps[0].id, r);
+    for (const d of treeNodes) {
+      if (d.type !== "goal" || !d.folded) continue;
+      const r = runForFold(d, baseNodes);
+      if (r) out.set(d.id, r);
+    }
+    return out;
+  }, [baseNodes, treeNodes, deleteSlots, onApplyRewrite]);
+
+  // THE STALENESS GUARD, once. An answer is written onto the pill only while
+  // the pill it was asked for is still the one standing: the reader may have
+  // moved on, and a verdict landing on somebody else's proposal would be a
+  // claim about edits it never checked.
+  const keepProposal =
+    (id: string, kind: Rewrite["kind"]) =>
+    (f: (cur: NonNullable<typeof proposal>) => NonNullable<typeof proposal>) =>
+      setProposal((cur) => (cur?.id === id && cur.kind === kind ? f(cur) : cur));
+
+  const proposeRewrite = (id: string, r: Rewrite, why?: string) => {
+    setProposal({ id, kind: r.kind, rewrite: r, phase: "checking", why });
+    const keep = keepProposal(id, r.kind);
+    if (!onCheckRewrite) {
+      keep((cur) => ({
+        ...cur,
+        phase: "ok",
+        delta: r.kind === "inline" ? 1 : r.kind === "extract" ? -1 : 0,
+      }));
+      return;
+    }
+    void onCheckRewrite(r.edits).then(
+      (res) =>
+        keep((cur) => ({
+          ...cur,
+          phase: res.ok ? "ok" : "bad",
+          message: res.message,
+          delta: res.before - res.steps,
+        })),
+      (e: unknown) =>
+        keep((cur) => ({ ...cur, phase: "bad", message: String(e) })),
+    );
+  };
+  // D6 — THE PRIMITIVES AN AGENT MAY CHOOSE AMONG. Every one of them is a
+  // rewrite this client already computed and could already write: the request
+  // carries their titles and their EDIT LISTS, and the answer is allowed to
+  // name one of them and say why. There is no free-form edit anywhere in the
+  // channel, which is what makes the proposal checkable — it goes through the
+  // same `checkRewrite` gate and the same pill as a rewrite the reader asked
+  // for by hand.
+  //
+  // The two moves with no offline edit list — D2's collapse and expand, whose
+  // replacement TEXT is the server's answer and not the client's — are
+  // deliberately absent: a primitive an agent may pick has to be one this
+  // side can hand over whole.
+  const agentPrimitives = useMemo(() => {
+    const out: { nodeId: string; kind: Rewrite["kind"]; title: string; rewrite: Rewrite }[] =
+      [];
+    // Nothing asks for these unless the propose channel is there, and the
+    // list is the whole D1/D4/D5 catalogue flattened — so it is not built at
+    // all where it cannot be sent.
+    if (!onPropose) return out;
+    for (const [id, r] of rewrites) {
+      if (r.inline) out.push({ nodeId: id, kind: "inline", title: r.inline.title, rewrite: r.inline });
+      if (r.extract)
+        out.push({ nodeId: id, kind: "extract", title: r.extract.title, rewrite: r.extract });
+    }
+    for (const [id, f] of lintFixes)
+      if (f.rewrite)
+        out.push({
+          nodeId: id,
+          kind: "lint",
+          title: f.rewrite.title,
+          rewrite: f.rewrite,
+        });
+    for (const [id, m] of renames)
+      for (const rn of m.values())
+        out.push({ nodeId: id, kind: "rename", title: rn.rewrite.title, rewrite: rn.rewrite });
+    return out;
+  }, [onPropose, rewrites, lintFixes, renames]);
+
+  // The proof as the agent is shown it: the tree's own outline, one line per
+  // node in DFS order. Not the file's bytes — this side does not hold them —
+  // and not prose either; it is what the reader is looking at.
+  const agentText = () =>
+    treeNodes
+      .filter((n) => !n.traceLeaf)
+      .map((n) => `${n.type === "goal" ? "⊢ " : ""}${n.label.replace(/\s+/g, " ")}`)
+      .join("\n")
+      .slice(0, 8000);
+
+  const askAgent = () => {
+    if (!onPropose || proposeBusy) return;
+    if (agentPrimitives.length === 0) {
+      showToast("Nothing to propose — no rewrite is offered on this proof");
+      return;
+    }
+    setProposeBusy(true);
+    void onPropose({
+      text: agentText(),
+      primitives: agentPrimitives.map(({ nodeId, kind, title }) => ({
+        nodeId,
+        kind,
+        title,
+      })),
+    }).then(
+      (res) => {
+        setProposeBusy(false);
+        const hit = agentPrimitives.find(
+          (p) =>
+            p.nodeId === res.nodeId && (!res.kind || p.kind === res.kind),
+        );
+        if (!hit) {
+          showToast(res.note ?? "No rewrite proposed", true);
+          return;
+        }
+        proposeRewrite(hit.nodeId, hit.rewrite, res.reason);
+        showToast(`Proposed: ${res.reason ?? hit.title}`, true);
+      },
+      (e: unknown) => {
+        setProposeBusy(false);
+        showToast(`Proposal failed: ${String(e).slice(0, 60)}`, true);
+      },
+    );
+  };
+
+  // D2a — COLLAPSE. The client knows the extent; only the elaborator knows
+  // which tactic closes it, so the proposal is opened BEFORE the candidate is
+  // known and the pill's line is written when the answer lands. Offline there
+  // is no `tryClose`, so the first candidate stands in — the gesture and the
+  // pill can be seen and measured, and the verdict stays the server's alone
+  // (the D1 rule, said again).
+  const proposeCollapse = (id: string, run: LinearRun) => {
+    const n = run.steps.length;
+    const ctx = collapseCtx;
+    if (!ctx) return;
+    const open = (tactic: string) => collapseRewrite(run, ctx, tactic);
+    const stub = open(AUTOMATION_CANDIDATES[0]);
+    if (!stub.ok) {
+      showToast(`No collapse — ${stub.why}`);
+      return;
+    }
+    setProposal({
+      id,
+      kind: "collapse",
+      rewrite: stub.rewrite,
+      phase: "checking",
+      title: `collapse ${n} step${n === 1 ? "" : "s"} to one tactic`,
+    });
+    const from = run.steps[0].position!.start;
+    const to = run.steps[n - 1].position!.start;
+    const keep = keepProposal(id, "collapse");
+    if (!onTryClose) {
+      keep((cur) => ({ ...cur, phase: "ok", delta: n - 1, title: undefined }));
+      return;
+    }
+    void onTryClose(from, to).then(
+      (res) => {
+        if (!res.tactic) {
+          keep((cur) => ({
+            ...cur,
+            phase: "bad",
+            message:
+              res.message ??
+              `nothing closes it (tried ${res.tried?.length ?? AUTOMATION_CANDIDATES.length})`,
+          }));
+          return;
+        }
+        const won = open(res.tactic);
+        if (!won.ok) {
+          keep((cur) => ({ ...cur, phase: "bad", message: won.why }));
+          return;
+        }
+        keep((cur) => ({
+          ...cur,
+          phase: "ok",
+          rewrite: won.rewrite,
+          title: undefined,
+          delta:
+            res.before !== undefined && res.steps !== undefined
+              ? res.before - res.steps
+              : n - 1,
+        }));
+      },
+      (e: unknown) =>
+        keep((cur) => ({ ...cur, phase: "bad", message: String(e) })),
+    );
+  };
+
+  // D2b — EXPAND. The trace has to be in hand first: where it is not, the
+  // B4 RPC is asked and the proposal opens on its answer, so the reader's one
+  // click still means "write what it used".
+  // B4's trace, fetched if it is not in hand, and the node re-stamped with it.
+  // `go` is called ONCE either way, so a gesture that needs a trace is still
+  // one click; `miss` is what to say when there is no trace to be had. The
+  // trace lands in `traces` and is stamped on the next drawn tree, but the
+  // click cannot wait for a render, so it reads the index directly.
+  const withTrace = (
+    n: TreeNode,
+    go: (node: TreeNode) => void,
+    miss?: () => void,
+  ) => {
+    if (n.trace) return go(n);
+    if (!onTrace || !n.position) return miss?.();
+    onTrace(n.position).then(
+      (ok) => {
+        if (!ok) return showToast("No trace — the server could not read one");
+        const t = traceRef.current.get(traceKey(n.position!.start));
+        go(t ? { ...n, trace: t } : n);
+      },
+      () => showToast("No trace — the request failed"),
+    );
+  };
+
+  const proposeExpand = (id: string) => {
+    const ctx = rewriteCtx;
+    const n = treeNodes.find((t) => t.id === id);
+    if (!ctx || !n?.position) return;
+    withTrace(n, (node) => {
+      const p = expandRewrite(node, ctx);
+      if (!p.ok) {
+        showToast(`Nothing to write — ${p.why}`);
+        return;
+      }
+      proposeRewrite(id, p.rewrite);
+    });
+  };
+
+  // D4 — FIX A LINT. The first of the node's lints that has a one-edit answer
+  // is proposed; where the only answer is `linter.flexible`'s, B4's trace is
+  // fetched FIRST and the proposal opens on its answer — the same one-click
+  // shape D2b's `⇑` has, for the same reason (`lintFix` declines with "the
+  // trace has not been read yet" until then).
+  const proposeLintFix = (id: string) => {
+    const ctx = rewriteCtx;
+    const ls = lintsFor.get(id);
+    const n = treeNodes.find((t) => t.id === id);
+    if (!ctx || !ls || !n) return;
+    const ready = lintFixes.get(id)?.rewrite;
+    if (ready) return proposeRewrite(id, ready);
+    const why = () =>
+      lintFixesFor(n, ls, ctx)
+        .map((f) => (f.proposal.ok ? "" : f.proposal.why))
+        .find(Boolean) ?? "there is no one-edit answer";
+    const miss = () => showToast(`No fix — ${why()}`);
+    withTrace(
+      n,
+      (node) => {
+        const hit = firstLintFix(node, ls, ctx);
+        if (hit) proposeRewrite(id, hit.rewrite);
+        else miss();
+      },
+      miss,
+    );
+  };
+
   // WHICH nodes a delete extent covers — the armed dimming and the ⌦ hover
   // preview are the same question asked twice, so they ask it in one place.
   // Keyed by POSITION (an extent is a source range; ids say nothing about it),
@@ -2379,8 +3296,16 @@ export default function ProofTreeView({
   ]);
 
   const diag = useMemo(() => {
-    if (!diagnostics || diagnostics.length === 0) return null;
     const all = engine.allNodes();
+    // Lints are attributed by `lintNodeAt` — the drawn tree's own question,
+    // with the fallback a `skip` (harvested as NO step) needs — and then
+    // converted to `TreeDiagnostic`s at severity 3 and merged into the kept
+    // list BEFORE `attachDiagnostics`. One pipeline: the ribbon, the `worst`
+    // map, the node `<title>` and the bar's pager get them for nothing.
+    const lintDiags =
+      lintList.length > 0 ? lintDiagnostics(lintList, lintsFor) : [];
+    const raw = [...(diagnostics ?? []), ...lintDiags];
+    if (raw.length === 0) return null;
     const consumed = new Set<string>();
     for (const n of all) for (const p of n.parents) consumed.add(p.id);
     const open: { id: string; position: ProofStepPosition }[] = [];
@@ -2390,11 +3315,11 @@ export default function ProofTreeView({
       if (n.position) open.push({ id: n.id, position: n.position });
       if (n.addSpec) chipped.add(n.id);
     }
-    return attachDiagnostics(tacticTargets(all), diagnostics, {
+    return attachDiagnostics(tacticTargets(all), raw, {
       open,
       chipped,
     });
-  }, [engine, diagnostics]);
+  }, [engine, diagnostics, lintList, lintsFor]);
 
   const [diagSel, setDiagSel] = useState<string | null>(null);
   const diagList = diag?.ordered ?? [];
@@ -2405,10 +3330,6 @@ export default function ProofTreeView({
   const diagCur = diagList[diagIdx] ?? null;
 
   const nodeKeys = useMemo(() => layoutKeys(nodes), [nodes]);
-  const placed = useMemo(
-    () => new Map(nodes.map((n) => [n.data.id, n])),
-    [nodes],
-  );
 
   const anchorOn = (id: string) => {
     const cur = placed.get(id);
@@ -2420,6 +3341,51 @@ export default function ProofTreeView({
         x: cur.x,
         y: cur.y,
       };
+  };
+
+  // B4 — OPEN or CLOSE one step's trace. The subtree IS a relayout, so it is
+  // anchored on the step the reader clicked, like every other one; nothing
+  // moves under the pointer.
+  //
+  // Where the answer is not in hand yet the RPC is asked for it first and the
+  // affordance shows a pending state (the button's glyph goes to `…`); the
+  // subtree opens when it lands. Offline (`ppharness --traces`) there is no
+  // RPC and the answer is already in the index, so the toggle is immediate.
+  const toggleTrace = (id: string) => {
+    const n = treeNodes.find((t) => t.id === id);
+    if (!n?.position) return;
+    anchorOn(id);
+    if (traceOpen.has(id)) {
+      setTraceOpen((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
+    const open = () =>
+      setTraceOpen((prev) => new Set(prev).add(id));
+    if (traces.has(traceKey(n.position.start))) return open();
+    if (!onTrace) return;
+    if (traceBusy.has(id)) return;
+    setTraceBusy((prev) => new Set(prev).add(id));
+    const done = () =>
+      setTraceBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    onTrace(n.position).then(
+      (ok) => {
+        done();
+        if (ok) open();
+        else showToast("No trace — the server could not read one");
+      },
+      () => {
+        done();
+        showToast("No trace — the request failed");
+      },
+    );
   };
 
   const anchorAs = (currentId: string, nextId: string) => {
@@ -2551,6 +3517,22 @@ export default function ProofTreeView({
     if (!v) setCombineOff(new Set());
     showToast(`Merge ${v ? "on" : "off"}`);
   };
+  // D4 — turning it ON is what ASKS the server (`ProofTree.lintDecl` is a
+  // re-elaboration of the declaration, so nothing fires it unasked); turning
+  // it off simply stops reading. The lints themselves belong to the caller.
+  const applyLints = (v: boolean) => {
+    setLintsOn(v);
+    onLints?.(v);
+    showToast(`Lints ${v ? "on" : "off"}`);
+  };
+  // C4 — the row is a SESSION override of the setting, and it says so in the
+  // toast: turning it off here does not turn the setting off. Switching it on
+  // outside `narrate` would have nothing to rewrite, so the row says that in
+  // its title rather than silently doing nothing.
+  const applyPolish = (v: boolean) => {
+    setPolishOverride(v);
+    showToast(`Polish ${v ? "on" : "off"}`);
+  };
   const applyUpToCursor = (v: boolean) => {
     setUpToCursor(v);
     showToast(`To cursor ${v ? "on" : "off"}`);
@@ -2626,9 +3608,9 @@ export default function ProofTreeView({
   };
 
   // ONE door onto the cut list. It DEDUPES by `cutId`, which is not defensive
-  // book-keeping: a trunk goal's `−` and ⌥-click on the tactic below it mint
-  // the very same `elide-step:` cut, and a second copy would resolve to the
-  // same members and mint a second marker for them.
+  // book-keeping: a goal's `−` and ⌥-click on the LEAF below it mint the very
+  // same `elide-fold:` cut, and a marquee band over a goal's subtree mints it
+  // a third way; a second copy would resolve to the same members twice.
   const addCut = (cut: ElideCut, drop?: ReadonlySet<string>) => {
     const key = cutId(cut);
     setElideCuts((cs) => {
@@ -2647,20 +3629,13 @@ export default function ProofTreeView({
   const cutExtentIds = (cut: ElideCut): Set<string> =>
     new Set(resolveCut(cut, treeIdx.byId));
 
-  // ◌ on a step is ALWAYS the goal above hopping over it — the same cut the
-  // goal's own `−` mints, so the two gestures reach one position with one
-  // look. (A ghost of the step used to stand here for a step with side work;
-  // it went, because the two gestures then drew the same thing two ways.)
-  // Where no hop can be read — the step closes its goal, or splits with no
-  // continuation — the goal above FOLDS instead, which is `goalCut`'s own
-  // answer for that goal, asked rather than re-derived.
+  // ◌ SKIPS: the goal above hops over the step wherever it has one
+  // continuation — trunk or branch, any layout — and a LEAF folds the goal
+  // above (reading to the end of a branch). A split, a closing step with side
+  // obligations and a ledger row get `null`, and ◌ is not offered there
+  // (`stepElidable` asks the same function).
   const stepCutFor = (id: string): { cut: ElideCut; anchor: string } | null => {
-    const cut = stepCut(
-      treeIdx.byId,
-      id,
-      { trunk: compact, stepElidable: elidableIds },
-      treeIdx.kids,
-    );
+    const cut = stepCut(treeIdx.byId, id, treeIdx.kids);
     if (!cut) return null;
     if (cut.kind !== "hop") return { cut, anchor: "id" in cut ? cut.id : id };
     // The one thing only the DRAWN tree can say: this step hangs off the goal
@@ -2708,10 +3683,9 @@ export default function ProofTreeView({
     return new Set(c ? resolveCut(c.cut, treeIdx.byId) : []);
   };
 
-  // A LEAF tactic takes ◌ too: `stepCut` reads it as the fold of the goal
-  // above, so a branch can be shortened from its end by skips alone and land
-  // on the same state the goal's − gives (user direction, reversing an
-  // earlier decline — skip and collapse are one mechanism now).
+  // ◌ is offered exactly where `stepCut` answers (`elidableIds`): one
+  // continuation, or a LEAF — whose skip is the fold of the goal above, so a
+  // branch can be read to its end by skips alone. A split is not offered.
   const elideGateOf = (
     d: (typeof treeNodes)[number],
   ): { combined: boolean } | null => {
@@ -2787,13 +3761,10 @@ export default function ProofTreeView({
     );
     const { ids, absorbed } = cutMembers(picked);
     if (ids.size === 0) return false;
-    // A band swept down ONE trunk run is the hop the same gesture would give
-    // step by step — same members, so the same look; anything else keeps the
-    // marquee's own marker.
-    const cut: ElideCut = hopForBand(treeIdx.byId, ids, treeIdx.kids) ?? {
-      kind: "band",
-      ids: [...ids],
-    };
+    // The band follows the verb: exactly one goal's subtree is that goal's
+    // FOLD, a straight run is the HOP ◌ would give step by step; anything
+    // else keeps the marquee's own marker.
+    const cut: ElideCut = cutForBand(treeIdx.byId, ids, treeIdx.kids);
 
     const top = topMemberOf([...ids])!;
     const topPlaced =
@@ -2801,8 +3772,9 @@ export default function ProofTreeView({
       nodes
         .filter((p) => sel.has(p.data.id))
         .reduce((a, b) => (a.y <= b.y ? a : b));
-    // A hop mints no marker — the goal it hangs off stays, and is the anchor.
-    if (cut.kind === "hop") anchorOn(cut.id);
+    // A hop or a fold mints no marker — the goal it hangs off stays, and is
+    // the anchor.
+    if (cut.kind === "hop" || cut.kind === "fold") anchorOn(cut.id);
     else anchorAs(topPlaced.data.id, cutId(cut));
     addCut(cut, absorbed);
     return true;
@@ -2828,7 +3800,7 @@ export default function ProofTreeView({
     const prose = value.replace(/\s*\n\s*/g, " ").trim();
     if (!head || (p.kind === "note" && prose === "")) return;
 
-    if (p.kind === "none" && prose === "" && !elidableIds.has(head.id)) return;
+    if (p.kind === "none" && prose === "" && !noneBareOk(head.id)) return;
     const directive =
       p.kind === "none" ? `.none${prose ? ` ${prose}` : ""}` : prose;
     const patch = flagLine(head, deleteSlots ?? [], directive);
@@ -2836,11 +3808,11 @@ export default function ProofTreeView({
     applyPatches([patch]);
     if (p.kind === "none") {
       // The same cut the seed will build from the written flag: a hop off the
-      // goal above, its note captioning the break — or, where no hop can be
-      // read, the ghost that carries the author's sentence in a box.
+      // goal above, its note captioning the break; the fold of the goal above
+      // on a leaf; or, on a split, the ghost that carries the sentence.
       const byId = new Map(baseNodes.map((n) => [n.id, n]));
       const cut = noneSeedCut(byId, head.id, prose || undefined);
-      if (cut.kind === "hop") anchorOn(cut.id);
+      if (cut.kind === "hop" || cut.kind === "fold") anchorOn(cut.id);
       else anchorAs(head.id, cutId(cut));
       setElideCuts((cs) => [...cs, cut]);
     }
@@ -3092,8 +4064,12 @@ export default function ProofTreeView({
   const hdrRef = useRef<HTMLDivElement | null>(null);
   const [hdrRaw, setHdrRaw] = useState(0);
   const [hdrW, setHdrW] = useState(0);
+  // Whether the resting one-line text is wider than its box: the FADE at its
+  // right edge is drawn only then (a fade on text that fits would eat its
+  // last characters). Measured with the height, by the same observer.
+  const hdrTextRef = useRef<HTMLSpanElement | null>(null);
+  const [hdrClip, setHdrClip] = useState(false);
 
-  const [hdrOpen, setHdrOpen] = useState(false);
   useLayoutEffect(() => {
     const el = hdrRef.current;
     if (!el) {
@@ -3101,6 +4077,7 @@ export default function ProofTreeView({
       return;
     }
     if (hdrOpen) return;
+    const txt = hdrTextRef.current;
     const read = () => {
       // A hidden webview (the infoview panel behind another view, a collapsed
       // <details>) lays the document out at zero — `useFrameOffset` guards the
@@ -3112,12 +4089,29 @@ export default function ProofTreeView({
 
       setHdrRaw((prev) => (Math.abs(prev - r.height) > 1 ? r.height : prev));
       setHdrW((prev) => (Math.abs(prev - r.width) > 1 ? r.width : prev));
+      setHdrClip(txt ? txt.scrollWidth > txt.clientWidth + 1 : false);
     };
     read();
     const ro = new ResizeObserver(read);
     ro.observe(el);
+    if (txt) ro.observe(txt);
     return () => ro.disconnect();
-  }, [declHeader, hdrOpen]);
+  }, [declHeader, declHeaderSigStop, focusId, pathId, hdrOpen]);
+
+  // Outside click closes the open signature. A document listener rather than
+  // the `layers` table's `bg` flag: that one answers the tree's BACKGROUND,
+  // and a click on a node or the bar is just as much outside the overlay.
+  // `data-ptw-hdr` marks the overlay and its button.
+  useEffect(() => {
+    if (!hdrOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest?.("[data-ptw-hdr]")) return;
+      setHdrOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [hdrOpen]);
 
   // The measurement is a REFINEMENT of a height the resting header already
   // has by construction (one `pre` line, `overflow: hidden`, 6px of padding
@@ -3143,10 +4137,35 @@ export default function ProofTreeView({
     [engine, scopeId],
   );
 
+  // The header's two resting texts, cut where the SERVER says by syntax kind
+  // (`declHeaderSigStop` = the type spec's `:`, `declHeaderNameStop` = the
+  // signature's start) and collapsed to one line. The statement itself is not
+  // repeated: it is the root goal's `⊢` line directly below.
+  const hdrRest = useMemo(
+    () =>
+      declHeader && declHeaderStart
+        ? headerPrefix(declHeader, declHeaderStart, declHeaderSigStop)
+        : null,
+    [declHeader, declHeaderStart, declHeaderSigStop],
+  );
+  const hdrName = useMemo(
+    () =>
+      declHeader && declHeaderStart
+        ? headerPrefix(
+            declHeader,
+            declHeaderStart,
+            declHeaderNameStop ?? declHeaderSigStop,
+          )
+        : null,
+    [declHeader, declHeaderStart, declHeaderNameStop, declHeaderSigStop],
+  );
+  // keyword + name, for the scope trail. Without the server's split, the
+  // first two words (an older server) — never a `…`.
   const declHead = useMemo(
     () =>
-      (declHeader ?? "").trimStart().split(/\s+/).slice(0, 2).join(" ") + " …",
-    [declHeader],
+      hdrName?.text ??
+      (declHeader ?? "").trimStart().split(/\s+/).slice(0, 2).join(" "),
+    [hdrName, declHeader],
   );
   const scopeLabel = useMemo(() => {
     if (!scopeNode) return "scoped";
@@ -4297,7 +5316,7 @@ export default function ProofTreeView({
               placeholder={
                 flagPrompt.kind !== "none"
                   ? "a comment for this tactic"
-                  : elidableIds.has(flagPrompt.headId)
+                  : noneBareOk(flagPrompt.headId)
                     ? "why this part is not worth reading (Enter writes .none)"
                     : "why this closing step is not worth reading"
               }
@@ -4338,6 +5357,7 @@ export default function ProofTreeView({
   }
 
   return (
+    <TipContext.Provider value={tipCtl}>
     <div
       data-ptw-theme={themeKind}
       data-ptw-fill={outline ? "none" : undefined}
@@ -4362,6 +5382,7 @@ export default function ProofTreeView({
       {declHeader ? (
         <div
           ref={hdrRef}
+          data-ptw-hdr=""
           onClick={onRevealHeader}
           style={{
             position: "absolute",
@@ -4384,15 +5405,20 @@ export default function ProofTreeView({
               "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
             cursor: onRevealHeader ? "pointer" : "default",
 
+            // The right padding is the `▾` button's lane (`HDR_BTN_W` at
+            // `HDR_BTN_RIGHT`), in both states — the button is a sibling, so
+            // the open overlay's scroll never carries it away.
             ...(hdrOpen
               ? {
-                  padding: "6px 10px",
+                  padding: `6px ${HDR_BTN_LANE}px 6px 10px`,
                   maxHeight: "60%",
                   overflowY: "auto",
                   zIndex: 11,
-                  right: 38,
                 }
-              : { padding: "6px 46px 6px 10px", overflow: "hidden" }),
+              : {
+                  padding: `6px ${HDR_BTN_LANE}px 6px 10px`,
+                  overflow: "hidden",
+                }),
           }}
         >
           <div
@@ -4405,8 +5431,7 @@ export default function ProofTreeView({
             }}
           >
             <span
-              onMouseEnter={() => setHdrOpen(true)}
-              onMouseLeave={() => setHdrOpen(false)}
+              ref={hdrTextRef}
               style={{
                 flex: "0 10 auto",
                 minWidth: 0,
@@ -4414,22 +5439,38 @@ export default function ProofTreeView({
                   ? {}
                   : {
                       overflow: "hidden",
-                      textOverflow: "ellipsis",
                       whiteSpace: "pre",
+                      // Too wide for the band: a short FADE at the right edge,
+                      // never a `…` glyph.
+                      ...(hdrClip
+                        ? {
+                            maskImage: HDR_FADE,
+                            WebkitMaskImage: HDR_FADE,
+                          }
+                        : null),
                     }),
               }}
             >
               {(() => {
                 const src = declHeader.split("\n");
-                const tagged = renderDeclHeader?.(src);
-                const lines = tagged ?? src;
+                // One line, coloured: the collapsed text maps back to source
+                // offsets through its `keep` segments.
+                const oneLine = (cut: { text: string; keep: KeepSeg[] }) =>
+                  renderDeclHeader?.([cut.text], cut.text, {
+                    original: declHeader,
+                    keep: cut.keep,
+                    marks: [],
+                  })?.[0] ?? cut.text;
 
                 if (!hdrOpen) {
                   if (scopeId) {
-                    return (
-                      renderDeclHeader?.([declHead], declHead)?.[0] ?? declHead
-                    );
+                    return hdrName
+                      ? oneLine(hdrName)
+                      : (renderDeclHeader?.([declHead], declHead)?.[0] ??
+                          declHead);
                   }
+                  if (hdrRest) return oneLine(hdrRest);
+                  const lines = renderDeclHeader?.(src) ?? src;
                   return (
                     <>
                       {lines[0]}
@@ -4440,6 +5481,7 @@ export default function ProofTreeView({
                   );
                 }
 
+                const lines = renderDeclHeader?.(src) ?? src;
                 return lines.map((ln, i) => (
                   <span key={i} style={{ display: "block" }}>
                     {ln}
@@ -4501,6 +5543,48 @@ export default function ProofTreeView({
             )}
           </div>
         </div>
+      ) : null}
+
+      {declHeader ? (
+        // A SIBLING of the header, not a child: the open overlay scrolls, and
+        // the button must stay put; and its click must not reach the header's
+        // reveal-in-source.
+        <button
+          type="button"
+          data-ptw-hdr=""
+          aria-label={
+            hdrOpen ? "Hide the full signature" : "Show the full signature"
+          }
+          aria-expanded={hdrOpen}
+          onPointerEnter={(e) => tipCtl.enter(e.currentTarget)}
+          onPointerLeave={(e) => tipCtl.leave(e.currentTarget)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setHdrOpen((o) => !o);
+          }}
+          style={{
+            position: "absolute",
+            top: 0,
+            right: HDR_BTN_RIGHT,
+            zIndex: 12,
+            width: HDR_BTN_W,
+            height: HDR_REST_H - 1,
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontFamily: "inherit",
+            fontSize: 11,
+            lineHeight: 1,
+            color: NODE_TEXT,
+            opacity: hdrOpen ? 0.9 : 0.6,
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          {hdrOpen ? "▴" : "▾"}
+        </button>
       ) : null}
 
       {headerExtra && (
@@ -4576,6 +5660,30 @@ export default function ProofTreeView({
         brief={brief}
         onBriefHover={setBriefHover}
         onBriefChange={applyBrief}
+        lintsOn={lintsOn}
+        onLintsChange={applyLints}
+        polishOn={polishOn}
+        polishEnabled={!!onPolish && polishReady}
+        polishWhy={
+          !onPolish
+            ? "Polish needs the Ramify companion — the widget cannot reach a network"
+            : !polishReady
+              ? (polishWhy ??
+                "Polish is off in the companion, or no API key is set (Ramify: Set narration API key)")
+              : commentMode === "narrate"
+                ? "Rewrite each generated line into fluent English through the companion; the author's own comments are never sent (≈)"
+                : "Polish rewrites the generated lines, so it shows in Comments: narrate"
+        }
+        onPolishChange={applyPolish}
+        proposeEnabled={!!onPropose && proposeReady && !proposeBusy}
+        proposeBusy={proposeBusy}
+        proposeWhy={
+          !onPropose || !proposeReady
+            ? (proposeWhy ??
+              "Turn on `ramify.restructure.propose` in the companion, and set an API key")
+            : "Ask for one of the rewrites already offered on this proof, with a reason — the elaborator still has the last word"
+        }
+        onPropose={askAgent}
         commentMode={commentMode}
         onCommentModeChange={applyCommentMode}
         combine={combine}
@@ -4836,7 +5944,21 @@ export default function ProofTreeView({
                 const startX = link.source.x;
                 const endX = link.target.x;
                 const k = (endY - startY) * 0.7;
-                d = `M${startX},${startY}
+                // ⑃ wide, a HOP whose kept goal sits off to one side: the
+                // break is drawn for a VERTICAL line at the midpoint below the
+                // goal, so the link drops straight through it (and past the
+                // caption beside it) before it curves away — otherwise the
+                // strokes stood beside a curve that had already left.
+                const breakRun =
+                  link.source.data.folded?.kind === "hop" &&
+                  Math.abs(endX - startX) > 0.5;
+                const y1 = (startY + endY) / 2 + BADGE_H / 2 + 2;
+                d = breakRun
+                  ? `M${startX},${startY} L${startX},${y1}
+                    C${startX},${(y1 + endY) / 2}
+                     ${endX},${(y1 + endY) / 2}
+                     ${endX},${endY}`
+                  : `M${startX},${startY}
                     C${startX},${(startY + endY) / 2}
                      ${endX},${endY - k}
                      ${endX},${endY}`;
@@ -4961,14 +6083,19 @@ export default function ProofTreeView({
               const boxRx = type === "tactic" ? 4 : 6;
               const nodeDiags = diag?.byNode.get(id);
               const diagSev = diag?.worst.get(id) ?? null;
-              const diagInk =
-                diagSev === 1 ? DANGER_FILL : diagSev === 2 ? WARN_FILL : null;
+              const diagInk = diagSev === null ? null : diagInkOf(diagSev);
+              // A LINT does not restyle the box: the proof is correct, and a
+              // node whose border changed colour would say otherwise. Only an
+              // error or a warning reaches the stroke; the RIBBON is where a
+              // lint speaks.
+              const diagStroke =
+                diagSev === 1 || diagSev === 2 ? diagInk : null;
               const diagSelected = !!diagCur && diagCur.nodeId === id;
               const recovered = node.data.recovered;
               const recoveredStroke =
                 recovered === "failed"
                   ? DANGER_FILL
-                  : recovered === "skipped"
+                  : recovered === "skipped" || node.data.traceLeaf
                     ? "var(--ptw-comment)"
                     : null;
 
@@ -5036,9 +6163,49 @@ export default function ProofTreeView({
                 caps.flags &&
                 type === "tactic" &&
                 !!flagLine(node.data, deleteSlots ?? [], ".mark");
+              // B4 — an automation step the reader can ask about, and whether
+              // its trace is open / being fetched. `isAutomationNode` reads
+              // SOURCE facts only (the head word and a position), so the
+              // affordance is there before any round trip.
+              const traceLeaf = node.data.traceLeaf;
+              const automation =
+                !traceLeaf &&
+                isAutomationNode(node.data) &&
+                (!!onTrace || traces.has(traceKey(node.data.position!.start)));
+              const traceIsOpen = traceOpen.has(id);
+              const traceIsBusy = traceBusy.has(id);
+
+              // D1 — the two restructuring moves, decided offline from the
+              // tactic's own source (`rewrites`, one pass over the drawn
+              // tree). The bar offers them; the elaborator answers when the
+              // reader clicks.
+              const rw = rewrites.get(id);
+              const inlinable = !!rw?.inline;
+              const extractable = !!rw?.extract;
+              const proposing = proposal?.id === id;
+
+              // D2 — the run this node heads (or, on a folded goal, the run
+              // its `+N` hides), and whether its automation has something to
+              // write. `collapsible` is a SOURCE fact; `expandable` needs a
+              // trace, which the click will fetch if it is not in yet.
+              const run = collapses.get(id);
+              const collapsible = !!run && !!onApplyRewrite;
+              // D4 — a lint on this node with an answer (or, for
+              // `linter.flexible`, one the click can reach).
+              const lintable = lintFixes.get(id);
+              const expandable =
+                !traceLeaf &&
+                !!onApplyRewrite &&
+                automation &&
+                (node.data.trace
+                  ? node.data.trace.kind === "lemmas"
+                  : !!onTrace);
+
               const hasBar =
                 !isEditing &&
-                (goalRevealable ||
+                !traceLeaf &&
+                (automation ||
+                  goalRevealable ||
                   focusable ||
                   isFocusRoot ||
                   pathable ||
@@ -5046,6 +6213,10 @@ export default function ProofTreeView({
                   popoutable ||
                   elidable ||
                   deletable ||
+                  inlinable ||
+                  extractable ||
+                  collapsible ||
+                  expandable ||
                   barLinkPlus);
 
               const hoverHighlights =
@@ -5059,15 +6230,15 @@ export default function ProofTreeView({
                 revealable ||
                 goalRevealable;
 
+              // B3 — what this step NAMES. The premises are the other half of
+              // "what did this step use?", the used-hypothesis marks being the
+              // first; four is what a title can carry without becoming a list.
+              const lemmas = node.data.lemmas ?? [];
+
+
               const hints = nodeHints({
                 revealable,
-                goalCut: folded
-                  ? "open"
-                  : myCut
-                    ? myCut.kind === "hop"
-                      ? "skip"
-                      : "fold"
-                    : null,
+                goalCut: folded ? "open" : myCut ? "fold" : null,
                 goalRevealable,
                 editable,
                 partEditable,
@@ -5078,7 +6249,12 @@ export default function ProofTreeView({
                 pathable,
                 isPathRoot,
                 anyUsedHyp: !!hyps?.some((l) => l.used),
+                hypOrigins: !!hyps?.some((l) => l.origin),
                 usesHyps: hypLitTactics.has(id),
+                usesLemmas: lemmas.length > 0,
+                branches: (node.data.branch?.arms.length ?? 0) > 0,
+                automation,
+                traceOpen: traceIsOpen,
                 ledgerRows: !!node.data.ledger?.some(
                   (r) => r.goalId !== undefined,
                 ),
@@ -5086,26 +6262,88 @@ export default function ProofTreeView({
                 tourStop: myStopIds.has(id),
                 tourMarkable: markWritable,
                 tourTab: tab?.who ?? null,
+                inlinable,
+                extractable,
+                collapsible,
+                expandable,
+                renamable: (renames.get(id)?.size ?? 0) > 0,
+                lintFixable: !!lintable,
               });
 
               const diagTip = (nodeDiags ?? [])
-                .map((d) => `${d.severity === 1 ? "⨯" : "⚠"} ${d.message}`)
+                .map((d) => `${diagGlyphOf(d.severity)} ${d.message}`)
                 .join("\n\n");
 
               // A FOLDED goal has no marker to hover, so the count and the
               // list of what went ride the goal's own `<title>`, ahead of its
               // gestures — the ghost's tooltip, said on the node that is
               // standing in for the steps.
+              // A FOLD's `.none` note (a leaf the author skipped) has no break
+              // to caption, so the sentence heads the title instead.
               const foldedTip = folded
-                ? folded.seeded
-                  ? `${seedTitle(folded.seededBy, folded.tactics.length)}\n\n${folded.tactics.join("\n")}`
-                  : `${folded.tactics.length} ${
-                      folded.tactics.length === 1 ? "step" : "steps"
-                    } folded — click + to restore\n\n${folded.tactics.join("\n")}`
+                ? (folded.kind === "fold" && folded.note
+                    ? `${folded.note}\n\n`
+                    : "") +
+                  (folded.seeded
+                    ? `${seedTitle(folded.seededBy, folded.tactics.length)}\n\n${folded.tactics.join("\n")}`
+                    : `${folded.tactics.length} ${
+                        folded.tactics.length === 1 ? "step" : "steps"
+                      } ${folded.kind === "hop" ? "skipped" : "folded"} — click + to restore\n\n${folded.tactics.join("\n")}`)
+                : "";
+
+              // A SUBTERM step is not a tactic the author wrote on its own
+              // line — it is one component of the term the tactic above
+              // supplied, given its own goal by the elaborator. Say so, since
+              // the box looks like any other step.
+              const subtermTip =
+                node.data.recovered === "subterm"
+                  ? "A term the tactic above supplied — its goal is the component's expected type"
+                  : "";
+
+              // B4 — what the automation actually used, once the answer is
+              // in: the same `uses:` idiom, in the trace's voice.
+              const viaTip = traceTip(node.data.trace);
+              const leafTip = traceLeaf?.title ?? "";
+
+              const usesTip = lemmas.length
+                ? `uses: ${lemmas
+                    .slice(0, 4)
+                    .map((l) => l.name)
+                    .join(" · ")}${lemmas.length > 4 ? " …" : ""}`
+                : "";
+
+              // B5 — the branch this step opened, in the words the ELABORATOR
+              // uses for it: the form, what it split on, and each arm's tag
+              // with the names it binds.
+              const branch = node.data.branch;
+              const branchTip =
+                branch && branch.arms.length > 0
+                  ? `${branch.form}${branch.on ? ` on ${branch.on}` : ""}: ${branch.arms
+                      .map(
+                        (a) =>
+                          `${a.tag || "·"}${
+                            a.pattern
+                              ? ` ${a.pattern}`
+                              : a.binders.length
+                                ? ` ${a.binders.join(" ")}`
+                                : ""
+                          }`,
+                      )
+                      .join(" | ")}`
+                  : "";
+
+              const armTip = node.data.arm?.pattern
+                ? `arm: ${node.data.arm.pattern}`
                 : "";
 
               const nodeTooltip = [
                 node.data.proseLabel ? node.data.label : "",
+                leafTip,
+                subtermTip,
+                branchTip,
+                armTip,
+                usesTip,
+                viaTip,
                 foldedTip,
                 diagTip,
                 hints.map((h) => `· ${h}`).join("\n"),
@@ -5604,7 +6842,7 @@ export default function ProofTreeView({
                       accent
                         ? SEQ_STROKE
                         : (recoveredStroke ??
-                          diagInk ??
+                          diagStroke ??
                           (node.data.proseLabel ? PROSE_FILL : style.stroke))
                     }
                     strokeWidth={
@@ -5647,6 +6885,24 @@ export default function ProofTreeView({
                       nodeTooltip !== "" && <title>{nodeTooltip}</title>
                     )}
                   </rect>
+
+                  {/* B2 — the introducing step, WASHED while a hypothesis it
+                      bound is dwelt on. The same ink and the same reading as
+                      the used-hyp wash in the other direction (`hypLitTactics`
+                      lights the lines a tactic uses; this lights the tactic a
+                      line came from), so no new colour enters the view. Paint
+                      only: nothing here is measured. */}
+                  {hypOriginHit?.tn.data.id === id && !hideForEdit && (
+                    <rect
+                      x={-w / 2}
+                      y={boxTop}
+                      width={w}
+                      height={h}
+                      rx={boxRx}
+                      fill={HYP_LIT_FILL}
+                      style={{ pointerEvents: "none" }}
+                    />
+                  )}
 
                   {isMarker && ghostMore > 0 && !hideForEdit && (
                     <g pointerEvents="none">
@@ -5726,6 +6982,33 @@ export default function ProofTreeView({
                       taggedLines={taggedHyps}
                       lit={hypLitGoalId === id}
                       markStyle={hypMarkStyle}
+                      onLine={(j) =>
+                        setHoverHyp(j === null ? null : `${id}\u0000${j}`)
+                      }
+                      lineTitle={(j) => {
+                        const l = hyps[j];
+                        const from = l?.originText
+                          ? `introduced by \`${l.originText}\` (line ${l.originLine})`
+                          : undefined;
+                        // D5 — the offer lives here rather than in a glyph of
+                        // its own: a context line already has a hit target and
+                        // a title (B2), and a ✎ on every renamable line would
+                        // put chrome on the one part of the box that is a list
+                        // of the author's own words.
+                        const rn = renames.get(id)?.get(j);
+                        const ren = rn
+                          ? `⌥-click renames \`${rn.rewrite.name}\` → \`${rn.to}\` (Mathlib's name for ${rn.rule.what})`
+                          : undefined;
+                        return [from, ren].filter(Boolean).join(" — ") || undefined;
+                      }}
+                      onLineClick={
+                        renames.has(id)
+                          ? (j, alt) => {
+                              const rn = alt ? renames.get(id)?.get(j) : undefined;
+                              if (rn) proposeRewrite(id, rn.rewrite);
+                            }
+                          : undefined
+                      }
                     />
                   )}
 
@@ -5901,7 +7184,11 @@ export default function ProofTreeView({
                       fill={
                         node.data.proseLabel
                           ? PROSE_FILL
-                          : isMarker
+                          : // A B4 TRACE LEAF is not the author's text — it is
+                            // the elaborator's report — so it reads in comment
+                            // ink inside its dashed box, the same voice a
+                            // ghost speaks in.
+                            isMarker || node.data.traceLeaf
                             ? accent
                               ? SEQ_STROKE
                               : "var(--ptw-comment)"
@@ -5942,7 +7229,7 @@ export default function ProofTreeView({
                     !node.data.synthetic &&
                     (() => {
                       const label = node.data.label;
-                      const c = collapseLabel(label);
+                      const c = collapseLabel(label, node.data.branch?.form);
                       if (!c) return null;
                       const offs = lineOffsets(
                         label,
@@ -6390,6 +7677,24 @@ export default function ProofTreeView({
                             ]
                           : []),
 
+                        // B4 — WHAT DID `simp` USE? The `⁇` is the tactic's
+                        // own `?` form said twice: the affordance and the
+                        // mechanism are the same character, and it is a
+                        // question, which is what the reader is asking.
+                        ...(automation
+                          ? [
+                              {
+                                glyph: traceIsBusy ? "…" : "⁇",
+                                title: traceIsBusy
+                                  ? "Asking the server what this step used…"
+                                  : traceIsOpen
+                                    ? `Hide what \`${node.data.trace?.tactic ?? "this"}\` used`
+                                    : "Show what this step used — the declaration is re-elaborated with the tactic's `?` form and its `Try this` read back",
+                                onClick: () => toggleTrace(id),
+                              },
+                            ]
+                          : []),
+
                         ...(elidable
                           ? [
                               {
@@ -6397,7 +7702,9 @@ export default function ProofTreeView({
                                 icon: <SkipIcon />,
                                 title: isCombined
                                   ? "Skip this run (⌥-click) — the whole run collapses to one dashed box (click it to restore)"
-                                  : "Skip this step (⌥-click) — the goal above hops over it and wears +N; the break on the line names what went (click either to restore)",
+                                  : hasChildren
+                                    ? "Skip this step (⌥-click) — the goal above hops over it and wears +N; the break on the line names what went (click either to restore)"
+                                    : "Skip this closing step (⌥-click) — the goal above folds and wears +N (click it to restore)",
                                 onClick: () =>
                                   isCombined
                                     ? elideCombined(id)
@@ -6481,6 +7788,101 @@ export default function ProofTreeView({
                             ]
                           : []),
 
+                        // D1 — RESTRUCTURING. `⤵` puts a `have` down into
+                        // its one use, `⤴` lifts a `(by …)` out into a
+                        // `have`: the arrows point the way the text moves,
+                        // and they are the same glyph mirrored because the
+                        // two moves are inverse. Neither writes anything on
+                        // its own — the click opens a PROPOSAL, and the
+                        // elaborator decides whether it can be taken.
+                        ...(inlinable && !proposing
+                          ? [
+                              {
+                                glyph: "⤵",
+                                title: `Inline \`${rw!.inline!.name}\` into the one step that uses it — the elaborator is asked first`,
+                                onClick: () =>
+                                  proposeRewrite(id, rw!.inline!),
+                                onHover: (on: boolean) =>
+                                  onPreviewRange?.(
+                                    on
+                                      ? {
+                                          start: rw!.inline!.edits[0].range.start,
+                                          stop: rw!.inline!.edits[0].range.end,
+                                        }
+                                      : null,
+                                  ),
+                              },
+                            ]
+                          : []),
+                        ...(extractable && !proposing
+                          ? [
+                              {
+                                glyph: "⤴",
+                                title:
+                                  "Hoist the `(by …)` out as `have this : … := by …` on the line above — the elaborator is asked first",
+                                onClick: () =>
+                                  proposeRewrite(id, rw!.extract!),
+                              },
+                            ]
+                          : []),
+
+                        // D2 — the two automation moves, drawn as the double
+                        // arrows the single ones already established: `⇓`
+                        // takes a RUN down to one tactic, `⇑` brings what
+                        // that tactic used back up into the source. Neither
+                        // writes; both open the same proposal pill.
+                        ...(collapsible && !proposing
+                          ? [
+                              {
+                                glyph: "⇓",
+                                title: `Collapse ${run!.steps.length} steps to one automation tactic — ${AUTOMATION_CANDIDATES.join(", ")} are tried in that order and the first that closes the goal is offered`,
+                                onClick: () => proposeCollapse(id, run!),
+                                onHover: (on: boolean) => {
+                                  const ext = collapseRewrite(
+                                    run!,
+                                    collapseCtx!,
+                                    "omega",
+                                  );
+                                  onPreviewRange?.(
+                                    on && ext.ok
+                                      ? {
+                                          start: ext.rewrite.edits[0].range.start,
+                                          stop: ext.rewrite.edits[0].range.end,
+                                        }
+                                      : null,
+                                  );
+                                },
+                              },
+                            ]
+                          : []),
+                        ...(expandable && !proposing
+                          ? [
+                              {
+                                glyph: "⇑",
+                                title: node.data.trace
+                                  ? `Write what \`${node.data.trace.tactic}\` used into the source, in core's own words`
+                                  : "Write what this automation used into the source — its lemmas are read back first, in core's own words",
+                                onClick: () => proposeExpand(id),
+                              },
+                            ]
+                          : []),
+
+                        // D4 — FIX THE LINT. `✎` is the pencil the reader
+                        // already reads as "write this for me", and it is
+                        // offered only where a lint on this node HAS a
+                        // one-edit answer. Like every other D move it writes
+                        // nothing: the click opens the same proposal pill,
+                        // and the elaborator decides.
+                        ...(lintable && !proposing
+                          ? [
+                              {
+                                glyph: "✎",
+                                title: `${lintable.title.charAt(0).toUpperCase()}${lintable.title.slice(1)} — the elaborator is asked first`,
+                                onClick: () => proposeLintFix(id),
+                              },
+                            ]
+                          : []),
+
                         ...(deletable && !isArming
                           ? [
                               {
@@ -6525,6 +7927,45 @@ export default function ProofTreeView({
                 </g>
               );
             })}
+
+            {/* B2 — THE PROVENANCE CONNECTOR. Drawn ABOVE every node so it
+                reads as one continuous line from the hypothesis to the step
+                that bound it, dashed and in comment ink so it is plainly an
+                annotation rather than an edge of the proof. It leaves the hyp
+                line at its LEFT edge, runs out to a channel clear of both
+                boxes, and comes back in at the introducing box's left edge —
+                one elbow each end, never through a node. `pointerEvents` none
+                and no measurement: the layout does not know it exists. */}
+            {hypOriginHit &&
+              (() => {
+                const { gn, lines, j, tn } = hypOriginHit;
+                const gTop = (bandTopH(gn.data) - gn.data.h) / 2;
+                const x0 = gn.x - gn.data.w / 2 + NODE_PAD;
+                const y0 =
+                  gn.y + gTop + NODE_PAD_Y + hypLineOffset(lines, j);
+                const bLeft = tn.x - tn.data.w / 2;
+                const bTop = tn.y + (bandTopH(tn.data) - tn.data.h) / 2;
+                const y1 = bTop + tn.data.h / 2;
+                const ex = Math.min(x0, bLeft) - ORIGIN_CHANNEL;
+                return (
+                  <g style={{ pointerEvents: "none" }}>
+                    <path
+                      fill="none"
+                      stroke="var(--ptw-comment)"
+                      strokeWidth={1}
+                      strokeDasharray="3 3"
+                      opacity={0.9}
+                      d={`M${x0},${y0} H${ex} V${y1} H${bLeft}`}
+                    />
+                    <circle
+                      cx={x0}
+                      cy={y0}
+                      r={1.8}
+                      fill="var(--ptw-comment)"
+                    />
+                  </g>
+                );
+              })()}
 
             {arming &&
               (() => {
@@ -6590,6 +8031,115 @@ export default function ProofTreeView({
                 );
               })()}
 
+            {/* D1 — THE PROPOSAL PILL. The armed delete's pill, in the same
+                place and the same idiom, because a rewrite is the same kind
+                of promise: it says what will happen, it says whether the
+                elaborator agreed, and nothing is written until the reader
+                clicks it. `checking…` while the RPC is out; then the move,
+                how much shorter the proof gets and `✓ elaborates`, or `✗`
+                with the first error's first line. */}
+            {proposal &&
+              (() => {
+                const an = placed.get(proposal.id);
+                if (!an) return null;
+                const { w, h } = an.data;
+                const boxTop = (bandTopH(an.data) - h) / 2;
+                const d = proposal.delta ?? 0;
+                const shorter =
+                  d > 0
+                    ? `${d} step${d === 1 ? "" : "s"} fewer`
+                    : d < 0
+                      ? `${-d} step${d === -1 ? "" : "s"} more`
+                      : "same length";
+                // A COLLAPSE has no title until the server names the tactic
+                // that closed the run, so while it is out the pill says what
+                // is being asked (`proposal.title`) and the answer replaces
+                // it with the move itself.
+                const said = proposal.title ?? proposal.rewrite.title;
+                // An EXPAND is not about length — it writes out what the
+                // automation used and the proof is the same proof — so it
+                // does not carry the step-count clause the other three do.
+                // …and neither is a LINT FIX: `write \`·\` for the focusing
+                // dot → same length` was true and beside the point. Only the
+                // moves that claim to shorten the proof carry the clause.
+                const lenClause =
+                  proposal.kind === "expand" ||
+                  proposal.kind === "rename" ||
+                  proposal.kind === "lint"
+                    ? ""
+                    : ` → ${shorter}`;
+                const label =
+                  proposal.phase === "checking"
+                    ? `${said} — asking the elaborator…`
+                    : proposal.phase === "ok"
+                      ? `${proposal.rewrite.title}${lenClause} · ✓ elaborates`
+                      : `✗ ${(proposal.message ?? "it does not check").slice(0, 72)}`;
+                const live = proposal.phase === "ok";
+                const wide = chipWidth(label, CHIP_FONT_PX);
+                const x0 = -CHIP_W_ADD / 2;
+                const rowW = wide + CHIP_GAP + CHIP_W_ADD;
+                const shift = drawnParentIds.has(proposal.id)
+                  ? CHIP_W_ADD / 2 + 6 + CARD_PAD
+                  : 0;
+                return (
+                  <g
+                    transform={`translate(${
+                      an.x - w / 2 + TRUNK_INSET + shift
+                    }, ${an.y + boxTop + h + CHIP_TOP_GAP})`}
+                  >
+                    <rect
+                      x={x0 - CARD_PAD}
+                      y={-CARD_PAD}
+                      width={rowW + 2 * CARD_PAD}
+                      height={CHIP_H + 2 * CARD_PAD}
+                      rx={4}
+                      fill="var(--ptw-surface)"
+                      stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
+                      strokeWidth={1}
+                      style={{
+                        filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))",
+                      }}
+                    />
+                    <FrontierChip
+                      glyph={label}
+                      title={
+                        (proposal.why ? `Proposed: ${proposal.why}\n` : "") +
+                        (live
+                          ? `Write it — ${CMD}Z in the editor undoes it`
+                          : proposal.phase === "checking"
+                            ? "The declaration is being re-elaborated with this rewrite spliced in"
+                            : "The elaborator rejected this rewrite; nothing was written")
+                      }
+                      x={x0}
+                      width={wide}
+                      color={live ? SEQ_STROKE : "var(--ptw-comment)"}
+                      fontSize={CHIP_FONT_PX}
+                      solid={live}
+                      fontFamily={getCodeFontFamily()}
+                      onPick={() => {
+                        if (!live) return;
+                        onApplyRewrite?.(
+                          proposal.rewrite.edits,
+                          proposal.rewrite.kind === "extract"
+                            ? proposal.rewrite.renameAt
+                            : undefined,
+                        );
+                        setProposal(null);
+                      }}
+                    />
+                    <FrontierChip
+                      glyph="×"
+                      title="Cancel"
+                      x={x0 + wide + CHIP_GAP}
+                      width={CHIP_W_ADD}
+                      color="var(--ptw-comment)"
+                      fontFamily={getCodeFontFamily()}
+                      onPick={() => setProposal(null)}
+                    />
+                  </g>
+                );
+              })()}
+
             {seamEl}
 
             {marquee && (
@@ -6636,8 +8186,7 @@ export default function ProofTreeView({
                         gap: 6,
                         borderWidth: 1,
                         borderStyle: "solid",
-                        borderColor:
-                          list[0].severity === 1 ? DANGER_FILL : WARN_FILL,
+                        borderColor: diagInkOf(list[0].severity),
                       }}
                     >
                       {list.map((d) => (
@@ -6654,10 +8203,10 @@ export default function ProofTreeView({
                               fontFamily: "monospace",
                               fontSize: 15,
                               lineHeight: "15px",
-                              color: d.severity === 1 ? DANGER_FILL : WARN_FILL,
+                              color: diagInkOf(d.severity),
                             }}
                           >
-                            {d.severity === 1 ? "⨯" : "⚠"}
+                            {diagGlyphOf(d.severity)}
                           </span>
                           <span
                             style={{
@@ -7154,7 +8703,10 @@ export default function ProofTreeView({
           </g>
         </svg>
       </div>
+      {/* THE IN-PAGE TOOLTIP, above every floater (tip.tsx). */}
+      <TipLayer />
     </div>
+    </TipContext.Provider>
   );
 }
 
@@ -7247,6 +8799,16 @@ const PILL_BTN: CSSProperties = {
   color: "inherit",
 };
 
+/** D4 — the THREE severities' ink and glyph, in one place: an error, a
+ warning, and a LINT. A lint is not a problem with the proof — the proof
+ checks — so it wears the comment ink and a note's mark rather than a colour
+ that says something is wrong. */
+const diagInkOf = (sev: 1 | 2 | 3): string =>
+  sev === 1 ? DANGER_FILL : sev === 2 ? WARN_FILL : "var(--ptw-comment)";
+
+const diagGlyphOf = (sev: 1 | 2 | 3): string =>
+  sev === 1 ? "⨯" : sev === 2 ? "⚠" : "◇";
+
 interface DiagBarProps {
   index: number;
   count: number;
@@ -7264,8 +8826,8 @@ function DiagnosticItem({
   onStep,
   onGo,
 }: DiagBarProps) {
-  const err = diag.severity === 1;
-  const ink = err ? DANGER_FILL : WARN_FILL;
+  const ink = diagInkOf(diag.severity);
+  const tip = useTip();
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -7279,13 +8841,13 @@ function DiagnosticItem({
         color: "var(--vscode-icon-foreground, #2d3748)",
       }}
     >
-      <span style={{ color: ink }}>{err ? "⨯" : "⚠"}</span>
+      <span style={{ color: ink }}>{diagGlyphOf(diag.severity)}</span>
       {count > 1 && (
         <>
           <button
             type="button"
             style={PILL_BTN}
-            title="Previous problem"
+            {...tip.props("Previous problem")}
             onClick={() => onStep(-1)}
           >
             ‹
@@ -7296,7 +8858,7 @@ function DiagnosticItem({
           <button
             type="button"
             style={PILL_BTN}
-            title="Next problem"
+            {...tip.props("Next problem")}
             onClick={() => onStep(1)}
           >
             ›
@@ -7305,7 +8867,11 @@ function DiagnosticItem({
       )}
       <span
         onClick={onGo}
-        title={diag.message}
+        {...tip.props(
+          clickable
+            ? `${diag.message}\n\nClick to show it on its node and in the source`
+            : diag.message,
+        )}
         style={{
           minWidth: 0,
           whiteSpace: "nowrap",
@@ -7486,10 +9052,11 @@ function RailButton({
   disabled?: boolean;
 }) {
   const ink = pressedInk ?? RAIL_PRESSED;
+  const tip = useTip();
   return (
     <button
       type="button"
-      title={title}
+      {...tip.props(title)}
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -8085,12 +9652,18 @@ function BarButton({
   onClick: (e: React.MouseEvent) => void;
   onHover?: (h: boolean) => void;
 }) {
+  const { ctl } = useTip();
   return (
     <button
       type="button"
-      title={title}
+      aria-label={title}
       disabled={disabled}
       onClick={onClick}
+      // POINTER events for the tip, not mouse: React drops `onMouseEnter` on
+      // a DISABLED button, and the disabled rows are the ones whose tip says
+      // why (measured in the harness on `goals as TeX`).
+      onPointerEnter={(e) => ctl.enter(e.currentTarget)}
+      onPointerLeave={(e) => ctl.leave(e.currentTarget)}
       onMouseEnter={onHover ? () => onHover(true) : undefined}
       onMouseLeave={onHover ? () => onHover(false) : undefined}
       style={{
@@ -8121,12 +9694,18 @@ function BarRow({
   onClick: () => void;
   onHover?: (h: boolean) => void;
 }) {
+  const { ctl } = useTip();
   return (
     <button
       type="button"
-      title={title}
+      aria-label={title}
       disabled={disabled}
       onClick={onClick}
+      // POINTER events for the tip, not mouse: React drops `onMouseEnter` on
+      // a DISABLED button, and the disabled rows are the ones whose tip says
+      // why (measured in the harness on `goals as TeX`).
+      onPointerEnter={(e) => ctl.enter(e.currentTarget)}
+      onPointerLeave={(e) => ctl.leave(e.currentTarget)}
       onMouseEnter={onHover ? () => onHover(true) : undefined}
       onMouseLeave={onHover ? () => onHover(false) : undefined}
       style={{ ...BAR_ROW, opacity: disabled ? 0.4 : 1 }}
@@ -8455,6 +10034,16 @@ function StatusBar({
   brief,
   onBriefChange,
   onBriefHover,
+  lintsOn,
+  onLintsChange,
+  polishOn,
+  polishEnabled,
+  polishWhy,
+  onPolishChange,
+  proposeEnabled,
+  proposeBusy,
+  proposeWhy,
+  onPropose,
   commentMode,
   onCommentModeChange,
   combine,
@@ -8497,8 +10086,18 @@ function StatusBar({
   brief: boolean;
   onBriefChange: (v: boolean) => void;
   onBriefHover: (h: boolean) => void;
-  commentMode: "shown" | "hidden" | "instead";
-  onCommentModeChange: (v: "shown" | "hidden" | "instead") => void;
+  lintsOn: boolean;
+  onLintsChange: (v: boolean) => void;
+  polishOn: boolean;
+  polishEnabled: boolean;
+  polishWhy: string;
+  onPolishChange: (v: boolean) => void;
+  proposeEnabled: boolean;
+  proposeBusy: boolean;
+  proposeWhy: string;
+  onPropose: () => void;
+  commentMode: CommentMode;
+  onCommentModeChange: (v: CommentMode) => void;
   combine: boolean;
   onCombineChange: (v: boolean) => void;
   hypMode: HypMode;
@@ -8528,6 +10127,7 @@ function StatusBar({
     onBarOpenChange(barOpen === id ? null : id);
   };
   const close = () => onBarOpenChange(null);
+  const tip = useTip();
 
   const effReflow = forcedReflow ?? reflow;
   const reflowCols = forcedReflow ?? reflowToStop(reflow);
@@ -8552,7 +10152,7 @@ function StatusBar({
     : tourAt === null
       ? `–/${tourCount}`
       : `${Math.min(tourAt + 1, tourCount)}/${tourCount}`;
-  const readingSlots = [brief, combine, upToCursor && upToEnabled];
+  const readingSlots = [brief, combine, upToCursor && upToEnabled, lintsOn];
 
   // A compact label is drawn in the TREE's code font, not the bar's system UI
   // font: these glyphs were designed to sit in that stack and several are
@@ -8608,7 +10208,7 @@ function StatusBar({
       ),
       value: commentName,
       values: Object.values(COMMENT_MODES).map((m) => m.name),
-      title: `Comments: ${commentName} — how a tactic's comments are drawn: as strips above the box, hidden, or standing in for the tactic's own text. ⌥-click: next`,
+      title: `Comments: ${commentName} — how a tactic's prose is drawn: as strips above the box, hidden, standing in for the tactic's own text, or GENERATED from the step itself (\u2234) where the author wrote none. ⌥-click: next`,
       onAlt: () => onCommentModeChange(COMMENT_MODES[commentMode].next),
     },
     {
@@ -8662,13 +10262,21 @@ function StatusBar({
             // and the SIZE is measured (see `CHEVRON_PX`). The BOX stays
             // `TEXT_GLYPH_BOX_W`, so nothing the row measured moves.
             label={glyph("‹", CHEVRON_PX, TEXT_GLYPH_BOX_W)}
-            title="Previous mark (`<`)"
+            title={
+              tourCount === 0
+                ? "Previous mark (`<`) — no marks in the lists that are on"
+                : "Previous mark (`<`)"
+            }
             disabled={tourCount === 0}
             onClick={() => onTourStep(-1)}
           />
           <BarButton
             label={glyph("›", CHEVRON_PX, TEXT_GLYPH_BOX_W)}
-            title="Next mark (`>`)"
+            title={
+              tourCount === 0
+                ? "Next mark (`>`) — no marks in the lists that are on"
+                : "Next mark (`>`)"
+            }
             disabled={tourCount === 0}
             onClick={() => onTourStep(1)}
           />
@@ -8902,7 +10510,7 @@ function StatusBar({
             <EyeGlyph />
           </GlyphBox>
         }
-        title="Reading options"
+        title="Reading options — brief, merge, lints, polish, a suggested rewrite, to cursor; the four marks below say which of brief, merge, to cursor and lints are on"
         // NO ACCENT: its three toggles take three SLOTS instead, which say
         // WHICH are up where the pill only ever said "at least one".
         slots={readingSlots}
@@ -9208,8 +10816,13 @@ function StatusBar({
               ],
               [
                 "instead",
-                "narrate",
+                "instead",
                 "A commented tactic's prose stands in for its label, inside the box",
+              ],
+              [
+                "narrate",
+                "narrate",
+                "Strips as above, and where the author wrote none a line generated from the step itself (∴); a folded goal's strip summarises what it hides",
               ],
             ] as const
           ).map(([v, label, title]) => (
@@ -9249,7 +10862,7 @@ function StatusBar({
       )}
 
       {barOpen === "reading" && (
-        <BarPanel left={menuX} width={170}>
+        <BarPanel left={menuX} width={196}>
           {/* Toggles, so every row leaves the panel open. `brief`'s hover is
               what drives the in-place underline preview of what it would
               elide, so the row carries it. */}
@@ -9266,6 +10879,37 @@ function StatusBar({
             on={combine}
             onClick={() => onCombineChange(!combine)}
           />
+          {/* D4. OFF by default and never fired unasked: the answer costs the
+              server one re-elaboration of the declaration, which is why it is
+              a reading option and not a payload field. */}
+          <BarRow
+            label="lints"
+            title="Show Mathlib's own style linters on the steps they object to — the declaration is re-elaborated once to ask"
+            on={lintsOn}
+            onClick={() => onLintsChange(!lintsOn)}
+          />
+          {/* C4. Mirrors `ramify.narration.polish` for THIS session: the
+              setting is the default, the row is the override, and neither
+              writes the other. Disabled where there is no companion or no
+              key, with the title saying which — the reader who has met the
+              setting should find out where it went, the `goals as TeX` rule
+              said again. */}
+          <BarRow
+            label="polish"
+            title={polishWhy}
+            on={polishOn}
+            disabled={!polishEnabled}
+            onClick={() => onPolishChange(!polishOn)}
+          />
+          {/* D6. An ACTION, not a setting: it asks once, on the proof in
+              front of you, and the answer is a proposal pill on a node —
+              the same pill, the same `checkRewrite` gate, the same undo. */}
+          <BarRow
+            label={proposeBusy ? "suggesting…" : "suggest a rewrite"}
+            title={proposeWhy}
+            disabled={!proposeEnabled}
+            onClick={onPropose}
+          />
           <BarRow
             label="to cursor"
             title={
@@ -9276,6 +10920,21 @@ function StatusBar({
             on={upToCursor && upToEnabled}
             disabled={!upToEnabled}
             onClick={() => onUpToCursorChange(!upToCursor)}
+          />
+          {/* C1, THE SEAM AND NOTHING ELSE. The `latex` sidecar exists on both
+              wires and is always empty: kmill/LeanTeX does not build against
+              Lean v4.32.2 (three incompatibilities, all recorded). The row is
+              drawn rather than hidden because a reader who has met the idea —
+              the roadmap's "goal boxes' reading form" — should find out where
+              it went and why, and because the row is the thing the printer
+              will switch on the day it builds. It carries no state, so there
+              is nothing to toggle and nothing for `remapIds` or the view stash
+              to know about. */}
+          <BarRow
+            label="goals as TeX"
+            title="Needs LeanTeX, which is not built for this toolchain (Lean v4.32.2)"
+            disabled
+            onClick={() => {}}
           />
         </BarPanel>
       )}
@@ -9308,11 +10967,11 @@ function StatusBar({
             max={reflowMax}
             step={1}
             value={reflowCols}
-            title={
+            {...tip.props(
               forcedReflow
                 ? `Wrap at ${forcedReflow} columns, required by the tracks layout`
-                : "Wrap labels and context lines at this many columns (right end = full width)"
-            }
+                : "Wrap labels and context lines at this many columns (right end = full width)",
+            )}
             onChange={(e) =>
               onReflowChange(stopToReflow(Number(e.target.value)))
             }
@@ -9407,10 +11066,12 @@ function FrontierChip({
   solid?: boolean;
   onPick: () => void;
 }) {
+  const tip = useTip();
   return (
     <g
       transform={`translate(${x},0)`}
       style={{ cursor: "pointer" }}
+      {...tip.props(title)}
 
       onClick={(e) => {
         e.stopPropagation();
@@ -9418,7 +11079,6 @@ function FrontierChip({
       }}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      <title>{title}</title>
       <rect
         x={0}
         y={0}
@@ -9532,7 +11192,8 @@ size: at the shared 13 it inks 7x8 against `⧉`'s 10x9 and the drawn icons'
 inside 1px of every neighbour's ink height. Equal INK, not equal font size (`RailButton`'s
 own rule). */
 const PATH_GLYPH_PX = 15;
-/** A hover bar is GLYPH BUTTONS with `<title>`s and nothing else. A dwell row
+/** A hover bar is GLYPH BUTTONS with tooltips and nothing else (in-page tips,
+not `<title>`s: tipController.ts says why). A dwell row
 of words under them was tried and removed: the bar appears on hover over every
 box in the tree, so a row that grows the card under the pointer moves the very
 buttons it is naming, and it says on every node what the tooltip says on the
@@ -9632,6 +11293,7 @@ function NodeActionBar({
   const w =
     actions.length * cell + (actions.length - 1) * BAR_GAP + 2 * BAR_PAD;
   const h = BAR_BTN + 2 * BAR_PAD;
+  const { ctl } = useTip();
   const x0 = placement === "right" ? x : x - w;
   const y0 =
     placement === "right"
@@ -9662,11 +11324,13 @@ function NodeActionBar({
               if (a.onAlt && e.altKey) a.onAlt();
               else a.onClick();
             }}
+            aria-label={a.title}
+            onPointerEnter={(e) => ctl.enter(e.currentTarget)}
+            onPointerLeave={(e) => ctl.leave(e.currentTarget)}
             onMouseEnter={a.onHover ? () => a.onHover!(true) : undefined}
             onMouseLeave={a.onHover ? () => a.onHover!(false) : undefined}
             style={{ cursor: "pointer" }}
           >
-            <title>{a.title}</title>
             <rect
               x={bx}
               y={y0 + BAR_PAD}

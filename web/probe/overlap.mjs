@@ -2,8 +2,9 @@
 // (combined and marquee/`.none` boxes), the caption beside a hop's axis break,
 // and a tour stop's numbered tab hung off a box's left edge.  Every seeded / outline / per-goal
 // cut, combine on and off, in the five placements.  npm run probe -- overlap
-import { sourceView, outlineCuts, goalCut, applyElisions, stepElidable, combineRuns, resolveCut, createLayoutEngine, bandTopH, COMMENT_INDENT, isGhostNode, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, tourTabWidth, authorStops } from "./lib.mjs";
-import { records, tree, byIdOf, kidsOf } from "./corpus.mjs";
+import * as lib from "./lib.mjs";
+import { applyNarration, sourceView, outlineCuts, goalCut, applyElisions, stepElidable, combineRuns, resolveCut, createLayoutEngine, bandTopH, COMMENT_INDENT, isGhostNode, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, tourTabWidth, authorStops } from "./lib.mjs";
+import { records, tree, byIdOf, kidsOf, readerCuts } from "./corpus.mjs";
 
 const MODES = { stacked: [true, false, false], spine: [true, false, true], tracks: [true, false, "track"], sbs: [true, true, false], wide: [false, false, false] };
 const rects = (pn, wide) => {
@@ -18,11 +19,20 @@ let total = 0, checked = 0;
 for (const [i, rec] of records().entries()) {
   const base = tree(rec); if (base.length < 2) continue;
   const byId = byIdOf(base), kids = kidsOf(base), se = stepElidable(base);
-  const goalSets = base.filter((n) => n.type === "goal").flatMap((g) => [true, false].map((tr) => goalCut(byId, g.id, { trunk: tr, stepElidable: se }, kids)).filter(Boolean).map((c) => [c]));
+  // Every cut a reader can mint, one at a time: each goal's `−` (a fold) and
+  // each step's ◌ (a hop — inside branches too — or a leaf's fold). Only the
+  // ones that draw a ghost or a break survive the filter below.
+  const goalSets = readerCuts(lib, base).map((c) => [c]); void goalCut; void se;
   for (const cuts of [sourceView(base), outlineCuts(byId, kids), ...goalSets]) for (const combine of [false, true]) {
     const manual = new Set(cuts.flatMap((c) => resolveCut(c, byId)));
-    const nodes = applyElisions(base, combine ? [...cuts, ...combineRuns(base, manual)] : cuts);
-    if (!nodes.some((n) => isGhostNode(n) || n.folded?.kind === "hop")) continue;
+    const drawn = applyElisions(base, combine ? [...cuts, ...combineRuns(base, manual)] : cuts);
+    if (!drawn.some((n) => isGhostNode(n) || n.folded?.kind === "hop")) continue;
+    // …in BOTH comment modes that draw strips: `Comments: narrate` gives a
+    // strip to every step the author left unremarked, which is the widest the
+    // strips ever get, so the ghost/caption/tab clearances are checked against
+    // it as well as against the author's own sparse comments.
+    for (const narrate of [false, true]) {
+    const nodes = narrate ? applyNarration(drawn, base) : drawn;
     for (const [mode, [compact, sbs, aside]] of Object.entries(MODES)) {
       const { nodes: placed } = createLayoutEngine(nodes, { chips: true }).computeLayout(null, null, compact, sbs, null, aside);
       const rs = placed.flatMap((pn) => rects(pn, !compact).map((r) => ({ ...r, id: pn.data.id, brk: isGhostNode(pn.data) })));
@@ -59,8 +69,9 @@ for (const [i, rec] of records().entries()) {
       checked++;
       for (let a = 0; a < rs.length; a++) for (let b = a + 1; b < rs.length; b++) {
         if (rs[a].id === rs[b].id || !(rs[a].brk || rs[b].brk)) continue;
-        if (hit(rs[a], rs[b])) { total++; if (total <= 20) console.log(`overlap #${i} ${mode} combine=${combine} ${rs[a].k}:${rs[a].id} × ${rs[b].k}:${rs[b].id}`); }
+        if (hit(rs[a], rs[b])) { total++; if (total <= 20) console.log(`overlap #${i} ${mode} combine=${combine} narrate=${narrate} ${rs[a].k}:${rs[a].id} × ${rs[b].k}:${rs[b].id}`); }
       }
+    }
     }
   }
 }

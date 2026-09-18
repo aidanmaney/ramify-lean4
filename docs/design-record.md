@@ -1128,3 +1128,2322 @@ width it measured before and no compaction threshold moved (`probe counts`,
 
 
 **Same night, corrected:** the toast's Y was never the complaint — it goes back to the top-centre column. What the reader wanted was the COUNTER to hold still: tabbing through marks, the eye parks on `1/5 → 2/5` and reads the caption after it, and a centred box moved the counter left and right with every caption's length. A mark jump's toast is now `anchored`: the column takes a fixed width (`TOAST_ANCHORED_W` 420, within its 80% cap) and the box fills it, text left-aligned, ellipsis at the right; every other toast stays centred and sized to fit. Harness: two consecutive marks, x 430 / w 420 both times.
+
+
+**2026-09-09, B1 — term-level structure inside a tactic (Part E).** `exact ⟨key n, parity n, gap n, residue⟩` was one leaf: four propositions the author proved, drawn as one box. `ProofTreeRecover.recoverTermInStep` now walks the four term-taking tactics (`exact`, `refine`, `refine'`, `apply` — kind-matched on `TacticInfo.stx`, the term taken as the LAST NON-ATOM CHILD so nothing counts argument indices), finds the `⟨…⟩` the term is built around (`ctorTarget?`: itself, or one inside a parenthesis or standing as an argument of an application, so `exact Or.inl ⟨h, hk⟩` decomposes and `exact foo a b` stays the leaf it reads as), and for each component synthesises a goal from `TermInfo.expectedType?` and GRAFTS it onto the harvested step — the same seam `recoverCalcLinks` uses for a calc justification, so nothing downstream needed a new shape. Below each goal `walkTerm` runs, which is Part B unchanged except for one addition: `anonymousCtor`, until now a `leaf`, is a case, so a term-mode `⟨…⟩` decomposes too. Every step it mints is stamped `recovered: "subterm"` (Part E restamps `walkTerm`'s "term"), a new value in the client's `RecoveredStep.kind` union; goal ids come from `syntheticGoalId`, i.e. source position, not mvarIds.
+
+Three guards, each of them a component that is already somewhere else or says nothing:
+
+* **a hole** (`?_`, `_`) is the tactic's own remaining goal, already drawn — `refine ⟨2 * k * k, ?_⟩` must not draw it twice;
+* **a component containing a harvested step** belongs to the harvest. `⟨by simp, rfl⟩`: Part B's `leaf` already spawns that block's root goal, and a second box for it would draw the same subtree twice. Measured on `ProofTreeTerms.lean`'s `term_nested_by` — the `by simp` graft appears once, `rfl` gains its own goal, 2 steps → 3;
+* **a data component** is a witness, not an argument. `2 * k * k : ℕ` would get `⊢ ℕ`, which says nothing, so `Meta.isProp` on the expected type is the gate. Together with the hole rule, `refine ⟨2 * k * k, ?_⟩` grafts NOTHING — the case the counts probe pins.
+
+Numbers (measured, `gen.sh` corpus). odd_sums 70 → 78 nodes: four goals and four leaves under the closing `exact`, whose spawned goals are now `goal_80_9 … goal_80_33` in source order (grafts are APPENDED, not prepended — `Recovery.apply` grafts in list order, and a prepend reversed the components). Every odd_sums cut number moves by the same +8: root hop 55 → 63, goal-after-key 68 → 76, succ fold 63 → 71, parity hop 44 → 52; collapse-all 14 → 18 with 4 → 8 folded goals, because each new component goal is a branch root with a child and so earns its own `outlineCuts` fold. Elsewhere: euclid +5 (`⟨n, hp, dvd_refl n⟩`, `⟨p, hpp, hpm.trans hmdvd⟩`, and `hp` out of `refine ⟨p, hp, ?_⟩`), multiline +4, commented +1 (`⟨0, Or.inl rfl⟩`; its sibling `⟨k, Or.inr (by omega)⟩` grafts nothing, the nested-`by` guard), wrap +11 (the widest fixture: nested ctor and two `fun` bodies, walked by Part B). Every other record in `sample.ndjson` is byte-identical, and every change is an addition. `probe counts` (with a new Part E block), `overlap` (730 layouts, 0), `order` (1912, 0 moves), `hopgap` all green; `structural` clean on every record and every cut.
+
+Two places the design bent. **The lens.** `goalAnnotations` keeps ONE annotation per source line, latest start wins; four subterm steps share the `exact`'s line, so the last of them (`residue`, no goals after) would have spoken for the line, and the host `exact`'s own reading would have become "⊢ ∑ … +3 more" because `after` falls back to `spawnedGoals` when `goalsAfter` is empty. `lensGoals` in widget.tsx now drops subterm steps AND filters the grafted goals out of their host's `spawnedGoals` — Part B's `term` steps still stay, because in a term-mode proof they ARE the script. **The look.** The brief asked for a deliberate look for the new kind; `recovered === "term"` has none today (no `recoveredStroke`, so it draws as an ordinary tactic), and a subterm is the same species as a term step — inventing a stroke for one and not the other would have said they differ. Rejected: the dashed comment-ink stroke `skipped` wears, which in this vocabulary means REDUCED IN PLACE and would misread a real piece of source. What the new kind gets instead is a `<title>` line ("A term the tactic above supplied — its goal is the component's expected type"), ahead of the fold tip; `nodeHints` has no row about term steps to extend, so no help row was added.
+
+Left undone: `apply` and `refine'` are wired but no corpus fixture exercises them; a structured term that is a bare `fun`/`have`/`show` at the top of a tactic (`exact fun x => …`) still mints nothing, because grafting a goal for the body would need a box for the term itself and the tactic node already is that box — the anonymous constructor is the only shape where the components have somewhere to hang.
+
+**2026-09-09, B1 Part E drawn as a LEDGER (the calc idiom, one mechanism).** The user, on a screenshot of the live infoview: *"Should inline like calc blocks since they're related."* Part E's four component goals under `exact ⟨key n, parity n, gap n, residue⟩` were drawing as four spawned side branches (goal box + leaf each), the last of them dropping into the trunk lane. They now draw as ONE LEDGER: the tactic keeps its own text, a ledger node lists one row per component (the row's text IS the component's goal, the way a calc row is the link's relation), and each component's proof hangs off it as a calc justification does.
+
+**The mechanism is the client's ledger, not the `CalcChain` sidecar** — and this is a deliberate departure from the brief, which asked for a `CalcChain`-shaped sidecar with a `kind` field. `CalcChain` carries NO rows: it is calc's EDIT affordance (`indent`, `broken`, `firstBare`, `links`, `text`, feeding `repairSpec`/`addLinkFor`), and a constructor has none of those. The rows come from `ledgerFor` in proofToTree.ts, client-side, off the harvested goals. So the shared thing is `LedgerRow[]` + the `ledger:<line>:<char>` node + `ledgerParent`, and adding a second `CalcChain` would have added a mechanism rather than shared one. What Part E DOES emit is the minimum the client cannot compute: WHICH spawned goals are components, and in what source order. `TermLedger {tacticStart, kind: "ctor", rows: [{goalId, start, stop}]}`, a per-step sidecar keyed on `position.start` like every other, plain data on both wires (`Recovery.ledgers` → `ProofTreeData.termLedgers` → `stableProofOf`). No text and no justification range ride it: the client reads the row's text off the goal (`goals.get(id).type`) and the justification off `stepByGoal`, exactly as `ledgerFor` does, so the printed statement keeps ONE source of truth. Row identification needed the sidecar for a reason the guards make plain: a nested `by` component grafts NOTHING (the harvest already owns its root goal) but is still a component and still a row, so `harvestedGoalIn` names it from the outermost harvested step written inside the component.
+
+**The renderer branches nowhere.** `ProofTreeView.tsx`'s ledger paint, the row `<title>`s, `chainOpen`, `toggleRow`, `remapIds`' ledger sets and `ledgerSize` in layout.ts are all generic over `LedgerRow[]` already — `ledgerSize` even reads `rows.some(isLedgerHead)` to decide the indent, so a head-less ctor row set lays out with no change. THREE places branch, and they are the three that would otherwise say something false: `narrateFamily` (a ctor is not "a chain of (in)equalities"), `runnable` in rewrite.ts and `blocked` in `combineRuns` (a ledger host's sole child is the ledger, not a goal a linear run can continue through — `chain` covered the calc host alone). The flag they read is `TreeNode.ledgerKind: "calc" | "ctor"`, stamped on BOTH the host tactic and the ledger node. Inside `proofToTree` a local `calcLed` keeps the four calc-only behaviours: the label `calc` standing for its chain (a constructor keeps its own text and its brief-mode elision), `chain: true` on the ledger node, `chainCtxNext`, and `linkElisions`. Layout needed nothing: `n.ledger !== undefined` already means "no child takes the trunk", so the rows' justifications indent together and the `?_` continuation of a `refine ⟨…, ?_⟩` — a child of the TACTIC, after the ledger — stays `last` and keeps the trunk.
+
+**Gates.** The calc ones, asked of the same things: a row needs a justification step that is neither a `sorry` stub nor a hole, and below TWO rows nothing is minted, because one component is better served by the branch box it already had. That is what leaves `commented.lean`'s `⟨0, Or.inl rfl⟩` (one prop component) and `refine ⟨p, hp, ?_⟩` (a witness, a prop, a hole) exactly as they were.
+
+**Cuts.** ◌ on a ctor row's justification does what ◌ on a CALC row's justification does, and that was measured before it was decided: the justification hangs off the ledger NODE, which is `type: "goal"`, so `stepCut` takes its goal branch and gets `goalCut`'s answer — a `fold` of the whole ledger. Every row of every ledger in the corpus, calc and ctor alike, answers `fold @ledger:…`. Making ◌ skip one component would have made the constructor answer differently from the chain for no reason the reader could see, and the per-component gesture already exists: click the ROW to bring that component's goal out, then its own `−` folds that justification alone. The `stepCut` comment claiming a calc step "hangs off the ledger tactic" and is "the one place ◌ still mints a ghost" was WRONG and is corrected in place: the ghost's last remaining door is a step hanging off a TACTIC — a broken chain's synthetic `calc` node.
+
+**Narration.** `ctor` is a family of its own, `Prove each part: <row>; <row>; …` (LINE_CAP as everywhere). `probe narrate` stays at 251/251 templated, residue 0, with `ctor:6` beside `calc:3`. Summaries needed nothing: the ledger node falls in `opened`'s `main`, so `summaryOfTactic` folds the rows' justifications with the same `; then` join it uses for a chain.
+
+**Numbers (measured, `gen.sh` corpus).** Six ledgers: odd_sums (4 rows), euclid ×2 and multiline ×2 (2 each), wrap (6 — `refine ⟨rfl, fun _ => hn, Or.inl hk, fun x _ => rfl, rfl, fun h => …⟩`). Every NDJSON record is byte-identical apart from an added `termLedgers` key on those five records. odd_sums 78 → 75 nodes (four goal boxes become one ledger node); root hop 63 → 60, goal-after-key 76 → 73, succ fold 71 → 68, parity hop 52 → 49; collapse-all 18 → 19 drawn with 8 → 4 folded goals — the component goals are no longer branch roots, so `outlineCuts` no longer folds them and the ledger's rows and leaves stay drawn in the outline. That is the CALC ledger's own standing behaviour (a calc's rows and justifications survive collapse-all too), and it was left alone rather than made a special case. Corpus-wide context lines carrying provenance 395 → 409: the ledger node carries the host goal's context (as a calc ledger does, suppressed in paint by `hypsInheritedFrom`) where the four component goals carried their own. `probe overlap` 1640 layouts / 0, `order` 1872 / 0 moves, `hopgap` all OK, `rewrite`, `eval` and `lints` unchanged. The counts probe's Part E block was rewritten to assert the ledger: `ledgerKind`, one child, four rows with `goalId` and no `hiddenLhs`, the leaves in source order all stamped `subterm`, and — the point of the change — ZERO spawned goals still hanging off the host tactic.
+
+**Verified live and in the harness.** `probe lsp ../lean/ProofTreeTour.lean 77 4 --json` on the running server returns `termLedgers: [{kind: "ctor", tacticStart: 77:2, rows: [goal_77_9 @77:9-12, goal_77_14 @77:14-18]}]` for `exact ⟨hab, hpos⟩`. Harness `select(19)`: the ledger draws as the calc block does — tactic, ledger box with the four component goals as rows, four leaves indented beneath it at one x (measured 120 for both the first, `key n`, and the last, `residue`), none of them in the trunk lane (the host tactic's own x is 72). A calc ledger screenshotted beside it is the same picture with a head row and an indent.
+
+**Left undone.** No corpus fixture has a `refine ⟨…, ?_⟩` that mints two or more rows, so the "continuation keeps the trunk beside a ledger" case is structural (layout's `last` rule) and not measured. And the ROW-to-LEAF correspondence is positional only — the leaves stack under the whole ledger box rather than each beside its own row, which is how calc has always drawn and is what "the calc idiom" was asked for.
+
+### 2026-09-09 — The "never fork Paperproof" rule is struck
+
+User direction: "relax never fork the paperproof parser … strike it as a project rule. All bets off now." Post-processing and additive walks stay the first choice because they are cheap and keep the pin, but where `BetterParser`'s harvest is itself the limit (B2 provenance, B4 automation traces, B5 case semantics) the parser may be changed. If it is: vendor the changed files under `lean/` (never edit `.lake/packages/`), keep the upstream commit pin so the diff against it is readable, and record each departure here.
+
+
+### 2026-09-09 — B2, hypothesis provenance
+
+**Where a hypothesis came from.** Paperproof ships the raw `fvarId` on every
+`Hypothesis` and correlates nothing across steps, which is why a reader of a
+context box could see `hk : n = 2 * k + 1` and have no way to ask which line
+of the proof put it there. That reading is now recovered — and it needed no
+change to `BetterParser`. **The post-pass sufficed**: the harvest already
+carries every id on both sides of every step, so one walk over the FINAL step
+list (after every recovery is applied, so a recovered `have`/term step
+introduces like any other) in SOURCE ORDER answers it. `ProofTree.hypOrigins`
+(ProofTreeRecover.lean, `Array HypOrigin {id, username, start}`) emits one
+entry per id that appears in `goalsAfter ++ spawnedGoals` and is absent from
+that step's `goalBefore.hyps`. It ships on both wires: a field on
+`ProofTreeData` for the widget, an optional `("hypOrigins", …)` pair emitted
+only when non-empty in `resultToJson`, so an untouched record's NDJSON line is
+byte-identical.
+
+Two rules decide the shape.
+
+* **First writer wins**, which is not a tie-break but the reading itself. A
+  rewritten hypothesis gets a NEW fvarId, so the rewriting step registers it
+  and *is* its origin: in odd_sums, `hn` is introduced by `by_cases hn` on line
+  67 in both branches, and in the odd branch `rw [Nat.not_even_iff_odd] at hn`
+  on line 75 introduces the `hn : Odd n` that the branch below actually reads.
+  A reader following `hn` down that branch is told about the rewrite, not sent
+  back past it.
+* **The declaration's binders get nothing.** They sit in the root step's
+  `goalBefore`, so they are never "absent from goalBefore" anywhere and no
+  special case is needed. `hyp_used.lean`'s `all_marked` (`a b : ℕ`,
+  `hab : a = b`, one `rw`) ships an EMPTY sidecar, i.e. none at all. "From the
+  statement" is said by silence: no title, no wash, no connector.
+
+**Matching, client-side, is by ID ALONE** — a deliberate departure from the
+used-set's `deepUsed`, which matches id-first and falls back to `username`
+because a subtree's ids drift from the goal's. Here the drift is the point:
+the re-minting step registers the new id, so the table's key is always the id
+the goal in hand carries, and an id-miss means "no step introduced this". The
+username fallback was written anyway and MEASURED over the corpus: it fired
+twice in ~1300 context lines and was wrong both times, pointing
+`commented.lean`'s statement binder `h` at the `rw [hb] at h` that would later
+rewrite it — i.e. it invented provenance from the future. Removed. There is no
+third matching rule.
+
+`proofToTree` turns the sidecar into node ids through one position→step map
+(`tacticId(step.goalBefore.id)`), and stamps `HypLine.origin` (the introducing
+tactic node), `originText` (`tacticHead` of its label — the same cut the ghost
+labels use) and `originLine` (1-based, as the editor counts). Layout's wrap
+copies all three onto every wrapped piece: a hypothesis that spills over two
+lines came from ONE step and hovering either half must say so.
+
+**The view, on demand and paint only.** `hoverHyp` (the line under the
+pointer) and `hypOrigin` (the line dwelt on for `HYP_LIT_DWELL_MS`, the same
+350 ms the used-hyp wash waits) are two `nodeId\u0000lineIndex` strings — a
+primitive, so the dwell effect can depend on it — and neither reaches the
+engine, the cut list, an anchor or a `viewKey`. On the dwell: the introducing
+tactic box takes `HYP_LIT_FILL`, the wash `hypLitTactics` already uses in the
+other direction (that lights the LINES a tactic uses; this lights the TACTIC a
+line came from — one relation, read from both ends, and no new colour), and a
+dashed connector runs from the hyp line's left edge out to a channel
+`ORIGIN_CHANNEL` (12) clear of both boxes and back into the introducing box's
+left edge: one elbow each end, `--ptw-comment`, `strokeDasharray "3 3"`,
+`pointerEvents` none, drawn in the overlay above every node so it reads as one
+line rather than an edge of the proof. An origin that is folded away resolves
+to nothing and no ink is spent claiming a box that is not there; the `<title>`
+("introduced by \`have key…\` (line 17)") still says where it came from.
+Hit-testing has two paths because the two render paths differ: on the plain
+`<text>` path a per-line transparent rect (`data-ptw-hyp`, geometry from
+`hypLineOffset`/`HYP_LINE_H`, the measurer's own numbers) — the glyphs alone
+are hit-testable and the gaps between them are not; on the tagged path the
+line's own `<div>` carries enter/leave and the title, because a rect laid over
+it would swallow the `InteractiveCode` popups the hyp types carry. One
+`nodeHints` row under `goal`: "hover a context line → names the step that
+introduced it, lights that step and points at it".
+
+**Measured.** `./gen.sh`: 17 of 31 records gain `hypOrigins` and change in no
+other way (the four that also moved — odd_sums, euclid, multiline#1, wrap,
+commented#1 — moved in `steps`/`allGoals`/`recovered`, which is B1's Part E);
+`hyp_used#2` is byte-identical, having no origins to ship. 390 context lines
+across the corpus carry provenance, every one of them resolving to a tactic
+node of the same tree (`probe counts`, new B2 block, which also pins
+`hyp_used`'s `rintro ⟨k, hk⟩` on line 26 for both `k` and `hk` with the binder
+`m` beside them bare, odd_sums' `have key` on 17, `by_cases hn` on 67, the
+line-75 re-origin, and `obtain ⟨k, hk⟩` on 76). `counts`, `overlap` (730
+layouts, 0), `order` (1912, 0 moves) and `hopgap` all unchanged — the sidecar
+adds no node and reserves no space. Live server (`probe lsp
+../lean/ProofTreeTour.lean 75 4 --json`, `tour_editing`): three origins,
+`hbb`/`hab`/`hpos` at lines 75/76/77 (0-based), and the four statement binders
+`a b h hb` absent — the widget wire carries it, through `stableProofOf`, with
+nothing added to `incoming`. Harness (`?stub-edit`, `select(19)`, real pointer
+hover on `m : ℕ` in the goal `intro m` opened): connector
+`M82.4,332.5 H58.4 V284 H70.4` landing exactly on the washed box's left edge
+(`translate(107.686,284)`, half-width 37.286), one wash rect, and every
+existing `<g transform>` byte-identical across the hover — the only DOM
+addition being the node's own hover bar. Nothing moved.
+
+Left undone: nothing in the design; the connector is a single elbow and makes
+no attempt to route around intervening boxes, which on a wide tree can run it
+across a node's corner in the channel — acceptable because it is 1px dashed
+comment ink and lives only while the pointer dwells.
+
+## 2026-09-09 — B3: the constants a step names, with their docstrings
+
+The premise library Workstream C's templates need: for every step, the
+lemmas and definitions its tactic text actually references. `▸`-style used
+marks answer "which HYPOTHESES did this use?"; this is the other half of the
+same question, and it is the one input every informalization paper
+(Hattori, Herald, CoSProver) takes as given.
+
+**Nothing new was harvested.** `collectConstIdentTokens` (Ramify.lean) already
+walked `tree.deepestNodes` for `TermInfo` nodes whose syntax is an ORIGINAL
+identifier and whose `expr.getAppFn.isConst` — computing exactly the right
+set of nodes and then throwing the constant's NAME away, keeping only the
+range so the token could be painted `const`-coloured. B3 is that walk with the
+name kept. The predicate now lives ONCE, as `ProofTree.constIdentNodes`
+(ProofTreeRecover.lean, returning `(Syntax × Name)`), and
+`collectConstIdentTokens` is three lines over it. That sharing is the point,
+not tidiness: a name that colours as a constant and a name that appears in a
+step's reference list must be the same set, and two matching guards in two
+files is exactly the drift CLAUDE.md's measurer/renderer rule exists to stop.
+Paperproof's own `GetTheorems`/`ProofStep.theorems` was NOT used — it is
+always `[]` on both wires and expensive to fill.
+
+**Attribution is INNERMOST, and that is the whole design decision.** Tactic
+ranges NEST: `have key : … := by induction m with … rw [Finset.sum_range_succ]`
+is a harvested step that contains three more harvested steps. Attributing an
+identifier to every containing step would give the outer `have` its entire
+subtree's premises, and a list that contains everything says nothing. So each
+identifier goes to the containing step with the LATEST start (ties to the
+tightest stop) and to that one alone. Measured on odd_sums: the `rw` owns
+`Finset.sum_range_succ`, and the enclosing `have key` does not repeat it.
+
+One thing the innermost rule does that is worth recording because it looks
+like a bug and is not: `have key`'s list is
+`Finset.range · Nat.zero · Nat.succ`. `Nat.zero`/`Nat.succ` are the CASE
+LABELS of the `induction m with | zero | succ` below it — the `induction`
+step's own `position` stops at the end of its line, so the labels on the
+following lines are outside it, and the innermost step that does contain them
+is the `have`. This is the rule reporting honestly, not a misattribution; the
+`induction` step's own range genuinely names nothing. `probe counts` asserts
+both halves so a later change to step ranges shows up as a diff.
+
+**Local hypotheses need no exclusion.** They are fvars, not constants, so the
+shared predicate drops them for free — the closing
+`exact ⟨key n, parity n, gap n, residue⟩` of odd_sums has an EMPTY list, and
+so does each of its four B1 subterm leaves, which are harvested steps with
+positions of their own and therefore attribute innermost like any other.
+Excluded by name: the declaration under elaboration (structural recursion
+refers to itself, which is not a premise), and internal / macro-scoped names.
+Instances were considered for the `kind` field and dropped: `ConstantInfo`
+alone gives `theorem | def | axiom | inductive | ctor | rec | opaque | quot`
+for free from `env.find?`, and "is this a registered instance" needs an
+attribute lookup for a distinction C's templates do not yet make. Per step the
+list is deduped by name and keeps source order of first occurrence
+(`have parity : ∀ m, Even m ↔ Even (m ^ 2)` writes `Even` twice, lists it once).
+
+**Wire.** `lemmaRefs : Array LemmaRef` with `{stepStart, name, doc?, kind}` —
+plain data, so it ships on BOTH wires (`resultToJson` emits it only when
+non-empty, as the other sidecars do; `stableProofOf` carries it). The
+docstring is `findDocString?`'s raw markdown, a `String` and not a
+`CodeWithInfos`, which is what makes the offline corpus able to see it at all.
+It is computed in `mkTreePayload`, so the counterfactual path gets it for
+nothing. `declName?` moved from Ramify.lean to ProofTreeRecover.lean so both
+entry points can name the declaration to exclude.
+
+**Coverage, measured over the 31-proof CLI corpus (the numbers C will quote):**
+244 drawn tactic nodes, 61 of them (25.0%) naming at least one constant; 70
+references in all, 29 of them (41.4%) carrying a docstring; 37 distinct names,
+12 of which are documented. By kind: 43 theorem, 19 def, 8 ctor. Top ten
+names: `rfl`, `Nat.add_zero` (5 each), `Finset.range`, `Finset.sum_range_succ`,
+`Nat.factorial` (4), `Or.inl`, `Nat.Prime`, `Nat.sub_add_cancel` (3),
+`sq_nonneg`, `Nat.strong_induction_on` (2). The 75% of steps with no
+reference at all are the structural ones — `intro`, `constructor`, `ring`,
+`omega`, bullets — which is the shape C's templates should expect: the
+premise library is sparse and it is the `rw`/`exact`/`have` steps that carry
+it. On the live server (LSP probe, `ProofTreeScratch.lean` at 11:2) the same
+walk gives `infinitude_of_primes` nine references across five steps, two with
+docstrings, so the widget sees exactly what the CLI does.
+
+**Surfaced minimally, on purpose.** The tactic node's `<title>` gains a
+`uses: Nat.dvd_one · Nat.not_prime_one` line (first four, ` · `-joined, `…`
+beyond) and `nodeHints` gains one row saying so. NOTHING is drawn: no badge,
+no lane, no reserved room, so no measurer changes and `probe overlap` has
+nothing new to model. `probe counts`, `overlap`, `order` and `hopgap` are
+unchanged; the only diff in `sample.ndjson` is the `lemmaRefs` arrays.
+
+**Left undone, deliberately.** Making `docTip.tsx` show `lemmas[].doc` in the
+harness was scoped and dropped. The popup hangs off `DocTokenSpan`, which is
+reached from `tacticTokens.tsx` — a DOM span path fed by `tokenInfos` and
+`tacticEdits`, both widget-only, and one the harness does not run at all
+(offline node labels are SVG `<text>`, not spans). Showing a docstring there
+means giving the harness a whole token-span rendering path and a DOM overlay
+over an SVG label — far more than the ~40 lines the brief allowed, and a new
+overlay to pair with the measurer. The docstrings are on the offline wire and
+probeable; only the offline POPUP is missing. In the widget the docstring for
+a constant is already reachable by hovering the token itself, which is where a
+reader looks for it.
+
+## 2026-09-09 — B4: what the automation used
+
+The reader's question at a `simp` is the one the source cannot answer. `▸`
+marks say which HYPOTHESES a step used (B2 says where each came from); B3's
+`lemmaRefs` say which constants the author WROTE. At `simp`, `grind` or
+`aesop` the author wrote no name at all and the premises are whatever the
+search found, so both of those lists are empty and correct and useless. B4 is
+the third question: **which lemmas closed this goal**, answered by the
+elaborator and not by us.
+
+**Mechanism: core's own `?` forms, and nothing invented.** Measured on this
+toolchain (`lake env lean` over a scratch file, v4.32.2): `simp?`, `simp_all?`,
+`grind?` and `aesop?` all exist and all emit a suggestion. `simp?` and
+`aesop?` say `Try this:\n  [apply] simp only [a, b, c]`; **`grind?` says "Try
+these:"** — plural — and offers a LIST of scripts (`grind only [!foo]` and
+`grind => instantiate only [!foo]`), with a `!` prefix on the names. Both
+headers are read, every line of a list is kept, and the names are pooled and
+deduped, so a reader gets the union of what the search reported. The `!`, `←`,
+`<-`, `↑`, `@` and `-` prefixes are stripped; anything in a bracket that is not
+a dotted identifier (a numeral, a parenthesised term, `*`) is skipped. The raw
+suggestion text is kept beside the parse, so nothing depends on the parse being
+complete.
+
+Tactics with NO `?` form in v4.32.2 — `omega`, `linarith`, `nlinarith`,
+`decide`, `norm_num`, `positivity`, `ring`, `ring_nf`, `trivial`, `tauto` —
+are **not left out**: they get a trace of kind `opaque`, computed with no
+elaboration at all, and the subtree opens to one line, `omega keeps no lemma
+list`. Silence at an offered affordance reads as a broken affordance; saying
+"this one closes by decision procedure, there is no list" is the answer.
+
+**ALL SITES AT ONCE — the decision that makes it affordable.** The brief asked
+for the counterfactual pipeline's per-step splice: one tactic replaced, one
+declaration re-elaborated, per step. A `?` form behaves EXACTLY as the bare one
+(it only says more), so every automation tactic in the declaration can be
+rewritten together and ONE re-elaboration answers for the whole proof. On a
+proof with ten `simp`s the per-step shape pays ten Mathlib elaborations for
+data the first pass already had in hand. Rejected accordingly. What survives
+the brief is the laziness: the widget still computes nothing until the reader
+asks, and then the first ask pays for every automation step in the declaration
+and the rest are free.
+
+Positions come back from that rewrite unshifted in the only way that matters:
+inserting `?` never adds a line, so a rewritten tactic's start moves by exactly
+the number of `?`s inserted EARLIER ON ITS OWN LINE. `traceSites` records both
+the original start (the sidecar's key) and the new one (what the message's
+position will read), and `collectTraces` matches on the new one EXACTLY — no
+proximity guess, and a mismatch surfaces as `kind: "failed"` rather than as a
+lemma list attributed to the wrong step.
+
+**The re-elaboration seam is now shared.** `computeCf`'s first forty lines —
+find the finished snapshot before the anchor byte, re-parse one command against
+its `cmdState` with `Elab.async` off, `elabCommandTopLevel` it into a fresh
+ref, hand back the synthetic snapshot — are `reElabDecl` (Ramify.lean), which
+cf and B4 both call. The one difference is a flag: cf needs `infoState.trees`
+to be exactly one tree (it runs `BetterParser_Tree` over it), while a trace
+reads only messages and a `sorry`-free re-elaboration can legitimately leave
+more, so `needInfoTree` is false there. `computeCf`'s behaviour is unchanged —
+same anchor (`lineStart`), same messages, same order (parse messages then
+elaboration messages).
+
+**The environment trap, hit for real.** The CLI's second pass is a whole-file
+`processCommands`, and the first version handed it `finalEnv` — the environment
+the first pass finished with. Every declaration then reported
+`'sum_range_odd' has already been declared` and not one `Try this` came out;
+the traces all read `failed` and looked like a parse bug. The second pass takes
+the HEADER environment; name resolution (docstrings, `ConstantInfo` kinds)
+still takes the finished one, since that is where the declarations are.
+
+(`PPH_TRACE_DEBUG=1` on the CLI prints every site and every message with its
+position, which is the only way to see a position mismatch — the symptom is a
+silent `failed`, and that is what it looked like here.)
+
+**Shape.** `ProofTree.AutomationTrace {stepStart, tactic, kind, suggestion?,
+lemmas}` — plain data, so it ships on BOTH wires; `lemmas` is B3's own
+`LemmaRef`, resolved through the same `env.find?`/`findDocString?` pair, so the
+two lists read identically in the client. `kind` is `"lemmas" | "opaque" |
+"failed"`. On the offline wire it rides `Proof.automationTraces` (carried by
+`stableProofOf`); in the widget it does NOT ride the payload at all — a proof
+with ten `simp`s must not re-elaborate on every cursor move — and arrives from
+`ProofTree.getAutomationTrace {pos, stepStart?}`, held in widget.tsx's own
+state and passed to the view as a SIBLING, which is why `ProofTreeView` takes
+`automationTraces` as an argument with `proof.automationTraces` as fallback
+(the `deleteSlots` rule). The RPC is synchronous (the reader asked and is
+watching a pending glyph, where cf fires unbidden on a cursor move) and cached
+on `(uri, version, declaration start)` — `proofTreeCache`'s key minus the
+diagnostics count, which a trace does not depend on. The widget's own list is
+keyed on `proofId` in STATE, not a ref: navigating to another declaration
+simply stops matching and the list falls away, with no effect and nothing to
+clear (the refs lint is the gate and it caught the first version).
+
+**The subtree is minted on the DRAWN tree, and that is deliberate.**
+`applyTraces` (web/src/trace.ts) runs AFTER `applyElisions`, and `treeIdx` —
+the index elide.ts's cut rules read — filters trace leaves out. Otherwise a
+closing `simp` with its trace open would stop being a leaf, `stepIds` would
+return non-empty, and the goal above would HOP where it used to FOLD: opening
+a lemma list would silently change what `−` does. As a bonus, a step a cut has
+hidden takes its trace with it for nothing — there is no node to hang it under.
+The leaves are ordinary tactic nodes with `traceLeaf` set, positionless (so
+nothing offers to edit, reveal, delete or flag them) and id'd
+`trace:<line>:<char>:<i>` from the step's own position, which is what carries
+them across a re-parse without `remapIds` needing to know they exist. They
+paint like a ghost — transparent fill, `3 3` dash, comment ink for box and text
+— because they are the same kind of thing: not the author's words.
+
+**Gesture.** One hover-bar button, `⁇` (the tactic's own `?` said twice: the
+affordance and the mechanism are one character, and it is a question, which is
+what the reader is asking). Click opens, click closes, and while the RPC is out
+the glyph is `…` and the title says so. It is offered on every automation node
+(`isAutomationNode`, a SOURCE fact — the head word and a position — so the
+button is there before any round trip) wherever an `onTrace` exists, and
+offline wherever the corpus already carries a trace. The subtree IS a relayout,
+so `toggleTrace` calls `anchorOn` first, like every other one. The step's
+`<title>` gains a `via simp?: Finset.range_zero · Finset.sum_empty · …` line
+beside B3's `uses:` as soon as the answer is in — which is what tells a reader
+the button did something before they open anything — and `nodeHints` gains two
+rows (one for open, one for closed), so the `?` panel says it too.
+
+**Timing, measured over the 13-file / 31-proof CLI corpus.** `gen.sh` without
+traces: 167.0s. With: 171.0s. **+3.9s, 2.3%** — because the cost of these files
+is Mathlib's import, not the elaboration, and the second pass reuses the header
+environment. Well under the 10s the brief set as the threshold, so traces are
+ON by default in `gen.sh` (`--no-traces` is the escape) and the corpus carries
+them: the harness can show the real gesture with no server, and `probe counts`
+can assert them. The NDJSON is byte-identical to the traces-off run once
+`automationTraces` is stripped (checked field by field over all 31 records).
+
+**What the corpus says.** 36 traces over 13 of the 31 records: 26 `opaque`
+(`omega` ×16, `ring` ×7, `linarith` ×2, `norm_num` ×1), 10 with a lemma list
+(9 `simp` and `proofs/multiline.lean:28`'s `grind [Nat.factorial_pos]`, which
+reports `grind only [!Nat.factorial_pos]`), none `failed`. **22 lemmas named,
+NONE of them documented** — the `simp` set is `Finset.range_zero`, `zero_add`,
+`mul_one`, `add_zero`, `ne_eq`, `not_false_eq_true`, `zero_pow` &c, and Mathlib
+does not docstring its simp lemmas. Worth knowing before C leans on `doc` for
+narration: B3 measured 41% of the constants an author WRITES as documented, and
+B4 measures 0% of the ones the search FINDS.
+
+That `grind` was the specimen that turned up both of the format surprises —
+"Try these:" and the `!` prefix — and it read `failed` until they were handled.
+Which is the argument for keeping `failed` as a kind rather than dropping the
+trace: an unhandled suggestion format shows up as a step that says "nothing
+reported", visibly, instead of as a step with no affordance.
+
+**One layout rule bent, once.** `computeLayout`'s stacked pass gives the LAST
+child the trunk lane (the proof continues under its step, side work goes
+beside it). A trace's leaves are all side work — not one of them continues the
+proof — so the sixth lemma of odd_sums' `simp` was drawn under the step with
+the other five beside it, reading as if that one were the continuation.
+`trunk` is now `undefined` when the last child is a trace leaf, which is the
+same answer the ledger case already gives. Placement only: no size changes, so
+no measurer moves with it, and `overlap`/`order`/`hopgap` are unchanged.
+
+**Verified.** `probe counts` gains a B4 block (a closed trace adds NO node —
+the invariant that lets every cut number above keep meaning what it meant; the
+stamp lands anyway; opening odd_sums' `simp` adds exactly six positionless
+leaves parented on the step with `trace:23:6:*` ids; `omega` opens to its one
+opaque line; every one of the corpus's 36 traces hangs on a tactic node the
+client would offer the affordance for). `overlap` 730/0, `order` 1912/0,
+`hopgap` 284 — all unchanged, since the subtree exists only while it is open
+and reserves nothing when it is not. Live server (`probe lsp
+../lean/ProofTreeScratch.lean 11 2 --trace`): `infinitude_of_primes`'s two
+`grind`s trace to `Nat.factorial_pos` and to
+`Nat.not_prime_one · Nat.dvd_one`, **75ms** for the first call (one declaration
+re-elaborated) and **1ms** for the second, off the cache. The counterfactual
+pipeline still works after the `reElabDecl` refactor — a scratch declaration
+with `· omeg` on its last line returns `cfPending` then serves
+`cf: line 6 draft="· omeg"` with three steps (the probe now polls for the
+served payload, so a cf regression is visible from it rather than only in the
+editor). Harness (`?stub-edit&trace-stub`, record 19): the `⁇` opens 78 → 84
+with six dashed comment-ink boxes in ONE lane, the step's `<title>` reads
+`via simp?: Finset.range_zero · Finset.sum_empty · ne_eq ·
+OfNat.ofNat_ne_zero …`, closing returns 84 → 78 with the `simp` box at exactly
+the same client rect (204, 310) and `scrollTop` unchanged — the anchor holds —
+and `omega` opens to the single line `omega keeps no lemma list`.
+
+**Left undone, deliberately.** (1) `getAutomationTrace` ignores its
+`stepStart` argument beyond logging: the answer is the whole declaration's
+list either way, and narrowing would cost a second elaboration to save nothing.
+The parameter stays because a future narrowing is the obvious extension and the
+wire should not have to change for it. (2) The trace leaves show a NAME, not a
+statement: `Finset.sum_range_succ`, not what it says. The statement is a
+`CodeWithInfos` the widget could render and the offline wire could not, and the
+docstring is already reachable by hovering the constant. (3) No trace is
+offered for a tactic inside a `calc` ledger row — a ledger step hangs off the
+ledger tactic and has no box of its own to grow a subtree under.
+
+## 2026-09-09 — B5: what a branching tactic did, asked of its syntax kind
+
+The tree drew a case split from two facts and neither of them was the
+tactic. `GoalInfo.username` gave the tag (`zero`, `succ`, `inl`, `pos`,
+`mp`), and one regex over the tactic's TEXT — `MAIN_FIRST_RE`,
+`/^(rw|rewrite|erw)\b/` — decided which of several goals-after is the
+proof's continuation and which are obligations the tactic made on the way.
+Everything the author actually wrote about the branch was lost: `induction m
+with | succ k ih` drew a badge reading `succ`, and `k` and `ih` — the names
+the reader has to carry down that whole case — appeared nowhere;
+`rcases h with ⟨k, hk⟩ | h` drew `inl`/`inr` with the patterns gone.
+
+**The inventory, before.** Smaller than the brief assumed, and worth
+recording because the shape of B5 follows from it. Regexes that decided tree
+SHAPE, child ORDER or a case LABEL:
+
+| where | regex | decided |
+|---|---|---|
+| `proofToTree.ts` `MAIN_FIRST_RE` | `/^(rw\|rewrite\|erw)\b/` | `TreeNode.side` on every child but the first, for a step with ≥2 goals-after |
+| `proofToTree.ts` `addSpecFor` | `label.endsWith("with")` | `AddSpec.kind === "case"` — a pending goal takes a `\| case =>` alternative |
+| `briefLabel.ts` `HEAD_MARKS` | `/^constructor\b/`, `/^(intro\|intros\|rintro)\b/` | the `⟨⟩` / `λ` mark brief mode puts in place of the head word |
+| `briefLabel.ts` `mB` | `/^(\s*)(rcases\|cases)\s+/` | brief mode elides the discriminant between the head and `with` |
+
+And regexes that decide something else and were left alone: `isChain`
+(`/^calc\b/`, which the `calcChains` sidecar already backs up),
+`rflResidue`'s `/^rw \[rfl\]/`, `elide.ts`'s `tacticKeyword`
+(`/^[A-Za-z_'.₀-₉]+/` — a lexical head-word scan, not a family test),
+`briefLabel`'s `BINDER_KW`/`VERB_KW`/`pushNamespace`/`mF`/`mX`/`mH`/`mD`
+(presentation: which part of a LABEL to hide, at character offsets the label
+alone can give). **No regex ever named a case.** The tags were always the
+elaborator's, through `username`; what was missing was everything beside the
+tag.
+
+**The walk.** `ProofTree.branches` (ProofTreeRecover.lean) folds `TacticInfo`
+and dispatches on `stx.getKind` — a table of thirteen kinds, verified against
+this toolchain by parsing each form and printing its kind rather than by
+memory (`tacticErw___`, `Mathlib.Tactic.intervalCases`,
+`Lean.Elab.Tactic.finCases` and `«tacticBy_cases_:_»` are none of them
+guessable). Per step it emits
+`{stepStart, form, on, withAlts, arms}` with `arms : Array {tag, binders,
+pattern, goalId}` in SOURCE order, keyed on `position.start` like every other
+sidecar, plain data on both wires, emitted only when non-empty.
+
+Tags come from the elaborator in four different ways, one per form, and never
+from the text:
+
+* `induction`/`cases` take them from the `with | … =>` alternatives where the
+  author wrote them and from the discriminant's inductive `ctors` in
+  DECLARATION order where they did not. Preferring the alternatives is not
+  laziness: it is also what makes `induction n using Nat.strong_induction_on
+  with | h n ih` right, where the eliminator's tags are nothing the type's
+  constructors know about. No `using` detection is needed anywhere.
+* `constructor` takes the target STRUCTURE's fields (`And` → `left`/`right`,
+  `Iff` → `mp`/`mpr`). A non-structure inductive does not split under
+  `constructor` at all — it picks one constructor — and correctly gets no arms.
+* `by_cases` is `pos`/`neg`, the two names its own macro expansion writes,
+  both binding the hypothesis the author named.
+* `refine` reads the synthetic holes; a named `?foo` names its arm, an
+  anonymous `?_` adopts the goal's own (`refine_1`, `refine_2`).
+* `rcases`/`obtain`/`rintro` have no tags of their own. Lean names those goals
+  positionally from the pattern's alternatives, so they resolve positionally —
+  which is the brief's own exception, "positional only where Lean itself is
+  positional" — and then ADOPT the goal's tag, so `rcases … with he | ho`
+  comes back tagged `inl`/`inr` without anything here knowing that word.
+
+`resolveArms` is one function with three rules in order: by tag where every
+arm has one and every one of them names a produced goal; positionally where
+the counts match; and a single arm takes the FIRST produced goal even where
+the step also spawned side work (one arm is one continuation).
+
+**The trap, and it is a real one: a macro expansion wears the original's
+source range.** `have h : P := by …`, `by_contra` and `exfalso` all expand to
+`refine`, and the `TacticInfo` for the expansion carries `Parser.Tactic.refine`
+as its kind AND the `have`'s own range. The first run gave 39 `refine`
+branches over the corpus, 28 of them on `have`s, tagged with things like
+`body._@.4130051218._hygCtx._hyg.129`. The guard is `.original` head info —
+the same one `constIdentNodes` (B3) uses to decide what paints as a constant —
+and it takes the count to 11, all of them tactics the author wrote. `by_cases`
+survives it because `by_cases` is a macro whose OWN node is the author's; only
+its expansion is synthetic.
+
+Two more places the walk had to stop looking. A tactic's own parts must be
+searched WITHOUT descending into a nested tactic block (`ptNodesHere` prunes
+at `tacticSeq`/`byTactic`), or `induction n using … with | h n ih => rcases x
+with a | b` reads the inner `rcases`'s `elimTarget` as part of its own
+discriminant — measured, `on` came back as `"n, List.mem_append.mp hpm"`. And
+an alternation NESTED inside a tuple (`obtain ⟨k, hk | hk⟩ := ih`) splits the
+goal without splitting the top-level pattern; reading it as one arm listed
+`hk` twice and claimed one arm for two goals, so it is undecoded instead.
+
+**Where the walk cannot decode, it says so.** `arms := #[]` with the `form`
+still set, and every client fallback keys on that array being empty rather
+than on the sidecar being absent. Over the corpus that is three steps:
+`match n with` (form and discriminant only — its alternatives are a term-level
+`matchAlts`, not this walk's shape), `obtain ⟨k, hk | hk⟩ := ih` (the nested
+alternation above), and `refine ⟨rfl, fun _ => hn, Or.inl hk, …⟩`, which has
+no holes and therefore no arms — correctly.
+
+**Client.** `Proof.branches` (carried by `stableProofOf`, so `incoming` needed
+nothing), `TreeNode.branch` on the tactic, `TreeNode.arm` on each child goal.
+Each of the four regexes above now reads the data first and keeps its text
+test as the fallback where no branch reached the step: `mainFirst` is
+`form === "rewrite"`, `addSpecFor` is `withAlts`, and briefLabel takes an
+optional `form` argument, with a LEXICAL `headEnd` scan supplying the
+character offsets the elision machinery needs (a label-family regex cannot be
+replaced by a fact that carries no offsets, so the offsets are computed
+lexically and the FAMILY question is the only one the sidecar answers).
+`shapeSource` (`"branch" | "regex" | "none"`) is stamped on every tactic node
+so the probe can assert the point directly: **0 nodes over the corpus are
+still shaped by a regex**, 32 by the sidecar, 212 with nothing to decide.
+
+`rw [a, b]` is harvested as one step PER RULE, each with its own position
+inside the `rw`, so a `rewrite` branch would have reached only the first of
+them if it were keyed on the syntax's start. It is emitted for EVERY step the
+`rw`'s syntax range covers instead — 40 over the corpus, and confirmed on the
+live server, where `rw [Nat.add_zero, Nat.zero_add]` at Tour line 55 ships
+three `rewrite` branches at characters 8, 22 and 34.
+
+**The badge is GROWN, never minted.** `caseLabel` still comes from the goal's
+own tag with the parent's prefix stripped, and the arm only adds to it: the
+pattern the author wrote where there is one, else the names bound.
+`succ k ih`, `inl he`, `pos hn`, `mp` (nothing to add). A goal that shares its
+parent's tag draws no badge and gains none, so not one node grew a line of
+chrome it did not have; `caseSize` measures whatever string it is handed, so
+the measurer/renderer pair needed no change and `probe overlap` had nothing
+new to model. Child order follows the arms' source order only on FULL
+coverage (every arm resolved, every child claimed, counts equal); measured,
+**0 records move** — the arms' source order and Lean's own goal order agree
+everywhere in this corpus — so the reordering is a correctness guarantee for
+proofs that do not yet exist rather than a change to what is drawn.
+
+**Surfaced minimally.** One `<title>` line on the tactic
+(`induction on m: zero | succ k ih`), one on a goal whose arm has a pattern,
+one `nodeHints` row. Nothing else is drawn and nothing reserves room.
+
+**Measured.** `./gen.sh`: 23 of 31 records gain `branches`, 89 branches with
+72 arms, **every arm resolving to a goal the client draws** and every arm's
+tag equal to that goal's own; the NDJSON is byte-identical field-for-field
+once `branches` is stripped. `probe counts` gains a PART B5 block pinning the
+odd_sums specimens the brief named (`induction m with` → `zero` / `succ k ih`;
+`obtain ⟨k, hk⟩ := hn` → binders `k hk` and the pattern verbatim; `by_cases hn
+: Even n` → `pos`/`neg` both binding `hn`; `rcases Nat.even_or_odd m with he |
+ho` → `inl`/`inr`; `constructor` on an `↔` → `mp`/`mpr` from `Iff`'s fields),
+the corpus-wide resolution invariant, the per-form counts, the `shapeSource`
+tally and the zero-order-change measurement. `overlap` 730/0, `order` 1912/0,
+`hopgap` 284 — all unchanged. One expected-value edit: `counts` found the
+succ goal by `caseLabel === "succ"` and now matches on the prefix, which is
+the badge change showing up exactly where it should. Live server (`probe lsp
+../lean/ProofTreeTour.lean 28 4` and `52 4`): `tour_reading`'s `rcases
+Nat.le_total n m with h | h` ships one branch, arms `inl`/`inr` each binding
+`h`, and `tour_reshaping` ships the `induction` with `zero` / `succ k ih` plus
+the three `rewrite` branches — the widget wire carries it with nothing added
+to `incoming`. Harness (`?stub-edit`, `select(19)`): 78 nodes, unchanged, and
+the badges read `zero · succ k ih · mp · mpr · inl he · inr ho · pos hn ·
+left · neg hn · right`.
+
+**Left undone.** (1) `match` is form-and-discriminant only; decoding
+`matchAlts` means walking term-level patterns, which is a different grammar
+from `rcasesPat` and would want its own pass. (2) `split`,
+`interval_cases` and `fin_cases` are in the kind table but no corpus fixture
+exercises them, so they have never emitted an arm; the first two would want
+the same `matchAlts`/range work, and `fin_cases` produces one goal per element
+of a finite type, which is a count the syntax does not carry. (3) A nested
+`rcases` alternation is undecoded rather than expanded — the cross-product of
+a tuple's alternatives is the right answer and it is more machinery than the
+one corpus specimen justifies. (4) `refine'` and Mathlib's own spelling of it
+are in the table by name and untested, like B1's. (5) briefLabel still owns
+its own character offsets: the sidecar answers WHICH tactic this is, and the
+label answers WHERE its head ends.
+
+## 2026-09-09 — C2/C3: templated narration and recursive summaries, as the fourth comment mode
+
+The roadmap's Workstream C, items 2 and 3, on top of the B parser work that
+landed this morning. Hattori et al. (INLG 2025) measure two things: a template
+per tactic KIND lifts step accuracy from ~54% to ~89% over free generation, and
+a summary folded along the PROOF TREE beats a flat one. Both are what this tree
+already has the shape for, so neither needed new geometry.
+
+**`web/src/narrate.ts`** — pure, in the probe barrel, no React and no infoview.
+`narrateStep(node, ctx)` writes one line; the family it dispatches on comes from
+B5's `branch.form` FIRST (the syntax kind the server decoded) and the head word
+second. Never an argument index, and never a regex over the whole label where
+the elaborator's own data answers — the three places a template reads text
+rather than data are stated in the file: `rw`'s rule list (which is `rw`'s own
+`[rules]` syntax, taken only when `lemmas` is empty because the rules are local
+hypotheses), an anonymous `have`'s statement (only when `hypOrigins` gave no
+introduced hypothesis), and the `at h` clause.
+
+What each B item bought:
+
+| B item | what narration reads it for |
+|---|---|
+| B2 `hypOrigins` | a step's NEW hypotheses are the child goal's `HypLine`s whose `origin` is this step — so `intro`, `have`, `let`, `by_contra` say the name and type Lean gave them, not the text the author typed |
+| B3 `lemmaRefs` | "This is exactly `Nat.not_even_iff_odd` — …" with the docstring's first sentence; the principal lemma is chosen by `ConstantInfo` KIND (theorem/axiom first, constructors and recursors last), because every term mentions `Nat.succ` in passing |
+| B4 `automationTraces` | "simp used `a`, `b`, `c`" where a trace is open; "This is routine (omega)" where it is not |
+| B5 `branches` | the discriminant (`branch.on`), the arm tags and what they bind — "By induction on n: zero, succ (k, ih)", "Case on `Nat.even_or_odd m`: inl (he), inr (ho)". Where `arms` is EMPTY (the server recognised the form, not its arms — `obtain`, `match`) the patterns are read off the produced GOALS' own `arm`, which is where `obtain`'s `⟨p, hp, hpdvd⟩` lives |
+| recovery (B1) | `term`/`subterm` steps get their own family, `failed` and `skipped` one line each |
+| the calc ledger | the ledger IS the prose: "Chain: a = b ≤ c". The rows hang off the goal the `calc` step opened, not off the step, so the template walks one child to find them — by structure, not by index |
+
+**Coverage, measured (`npm run probe -- narrate`): 244 tactic nodes in the
+corpus, 244 templated, residue 0.** Families: rw 39, exact 38, auto 36, have 26,
+term 26, intro 16, obtain 12, refine 11, induction 8, cases 6, constructor 5,
+rfl 4, side 4, calc 3, by_cases 3, apply 2, by_contra/push_neg/subst/sorry/
+exfalso 1 each. The probe pins `COVERAGE_MIN = 1` and `RESIDUE_MAX = 0`: the
+residue path (`Then <tacticHead>`) is still there and still counted, and a new
+fixture with an unhandled kind is meant to FAIL the probe rather than quietly
+print prose nobody wrote a template for. It also asserts every line fits 96
+chars (the strip's two clamped lines; the longest measured is 90), that every
+summary is under its cap, that summaries are deterministic across two runs, and
+that narration never lands on a node the author commented.
+
+**C3, the recursion.** `summarize(nodes)` gives every node the fold of its own
+line with its children's, by the tree's own structure: a step's SPAWNED
+obligations become "(proved by: …)", a split's continuations become
+"Case zero: …; Case succ: …", a linear run becomes "…; then …". Bounded at ONE
+level (`SUMMARY_DEPTH`), deeper subtrees collapsing to "(3 more steps)", and
+clipped at 260 chars — a summary is 1–3 lines, because the reader looking at a
+folded goal wants the shape of what is under it, not its transcript.
+
+**The fourth mode.** `Comments: show | hide | instead | narrate`. The existing
+`instead` mode PRINTED the word "narrate" on the bar; C2 takes that word for the
+generated prose, which is what a reader means by it, and gives `instead` back
+the name it has always had in the code. The bar's `values` reservation derives
+from `COMMENT_MODES`, so the row widened itself; ⌥-click cycles
+show → hide → instead → narrate → show, and each stop toasts as every mode
+change does.
+
+In `narrate`: the author's comment still wins on any node that has one; every
+other tactic gets its templated line, and a FOLDED goal gets the summary of what
+its `+N` hides — the corner says how much, the strip says what. A HOP's strip is
+composed from the parts the cut names (its kept goal's subtree is still on
+screen, so the goal's own summary would over-report); a FOLD's is the goal's
+subtree summary outright.
+
+Decisions, and what they are instead of:
+
+- **`∴ ` written INTO the text, not a style.** Strips are already italic comment
+  ink for everyone, so italics cannot be the distinguisher; a glyph can. It is
+  written into the string so `commentSize` measures exactly what is painted —
+  the `SEED_MARK` idiom, and the reason nothing new had to learn about it.
+  Rejected: a second ink (light-on-light is this project's recorded trap), a
+  separate lane (the strips' geometry is the one thing this feature must not
+  touch), and a `(generated)` suffix (it costs a line and says less than ∴).
+- **Narration reaches the LAYOUT ENGINE ONLY.** `narratedNodes` is a memo beside
+  `treeNodes` and is passed to `createLayoutEngine`; every other reader — the
+  cut rules, the selection verbs, `commentEditFor` — keeps seeing the real tree.
+  So a generated line is never something a gesture offers to edit, hide or
+  delete, and `commentEditFor` returning null on a node with no `commentRanges`
+  already made the double-click a no-op without a new gate.
+- **Goals get no line of their own.** A goal box already prints its statement;
+  narrating it would say the same thing twice. Only folded goals speak.
+- **A closing step names the goal it discharges only inside a SUMMARY.**
+  `narrateStep(n, ctx, withGoal)`: off for a strip, because the goal box sits
+  directly above the tactic and "…, giving ∑ i ∈ Finset.range n, …" would print
+  the statement twice on adjacent lines (seen in the harness, 2026-09-09); on
+  inside a summary, where the goals have been folded away and the statement is
+  the only thing left saying what was closed.
+- **`summarize` is bounded by depth, not by a character budget alone.** A budget
+  alone gives a different answer depending on how verbose the first child was,
+  which is not deterministic reading — the depth bound plus a clip is.
+
+Probe changes: `web/probe/narrate.mjs` is new (`--print` prints odd_sums as an
+indented narrated outline plus the branch-root summaries). `probe overlap` now
+sweeps BOTH strip modes — `applyNarration` gives a strip to every step the
+author left unremarked, which is the widest the strips ever get, so the ghost,
+hop-caption and tour-tab clearances are checked against it: 1460 layouts, 0
+overlaps (was 730, 0). `counts`, `order` and `hopgap` are unchanged.
+
+Not done here: C1 (LeanTeX statement rendering) and C4 (the opt-in LLM polish
+through the companion) are still ahead of this in the roadmap's order. The
+automation-trace template is written and UNEXERCISED offline — the corpus is
+generated without `--traces`, so the `auto` family's 36 nodes all take the
+"This is routine (…)" branch; the trace branch has no fixture behind it yet.
+
+
+## 2026-09-09 — C1: the LaTeX seam, and why the printer is not behind it
+
+Workstream C item 1 asks for the goal box's *reading* form — `\sum_{i \in
+[0,n)}` beside the tree's `∑ i ∈ Finset.range n` — from kmill's LeanTeX, both
+prints elaborator-derived. The spike came back **no**, and the "no" is small
+and precise, so it is recorded in full: the work to unblock it is a decision,
+not a discovery.
+
+**LeanTeX does not build on Lean v4.32.2.** `kmill/LeanTeX` @
+`d66db4582b6cb4d9fa0b6309168103a248a5fd46` (2025-03-05, the tip of `main` —
+the repository has had no push since) declares `leanprover/lean4:v4.18.0-rc1`
+and requires `proofwidgets v0.0.53`. Built against v4.32.2 with the ProofWidgets
+module (`LeanTeX/Widget.lean`) removed, since the widget is the one part we
+would never use, it fails in exactly three places:
+
+1. `LeanTeX/LatexCmd.lean:18` — `String.split` now returns `Std.Iter
+   String.Slice`, not `List String`:
+   `Application type mismatch: … has type Std.Iter String.Slice but is expected
+   to have type List String in the application " ".intercalate (…)`.
+2. `LeanTeX/Builtins.lean:19` — the same change, in `String.toLatex`:
+   `Type mismatch: x :: namedPattern xs … has type List ?m but is expected to
+   have type Std.Iter ?m`.
+3. `LeanTeX/RuleSyntax.lean:104, 125, 141` — `aux_def` is now
+   `scoped syntax … visibility "aux_def" …` with the visibility MANDATORY and
+   the syntax scoped to `Lean.Elab.Command`, so all three
+   `latex_pp_rules`/`latex_pp_const_rule`/`latex_pp_app_rules` expanders emit
+   an unparseable command: `unexpected token 'aux_def'; expected 'abbrev', …,
+   'private', 'public', …`.
+
+Patched locally (`.toList.map (·.toString)` twice; `open Lean.Elab.Command in`
++ `private aux_def` three times) the library **builds clean and the printer
+runs**. Better: the same three patches already exist upstream-adjacent, in the
+fork `must-show-your-work/LeanTeX` @ `779ac83` ("Bump toolchain to Lean
+v4.31.0-rc1", 2026-06-03) — arrived at independently and character-for-character
+the same fix, which is good evidence the bump is the whole of the work. And
+`kmill/LeanTeX-Mathlib` @ `02f8d141` (2025-04-17, 232 lines) **compiles against
+Mathlib v4.32.2 with deprecation warnings only** (`lo` →
+`MonomialOrder.linearOrderSyn`, ×13). So the dependency is one bump away, not a
+port.
+
+**What it emits** (measured, `LeanTeX.run_latexPP : Expr → Config → MetaM
+String`, with LeanTeX-Mathlib's rules loaded):
+
+| statement | LaTeX |
+|---|---|
+| `∀ n : ℕ, ∑ i ∈ Finset.range n, (2*i+1) = n^2` | `\forall n : \mathbb{N},\ \sum_{i \in [0, n)}(2 \cdot i + 1) = n^{2}` |
+| `∀ m : ℕ, Even m ↔ Even (m^2)` | `\forall m : \mathbb{N},\ \text{Even}(m) ⇔ \text{Even}(m^{2})` |
+| `∀ a b : ℕ, a ∣ b` | `\forall a : \mathbb{N},\ \forall b : \mathbb{N},\ \text{Dvd.dvd}(a, b)` |
+| `∀ (f : ℝ → ℝ) (x : ℝ), f x = x/2 ∧ √x ≤ \|x\|` | `\forall f : \mathbb{R} \to \mathbb{R},\ \forall x : \mathbb{R},\ f(x) = \frac{x}{2} \mathrel{\mathrm{and}} \sqrt{x} \leq \text{abs}(x)` |
+| `∀ (s : Finset ℕ) (p : ℕ → Prop), (∀ x ∈ s, p x) → s.card ≥ 0` | `\forall s : \text{Finset}_{\mathbb{N}},\ \forall p : \mathbb{N} \to \mathbf{Prop},\ (\forall x : \mathbb{N},\ x \in s \implies p(x)) \implies \text{Finset.card}(s) \geq 0` |
+
+Read that table before deciding the bump is worth taking. The good half is very
+good — `\sum_{i \in [0,n)}`, `\frac`, `\sqrt`, `\mathbb{N}`, `\implies` — and it
+is exactly the roadmap's claim. The other half is a *worse* read than Lean's own
+print: `a ∣ b` becomes `\text{Dvd.dvd}(a, b)`, `∧` becomes
+`\mathrel{\mathrm{and}}`, `|x|` becomes `\text{abs}(x)`, `s.card` becomes
+`\text{Finset.card}(s)` — and `↔` is emitted as a RAW `⇔`, which is not LaTeX at
+all and which KaTeX would refuse. A reading form that prints `Dvd.dvd(a, b)`
+where the source says `a ∣ b` does not make a proof easier to understand; it
+makes it harder, and it does so silently, on exactly the statements a newcomer
+needs most. The residue is per-constant printer rules, i.e. open-ended work in
+LeanTeX-Mathlib, not in this repository.
+
+**So C1 ships the seam and stops there** — the roadmap's own "optional
+dependency" phrasing, taken literally. Three things landed:
+
+- **`ProofTree.LatexGoal`** (`lean/ProofTreeComments.lean`, `import Lean` only):
+  `{ goalId, tex }`. Keyed on the GOAL ID the tree already draws, not on
+  `position.start` — every other sidecar keys on the producing step because it
+  describes a step; this one describes a *print*, and the print is the goal's.
+  Plain data, so it rides both wires by the standing rule.
+- **The field on both wires, always empty.** `Proof.latex` in `Ramify.lean`;
+  `resultToJson` gains a trailing `(latex := #[])` parameter and writes the key
+  NON-EMPTY ONLY, so the corpus is byte-identical (verified: `gen.sh` leaves
+  `sample.ndjson` unchanged). Client: `Proof.latex?: LatexGoal[]` in
+  `paperproof.ts` and, critically, a line in `stableProofOf` — the field-by-
+  field rebuild is the thing a new wire field is silently absent from, and it is
+  the only client edit the widget path needed.
+- **One disabled row in the reading panel**, `goals as TeX`, titled "Needs
+  LeanTeX, which is not built for this toolchain (Lean v4.32.2)". It carries no
+  state at all: nothing for `remapIds`, the view stash or `viewKey` to know
+  about, and the layout with the option off is the layout that was there before
+  (probes below, all byte-identical numbers).
+
+Drawn-and-disabled rather than absent, deliberately. The alternative — ship
+nothing visible — leaves a reader who has met the idea with no way to find out
+where it went; a disabled row with the reason in its title is the same courtesy
+the `to cursor` row already pays when there is no editor cursor.
+
+**Not done, and the reason is a decision rather than a difficulty.** Wiring the
+printer in needs one of: (a) depending on `must-show-your-work/LeanTeX`, a
+personal fork whose lakefile floats `proofwidgets @ main` — a supply-chain
+choice for the INSTALLABLE package, not just the dev one; (b) vendoring a
+patched LeanTeX (1263 lines) + LeanTeX-Mathlib (232) under `lean/`, Apache-2.0,
+with the NOTICE entry that implies; or (c) waiting for upstream, which has been
+dormant for 18 months. None of those is a coding question, and (see the table)
+the payoff is currently half a reading form. `dist/` therefore takes no new
+dependency and `INSTALL.md` is unchanged.
+
+**KaTeX was never bundled**, so the bundle number is the one client row's worth:
+`web/dist/proofTreeWidget.js` 372,567 → 372,713 bytes (+146). The ~270 KB
+question the brief flagged is still open and still unasked — it is (a)/(b)'s
+second half, and the measurement to take then is whether KaTeX's `output:
+"html"` mode reads acceptably without its fonts, since the infoview webview
+fetches nothing.
+
+**The statement-level fallback was already there.** The brief's plan B second
+half — show the theorem STATEMENT on the goal box, from `declHeader` — is not
+needed: `declHeader` has drawn as an expandable header band at the top of the
+view since it landed, with its own semantic tokens (`declHeaderTokens`), which
+is strictly more than a `<title>` would give. Checked, and stopped.
+
+## 2026-09-09 — D1: inline a single-use `have`, extract one from a nested `by`
+
+The first two entries of Workstream D's catalogue, and the first time this
+tool proposes a change to a proof rather than a change to how a proof is
+DRAWN. The discipline is Blanchette et al.'s preplay, borrowed whole: a
+restructuring is a set of text edits, and it is not offered to the reader
+until the elaborator has been asked whether the rewritten declaration still
+checks. Nothing is written on a guess.
+
+**The specimen.** `proofs/euclid.lean` is `infinitude_of_primes` as first
+written (the file has not changed since commit `b846a29`); the same theorem in
+`lean/ProofTreeScratch.lean` is what a Lean user cut it down to, 30 lines to
+12, by the five moves the roadmap tabulates. The second of those was inlining
+`have hM : 2 ≤ Nat.factorial N + 1 := by …` into the `obtain` below it.
+`probe rewrite` asserts that move is offered, byte for byte.
+
+### The datum: `haveUses`, which is B2 ∘ `tacticDependsOn`
+
+No new harvest. `hypOrigins` (B2) already says which step first bound each
+`fvarId`; Paperproof's own `tacticDependsOn` already says which ids a step
+read. `ProofTree.haveUses` (ProofTreeRecover.lean) is one pass over the two:
+for every origin whose introducing step's head word is `have` or `obtain`, the
+`position.start` of every step whose `tacticDependsOn` holds that id, in
+source order. Plain data, emitted non-empty only, on both wires.
+
+Two restrictions, both deliberate.
+
+* **`have`/`obtain` only.** Every origin has a use list, and 390 of them in
+  the corpus would triple the sidecar for data nothing reads. What
+  `intro`/`by_cases`/`rintro`/`rcases` bind is the shape of the proof rather
+  than a fact stated in passing, and no move offers to inline it.
+* **An empty `users` is EMITTED.** A `have` nothing uses is exactly the
+  finding a reader wants — it is what Mathlib's `unusedHaveSuffices` linter
+  asks — and silence there is indistinguishable from "not computed". Two of
+  the corpus's 44 entries are empty (`commented.lean#5`'s `h`,
+  `sample.lean#0`'s `hsum`).
+
+**It is NOT an occurrence count, and that gap is the whole design of the
+inline rule.** `omega` closes a goal from the context: it depends on `hle1`
+and names it nowhere. So `hle1` has one USER and zero written occurrences, and
+`rewrite.ts` requires BOTH before it offers anything. That single test is what
+keeps `omega`, `assumption`, `decide` and `simp_all` out without anyone having
+to write a tactic taxonomy — the deny-list that exists beside it
+(`CONTEXT_ONLY`) buys nothing but a decline that SAYS why, instead of
+reporting "not named" for a tactic that structurally cannot name anything.
+
+Corpus: **44 entries over 13 of the 31 records**, 29 of them used exactly
+once, 2 unused. Everything else in `sample.ndjson` is byte-identical (checked
+field by field against the pre-D1 run).
+
+### The moves (`web/src/rewrite.ts`)
+
+Pure text over the tactic's own verbatim source, which is what lets
+`probe rewrite` run exactly what the widget runs. The lookup is one function,
+`SourceLookup`: in the widget it is `tacticEdits` (`getTacticEdit`, now also
+handing back `tacticIndent`); offline it is the tactic's `deleteSlots` extent
+sliced out of the `.lean` file, which is the same bytes.
+
+**`⤵` inline.** Delete the `have` — through `deleteEdit`, so it is the delete
+gesture's own extent and takes the `have`'s comment line with it, which is why
+the `hM` assertion pins line 33 and not 34 — and put the justification,
+parenthesised, where the one user named the hypothesis. Refused where:
+
+| decline | corpus count |
+|---|---|
+| the hypothesis is used more than once, or not at all | 4 |
+| the introducer is an `obtain` (a destructuring has no ONE justification) | 8 |
+| the one user is context-reading (`omega` &c) — it names nothing | 4 |
+| the occurrence is an `at` target, not a term (`rw [Int.isUnit_iff] at h2`) | live only |
+| the justification is longer than `MAX_INLINE_LINES` = 3 | 6 |
+| the tactic's source is not verbatim at the range it claims | harness only |
+
+`MAX_INLINE_LINES` is 3 because that is what admits `euclid`'s two-line `hM`
+and declines its 13-line `exists_prime_dvd`: an inlined block longer than that
+reads worse than the `have` it replaced, which is the whole point of the move.
+Continuation lines are re-indented to the USING tactic's column + 2, keeping
+their relative shape (`reindent` strips the shallowest indent and re-adds).
+
+**`⤴` extract.** The inverse: hoist a nested `by` block out of a term into
+`have this : <type> := by …` on the line above at the host's own indent, and
+leave `this` behind. Three things decide its shape.
+
+* **The name is `this`.** Lean's own anonymous idiom, and the author's to
+  rename. `h1` would be putting a word in their mouth (CLAUDE.md's standing
+  rule), and prompting would make a one-click gesture a dialogue. Declined
+  where `this` is already bound in that context.
+* **The TYPE is the elaborator's.** The `have` must state the block's goal,
+  and only the elaborator knows it: the spawned goal the host step opened
+  whose own first tactic falls inside the block's range. Where that goal was
+  not harvested, or does not print on one line, the move is not offered — no
+  `have this : _`, which Lean often cannot infer and a reader cannot read.
+* **PARENTHESISED BLOCKS ONLY**, and that is a rule rather than a gap. Without
+  brackets a `by` block ends where indentation and the host's own trailing
+  clauses say it ends — `rcases f <| by grind [Nat.factorial_pos]` on one line
+  and `with ⟨p, hp, hpdvd⟩` on the next, which is exactly the shape the human
+  wrote in the scratch file — and text alone cannot decide that. A reader who
+  wants the move there can put the parentheses in, and then it is offered.
+
+### Verify, then offer (`ProofTree.checkRewrite`)
+
+A new lazy RPC beside `getAutomationTrace`, on the same seam. It applies the
+candidate edits to a COPY of the file's text (descending order, so earlier
+offsets stay valid) and re-elaborates the one declaration through
+`reElabDecl`. Nothing is written to the document by this call, so a rejected
+proposal costs one elaboration and changes nothing.
+
+**The classifier — benign / semantic / structural — is decided HERE**, and had
+to be: only inside `reElabDecl` are the parse messages distinguishable from
+the elaboration ones. (The roadmap's verification section speaks of "the
+delete-verification classifier" as if it existed; it did not. The delete
+gesture arms and writes, and never asks. This is the first implementation of
+that three-way split, and the delete gesture is the obvious next caller.)
+`ReElab` gained one field, `nParse`, the length of the parse-message prefix:
+
+* `structural` — no declaration came back, or the first error is in that
+  prefix. The text does not parse; a parse error inside a rewrite WE generated
+  is our bug and not the reader's proof, so nothing more is said about it.
+* `semantic` — it parses and does not check. The first error's first line
+  comes back, because that is the sentence a reader can act on.
+* `benign` — no error at all, `sorry` warnings ignored as `computeCf` ignores
+  them.
+
+**Both step counts are RAW.** The first version returned
+`real.steps.length` as `before` and the rewritten `BetterParser_Tree` count as
+`after`, and `tour_editing`'s one-line inline reported **6→3**: `real.steps`
+has the recovery parser's own steps folded in (subterms, term proofs, failed
+tactics) and the rewritten text gets no recovery pass, so the "saving" was a
+difference of pipelines. `before` is now `BetterParser_Tree` over the ORIGINAL
+snapshot — no elaboration, the tree is already there — and the same inline
+reports 4→3. NOT cached: a trace is asked once per declaration and reused, but
+proposals differ by their edits, which is the whole key, and keying on edit
+text would save one repeat click.
+
+### The view
+
+One `useMemo` over the drawn tree computes both proposals for every tactic
+node (`rewrites`), so the bar can offer them with no round trip;
+`getTacticEdit` is now memoised in widget.tsx for exactly that dependency —
+a fresh closure per render recomputed every proposal on every render. Two bar
+buttons: `⤵` down into the use, `⤴` up out of the term — the arrows point the
+way the text moves, and they are one glyph mirrored because the two moves are
+inverse. Neither writes: the click opens a PROPOSAL.
+
+The pill is the ARMED DELETE'S PILL, in the same place and the same idiom,
+because a rewrite is the same kind of promise: it says what will happen, it
+says whether the elaborator agreed, and nothing is written until the reader
+clicks it. `checking…` while the RPC is out, then
+`inline `hpfac` into `have` → 1 step fewer · ✓ elaborates` (live, `SEQ_STROKE`,
+solid) or `✗ Unknown identifier `hbb`` (inert, comment ink). One `layers` row
+between `arming` and `pendingVerb`, so Esc backs out of it. Two `nodeHints`
+rows under `tactic`, gated `needs: "restructure"`. It reserves nothing and
+measures nothing, so `overlap` / `order` / `hopgap` have nothing new to model.
+
+Offline (`?stub-edit`) `onCheckRewrite` is deliberately NOT wired: with no
+checker the proposal goes straight to ✓, so both gestures and the pill can be
+seen and measured while the verdict stays the server's alone. The harness's
+`getTacticEdit` stub now answers with the TIGHT range (`deleteSlots`) instead
+of the step's trivia-inclusive `position` — with the old stop, `verbatim`
+declined every rewrite in the harness — but its text is still Paperproof's
+`tacticString`, a pretty-print, so every MULTI-LINE tactic is declined there
+and the offline probe (which reads the real file) is the one that sees `hM`.
+
+### Measured
+
+`probe rewrite` over the corpus: **8 inlines and 2 extracts offered**, 24
+declines with reasons among the nodes that have use counts. The two extracts
+are `commented.lean#1`'s `exact ⟨k, Or.inr (by omega)⟩` and its `Or.inl`
+sibling; the inlines are `euclid`'s `hM`, `hpfac` and `hp1`, `flags#0`'s `h`,
+`multiline#4`'s and `odd_sums`'s `gap`, and `sample`'s `hP` and `h2`. Applied
+to `proofs/euclid.lean` and run through `lake env lean`, the `hM` inline
+kernel-checks (`depends on axioms: [propext, Classical.choice, Quot.sound]`).
+
+`probe counts`, `overlap` (1460 layouts, 0), `order` (1912, 0 moves),
+`hopgap` (284), `narrate` — all unchanged. `typecheck`, `lint` clean.
+
+**Live server** (`probe lsp … --rewrite`, which builds the tree from the
+payload the server just returned, computes both proposals from the payload's
+OWN `tacticEdits`, and calls `checkRewrite` on each):
+
+* `lean/ProofTreeTour.lean` at 74:4 (`tour_editing`) — three inlines
+  (`hbb`, `hab`, `hpos`), all `benign`, 4→3, **12–19 ms** each.
+* `lean/ProofTreeScratch.lean` at 185:2 (`root_2_irrat_over_int`) — one
+  inline (`hnn` into `rcases`) `benign` 17→16 and one EXTRACT
+  (`(by linear_combination -hmn)`) `benign` 17→18, ~130 ms each; beside them
+  the declines the design asks for, live: `hm` used 3 times, `have hn`'s
+  6-line justification, `h2` an `at` target (`rw [Int.isUnit_iff] at h2`), and
+  — the innermost rule reporting honestly — the outer `have hn`'s own text,
+  whose only nested `(by …)` belongs to a step INSIDE it, declined with "the
+  block's goal was not harvested".
+* The reject side, on the same rig: the `have` deleted with NOTHING put where
+  it was used — which is what inlining into a context-reading tactic would
+  amount to, and the reason `rewrite.ts` refuses to offer it — comes back
+  `semantic: Unknown identifier `hbb``.
+
+**Harness** (`?stub-edit`, record 4 = `proofs/euclid.lean`): hovering
+`have hpfac` shows `⤵` on the bar with the title "Inline `hpfac` into the one
+step that uses it — the elaborator is asked first"; the click draws the pill
+`inline `hpfac` into `have` → 1 step fewer · ✓ elaborates`, and clicking it
+writes exactly two edits into `window.__rewrites` — `42:0–44:0 → ""` (the
+comment line and the `have`) and `45:41–45:46 → "(Nat.dvd_factorial hp.pos
+hle)"` (1-based lines). Record 1 (`commented.lean`) shows `⤴` and writes
+`24:0 → "      have this : m + 1 = 2 * k + 1 := by omega\n"` plus
+`24:23–24:33 → "this"`.
+
+### Left undone, deliberately
+
+1. **No inline into a `calc` row.** A ledger step hangs off the ledger tactic
+   rather than a goal and has no slot extent of its own; the same exception
+   the delete gesture and B4's traces already carry.
+2. **The offline probe under-reports by one.** `commented.lean#3`'s
+   `have hb : b + 0 = b := Nat.add_zero b`, used once by `rw [hb] at h`, is
+   declined with "no source for the step that uses it": the using step's
+   `position.start` matches no `deleteSlots` entry, so the probe's slice-based
+   lookup finds nothing where the widget's `tacticEdits` would. A probe-rig
+   limitation, not a rule.
+3. **The inline takes the `have`'s comment with it.** That is `deleteExtent`'s
+   standing rule (a comment attached to a tactic belongs to it), and it is
+   right for a delete; for an inline it can cost a sentence that was really
+   about the step below. Left as it is rather than given a second extent rule,
+   and the editor's undo takes it back.
+4. **`before`/`steps` are raw parser counts, not drawn nodes.** They answer
+   "how much shorter is the proof", which is what the pill claims; the drawn
+   count depends on the reader's cuts and would make the pill's number depend
+   on the view.
+
+## 2026-09-09 — D2: collapse a run to automation, and expand automation to its lemmas
+
+Workstream D's third catalogue entry and its inverse, on the seam D1 built.
+The discipline is unchanged — the client computes TEXT EDITS, the elaborator
+is asked whether they hold, and only then is the reader offered the write —
+but the question is new: D1 asked the tree *where* a `have` was used; D2 asks
+the elaborator *whether a shorter proof exists*, and that is a search rather
+than a lookup, so the cost bound is part of the design.
+
+### First, the C2 bug the brief named
+
+`probe narrate --print` printed `This is routine (simp)` for every automation
+step, with the corpus's own lemma lists sitting in `Proof.automationTraces`.
+The template was right and read the right field (`n.trace`); the field was
+never on the node it was handed. B4 stamps traces in `applyTraces`, which runs
+on the DRAWN tree (after the cuts, deliberately — an open trace must not
+change what a `−` does), and `narrationFor(base, drawn)` narrates a tactic
+from `ctx.byId.get(d.id) ?? d`, i.e. from the BASE node, which never carries
+one. So the bug was live in the widget too: a reader who opened `⁇` and then
+switched to `Comments: narrate` still read "routine".
+
+`narrationFor` now carries the drawn tree's stamps back onto the base nodes
+before the context and the summaries are built (one map, skipped entirely
+when nothing is traced), so the trace reaches BOTH the strip and every
+summary that folds that step in. `probe narrate` asserts it: the corpus's
+traced tree narrates **9** steps as `simp used …` (10 traces carry a lemma
+list; the tenth is `multiline.lean:28`'s `grind`, which narrates under the
+`grind` head), and `--print` now runs on a traced tree so the fix is visible
+from the same command that showed the bug.
+
+### The datum: a LINEAR RUN, and what "closes" means
+
+`linearRuns(nodes, source?)` (web/src/rewrite.ts) — pure, on the BASE tree,
+because a run is a fact about the author's text and a reader's cut must not
+change what is offered. A run is a MAXIMAL chain of consecutive steps, each
+producing exactly one ordinary goal (not `side`, not `spawned`) whose only
+step is the next, of length ≥ 2. Maximal: a run's head is nobody's successor,
+so the same steps are never offered twice under two heads.
+
+Two rules were forced by the live server and are worth the record:
+
+* **A step with no extent ENDS a run.** `rw [Nat.add_zero, Nat.zero_add]` is
+  harvested by Paperproof as THREE steps — one per rule plus a closing `rfl`
+  — at inner positions (`55:8`, `55:22`, `55:34`) that no `deleteSlots` entry
+  covers, while the slot is the whole `55:4–55:35`. A splice is over the
+  author's text, and a step with no text of its own has none to give, so
+  `hasSlot(slots)` is the `source` predicate every caller passes. Measured on
+  `lean/ProofTreeTour.lean`: `tour_reshaping` has 6 steps and 4 slots, and
+  after this rule it offers NO run at all — which is right, and is why the
+  Tour is not D2's specimen.
+* **CLOSING is `openBelow`, not "no children".** The first version asked
+  whether the last step had children; the `rfl` residue is a child, so a `rw`
+  that finished a goal read as open. `closes` is now "no goal anywhere below
+  the last step is drawn without a tactic under it". Only a closing run is
+  offered — a run that ends at a branch cannot be replaced by a closing
+  tactic, because the tactics below it would then have no goal. That change
+  alone moved the corpus from 68 runs / 44 collapsible to **57 / 56**.
+
+**The second entry point is the reader's own fold.** A maximal run is often
+longer than the move a human would make: in `proofs/euclid.lean` the maximal
+run starts at the `by_contra` on line 40 and takes nine lines, while the
+roadmap's "automation collapse" row is the four steps `have hp1; have hle1;
+have h2; omega` on 45–49. `runForFold(goal, base)` offers the collapse on any
+FOLDED goal whose `+N` hides a linear CHAIN (contiguous, nothing else hanging
+off it, nothing open below) — not necessarily a maximal run. Folding is how a
+reader says "I do not want to read this", which is exactly where the offer
+belongs, and it is how the human's own extent is reached: `probe rewrite`
+pins that the fold above `have hp1` offers 45–49 and the harness writes
+`44:2–48:7 → "omega"` (0-based) for it, byte for byte the lines the human
+replaced.
+
+### `ProofTree.tryClose` — the search, bounded
+
+A new lazy RPC beside `getAutomationTrace` and `checkRewrite`, on the same
+`reElabDecl` seam. Params are `{pos, from, to, tactics?}` where `from`/`to`
+are the first and last step's `position.start`: **the wire carries two
+positions, not a range**, and the server looks the extent up in its OWN
+`deleteSlots`, so a client cannot ask for the splice of a range it did not
+compute from the tree. Each candidate is spliced over that extent and the one
+declaration re-elaborated; the first with no error message wins, and the
+result carries every candidate tried with what each cost.
+
+Candidates, one exported constant on each side (`AUTOMATION_CANDIDATES` in
+rewrite.ts, `closingCandidates` in Ramify.lean, mirrored the way B4's head
+lists already are): `omega simp linarith norm_num grind decide ring simp_all
+aesop`. `omega` first because it is the cheapest and the most common answer,
+`aesop` last because it is the most expensive (measured below: 3–4× the
+others). Cost is bounded by construction — at most nine re-elaborations, one
+run, only on a click — and cached on `(uri, version, from, to)`, the run
+being the only thing the answer depends on.
+
+The splice is ONE edit: the first step's tight start to the last step's tight
+stop, the candidate as its whole text. Everything between goes, comments
+included — they belonged to the steps that are being replaced. And the first
+step's column is inherited from the extent's start, so there is no indent
+arithmetic to get wrong (`probe rewrite` asserts the column on all 56).
+
+### D2b — the inverse, and the verbatim rule
+
+`⇑` writes what B4 already read back. The replacement is **core's own
+suggestion text, verbatim**: the first line of `AutomationTrace.suggestion`,
+never a list rebuilt from `lemmas` — the parse is for reading and the
+suggestion is for writing, which is the Mathlib `says` idiom and the standing
+rule about not completing the author's text with something they did not
+choose (here the words are Lean's). `grind?` answers with a LIST of scripts;
+the first is written and the rest stay in the `⁇` subtree where the reader
+can see them, so `grind` offers `grind only [!Nat.factorial_pos]` — the `!`
+included, because that is what core said.
+
+Offered only where the suggestion's head word matches the tactic's, so an
+`opaque` trace (`omega`, `ring`, `linarith`, …) offers nothing and says why.
+Where no trace is in hand the click asks `getAutomationTrace` first and
+proposes on its answer, so one click still means "write what it used"; the
+freshly-arrived index is reached through a ref written in an effect (the
+`toastRef` pattern — no ref read during render).
+
+### The view
+
+Two more hover-bar buttons beside D1's pair, and the same proposal pill. `⇓`
+takes a run down to one tactic, `⇑` brings what a tactic used back up into
+the source: the double arrows say the same thing the single ones already say,
+one direction each, and the two D2 moves are inverse exactly as D1's are.
+`⇓` is offered on a run's first step AND on a folded goal, but as ONE
+`nodeHints` row under `tactic`: `nodeHints` gates on `when` alone and never on
+the target, so a second row under `goal` said itself twice on every tactic —
+the trap that rule was written for. The row's `says` names both places.
+
+One thing the pill had to learn: a COLLAPSE has no title until the server
+names the candidate, so the proposal opens with `collapse 4 steps to one
+tactic — asking the elaborator…` and the answer replaces it with the move
+(`these 4 steps are `omega` → 3 steps fewer · ✓ elaborates`). And an EXPAND
+carries NO step-count clause at all — the move is not about length, and
+`write what `simp` used → 1 step more` was both true and beside the point.
+
+`collapseRewrite` reads the SLOTS and nothing else — no tactic text — so it
+takes its own minimal context (`collapseCtx`) and is offered in a harness
+with no `getTacticEdit`. Nothing D2 adds reserves space or measures anything:
+`overlap` (1460, 0), `order` (1912, 0) and `hopgap` (284) are unchanged.
+
+### Measured
+
+**Corpus, offline (`probe rewrite`).** 57 linear runs, **56 collapsible**
+(one open run declined), over 31 records; run lengths 2–7. **10 traced steps
+with something to write** (9 `simp`, 1 `grind`), out of 36 traces — the other
+26 are `opaque` and offer nothing. Every collapse is one splice whose text is
+the candidate alone and whose column is the run's own. The D1 numbers are
+unchanged (8 inlines, 2 extracts).
+
+**Live server (`probe lsp … --collapse` / `--expand`).**
+
+* `lean/ProofTreeScratch.lean` at 46:2 (`sum_range_odd`) — 6 runs, all
+  closing. One is ACCEPTED: the 2-step run at 67:4 (`intro m` …
+  `exact Finset.sum_range_succ …`) is closed by **`grind`**, after `omega`
+  85ms, `simp` 88ms, `linarith` 85ms and `norm_num` 95ms all failed —
+  `grind` 133ms, 486ms of elaboration and 980ms wall for the accepted call,
+  splice `67:4–68:54`. The other five run the full nine and report
+  `nothing closes it (tried 9)` in 1.28–1.38s (`aesop` alone is 272–363ms of
+  that; every other candidate is 70–165ms).
+* `lean/ProofTreeScratch.lean` at 11:2 (`infinitude_of_primes`, the human's
+  own 12-line version) — one 2-step run, `nothing closes it (tried 9)`,
+  **321ms** for all nine (24–81ms each; the declaration is short).
+* `--expand` on `sum_range_odd`: traces in 112ms, 6 automation steps, one
+  offer — the `simp` at 53:6 → `simp only [Finset.range_zero,
+  Finset.sum_empty, ne_eq, OfNat.ofNat_ne_zero, not_false_eq_true,
+  zero_pow]`, `checkRewrite` **benign** in 628ms. The other five are `omega`
+  ×2 and `ring` ×3, declined with "keeps no lemma list".
+
+**Harness (`?stub-edit&trace-stub`).** Record 4 (`proofs/euclid.lean`):
+hovering `by_contra hle` shows `⇓` titled "Collapse 7 steps to one automation
+tactic — omega, simp, …"; the click draws
+`these 7 steps are `omega` → 6 steps fewer · ✓ elaborates` and accepting
+writes ONE edit, `39:2–48:7 → "omega"` (0-based; lines 40–49). In `wide`,
+folding the goal above `have hp1` (`4 steps folded`) offers
+`Collapse 4 steps…` on the GOAL and writes `44:2–48:7 → "omega"` — the
+human's own extent. Record 19 (`proofs/odd_sums.lean`): `⇑` on the `simp`
+reads "Write what `simp` used into the source, in core's own words", the pill
+reads `write what `simp` used · ✓ elaborates`, and the write is
+`23:6–23:10 → "simp only [Finset.range_zero, Finset.sum_empty, ne_eq,
+OfNat.ofNat_ne_zero, not_false_eq_true, zero_pow]"`.
+
+### Not offered, and why
+
+1. **A run that does not close.** Replacing it would leave the tactics below
+   it with no goal. 1 of the corpus's 57.
+2. **A SUB-RUN of a maximal run, except through a fold.** Offering every
+   suffix would multiply the search by the run's length for a question the
+   reader can ask precisely by folding. The fold is the extent picker.
+3. **A run through `rw`'s harvested sub-steps**, or any step with no slot of
+   its own — there is no text to splice. This is what silences
+   `tour_reshaping`.
+4. **A calc row.** The standing exception: a ledger step hangs off the ledger
+   tactic and has no extent of its own (the delete gesture and B4's traces
+   already carry it).
+5. **An `opaque` trace's expand.** `omega` has no `?` form and no lemma list;
+   the decline says so rather than offering an empty write.
+6. **`tryClose` does not try `exact?`.** It suggests a term rather than
+   closing the goal itself, so its answer is not a splice of the same shape;
+   the roadmap's `exact?` line belongs to D1's library-replacement move,
+   which is not built.
+7. **No cross-candidate ranking.** The first that elaborates wins, in the
+   fixed order. Preferring the "best" of several would need a criterion this
+   tool does not have, and the order already encodes cost.
+
+## 2026-09-09 — D3: the contradiction shapes, and D5: Mathlib's own names
+
+Workstream D's remaining two catalogue entries, on the seam D1 built and
+verified through the same `ProofTree.checkRewrite`. They came out very
+differently: D5 is a gesture, D3 is an analysis, and the reason is the corpus.
+
+### The datum both needed: the use machinery grows the intro family
+
+`haveUses` (D1) was `have`/`obtain` only, on the argument that what
+`intro`/`by_cases`/`rintro` bind is the shape of the proof rather than a fact
+stated in passing, and that nothing offers to inline it. That argument still
+holds for INLINING and is unchanged. But D3 has to know whether a `by_contra`
+binder is read anywhere but the closing step, and D5 has to know which steps
+read a hypothesis whatever tactic named it, so the head-word test is now a
+named constant, `ProofTree.ALLOWED_INTRODUCERS`:
+
+```
+#["have", "obtain", "intro", "intros", "by_contra"]
+```
+
+`by_contra!` arrives as `by_contra` because a head word is alphabetic. The
+pattern binders (`rintro`, `rcases`, `by_cases`) stay out, and that is a rule
+rather than an omission: what they bind is not one token a reader can point
+at, and the corpus proves it — `factorization`'s
+`rcases List.mem_append.mp hpm with h | h` names `h` TWICE in one pattern, so
+even with the form admitted the rename declines it ("`h` is written 2 times in
+its binder").
+
+`./gen.sh`: **5 of 34 records change and `haveUses` is the only field that
+moves**, 44 entries → 56 (euclid 17→20, factorization 2→5, multiline#4 1→2,
+odd_sums 11→15, sample 3→4); checked field by field against the pre-change
+run.
+
+Client side, one new field beside `uses`. A step can bind several names —
+`intro h h2` and `obtain ⟨k, hk⟩` ship one `haveUses` entry PER NAME at ONE
+position — and `usesAt` is a position map, so `uses` was silently the LAST of
+them. D1 never noticed because `inlineRewrite` declines anything but a `have`,
+which binds one. `TreeNode.usesEach` is all of them in source order;
+`uses` is unchanged and is still what the inline reads. And `HypLine` gained
+`hypName`/`hypType` — the elaborator's own pair, carried structurally rather
+than parsed back out of the printed `h : T := v`, and copied onto every
+wrapped piece exactly as B2's provenance fields are, because the rename must
+read the WHOLE type from a line the reflow may have cut in half.
+
+### D5 — the table is MEASURED, not quoted
+
+Mathlib's naming conventions page governs THEOREM names; it says nothing about
+hypotheses. So the table was measured over Mathlib itself at the pinned
+toolchain (`lean/.lake/packages/mathlib`), counting binder names against binder
+types over `Mathlib/`:
+
+| type | the names Mathlib uses | the predicate form |
+|---|---|---|
+| `0 < x` | `ha` 245 · `hr` 204 · `hn` 172 · `hb` 160 · `hx` 154 | `hpos` 23 |
+| `a ≤ b` | `hab` 255 · `hmn` 106 · `hbc` 59 · `hij` 54 | `hle` 66 |
+| `a < b` | `hab` 124 · `hxy` 102 · `hmn` 35 | `hlt` 16 |
+| `x ≠ 0` | `hn` 569 · `ha` 468 · `hx` 394 | `hne` 1 |
+| `a ∣ b` | `hab` 18 · `hba` 15 · `hpq` 13 · `hmn` 10 | `hdvd` 11 |
+| `Even n` | `hn` 39 · `ha` 13 | `heven` 3 |
+| `p.Prime` | `hp` 147 · `hq` 3 | `hpri` 2 |
+| `x ∈ s` | `hx` 596 · `ha` 241 · `hy` 170 · `hs` 43 | `hmem` — |
+| `¬ P x` | `ha` 71 · `hb` 52 · `hs` 33 · `hx` 24 | — |
+
+(`h` itself outranks every name for the binary relations, and is exactly what
+the move renames FROM, so it is not a candidate.)
+
+One rule falls out, not nine: **the name is `h` followed by the SUBJECT LETTERS
+of the type.** Two rows settled questions the brief had guessed the other way.
+
+* **`x ∈ s` names the ELEMENT, not the set** — 596 to 43. The brief offered
+  `hx`/`hmem`; the collection never gets the letter.
+* **Polarity does not reach the name.** The brief asked for `¬ P` → `hn…`;
+  Mathlib writes `ha`/`hx`, i.e. the positive's own name. So `¬` is STRIPPED
+  (through parentheses too) before the table is read, and `¬ Even n` and
+  `Even n` are both `hn`. Where both are in scope the shadow test declines the
+  second, which is the only place the collision can bite.
+
+Each rule still records its predicate form (`hpos`, `hle`, `hdvd`, …) because
+it is a real minority idiom, and the pill offers the PRIMARY alone: a gesture
+that asked which of two names you wanted would be a dialogue, not a click.
+
+A subject is a plain variable — one letter, optionally numbered or primed.
+`Nat.factorial N + 1 ≤ p` has no subject letter, so no rule fires and nothing
+is offered; that is the whole of the "compound type" handling.
+
+**What is never renamed.** A name the author CHOSE (only `h`, `h1`, `H`, `hyp`,
+`this`, `x_1` are candidates — the standing rule about not replacing the
+author's words); a name that would SHADOW one bound anywhere under the
+introducing step (the scope the edits reach, walked on the tree); a hypothesis
+the elaborator counted no uses for — a statement binder, a pattern binder, or
+one re-minted by `rw … at h`, whose B2 origin is the `rw` and which therefore
+binds no name of its own; a binder written more than once in its own binder
+text; and anything whose introducing or using step is not available verbatim.
+
+**The rewrite.** The BINDER — the part of the introducing step before its
+top-level `:=`, so an `h` in a `have`'s justification is left alone, being a
+term from an enclosing scope — plus every whole-identifier occurrence in the
+steps `haveUses` says READ it. Occurrences are scanned in CODE only: a line
+comment, a block comment or a string literal inside a tactic's tight extent is
+skipped, because a rename that reached into one would edit prose. A reader
+that names it nowhere (`omega` off the context) needs no edit and is not an
+obstacle, which is why the edit count can be SMALLER than the use count.
+
+**The gesture is ⌥-CLICK ON THE CONTEXT LINE**, and no glyph. B2 already gave
+every hyp line a hit target and a `<title>`; a `✎` on each renamable line would
+put chrome on the one part of the box that is a list of the author's own words,
+and it would have to be measured and modelled in `probe overlap`. The title
+now reads `introduced by \`intro h h2\` (line 26) — ⌥-click renames \`h\` →
+\`hpn\` (Mathlib's name for divisibility)`, one `nodeHints` row under `goal`
+gated `needs: "restructure"`, and the pill is D1's, without the step-count
+clause (a rename is not about length): `rename \`h\` → \`hpn\` · ✓ elaborates`.
+`HypBlock` gained one prop, `onLineClick`, wired on BOTH render paths — the
+per-line hit rect and, on the tagged path, the line's own `<div>` — and a plain
+click is ignored, so a context line still behaves like part of the goal box.
+
+### D3 — one shape is one edit, and this corpus has none of it
+
+Batteries documents the rule the redirection rests on (`Batteries/Tactic/
+Init.lean`, `byContra`): "If `p` is a negation `¬q`, `h : q` will be introduced
+instead of `¬¬q`." So on a NEGATED goal `by_contra h` is not a proof by
+contradiction at all — it is `intro h`, and saying so is one edit and a strict
+simplification of the reading. That is `directRewrite`, and it is the only
+redirection offered.
+
+`contradictionShapes` is the analysis: every `by_contra` / `by_contra!` /
+`exfalso` / negated-goal `intro` in a tree, with the goal's polarity, the
+binder, its use count, the head word of the step the block ends at, and the
+condition that decided it. **The corpus contains two shapes and neither is
+redirectable:**
+
+| where | head | goal | why not |
+|---|---|---|---|
+| `proofs/euclid.lean:40` | `by_contra hle` | `⊢ N < p` (positive) | the body really does derive `False` from `hle : ¬N < p`, through `push_neg` and four lemmas; a direct proof is a different proof, not moved text |
+| `proofs/odd_sums.lean:57` | `exfalso` | `⊢ Even m` | `exfalso` REPLACES the goal, and three steps stand between it and the closing `exact`; dropping it changes what is proved |
+
+The brief anticipated exactly this and asked, in that case, for the analysis
+rather than "a gesture with nothing to offer". So **D3 ships no hover-bar
+button**: `directRewrite` and `contradictionShapes` are pure functions, printed
+by `probe rewrite`, and one line in ProofTreeView would wire the button the day
+a proof in this repository needs it.
+
+`by_contra!` is declined even on a negated goal: it also normalises the
+negation (`push Not`), which `intro` would not reproduce.
+
+### The fixtures, and why there are two
+
+`proofs/` had nothing to rename either — its authors named every hypothesis
+well (`hmdvd`, `hle1`, `hpp`, `he`/`ho`), which is the right way to write Lean
+and leaves the move nothing to say. That is the finding; it is not a reason to
+ship an untested gesture. Two fixtures were added, and neither manufactures a
+measurement:
+
+* **`proofs/rename.lean`** — three short proofs whose hypotheses carry the
+  anonymous names a reader actually meets. It joins the corpus, so the harness
+  can show the gesture and `probe rewrite` can pin the edits. `probe rewrite`
+  asserts separately that **no rename is offered anywhere else in the corpus**.
+* **`lean/ProofTreeRestructure.lean`** — the same three proofs plus the four
+  contradiction shapes, `import Ramify` (which is what registers the RPCs), for
+  the live gate. Nothing under `lean/` reaches the corpus.
+
+The arrival of `proofs/rename.lean` moved every corpus-WIDE total in
+`probe counts` by exactly its own contribution (3 proofs, 7 tactic nodes):
+origins 390→395, tactic nodes 244→251, nodes naming a constant 61→64, lemma
+references 70→73, traces 36→37 (opaque 26→27), undecided shapes 212→219. The
+baselines are updated with that note beside them. `overlap` 1460→1540 layouts
+(0 overlaps), `order` 1912→1968 (0 moves), `hopgap` 284→300, `narrate`
+unchanged.
+
+### Measured
+
+**Corpus (`probe rewrite`).** D1 unchanged at 8 inlines and 2 extracts; D2's
+runs 57→64 with 63 collapsible and 10 expands (the fixture's own runs).
+**2 contradiction shapes, 0 redirections. 4 renames, all in the fixture, 0
+elsewhere.**
+
+```
+proofs/rename.lean#1:26  `h`  → `hpn`  (dvd: p ∣ n)   26:8–26:9  27:25–27:26
+proofs/rename.lean#1:26  `h2` → `hn`   (pos: 0 < n)   26:10–26:12 27:22–27:24
+proofs/rename.lean#2:30  `h`  → `hab`  (lt: a < b)    30:8–30:9  31:26–31:27
+proofs/rename.lean#3:34  `h`  → `hba`  (lt: b < a)    34:8–34:9  35:35–35:36
+```
+
+The first two are the case `usesEach` exists for: `intro h h2` binds both at
+one position. The `h`/`h2` pair is also the whole-identifier test — the use is
+`exact Nat.le_of_dvd h2 h`, and `h`'s edit lands at column 25 and not on the
+`h` inside `h2` at column 22. `sub_pos_of_generic`'s `h : b < a` is read by two
+steps and named by one (`omega` names nothing), so it is two edits for two
+users.
+
+**Live server** (`probe lsp ../lean/ProofTreeRestructure.lean <line> 2`):
+
+* `--direct` at 49:2 (`redirect_direct`, `⊢ ¬n + 1 = 0`) — offered,
+  `by_contra` → `intro`, **benign in 16 ms**, 2→2 steps. At 53:2 declined "the
+  goal is not a negation"; at 57:2 "`by_contra!` also normalises the
+  negation"; at 61:2 "`exfalso` replaces the goal".
+* `--rename` at 65:2 / 69:2 / 73:2 — `h`→`hpn`, `h`→`hab`, `h`→`hba`, all
+  **benign in 15–28 ms**, two edits each.
+
+**The one live/offline disagreement, and it is not the rename's.** At 65:2 the
+live server offers ONE rename where the offline probe offers two: the payload's
+`tacticEdits` entry for `intro h h2` stops at column 9 with text `"intro h"`,
+while `deleteSlots` for the same step correctly reaches column 12. The rename
+therefore cannot see `h2` in its own binder and declines with "the step does
+not name `h2` directly" — a SAFE failure, and the verbatim discipline working:
+the text it is handed is a genuine prefix at a genuine offset, so an occurrence
+it FINDS is at a correct document position and one it MISSES costs an offer or
+a `semantic` verdict from `checkRewrite`, never a wrong edit. The truncation is
+a `tacticEdits` bug with consequences beyond D5 (in-place editing of that
+tactic would overwrite only `intro h`) and is filed as its own task rather than
+patched around here.
+
+**Harness** (`?stub-edit`, record 23 = `proofs/rename.lean#1`). The two context
+lines carry the titles above; ⌥-clicking `h : p ∣ n` draws
+`rename \`h\` → \`hpn\` · ✓ elaborates` and accepting writes exactly
+`[25:8–25:9 → "hpn", 26:25–26:26 → "hpn"]` (0-based); ⌥-clicking `h2 : 0 < n`
+writes `[25:10–25:12 → "hn", 26:22–26:24 → "hn"]`. Nothing else in the DOM
+moved — the offer reserves nothing, measures nothing and draws nothing.
+
+### Left undone, deliberately
+
+1. **Statement binders are not renamed.** `mvars`' `h : 0 < n` and
+   `side_goals`' `h : b ≤ a` are exactly the shapes the table is for, and they
+   live in the declaration's own header: B2 gives them no origin (they are
+   never "absent from `goalBefore`"), `haveUses` gives them no use list, and
+   the client has no verbatim text for the signature. It would need a sidecar
+   of its own.
+2. **A `rw … at h` re-mint is not renamed.** Its B2 origin is the `rw`, which
+   binds no name — first-writer-wins reading straight through to a decline.
+3. **The alternate name is recorded and never offered.** `hpos`/`hle`/`hdvd`
+   are in the table for the record; offering both would make a click a
+   dialogue.
+4. **No equality rule.** Measured, `x = y` is `h` 297 to `hab` 15: there is no
+   convention to apply, and inventing one is what the standing rule forbids.
+   This is why `ProofTreeTour.lean:55`'s `have h : k + 0 = 0 + k` is not
+   offered a name.
+5. **D3's redirection has no button.** Above.
+
+## 2026-09-09 — The `intro h h2` truncation, and what the sweep found beside it
+
+D5's live gate ended with one disagreement between the offline probe and the
+server: at `lean/ProofTreeRestructure.lean:65` the offline probe offered two
+renames and the live one offered a single one, because the payload's
+`tacticEdits` entry for `intro h h2` stopped at column 9 with the text
+`"intro h"` while `deleteSlots` for the same step correctly reached column 12.
+It was filed as its own task rather than patched around, and this is it.
+
+### The trap
+
+`intro h h2` is a MACRO. Core expands it to `intro h; intro h2`, and the
+expansion's own `TacticInfo` nodes carry positions inherited from the original
+syntax — so the innermost one covers `intro h ` and Paperproof harvests the
+step at 65:2–65:10, which `tightStop` trims to 65:9. The label is right
+(`tacticString` is `"intro h h2"`, the whole surface tactic); it is the RANGE
+that is a prefix.
+
+`surfaceTacticRange` exists to widen exactly this kind of split step back to
+its surface tactic, and it could not: its rule is the SMALLEST `TacticInfo`
+that starts **strictly before** the step and contains it, and the outer
+`intro h h2` node begins at the same byte. Loosening the rule to `≤` is what
+the 2026-08 record already forbids in as many words — "delete wants the
+LARGEST container where colouring wants the smallest" — because on
+`induction n with` the container that starts at the same byte is the whole
+alternatives block, and `tacticEdits.text` would then be a block where the
+label is a line.
+
+### The fix: ask the SLOT, and believe it only where the LABEL agrees
+
+`tacticSlots` already knows the answer — a slot is one tactic AS WRITTEN — so
+the loop in `mkTreePayload` now looks the step's start up in the slot table
+and widens to the slot's stop **only where the slot's own verbatim text equals
+the step's label**. That one test is what separates the two cases without a
+taxonomy:
+
+| step | label | slot text | widened |
+|---|---|---|---|
+| `intro h h2` | `intro h h2` | `intro h h2` | yes |
+| `induction n with` | `induction n with` | the whole block | no |
+| `rcases … <;>\n exact h` | the left operand | the whole combinator | no |
+
+And where it widens, `tacticEdits.text` becomes character-for-character the
+label, which is the best case `alignInLabel` has (one segment, no clipping).
+
+### Measured
+
+`probe lsp … --edits` is the new invariant and it is permanent: for every
+`tacticEdits` entry that STARTS a `deleteSlots` slot, the entry must reach
+that slot's stop, or stop where the slot goes on to open a block or a `<;>`;
+and its `text` must be the file's own bytes at the range it claims. It works
+under `--all`.
+
+* `lean/ProofTreeRestructure.lean` — the entry is now `65:2–65:12`
+  `"intro h h2"`, and `--rename` at 65:2 offers BOTH renames live
+  (`h`→`hpn` and `h2`→`hn`, both `benign` in 15–19 ms), matching the offline
+  probe exactly. The token count for that step went 17 → 18: `h2` is coloured
+  now, which it was not.
+* `lean/ProofTreeTour.lean` (31 entries) and `lean/ProofTreeScratch.lean`
+  (104 entries) — **0 short, 0 off** after the change. Before it, the 8 rows
+  that did not reach their slot were all legitimate: seven
+  `induction … with` block openers and two `rcases … <;> exact h`
+  combinators (`root_2_irrat_over_int` 188:4 and 196:4), where the step IS the
+  left operand and the slot is the whole thing.
+* **The corpus, swept offline** (`sample.ndjson` + the `.lean` files, step
+  tight range against the slot it starts): exactly **3 true prefix
+  truncations in 34 records, and every one of them a multi-binder `intro`** —
+  `factorization.lean` 27:8 and 52:8 (`intro p` for `intro p hpm`) and
+  `rename.lean` 25:2. Nothing else in the corpus truncates: `rw [a, b]`'s
+  sub-steps sit at INNER positions that start no slot at all (a different
+  phenomenon, already handled by D2's `hasSlot`), and `obtain ⟨k, hk⟩ := h`,
+  `rcases … with a | b` and `simp at h` are harvested at their full extent.
+  So the family is `intro`, and the fix is sized to it.
+
+`tacticEdits` is widget-only, so **`web/public/sample.ndjson` is byte-identical
+across this change** — checked, and stated here because a wire fix that moved
+the corpus would mean the field had leaked onto the offline wire.
+
+## 2026-09-09 — D4: idiom normalisation, and the linters are Mathlib's own
+
+Workstream D's fourth catalogue entry. It is the one that writes the least
+code, and deliberately: **Mathlib's style rules already ship as programs.**
+They are `linter.*` options that run at elaboration and log a warning at the
+syntax they object to, so this project decides nothing about what good Lean
+looks like — it turns the linters on, carries their messages back with their
+own ranges, and draws them on the node they name.
+
+### The seam: `reElabDecl` with options
+
+B4 built the seam and D1 built the classifier on it; D4 needed one parameter.
+`reElabDecl` now takes `opts : Options → Options`, applied on top of the
+scope's own, and `ProofTree.lintDecl` passes `ProofTree.withLinters`. Two of
+CLAUDE.md's standing warnings turned out to be load-bearing:
+
+* **`Elab.async` is ON on the server**, and `runLintersAsync` would then post
+  every linter to a snapshot task whose messages this call never sees.
+  `reElabDecl` already forces it off for its own reasons, and that is what
+  makes `runLinters` run inline so the messages land in the command state the
+  RPC reads.
+* **`snap.msgLog` is empty on the server**, which is why the lints are the
+  re-elaboration's own messages and never the file's.
+
+The RPC is lazy and cached on `(uri, version, declaration start)` — B4's key,
+for B4's reason. Measured on `lean/ProofTreeLints.lean`: **8–27 ms** per
+declaration, 0–1 ms cached.
+
+### The set is EXPLICIT, and it is the tactic-level half of the standard set
+
+`linter.mathlibStandardSet` enables 25 linters at once, and a lint is
+re-elaborated out of ONE declaration rather than out of its file. Every linter
+that judges the FILE — `style.header`, `style.longFile`, `style.missingEnd`,
+`style.openClassical`, `style.setOption`, `privateModule`, `hashCommand`,
+`minImports`, `upstreamableDecl`, `auxLemma` — would be answering about a file
+that does not exist, so `ProofTree.lintBoolLinters` names the fifteen that
+speak about a proof:
+
+```
+unusedTactic · unnecessarySeqFocus · style.multiGoal · flexible · style.cases
+style.cdot · style.refine · style.induction · style.show · style.lambdaSyntax
+style.dollarSyntax · style.longLine · oldObtain · style.admit
+style.nativeDecide                                    (+ haveLet, a Nat option)
+```
+
+`unusedTactic` and `haveLet` are NOT in Mathlib's own set — they are
+informational there — and they are the two whose findings a READER most wants,
+so they are in. `linter.haveLet` is a `Nat` (0 off / 1 noisy declarations only
+/ 2 always) and is set to 2: a reader who asked for lints has asked about this
+declaration.
+
+**The linter's NAME is read off the message's TAG** (`.tagged
+linterOption.name`, `Lean.Linter.logLint`), never scraped out of its text. One
+thing that cost a debugging round: the guard is `severity == .warning` plus a
+matching tag, and NOT `MessageData.isLinterMessage` — Mathlib's
+`logLint0Disable` (the `Nat`-valued linters, `haveLet` among them) never adds
+core's `linterMessageTag`, so a guard on it dropped exactly the lint whose fix
+is the simplest one D4 offers. Core's "This linter can be disabled with …"
+note is cut for display (`stripLintNote`); it is chrome for a compiler log.
+
+### The fix table is MEASURED, not designed
+
+The brief guessed at six fixes. What the live server actually hands back
+decided them, and the deciding fact is where each linter POINTS:
+
+| linter | the range it points at | fix | verdict |
+|---|---|---|---|
+| `style.cdot` | the `.` | → `·` | benign 22 ms |
+| `style.lambdaSyntax` | the `λ` | → `fun` | benign 8 ms |
+| `unnecessarySeqFocus` | the `<;>` | → `;` | benign 11 ms |
+| `haveLet` | the whole `have … := …` | its first four characters → `let` | benign 11 ms |
+| `style.multiGoal` | the tactic left standing | `· ` inserted at its column | benign 25 ms |
+| `unusedTactic` | the tactic | the delete gesture's extent → `""` | benign 9 ms |
+| `flexible` | the `simp at h` | D2b's expand, verbatim | benign 11 ms |
+| `style.cases` | a whole `cases' h with h h` | — | shown only |
+| the rest | — | — | shown only |
+
+Three of the seven are ONE TOKEN AT THE LINTER'S OWN RANGE, which is the shape
+of the whole table: where a linter points at a token, the fix is that token
+rewritten and nothing is invented; where it points at something wider
+(`style.cases` wants `obtain`/`rcases`/`cases` — three different answers, none
+of them a transposition of the text), no fix is offered and the reader writes
+their own, which is the standing rule about not completing an author's text.
+
+**The brief's guess about `unnecessarySeqFocus` was wrong in an instructive
+way.** It asked for "drop the `·`"; the linter's message is "Used
+`tac1 <;> tac2` where `(tac1; tac2)` would suffice" and its range is the `<;>`
+itself, so the fix is one character. Reading the linter beat reasoning about
+it.
+
+**Nothing is written on a guess even so.** Every fix goes through
+`ProofTree.checkRewrite` — D1's preplay, unchanged — before the reader is
+offered it. That is what lets `lints.ts` compute an edit from the linter's
+range with no verbatim source to check it against: the elaborator is the gate,
+not the text.
+
+### `unusedTactic` fires on a tactic the tree does not draw
+
+Measured, and it shaped `lintNodeAt`. A tactic that does nothing changes no
+goal, so Paperproof harvests no step for it: `lean/ProofTreeLints.lean`'s
+`skip` at 40:2 has a `deleteSlots` slot and NO node. The innermost-containing
+rule (B3's attribution) therefore returns nothing for the one lint whose fix
+is simplest. `lintNodeAt` falls back to the last node starting at or before
+the lint, and — when the lint is the first thing in the proof, which is where
+a `skip` usually is — to the GOAL the tactic below it stands under, never to
+that tactic itself, which would put "'skip' tactic does nothing" on the `rfl`
+that does the work. Measured: the lint lands on `⊢ n + 0 = n`, the root.
+
+### The corpus is CLEAN, and that is the finding
+
+`gen.sh` now runs `ppharness --lint` by default. The linters ride the ONE
+elaboration the harness already runs, so the cost is the linter passes and not
+a second pass: **176.5s without, 173.0s with**, i.e. inside the run-to-run
+noise, because the cost of these files is Mathlib's import. Well under the
+brief's 10s bar, so the default is ON.
+
+And `web/public/sample.ndjson` is **byte-identical** with it on, because
+`proofs/` produces **0 lints over 34 records**. That is not a gap in the
+plumbing — the CLI path was checked against the live server on the fixture and
+returns the same nine lints at the same positions — it is that this corpus is
+written the way Mathlib asks. `probe rewrite` pins the zero and says so.
+
+**No lint fixture was added to `proofs/`.** D5 added `proofs/rename.lean`
+because the shapes it needed were GOOD Lean that merely used anonymous names;
+a D4 fixture would be `cases'`, a stray `.`, a `λ` and a do-nothing `skip`
+dropped into a corpus every other probe measures. The live fixture
+`lean/ProofTreeLints.lean` carries them instead — one theorem per linter,
+`import Ramify`, nothing under `lean/` reaching the corpus — which is D5's own
+split between the two halves.
+
+### Left undone, deliberately
+
+1. **No `style.multiGoal` fix for a goal closed by more than one tactic.** One
+   bullet is one insertion; bulleting a RUN means re-indenting every line
+   under it, which is not one edit. The linter re-fires on the next tactic
+   after the first bullet is accepted, so a reader bullets a block one click
+   at a time and the elaborator checks each one.
+2. **No `oldObtain`, `style.refine`, `style.show`, `style.induction` fixes.**
+   Each wants a different tactic, not a different spelling.
+3. **`style.longLine` has no fix and should not.** Where to break a line is a
+   reader's judgement about their own text.
+4. **The `lints` option is a STANDING question, not a one-shot ask.** The
+   first cut fetched on the toggle alone, and walking to the next declaration
+   then left the row reading `lints` with nothing drawn until the reader
+   re-ticked it — a reading option that silently stops answering, which is
+   the class of bug this record is full of. It now re-fires on `proofKey`, and
+   `proofKey` moves only when the DECLARATION does, so a cursor move inside
+   one proof still costs nothing. The effect calls the RPC and sets state in
+   the promise's callback (never synchronously), and the requester — memoised
+   on the cursor, so a fresh closure per move — is reached through a ref
+   written in an effect, the `toastRef` pattern; `react-hooks` and the React
+   Compiler lint both pass.
+5. **A declaration with ERRORS lints thinly, and that is the linters' own
+   rule.** `unnecessarySeqFocus` returns early on `messages.hasErrors`, and
+   `haveLet` at level 1 does the same; measured, `lean/ProofTreeDiagnostics.lean`
+   — five deliberately broken declarations — produces 0 lints and no crash in
+   4–5 ms each. Lints are a finished-proof affordance. (`lean/ProofTreeErrors.lean`
+   cannot be a live gate at all: it has no `import` line, so no RPC is
+   registered there.)
+6. **The lints are per DECLARATION, not per file.** A reader asking about one
+   proof gets that proof's lints; the file-level linters are not in the set at
+   all (above).
+
+## 2026-09-09 — C4: the polish is a REWRITE, and the companion is the only thing that can reach a model
+
+The roadmap's C4 is one sentence with a lot of restraint in it: "constrained
+to *rewriting* the templated text with the states as context — the
+configuration all four papers report as best — never generating from the raw
+Lean." Everything below follows from taking that literally.
+
+### Where it runs, and why it cannot run anywhere else
+
+The infoview is a webview with no network. The Lean server could open a
+socket, but a proof assistant's language server making outbound HTTP calls on
+a cursor move is not a thing to build. The companion extension already exists,
+already has a channel, and is already the place the project puts everything
+the infoview API cannot do.
+
+So the direction of the existing idiom is reversed. `popoutEdit` writes
+`~/.proof-tree-companion/popout-request.json` and the companion's `fs.watch`
+picks it up; that channel has no answer, because every one of its actions is
+something the editor does. Polish has an answer, and there is no route from a
+VS Code extension back into a live RPC session — so the widget POLLS:
+
+    widget ──ProofTree.polishRequest {id, proofKey, lines}──▶ server
+           ──writes polish-request.json──▶ companion (fs.watch)
+           ──API──▶ writes polish-response.json
+    widget ──ProofTree.polishResult {id}──▶ (pending … pending … ok)
+
+`setTimeout` at 400 ms, twenty seconds and then give up — never `rAF`, which
+is the standing rule and which this is precisely the case for: a hidden
+webview fires no frames and the ask would simply hang. On give-up the strip
+draws the TEMPLATE, which was never wrong; nothing retries on its own.
+
+Every request carries an id this session minted (`companionId`), and
+`polishResult` returns `pending` unless the response file's id matches. A
+response left behind by another window is therefore never mistaken for an
+answer — the failure mode the theme file does not have (it is a broadcast) and
+this channel would.
+
+### What is sent
+
+`polishLines(base, drawn)` is exactly `narrationFor`'s own map with the
+`∴ ` stripped back off. That has a consequence worth stating: **the author's
+own comments are never sent**, because they are already absent from that map —
+the strip draws the author's words when there are any, and narration only
+fills the silence. Beside each sentence go the two goal states and the
+tactic's own text, as CONTEXT for phrasing.
+
+The prompt is five absolute clauses and a JSON envelope: rewrite only, never
+state a fact that is not already in the sentence; keep every symbol,
+identifier, hypothesis name and lemma name character for character; one output
+line per input line in the same order with the same `nodeId`; under 120
+characters, no markdown; the states are context for phrasing and not material.
+The model is `claude-haiku-4-5-20251001` by default — polish is a rewriting
+task and not a reasoning one, and the roadmap's own note about a local
+Leanstral through `lean-lsp-mcp` remains the eventual answer for people who
+want nothing to leave the machine. `max_tokens` is sized to the batch
+(`400 + 80 × lines`, capped at 8192) rather than fixed, because the whole
+proof goes in one request.
+
+**Batched per proof, cached per proof.** One request for the whole tree, and
+the companion caches on `(proofKey, hash of the templated text)` in
+`globalState`, so re-opening a proof costs nothing and a re-parse that changed
+nothing about the sentences costs nothing either. The client caches PER SENTENCE, not per tree: `polishCacheKey` is
+`nodeId + " " + template`, and only lines nobody has asked for go out
+(`askedRef`). Keying the client's copy on the whole tree was the first cut and
+was wrong for a reason worth recording — a CUT changes which nodes are drawn
+and nothing else, so folding one goal would have re-asked for every sentence
+in the proof, an API call per fold. A line that failed or came back empty
+stays marked (stored as `""`), so nothing retries on its own; a key that does
+not match draws the template, which was never wrong.
+
+### What is drawn
+
+`≈ ` (`POLISH_MARK`), in place of `∴ `, written INTO the string so
+`commentSize` measures what is painted — the `SEED_MARK` idiom, third use.
+Two marks and a plain strip is now the whole vocabulary of voices: the
+author's words bare, the tree's template `∴`, the rewritten template `≈`.
+`applyNarration` takes the polished map as an optional third argument and is
+otherwise untouched, so narration still reaches the layout engine alone and no
+gesture can edit, hide or delete a generated line.
+
+### The setting is the DEFAULT; the row is an OVERRIDE
+
+`ramify.narration.polish` is off by default. The reading-options row `polish`
+mirrors it for the session. The state is deliberately `polishOverride:
+boolean | null` and not a copy: the setting arrives late (it rides the theme
+file, fetched after mount), so a copy would have to be synced from an effect,
+and the setting would then lose to a value nobody chose. `null` means "follow
+the setting" and there is nothing to sync.
+
+Where there is no companion, or no key, the row is DISABLED with the reason in
+its title — the `goals as TeX` rule said again: a reader who has met the
+setting should find out where it went. The two facts come down the theme file
+as `ai: {polish, propose, ready, why}`; `ready` is the whole answer to "can
+this be asked at all".
+
+### The key
+
+`context.secrets`, set by `Ramify: Set narration API key`, falling back to
+`ANTHROPIC_API_KEY` in the environment. Never a setting (settings sync, and
+they are readable by every other extension in the window). Never logged — and
+neither is the prompt, which carries the user's proof. What the "Ramify"
+Output channel gets is the request id, the line count in and out, the latency
+and the token usage; an API failure is logged by STATUS ONLY, since some
+proxies echo the request back in an error body.
+
+### Offline
+
+`?polish-stub` fabricates the rewrite — first letter raised, full stop added —
+and records the lines it was handed in `window.__polish`. That is enough to
+see the `≈` strip, its wrap and the 2-line clamp with no key and no companion,
+and it is deliberately NOT a probe: what a model returns is not a fixture, and
+the only thing worth pinning offline is the request, which `polishLines` builds
+out of the narration probe's own map.
+
+---
+
+## 2026-09-09 — D6: the readability eval, and the agent as a chooser
+
+### The eval (`web/probe/eval.mjs`)
+
+`npm run probe -- eval`. Per proof: steps (the raw parser count — the number
+the rewrite pill claims to change, and the one thing here that does not depend
+on a reader's cuts), max tree depth, goals, `have`s, `have` per goal, unused
+`have`s (`haveUses` count 0), lints, closing linear runs and the longest run,
+and the rewrites OFFERED by each of D1/D2/D3/D5.
+
+The corpus is the CLI corpus plus two files that are not in it:
+`lean/ProofTreeTour.lean` (proofs written to be read) and
+`lean/ProofTreeScratch.lean` (which holds `infinitude_of_primes` as a Lean user
+rewrote it). Neither is a Lake target and neither reaches `sample.ndjson`, so
+the probe ELABORATES them itself into `probe/eval-extra.ndjson` — git-ignored,
+cached against the sources' mtimes, ~20 s cold, one ppharness process per file
+exactly as `gen.sh` does it. Putting them in `proofs/` was considered and
+rejected: `gen.sh`'s output is tracked, and this is a fixture for a
+measurement, not for the harness.
+
+**Measured (47 proofs):** 389 steps, max depth 35, 378 goals, 45 `have`s
+(0.12 per goal), 5 unused `have`s, 2 lints, 44 closing runs (longest 7), and
+122 rewrites offered — 14 inline, 4 extract, 85 collapse, 15 expand, 4 rename,
+0 lint fix. (The corpus's 2 lints are both in `ProofTreeScratch.lean`; `proofs/`
+is still clean, which is D4's own finding.)
+
+**The pair.**
+
+| | original (`proofs/euclid.lean`) | human (`ProofTreeScratch`) |
+|---|---|---|
+| steps | 26 | 9 |
+| max depth | 21 | 11 |
+| `have`s | 7 | 1 |
+| `have` per goal | 0.27 | 0.11 |
+| linear runs | 6 | 1 |
+| longest run | 7 | 2 |
+| rewrites offered | 16 | 4 |
+
+Asserted: fewer steps, shallower, fewer stated facts per goal. All three hold.
+The last row is the one to read carefully — the tool offers four times as many
+restructurings on the version that needs them.
+
+### The five moves: 4/5, and the missing one is a whole primitive
+
+The roadmap's table of what the Lean user did, answered from the OFFERS
+computed on the original rather than from a hand-written verdict:
+
+| move | offered? | by what |
+|---|---|---|
+| Library replacement (`exists_prime_dvd` → `Nat.exists_prime_and_dvd`) | **no** | nothing searches a library |
+| Inline single-use `have` (`hM`) | yes | D1a, `inline hM into obtain` |
+| Automation collapse (the `have` chain ending in `omega`) | yes | D2a, `these 7 steps are omega` |
+| Absorb a normalisation step (`push_neg at hle`) | yes | D2a — it is INSIDE that run |
+| Term ↔ tactic swap (`have hpfac := lemma a b`) | yes | D1a, `inline hpfac into have` |
+
+**4/5**, and the probe asserts that number so a change in either direction is a
+finding. Two honest notes about it:
+
+1. The fourth row is offered *incidentally*. The human moved `push_neg` to its
+   use site as `(by order)`; what the tool offers is a collapse of the whole
+   seven-step run that happens to contain it. The end state is shorter and the
+   step is gone, but the move is not the same move, and no primitive
+   relocates a normalisation step to its use site — D1's inline is about a
+   `have`'s justification, not a tactic's effect on the context.
+2. The missing row is the one Workstream D never built: `exact?`-style premise
+   selection. It is not a gap in D1–D5's coverage of what they do; it is a
+   sixth primitive. Reporting 4/5 rather than "5/5 with an asterisk" is the
+   point of measuring it.
+
+### The agent, and why it may only choose
+
+Roadmap: "the agent only chooses among them." That is implemented literally.
+
+The request carries the drawn tree's outline and `agentPrimitives` — every
+rewrite this client has ALREADY COMPUTED, with its edit list: inline, extract,
+lint fix, rename. D2's collapse and expand are deliberately absent, because
+their replacement TEXT is the server's answer (`tryClose` names the tactic,
+`getAutomationTrace` names the lemmas) and not the client's: a primitive an
+agent may pick has to be one this side can hand over whole.
+
+The answer is an INDEX into that list plus one line of reason. There is no
+free-form edit anywhere in the channel, which is what makes a bad answer
+harmless: the worst it can do is open a proposal the elaborator then rejects,
+through the same `checkRewrite` gate, the same pill and the same undo as a
+rewrite the reader asked for by hand. The reason rides the pill's `<title>`
+and an anchored toast — never the pill's LABEL, which says what will be
+written and whether the elaborator agreed, and is the promise.
+
+`suggest a rewrite` is a row in the reading options and an ACTION, not a
+setting: one ask, on the proof in front of you. It is gated on
+`ramify.restructure.propose` (off) and a key, and disabled with the reason
+otherwise. `?propose-stub` picks the first primitive offline and records the
+request in `window.__proposals`.
+
+**No agent ships.** What ships is the channel, the primitive list, the pill and
+the gate; the model call reuses C4's client in the companion. That is the
+whole of what "hook only" meant.
+
+## 2026-09-16 — In-page tooltips for the chrome, because native `title` does not survive the infoview
+
+**Report.** "Most of the new buttons don't have or don't show on-hover tooltips.
+Status bar and node menu absolutely should."
+
+**Measured in the live VS Code infoview (macOS).** The text EXISTED for every
+status-bar item, every Reading-options row and every hover-bar action; the
+native tooltip is what failed, two ways:
+
+1. While VS Code is NOT the active macOS app, no native tooltip shows at all —
+   yet pointer events still reach the webview (the hover bar appears, Lean's
+   own in-page hover popups appear). A reader with the editor beside a PDF gets
+   no tooltips, ever.
+2. With VS Code active they are FLAKY: the trash button, whose `onHover` sets
+   `deletePreview` and re-renders the tree, showed nothing after 2.5 s; the eye
+   failed on a first hover and worked on a retry. Skip, lens, Layout, Comments,
+   Width, Marks, the chevrons, ↺, ? and the panel rows worked.
+
+**What ships.** `web/src/tipController.ts` (a plain `TipController` object held
+in `useState`, never React state, plus `TipContext`/`useTip`) and `TipLayer` in
+`web/src/tip.tsx`, rendered once as the last child of the view's frame
+(`zIndex` 30, `pointerEvents: none`, `POPUP_CHROME` + the editor-widget border —
+the toast's and the doc-token popup's chrome — max-width 320, `pre-line`).
+`useSyncExternalStore` means a tip re-renders that one div and never the view;
+its `left`/`top` are written by a layout effect straight onto the element, above
+the target, flipped below where there is no room, clamped inside the frame.
+
+- **Text source:** the control's own `aria-label`, which replaces its `title` /
+  `<title>` (so the accessible name is unchanged and VS Code-active users never
+  see two). It is re-read every 200 ms while the tip stands, so `⁇` going to
+  `…` or the Marks count changing under the pointer is what the tip says.
+- **Timing:** 450 ms dwell; once one tip has shown, entering another target
+  shows it at once (native "tooltip mode") until the pointer has been off every
+  target for 600 ms. Measured in the harness: Layout → Context showed the second
+  tip 30 ms after the move; a cold hover on the trash had no tip at 300 ms and
+  its tip at 550 ms.
+- **Hides on:** pointerdown (capture — and the target stays quiet until left,
+  as a native tooltip does after a click), `scroll` (capture, so the tree's own
+  scroller counts), `wheel` (the ⌘-scroll zoom), target unmount (React sends no
+  leave for a removed node; the 200 ms poll checks `isConnected` — the hover bar
+  disappearing under a tip), and Esc as the FIRST row of the `layers` table. The
+  row reads `upNow: tipCtl.shown` at key time, a field added to `Layer` for
+  state that lives outside the view's render; a render-captured `up` would be
+  stale because a tip showing does not render the view. One Esc takes the tip,
+  the next the popover under it.
+- **POINTER events, not mouse.** React drops `onMouseEnter` on a disabled
+  `<button>` (Chrome itself delivers the events — measured, `:hover` and the
+  native `mouseenter` both reached `goals as TeX`), and the disabled rows are
+  exactly the ones whose tip says why. Existing `onHover` callbacks (brief's
+  preview, skip's and trash's fades, the D1/D2 range previews) stay on the
+  mouse pair; the tip rides `onPointerEnter`/`onPointerLeave` beside them.
+
+**Converted:** `BarButton` (every value item in both forms, the eye, ↺, ?, the
+Marks chevrons), `BarRow` (every row of the Layout, Context, Comments, Marks and
+Reading-options panels, disabled ones included), the Width slider, the
+diagnostics item's `‹ ›` and message, `RailButton` (`+ − ⛶`), every
+`NodeActionBar` button, `FrontierChip` (frontier chips, the calc relation
+picker, and the armed-delete and proposal pills' two parts), and the help
+panel's `✕`. The harness driver's `__ptw.button(prefix)` now matches
+`aria-label` first.
+
+**Left native, deliberately:** node BOX `<title>`s — the long node tooltip,
+hypothesis lines, ledger rows, trace leaves, the hop break and caption, the
+corner `+N`/`−` and the mark nub — which are reading aids on the tree rather
+than labels of a control, and several sit over `InteractiveCode`, whose own
+popups must not be covered; the gallery pager (an in-tree group title); the
+top-centre modal banner and the scope breadcrumb (outside the bar/rail/menu the
+report named).
+
+**Controls with no text at all:** none, in the surfaces the report named — the
+audit over every `onClick` the B/C/D work added (`⁇` and its busy `…`, `⤵ ⤴ ⇓ ⇑
+✎`, the lints / polish / suggest-a-rewrite / goals-as-TeX rows, the proposal
+pill's ✓ and × parts, trace leaves, ledger rows, the diagnostics pager) found a
+title on each. The report was the native failure. Three titles were
+nonetheless incomplete and now say more: the Marks chevrons, disabled with an
+empty reading, add "— no marks in the lists that are on" (the empty message's
+own words); the eye's bare "Reading options" names its rows and which four the
+slots report; the diagnostics message adds "Click to show it on its node and in
+the source" where the click does that.
+
+Gates unchanged: typecheck, lint, `counts`, `overlap` (1640 / 0), `order` (1872
+/ 0), `hopgap`. The tip draws nothing the layout engine sees; node `transform`s
+compared equal across a tip on the trash (which sets `deletePreview`).
+
+**Addendum, same day — the inactive app, measured again live.** With Calculator in front and the new in-page tips built, hovering the status bar showed nothing, and the webview had received no pointer events at all: the skip button's tip from before the switch stayed on screen and the trash button's delete-preview fade stayed applied until the reader clicked back into VS Code. An earlier inactive run had seen the node hover bar and Lean's own popups respond, so delivery to an inactive window is not dependable. No in-page tooltip can answer while another app is in front. What the view can do is not leave one standing: `TipLayer` now dismisses on window `blur`. The in-page tips still fix what native `title` got wrong with VS Code active: the trash can showed "Delete this tactic" live, and skip followed at once.
+
+**Addendum, same day — the dwell.** 450 ms was "a little quick to the jump" (user report). The first tip now waits `TIP_DWELL_MS` 1000, which is about when macOS shows a native tooltip, so the chrome's tips arrive on the same beat as every other tooltip on the desktop. Moving to a neighbouring control while a tip is up still shows the next one at once, as native tooltips do.
+
+## 2026-09-17 — D1 extract hands the name to Rename Symbol
+
+**Direction** (user, 2026-09-17): "If we're going to enable hoist we should
+probably fire off a vscode rename symbol command from `this` to the user's
+desired name." The 2026-09-09 rule "the name is `this` and is never invented or
+prompted for" is superseded in its second half: the name is still never
+INVENTED — it is asked through the editor's own Rename Symbol box, which the
+author can Esc out of, leaving `this` (a valid file).
+
+**Spike first — does Lean's server rename a `have this` binder?** Driven with
+the LSP rig (`lake serve`, a scratch `lean/SpikeRename.lean` opened by
+`didOpen` only, never written to disk; script kept out of the tree), on
+`theorem t1 (a b : Nat) (h : a < b) : a < b + 1`, once with no imports and once
+under `import Mathlib`, identical results both times:
+
+- `initialize` advertises `renameProvider: {prepareProvider: true}`.
+- Settled, `have this : a < b := by omega` + `exact Nat.lt_succ_of_lt this`:
+  `prepareRename` at the binder returns exactly the 4-char range; `rename`
+  returns TWO edits, binder and use, from the binder or from the use (0–2 ms).
+  `this` behaves exactly as an ordinary name (`hxy` gave the same shape).
+  The ANONYMOUS `have : …` renames only the use — irrelevant here, the extract
+  always writes `have this :`.
+- **Stale right after an edit.** Polling every 20 ms after a `didChange`: at
+  0 ms the server answers from the PREVIOUS snapshot — `null` where nothing
+  stood before (the extract's case: the position was inside the old `exact`),
+  otherwise edits at the OLD text's ranges (`hxy ` read with a trailing space,
+  `thi` read short) — and first answers correctly at 205–218 ms, core and
+  Mathlib alike, on a small declaration. `$/lean/fileProgress` with an empty
+  `processing` for the new version is NOT a usable signal: a rename sent right
+  after it still came back one version stale.
+
+So Lean renames the binder, and the multi-cursor fallback (select the binder
+and the one replaced occurrence from the edit's own positions) was NOT built.
+
+**Shape.**
+- `extractRewrite` stamps `Rewrite.renameAt` = `{insert line, indent + "have ".length}`,
+  the binder in the WRITTEN text (the insertion is a whole line at column 0 and
+  the other edit lies after it, so nothing shifts it). `probe rewrite` applies
+  each offered extract's edits to the real file and asserts `this :` stands
+  there (both corpus extracts, `commented.lean` 24/25).
+- The view passes it as `onApplyRewrite(edits, renameAt)` for `kind ===
+  "extract"` only; widget.tsx sends `callCompanion("rename", {renameAt, +4})`
+  in the `applyEdit` promise's success arm — never a condition of the write.
+  The harness records `window.__companion` (`?stub-edit`): accepting the
+  extract on `exact ⟨k, Or.inr (by omega)⟩` recorded `{action: "rename", pos:
+  {line: 23, character: 11}}` beside the written `      have this : m + 1 = 2
+  * k + 1 := by omega` at line 23 — column 11 is `this`.
+- **Its own request file.** `popoutEdit` writes `rename-request.json` when
+  `action == "rename"`: the write happens as the pointer leaves the accepted
+  pill, and a hover `clear`/`preview-clear` into `popout-request.json` a moment
+  later would overwrite it before the watcher read it (the watcher reads the
+  file at event time, and dedupes on nonce). Verified live: the RPC returns
+  `ok` and the file carries the action, range and nonce.
+- **Companion wait, bounded, two stages** (`renameAfterHoist`, extension.js):
+  (1) poll the document text until the range reads `this`, ≤ 2 s
+  (`RENAME_TEXT_WAIT_MS`); (2) poll, every 120 ms, ≤ 10 s
+  (`RENAME_READY_WAIT_MS`), until `vscode.prepareRename` returns EXACTLY that
+  range and a dry-run `vscode.executeDocumentRenameProvider(…, "this_renamed")`
+  returns edits that include the binder and ALL read `this` in the current
+  text — the second half is what catches the one-version-stale answer, which
+  a range check alone would not on an equal-length name. If the text moves
+  during the wait it gives up. Then it shows the document (an ordinary editor
+  on the file first, the lens second, column one last — Rename Symbol acts on
+  the FOCUSED editor), selects and reveals the binder and runs
+  `editor.action.rename`. Every stage logs to the Output channel with waited
+  ms and poll count; a give-up leaves `this`.
+- Setting `ramify.restructure.renameAfterHoist` (default true); off, the
+  companion logs a skip and does nothing. Only a window with the document open
+  acts on the request.
+- Extension 0.0.17.
+
+Not exercised: the companion half inside VS Code (installing is the user's
+step). 10 s is a guess sized for a long declaration under Mathlib; the 210 ms
+measured is a small one.
+
+## 2026-09-17 — Hide and skip split by verb
+
+**Direction.** "While reading to the end I go for skip; while taking a
+high-level look I go for hide." Two reading modes, two verbs, and until now
+one of them did the other's job: a trunk goal's `−` HOPPED its consumer in the
+compact layouts, so `−` and ◌ drew the same position, and ◌ inside a branch
+fell through to the fold of the goal above. The rule is now THE VERB DECIDES
+THE IDIOM, NOT THE GOAL'S POSITION.
+
+**The rule.**
+- `−` on a goal HIDES: always a `fold`, in every layout, trunk goals and the
+  root included (on a trunk goal that is the rest of the proof — intended).
+  Only a childless goal has no corner control.
+- ◌ on a step SKIPS: a `hop` from the goal above, keeping the continuation
+  goal, on the trunk and inside branches alike, in all four layouts. Offered
+  only where the step has EXACTLY ONE continuation or is a LEAF (a leaf that
+  is its goal's sole consumer folds that goal — reading a branch to its end by
+  skips). One continuation under a TACTIC (a broken chain's synthetic `calc`)
+  keeps the ghost.
+- NOT offered: a split (`induction`, `cases`, `constructor`, `rcases`,
+  `by_cases`, `refine ⟨?_, ?_⟩`, `match`…), a closing step whose only children
+  are spawned/side obligations, a ledger row.
+- Marquee bands follow the verb (`cutForBand`): exactly one goal's strict
+  subtree → that goal's fold; a straight run → the hop; anything else → the
+  ghost.
+- `.none` gives ◌'s answer (`noneSeedCut`): a seeded hop captioned with the
+  note where a continuation exists; the fold of the goal above on a leaf, the
+  note riding `folded.note` and heading the goal's `<title>`; the ghost only
+  on a split.
+
+So the look names the verb: `+N` with a break on the line = skipped, `+N`
+without = hidden.
+
+**What changed.**
+- `elide.ts`: `goalCut(byId, id, idx)` lost its `{trunk, stepElidable}`
+  options and is one line (fold iff the goal has children) — the trunk-hop
+  branch, the ghost/merged-run absorption and the continuation test all went.
+  `stepCut(byId, id, idx)` likewise lost its options: `hopForStep` → leaf fold
+  (`leafFoldFor`) → ghost under a tactic → `null`. Both hop and leaf fold go
+  through `soleConsumedGoal`, which is what refuses a ledger row (the ledger
+  node has one consumer per row). `hopForStep` no longer asks "first child"
+  but "sole consumer". `stepElidable` is now literally `stepCut(…) !== null`,
+  so the gate and the cut cannot disagree. New `foldForBand` / `cutForBand`.
+  `ElideCut`'s `fold` gained `note?`; `applyElisions` reads it.
+- `ProofTreeView.tsx`: `goalCuts` and `stepCutFor` call the option-less forms
+  (the layout no longer enters); the marquee calls `cutForBand` and anchors on
+  the goal for a fold as for a hop; the `.none` pill anchors likewise and its
+  bare-`.none` gate is `noneBareIds` (◌-able steps plus every tactic with
+  children, since a split's `.none` is its ghost); a folded goal's `<title>`
+  says "skipped" or "folded" by kind and leads with a leaf-`.none` note; the
+  hover bar's ◌ title distinguishes a closing step ("the goal above folds");
+  in ⑃ wide a hop whose kept goal sits to one side drops VERTICALLY through
+  the break before it curves (the strokes had stood beside a curve that had
+  already left). Two stale comments fixed in review (the `treeIdx` note still
+  said `goalCut` declines on a ghost below; `addCut`'s dedupe note still said
+  `−` and ◌ mint the same `elide-step:` cut — it is now `−` and ◌ on a LEAF
+  that mint the same `elide-fold:`, and a subtree band a third way).
+- `gestures.ts`: `NodeGates.goalCut` is `"fold" | "open" | null` (`"skip"`
+  went with its row); the `−` row says "to hide everything below this goal",
+  with a note pointing at ◌ for reading on; ◌'s note says a closing step just
+  folds and a split has no skip; the marquee `skip` verb's title names all
+  three outcomes.
+- Probes. `corpus.mjs` gained `readerCuts(lib, nodes)` — every goal's `−` plus
+  every step's ◌, deduped by `cutId` — and `order`, `overlap`, `hopgap` sweep
+  it, so hops INSIDE branches are measured for the first time. `counts` pins
+  the rule (below). `fold.mjs` gained `skip:<tactic>` (`t<k>`, a label prefix
+  or an id) and prints "◌ not offered" on a split; `wide:` is gone.
+
+**Numbers** (odd_sums unless named; "before" is
+`refs/snapshots/before-skip-hide:web/probe/counts.mjs`).
+
+| | before | after |
+|---|---|---|
+| `−` on the root | hop, 60 drawn | fold, 1 drawn |
+| ◌ on `have key` | hop, 60 (same cut as the root's `−`) | hop, 60 — now the ONLY route |
+| `−` on the goal after `have key` | hop, 73 | fold, 17 |
+| ◌ on `have gap` | — | hop, 73 |
+| `−` on succ | fold, 68 | fold, 68 |
+| ◌ on `have parity` | hop, 49 | hop, 49 |
+| ◌ on `induction m with` | fold of the goal above | `null`, not offered |
+| ◌ on `constructor`, `rcases … he \| ho`, the 4 ctor-ledger rows | offered | not offered |
+| ◌ on `rw [Finset.sum_range_succ]` (succ case) | fold of succ | hop, 74 drawn, captioned `rw` |
+| `.none` on a leaf (`flag_closing`) | ghost | fold of the goal above, note carried, 0 ghosts |
+| `.none` on a split (`flag_demo`'s `rcases`) | ghost | ghost |
+| collapse-all odd_sums / factorization | 19 (4 folded) / 7 | unchanged |
+
+Reading the succ case to its end by ◌ (three chained hops on the case root,
+then `ring` folding the kept goal) COALESCES into the case root's fold,
+tallying 4; a lone branch hop does not coalesce. Probes after: `counts` ALL
+OK; `hopgap` hops 114 (inside branches 66), folds 234, caption placements 456
+(seeded 2), min gap below a hopped goal stacked/spine/tracks 34, wide 43, and
+every hop keeps exactly one child while no fold keeps any; `order` 1384
+checked (112 hop cuts), 0 moved; `overlap` 2300 layouts, 0.
+
+**Edge decisions.**
+- *Ledger rows are not offered.* The ledger node consumes one justification
+  per row, so no row is "the step below"; folding the ledger for one row would
+  take its siblings. The row click and the component goal's own `−` are the
+  per-row gesture. The ledger's HOST (`exact ⟨key n, …⟩`) still skips — the
+  ledger is its continuation.
+- *Closing with obligations is not offered.* `exact ⟨0, Or.inl rfl⟩` has
+  children but no continuation and is not a leaf: a hop would keep nothing to
+  break above, a fold would be `−`'s job.
+- *`.none` fallback* follows ◌ exactly, with the ghost kept only where ◌ is not
+  offered (a split) — the author's sentence still needs somewhere to stand.
+- *Band: fold before hop.* A run that ends by closing its goal is both a goal's
+  whole subtree and a straight run; as a hop it would keep no goal and draw no
+  break, so the look would lie about the verb. `foldForBand` is asked first.
+
+**Harness, measured** (`?stub-edit`, odd_sums, 75 drawn with the source's
+seeds: a `§` hop on the `obtain ⟨j, hj⟩` goal `+4` and the `have gap` body's
+fold `+2`).
+- `−` on the root: 75 → 1, root wears `+44`, 0 breaks; click restores 75.
+- `−` on the trunk goal before `have residue`: 75 → 47, `+16`, no new break,
+  it is the last node drawn.
+- ◌ on `have parity` (trunk): 75 → 49, `+17`, one break captioned
+  `have · intro · …` (the seeded hop inside it absorbed, bigger wins), the
+  continuation goal kept, the spawned body gone.
+- ◌ on `rw [Finset.sum_range_succ]` (succ case): 75 → 74, `+1`, break
+  captioned `rw`, the goal `rw [ih]` solves kept. ◌ on `intro m` inside the
+  `have key` body: 75 → 74, `+1`, break `intro`, `m : ℕ` goal kept.
+- Hover bar: `rw [add_comm]` offers "Skip this step"; `ring` and
+  `exact (Nat.not_even_iff_odd.mpr hodd) hsq` offer "Skip this closing step";
+  `induction m with` and `constructor` offer no skip. ⌥-click on
+  `induction m with`: 75 → 75, no corner, no break, no ghost.
+- Marquee driven by dispatched mouse events over the succ case's 7 subtree
+  nodes → the pill's `skip` → 68 drawn, succ wears `+4`, no break, no ghost.
+- **Layout switch** with the succ-case hop and a fold on the `have residue`
+  body standing, ⌥-cycling outline → spine → tracks → wide → outline: 55 drawn
+  in every layout, corners `+1 +2 +4 +10` and breaks `rw` plus the seeded one
+  in every layout (the fold never breaks), no console errors. A second cycle
+  read each node's screen rect right after the relayout and again 2 s later:
+  identical in all four switches — nothing moved on its own after the
+  anchored relayout.
+
+**Restoring.** `refs/snapshots/before-skip-hide` holds the tree from before
+this change; `git checkout refs/snapshots/before-skip-hide -- <paths>`
+restores any file.
+
+## 2026-09-17 — The signature header shows less, and opens only on click
+
+**Report.** The header band was "pretty clunky: the ellipses + the immediate
+dropdown of the full signature". At rest it drew the FIRST SOURCE LINE of the
+signature clipped with a `…` (`theorem sum_range_odd (n : ℕ) : …`), and
+pointer-enter on that text dropped the whole multi-line signature over the
+tree at once; leaving closed it. Crossing the band on the way to anything
+below it flashed a statement.
+
+**Four options were put; the user chose 1.** (1) SHOW LESS: keyword, name and
+binders at rest, the statement left to the root goal below, a click-only
+disclosure. (2) Keep the hover but DWELL-open it. (3) FIT-AND-FADE the whole
+signature onto one line. (4) PUSH the tree down when opened instead of
+overlaying it. (2) keeps an open-on-pass-through, only slower; (3) still
+repeats the statement the root goal prints directly below and is the widest
+text to fade; (4) is the tree moving on its own, which is the standing
+complaint.
+
+**The split is by SYNTAX KIND, on the server.** `Ramify.lean` ships two new
+plain positions beside `declHeaderStart`: `declHeaderSigStop` — the start of
+the `Lean.Parser.Term.typeSpec` inside the declaration's first
+`declSig`/`optDeclSig` node (found with `nodesOfKind`, preorder; a nested `by`
+holds none) — falling back, where there is no type spec, to that signature
+node's tail, then the `declId`'s tail, then the head atom of the declaration's
+own node (`example := …`); and `declHeaderNameStop` — the signature node's
+start (its first token: a binder's bracket, or the `:` where there are no
+binders), absent when the signature is empty. No argument index, no text scan.
+Both ride `stableProofOf` and widget.tsx's `ProofTreeData`; the CLI does not
+carry the header at all, so `gen.sh` and the corpus are untouched. The client
+(`headerPrefix`, briefLabel.ts) cuts `declHeader` there, collapses every
+whitespace run — newlines and continuation indents — to one space, and returns
+`keep` segments, so the existing token colouring maps through
+`renderTacticTokens`'s `Elision` path (`renderDeclHeader` gained the argument)
+and `theorem`, the name and the binders stay coloured. A position that does
+not fall inside the text returns null and the header falls back to today's
+first line (with its `…`, which then IS a fact about the source).
+
+**Measured on the live server** (`probe lsp --json`, a temporary fixture beside
+the Scratch and Tour files, since deleted): the stop lands on the `:` in every
+case, and the rest text is
+`example` (`example : 1 + 1 = 2`), `def twice` (`def twice : ℕ → ℕ`),
+`instance` (`instance : Inhabited (Fin 3)`), `instance finInh`,
+`lemma lem_add (a b : ℕ) {c : ℕ} [NeZero c] (h : a ≤ b)` (binders over three
+lines, collapsed), `abbrev three` (no type spec, empty signature → the
+`declId`'s tail), `example (n : ℕ) (h : 0 < n)`, `def withBinders (n : ℕ)` (no
+type spec → the binders' tail), `theorem modded (n : ℕ)` (under a docstring,
+`@[simp] private`), `example` (`example := by`, nothing but the keyword → the
+head atom), `theorem infinitude_of_primes (N : ℕ)`,
+`theorem sum_range_odd (n : ℕ)` (type on the next line),
+`theorem tour_reading (n m : Nat)`,
+`theorem tour_editing (a b : Nat) (h : a ∣ b) (hb : b ≠ 0)`. The name stops
+give `example`, `def twice`, `instance`, `instance finInh`, `lemma lem_add`,
+`theorem modded`, … and none for `abbrev three`/`example :=`, where the client
+uses the sig stop.
+
+**Too wide: a fade, not a glyph.** The resting span's `scrollWidth` against its
+`clientWidth` is read by the header's own ResizeObserver (now also observing
+the span), and only when it overflows does the span wear a 24px
+`mask-image` to transparent — a fade on text that fits would eat its last
+characters. Harness at 300px: `theorem tour_editing (a b : Nat) (h : a ∣ b)
+(hb : b ≠ 0)` in a 224px box, faded.
+
+**The hover is GONE.** A `▾` button at the band's right edge (a SIBLING of the
+header, so the open overlay's scroll does not carry it and its click never
+reaches the band's reveal-in-source) opens the overlay — styling, `maxHeight
+60%` and scroll as before — and reads `▴` while open; in-page tip "Show the
+full signature" / "Hide the full signature". It closes by the button, Esc (a
+`signature` row SECOND in `layers`, after the tip: the overlay sits above every
+popover), a capture-phase `pointerdown` anywhere not inside `[data-ptw-hdr]`
+(a document listener rather than `bg`, which answers only the tree's
+background), and a proof change (reset in the `proofKey` block, no effect).
+Clicking anywhere else on the band still reveals. The open overlay no longer
+stops at `right: 38` — that gutter was the zoom rail's when it hung at the top
+right, and the rail lives bottom-right now — and both states pad
+`HDR_BTN_LANE` (36px) on the right for the button, against the old 46px; the
+vertical padding is unchanged, so the band is `HDR_REST_H` (29) at rest,
+measured.
+
+**The scope trail** drops its `…` and takes the name stop's text:
+`theorem tour_editing › ◎ refine_1 ✕`.
+
+**Harness checks** (`?stub-edit&hdr=…&hdr-name=l:c&hdr-sig=l:c`, new stubs; the
+reveal stub now counts into `window.__reveals`): rest reads
+`theorem sum_range_odd (n : ℕ)` at 29px; synthetic pointer/mouse enter on the
+text opens nothing; `▾` opens (45px, `▴`, 0 reveals), `▴` closes, Esc closes,
+a pointerdown on the tree closes, a click inside the open overlay keeps it open
+and reveals once, a band click at rest reveals; the first node's screen rect
+identical before, during and after all of it. Without `hdr-sig` the rest text
+is today's `theorem sum_range_odd (n : ℕ) : …`.

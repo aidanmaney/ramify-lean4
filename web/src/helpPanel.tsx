@@ -7,6 +7,7 @@ import {
   type Gesture,
 } from "./gestures";
 import { POPUP_CHROME } from "./theme";
+import { useTip } from "./tipController";
 
 const INK = "var(--vscode-icon-foreground, #2d3748)";
 
@@ -28,6 +29,7 @@ export function HelpPanel({
   anchor?: CSSProperties;
 }) {
   const shown = GESTURES.filter((g) => !g.needs || caps[g.needs]);
+  const tip = useTip();
   return (
     <div
 
@@ -66,7 +68,7 @@ export function HelpPanel({
       >
         <button
           type="button"
-          title="Close (Esc, or ?)"
+          {...tip.props("Close (Esc, or ?)")}
           onClick={onClose}
           style={{
             border: "none",
