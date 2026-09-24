@@ -14,6 +14,6 @@ Quickstart: see [INSTALL.md](INSTALL.md#quickstart).
 
 ## Built on Paperproof
 
-Ramify would not exist without [Paperproof](https://github.com/Paper-Proof/paperproof), by Anton Kovsharov, Evgenia Karunus and its contributors. Paperproof showed that a Lean proof reads well as the history of its goals and hypotheses, and its parser is what recovers that history from Lean's InfoTree. Every tree Ramify draws starts from that parser, which Ramify uses unchanged as a pinned dependency. Ramify adds a different renderer, reading controls and editing from the tree. If you want the proof-as-paper view itself, use Paperproof; it is excellent.
+Ramify would not exist without [Paperproof](https://github.com/Paper-Proof/paperproof), by Anton Kovsharov, Evgenia Karunus and other contributors. We graciously build upon their parser for this project.
 
 This project is MIT licensed: see [LICENSE](LICENSE). For third-party attribution see [NOTICE](NOTICE).
