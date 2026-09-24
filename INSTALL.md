@@ -153,7 +153,7 @@ ext/ramify/       the VS Code extension
 ```
 
 > [!Note]
-> The layout above is what an install gives you, and it is a subset of this repository — you are reading the source. `dist/` is assembled by `./package.sh` and mirrored to the distribution repo, [aidanmaney/ramify-lean4](https://github.com/aidanmaney/ramify-lean4), which is what the instructions above clone. Sources are shared rather than copied: every library in `dist/lakefile.toml` points its source directory back at `lean/`, so the two cannot drift. `web/dist/proofTreeWidget.js` is minified there and here alike — it is a build artifact of `web/src/`, tracked because `Ramify.lean` reads it with `include_str` and a fresh clone runs no npm step.
+> The layout above is what an install gives you, and it is a subset of this repository — you are reading the source. `dist/` is assembled by `./package.sh` and copied to this repository's `main` branch, which is what the instructions above clone; development happens here on `dev`. Sources are shared rather than copied: every library in `dist/lakefile.toml` points its source directory back at `lean/`, so the two cannot drift. `web/dist/proofTreeWidget.js` is minified there and here alike — it is a build artifact of `web/src/`, tracked because `Ramify.lean` reads it with `include_str` and a fresh clone runs no npm step.
 
 Ramify is MIT licensed; see [LICENSE](LICENSE). It builds on Paperproof, ProofWidgets and `@leanprover/unicode-input`; see [NOTICE](NOTICE) for the breakdown.
 

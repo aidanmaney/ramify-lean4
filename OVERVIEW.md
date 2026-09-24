@@ -66,7 +66,7 @@ file, as a standalone browser app (`npm run dev`) that draws the same trees
 with no editor and no language server involved.
 
 Wire 2 is development equipment and ships nowhere. `dist/lakefile.toml`
-declares no executable at all, and the distribution repository carries only the
+declares no executable at all, and the install branch (`main`) carries only the
 three Lean sources the widget compiles — `Ppharness.lean` and `Main.lean` are
 not in it. Nothing an end user installs can run it, and nothing needs to.
 
@@ -843,10 +843,12 @@ The companion extension ships the same way: a prebuilt `.vsix` (currently
 `INSTALL.md` kept in step by hand. A rebuild is needed whenever a new setting
 lands, or existing installs never see it.
 
-Users install from a separate, private distribution repository that the
-development repo never references. There is no automated sync between the two,
-so a change to the widget, the shared Lean modules or the bundle has to be
-copied across by hand — or installs silently run stale.
+Both live in one public repository, [aidanmaney/ramify-lean4](https://github.com/aidanmaney/ramify-lean4):
+development happens on the `dev` branch, and `main` is the install branch, a
+hand-assembled subset of `dev` that users' `require` blocks point at. The two
+branches have separate histories and there is no automated sync, so a change to
+the widget, the shared Lean modules or the bundle has to be copied across to
+`main` by hand — or installs silently run stale.
 
 ---
 

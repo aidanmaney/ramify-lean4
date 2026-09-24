@@ -63,7 +63,7 @@ cd lean && lake exe cache get && lake build     # RE-RUN cache get after any `la
 - **No relayout on hover**; every relayout is anchored (`anchorOn`/`anchorAs`/the cursor node/the nearest-centre `[nodes]` anchor); the view must never move on its own — the user's most repeated complaint.
 - **No setState in effects; render-called functions must not touch refs** (react-hooks/refs and the React Compiler lint are the gate — restructure, never disable).
 - Toolchain **Lean v4.32.2**, Mathlib `v4.32.2`, Paperproof pinned by commit (upstream moved to the module system). `Main.lean` re-arms `enableInitializersExecution` per file (v4.32 clears it after every `importModules`).
-- Commit only when asked; "commit" means on `main`.
+- Commit only when asked; "commit" means on `dev` (the working branch; `origin` is the PUBLIC `aidanmaney/ramify-lean4`, whose `main` is the install branch — see the memory on the distribution). The old private repo is the `archive` remote, read-only.
 
 ## Facts the code depends on (grep the record for the why)
 

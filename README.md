@@ -142,6 +142,11 @@ none of it, which is why `dist/` is a separate, much lighter package.
 
 ## Distribution
 
+This is the `dev` branch of [aidanmaney/ramify-lean4](https://github.com/aidanmaney/ramify-lean4).
+Users install from the same repository's `main` branch, which is a hand-copied
+subset of this one: `dist/`, the three Lean sources the widget compiles, the
+renderer bundle and the extension.
+
 `dist/` is the installable Lake package and `./package.sh` builds it. Sources are
 **shared, not copied** — every library there points its source directory back at
 `lean/`, so the two packages cannot drift.
