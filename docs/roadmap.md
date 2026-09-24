@@ -72,7 +72,7 @@ Alternative considered: swapping Paperproof for **jixia** (frenzymath) — extra
 
 Grounded stack, in order of trust:
 
-1. **Statement rendering via LeanTeX / LeanTeX-mathlib** (kmill). Mechanism: `@[latex_pp kind]` / `latex_pp_app_rules (const := …)` printers over `Expr`, `#latex` command, a widget. Use it for goal boxes' *reading* form (`\mathbb{N}`, `\frac`, `\mapsto`) beside Lean's own print; both are elaborator-derived. Ship as an optional dependency in `dist/` (it is core-only; mathlib rules come with LeanTeX-mathlib). Render with KaTeX in the widget (bundled, offline).
+1. **Statement rendering via LeanTeX / LeanTeX-mathlib** (kmill) — **PUNTED (2026-09-24).** Upstream LeanTeX does not build on v4.32.2 and half its output reads worse than Lean's own print; pending a conversation with its authors, else a custom printer. Nothing of it ships: the always-empty `latex` sidecar and the disabled `goals as TeX` row were removed (design record, 2026-09-09 and 2026-09-24). The idea stands as it was: a goal box's *reading* form (`\mathbb{N}`, `\frac`, `\mapsto`) beside Lean's own print, rendered with a bundled KaTeX.
 2. **Templated step narration** (Coscoy/Holland-Minkley/Hattori): one template per tactic *kind* (`intro` → "Let x be …", `have` → "First, note that P (by …)", `rcases`/`obtain` → "Write h as …", `induction` → "By induction on n:", `calc` → the ledger *is* the prose, `exact lemma` → "This is exactly `lemma` (doc)", `rw` → "Rewriting with …", automation → "This is routine (simp/omega)"). Inputs are what Ramify already has per node: tactic syntax kind, goal before/after, used hyps, referenced lemmas + docstrings (B3). Deterministic, offline-probeable against the CLI corpus.
 3. **Recursive summarization along the tree** (Hattori 2025, Herald): a node's summary = its own template line + children's summaries, folded by the `have`/case structure the tree already has. Rendered as the **narration-mode strip** (comment mode `instead` already draws prose in the box) — i.e. auto-narration is a *fourth comment mode*: author's comment if present, else generated.
 4. **Optional LLM polish** behind a setting, via the companion (it can reach an API; the widget cannot). Constrained to *rewriting* the templated text with the states as context — the configuration all four papers report as best — never generating from the raw Lean. Off by default. Prove2Me-style "read-back" (re-verbalise the *statement* for a non-Lean reader) is the first use.
@@ -114,7 +114,7 @@ What we do *not* claim: a normal form. Each transformation is offered, measured 
 
 1. **A (rail/labels/text)** — 1–2 weeks. No wire changes. Unblocks user testing of everything after.
 2. **B1–B3** — parser walks; ship as sidecars keyed by `position.start` (the existing rule). Fixtures in `proofs/`.
-3. **C1–C3** — LeanTeX + templates + recursive narration as the fourth comment mode. Offline-probeable; measure template coverage over the corpus and `ProofTreeTour.lean` (target: every tactic kind in the corpus has a template; report the residue).
+3. **C2–C3** (C1 punted, see above) — templates + recursive narration as the fourth comment mode. Offline-probeable; measure template coverage over the corpus and `ProofTreeTour.lean` (target: every tactic kind in the corpus has a template; report the residue).
 4. **D1–D2** — inline/extract `have`, automation collapse/expand, on the cf pipeline. Then D3–D5.
 5. **C4** — LLM polish through the companion, opt-in.
 

@@ -758,29 +758,6 @@ def calcRelationGoals (steps : Array CalcGoalStep) (chains : Array CalcChain)
         unless out.contains i.goalBefore do out := out.push i.goalBefore
   return out
 
-/-! ## Statement rendering (C1) — the seam only
-
-A goal's statement in LaTeX, beside Lean's own print, so a reader can meet
-`∑_{i ∈ [0,n)}` where the tree draws `∑ i ∈ Finset.range n`. The producer is
-kmill's LeanTeX (`LeanTeX.run_latexPP : Expr → Config → MetaM String`), which
-does NOT build on this toolchain — see the 2026-09-09 design-record entry for
-the exact three incompatibilities and the fork that carries the fix.
-
-The TYPE ships anyway, and it ships EMPTY. It is plain data (a goal id and a
-string), so it rides both wires, and the client's reading option is drawn and
-disabled against it rather than against a compile-time flag: the day the
-printer is wired in, nothing downstream has to learn a new shape. Keyed on the
-GOAL ID the tree already draws, because a goal print is what is rendered — not
-on `position.start`, which is the producer step's key.
--/
-
-structure LatexGoal where
-
-  goalId : String
-
-  tex : String
-  deriving ToJson, FromJson, Inhabited
-
 /-! ## D4 — the linters, run by the elaborator and reported on the node they name
 
 Mathlib's style rules are already programs: they ship as `linter.*` options

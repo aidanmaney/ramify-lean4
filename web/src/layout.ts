@@ -129,13 +129,55 @@ function floatsComment(
   );
 }
 
+/** The room a strip drawn BELOW the box takes (`TreeNode.commentBelow`: a
+ folded goal's generated summary), 0 for every other node. Like a floated
+ strip it is outside the band, so `bandTopH` leaves it out and `inkExtent`,
+ `nodeSpan` and the trunk's `bottom` add it back — on the other side. */
+export function belowH(d: LayoutNode): number {
+  return d.commentBelow && !d.commentFloats && d.commentBlockH > 0
+    ? d.commentBlockH - COMMENT_GAP + BELOW_GAP
+    : 0;
+}
+
+/** Box to strip, for a strip BELOW the box: the trunk's step gap, so a folded
+ goal's summary lands where its first step's strip stood in the stacked
+ layout while the goal was open (`TRUNK_GAP_STEP` down to that step's band,
+ whose strip is the band's first thing). */
+const BELOW_GAP = 14;
+
 export function bandTopH(d: LayoutNode): number {
-  return d.caseH + (d.commentFloats ? 0 : d.commentBlockH);
+  return d.caseH + (d.commentFloats || belowH(d) > 0 ? 0 : d.commentBlockH);
 }
 
 export function inkExtent(d: LayoutNode): { up: number; down: number } {
   const half = (bandTopH(d) + d.h) / 2;
-  return { up: half + (d.commentFloats ? d.commentBlockH : 0), down: half };
+  return {
+    up: half + (d.commentFloats ? d.commentBlockH : 0),
+    down: half + belowH(d),
+  };
+}
+
+/** The TOP edge of the comment strip, relative to the node's placed `y` — the
+ one coding every paint site (lines, the clamp rule, the `⋯ more` row, the
+ comment editor) and `probe overlap` read. Above the box the block is the
+ lines then `COMMENT_GAP`; below it (`belowH`) `BELOW_GAP` comes first and
+ the lines follow. */
+export function commentStripTop(d: LayoutNode): number {
+  const top = bandTopH(d);
+  const boxTop = (top - d.h) / 2;
+  if (belowH(d) > 0) return boxTop + d.h + BELOW_GAP;
+  return boxTop - top + (d.commentFloats ? -d.commentBlockH : d.caseH);
+}
+
+/** The strip's left inset from the box's left edge in the compact layouts. A
+ strip BELOW a goal starts where its first step's strip started while the goal
+ was open (that step sits at the goal's own left, its strip `COMMENT_INDENT`
+ in), the root goal included. */
+export function commentIndentOf(d: {
+  parents: readonly unknown[];
+  commentBelow?: boolean;
+}): number {
+  return d.parents.length > 0 || d.commentBelow ? COMMENT_INDENT : 0;
 }
 
 export const CHIP_TOP_GAP = 8;
@@ -176,7 +218,7 @@ function trunkLayout(
   let trackFloor = -Infinity;
 
   const effOf = (n: LayoutNode): number => {
-    const indent = n.parents.length > 0 ? COMMENT_INDENT : 0;
+    const indent = commentIndentOf(n);
     return Math.max(
       n.w,
       (n.commentW > 0 ? indent : 0) + n.commentW,
@@ -199,7 +241,7 @@ function trunkLayout(
 
     return {
       y0: pn.y - band / 2 - (floats ? d.commentBlockH : 0),
-      y1: pn.y + band / 2,
+      y1: pn.y + band / 2 + belowH(d),
       lo: left,
       hi: left + effOf(d),
     };
@@ -264,7 +306,8 @@ function trunkLayout(
       floatsComment(aside, n) &&
       !(sideBySide && (kids.get(n.id) ?? []).length > 1);
     n.commentFloats = floats;
-    const cB = floats ? 0 : n.commentBlockH;
+    const below = belowH(n);
+    const cB = floats || below > 0 ? 0 : n.commentBlockH;
     const band = n.caseH + cB + n.h;
 
     const eff = effOf(n);
@@ -275,8 +318,14 @@ function trunkLayout(
     const pn: PlacedNode = { x: x0 + n.w / 2, y: y0 + band / 2, data: n };
     placed.set(n.id, pn);
     nodes.push(pn);
-    let bottom = y0 + band + n.chipH;
+    let bottom = y0 + band + below + n.chipH;
     let right = x0 + eff;
+    // A strip BELOW a goal reaches right, into the lane the aside modes float
+    // tactics (and their strips, which hang ABOVE the tactic) in, so it raises
+    // the track's floor exactly as an aside tactic's own box does — else the
+    // next floated strip lands on it (`probe overlap`, spine: 2 before this).
+    if (aside && below > 0)
+      trackFloor = Math.max(trackFloor, y0 + band + below + ASIDE_DROP);
 
     const cs = (kids.get(n.id) ?? []).slice().sort((a, b) => {
       const ra = srcRank(a.id);
@@ -360,7 +409,7 @@ function trunkLayout(
             : last;
 
     const stubY = y0 + n.caseH + cB + n.h / 2;
-    const boxBottom = y0 + band + n.chipH;
+    const boxBottom = y0 + band + below + n.chipH;
     const mark = nodes.length;
 
     if (isAside) trackFloor = Math.max(trackFloor, boxBottom + ASIDE_DROP);
@@ -1334,8 +1383,14 @@ export function createLayoutEngine(
       .coord(coordSimplex());
     const extent = layout(graph);
 
+    // Sugiyama centres the node's WHOLE reserved height on `n.y`; a strip
+    // below the box makes the ink asymmetric about the band, so the band is
+    // lifted by half the strip and the ink is centred on the layer again.
     const byNode = new Map<GraphNode<LayoutNode, LinkDatum>, PlacedNode>(
-      [...graph.nodes()].map((n) => [n, { x: n.x, y: n.y, data: n.data }]),
+      [...graph.nodes()].map((n) => [
+        n,
+        { x: n.x, y: n.y - belowH(n.data) / 2, data: n.data },
+      ]),
     );
     return {
       nodes: [...byNode.values()],

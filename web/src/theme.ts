@@ -168,6 +168,32 @@ const PALETTE_CSS = `
   --ptw-muted: color-mix(in srgb, var(--ptw-fg) 62%, var(--ptw-bg));
   --ptw-rail-pressed: #4a5568;
   --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
+  /* THE CHROME'S INK (2026-09-22 taste pass). Every floater — status bar,
+     rail, menus, tips, toasts, the hover bar — used to read VS Code's
+     editor-widget variables straight, each with a LIGHT literal fallback
+     (#cbd5e0, #2d3748, rgba(255,255,255,0.97)…), so wherever those variables
+     are absent (the harness; a host that does not set them) a dark theme got
+     white cards with dark ink: the recorded light-on-light trap, inverted.
+     The host's variable still wins; the fallback is now DERIVED from bg/fg,
+     so it lands on either side of the luminance split. */
+  --ptw-chrome-bg: var(--vscode-editorWidget-background, var(--ptw-surface));
+  --ptw-chrome-border: var(--vscode-editorWidget-border, color-mix(in srgb, var(--ptw-fg) 22%, var(--ptw-bg)));
+  --ptw-chrome-ink: var(--vscode-icon-foreground, color-mix(in srgb, var(--ptw-fg) 85%, var(--ptw-bg)));
+  --ptw-chrome-btn: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--ptw-fg) 5%, var(--ptw-chrome-bg)));
+  --ptw-chrome-lit: var(--vscode-list-activeSelectionBackground, color-mix(in srgb, var(--ptw-hue-goal) 16%, transparent));
+  --ptw-focus: var(--vscode-focusBorder, var(--ptw-hue-goal));
+  /* THE MESSAGE STRIP's tint (2026-09-24): a wash of the severity's own ink
+     over the chrome's background (so it stays opaque over the tree and lands
+     on either side of the luminance split with the chrome ink still readable
+     on it), and the same ink, whole, for its left edge. Error and warning take
+     the editor's own colours (--ptw-danger / --ptw-warn); a lint is comment
+     ink, as its ribbon is — the proof is correct and a style rule speaks. */
+  --ptw-diag-error-edge: var(--ptw-danger);
+  --ptw-diag-warn-edge: var(--ptw-warn);
+  --ptw-diag-lint-edge: var(--ptw-comment);
+  --ptw-diag-error-wash: color-mix(in srgb, var(--ptw-danger) 13%, var(--ptw-chrome-bg));
+  --ptw-diag-warn-wash: color-mix(in srgb, var(--ptw-warn) 13%, var(--ptw-chrome-bg));
+  --ptw-diag-lint-wash: color-mix(in srgb, var(--ptw-comment) 11%, var(--ptw-chrome-bg));
   --ptw-edit-bg: var(--vscode-input-background, var(--ptw-surface));
   --ptw-edit-text: var(--vscode-input-foreground, var(--ptw-fg));
 
@@ -297,11 +323,64 @@ export const EDIT_BG = "var(--ptw-edit-bg)";
 export const EDIT_TEXT = "var(--ptw-edit-text)";
 export const RAIL_PRESSED = "var(--ptw-rail-pressed)";
 
+/** THE CHROME (2026-09-22 taste pass). One set of tokens for every floater,
+ so a new one cannot pick its own literal fallback; see `--ptw-chrome-*`. */
+export const CHROME_BG = "var(--ptw-chrome-bg)";
+/** `--ptw-chrome-bg` laid over the editor background, for a CSS `background`.
+A theme's `editorWidget.background` may carry ALPHA (2026-09-24: the tree read
+through the status card and the message strip), and CSS cannot flatten a colour
+onto another in one value — so every chrome surface paints two layers, the
+token over the opaque `--ptw-bg`. SVG fills cannot layer; they draw an
+underlay rect instead (`CHROME_UNDERLAY`). */
+export const chromeSurface = (c: string = CHROME_BG) =>
+  `linear-gradient(${c}, ${c}), var(--ptw-bg)`;
+export const CHROME_SURFACE = chromeSurface();
+/** The opaque fill an SVG chrome rect sits on (see `chromeSurface`). */
+export const CHROME_UNDERLAY = "var(--ptw-bg)";
+export const CHROME_BORDER = "var(--ptw-chrome-border)";
+export const CHROME_INK = "var(--ptw-chrome-ink)";
+/** A glyph button's resting fill (the hover bar's squares). */
+export const CHROME_BTN = "var(--ptw-chrome-btn)";
+/** The keyed row of a menu. */
+export const CHROME_LIT = "var(--ptw-chrome-lit)";
+export const FOCUS_RING = "var(--ptw-focus)";
+/** The message strip's tint per severity (1 error, 2 warning, 3 lint): the
+ left edge in the severity's ink and a wash of it over the chrome. */
+export const DIAG_EDGE = {
+  1: "var(--ptw-diag-error-edge)",
+  2: "var(--ptw-diag-warn-edge)",
+  3: "var(--ptw-diag-lint-edge)",
+} as const;
+export const DIAG_WASH = {
+  1: "var(--ptw-diag-error-wash)",
+  2: "var(--ptw-diag-warn-wash)",
+  3: "var(--ptw-diag-lint-wash)",
+} as const;
+/** The UI face every piece of chrome speaks in — the host's own. Lean text
+ (goals, tactics) stays in the code font; the width readouts' `44 col` are
+ chrome and speak this face with tabular figures. */
+export const CHROME_FONT = "var(--vscode-font-family, system-ui, sans-serif)";
+/** One corner radius for HTML chrome and for the in-tree chrome that is not
+ a node box (bar, tabs, badges). Node boxes have their own (`nodeRx`). */
+export const CHROME_RADIUS = 3;
+/** The two opacities chrome dims with: a control that cannot be used now,
+ and a value or hint that reads as secondary/off. */
+export const DISABLED_OPACITY = 0.35;
+export const DIM_OPACITY = 0.6;
+
 export const POPUP_CHROME = {
   padding: "6px 9px",
-  borderRadius: 3,
-  background: "var(--vscode-editorWidget-background, rgba(255,255,255,0.97))",
+  borderRadius: CHROME_RADIUS,
+  background: CHROME_SURFACE,
   boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+} as const;
+
+/** POPUP_CHROME plus the border, ink and face every floater shares. */
+export const FLOATER_CHROME = {
+  ...POPUP_CHROME,
+  border: `1px solid ${CHROME_BORDER}`,
+  color: CHROME_INK,
+  fontFamily: CHROME_FONT,
 } as const;
 
 export const TOKEN_COLOR: Record<string, string> = {

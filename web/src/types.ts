@@ -113,6 +113,15 @@ export interface TreeNode {
 
   comment?: string;
 
+  /** The comment strip is drawn BELOW the box instead of above it. Set only by
+   `applyNarrationLines`, only on a FOLDED goal (`folded.kind === "fold"`)
+   whose strip is the GENERATED summary of what its `+N` hides: expanded, the
+   first step's `∴` line sat under the goal (the tactic's strip), so the fold's
+   summary stays under it too rather than jumping above the box (2026-09-22).
+   An author's comment on a goal never wears it. Layout reads it through
+   `bandTopH`/`inkExtent`/`commentStripTop`/`commentIndentOf` — one coding. */
+  commentBelow?: boolean;
+
   addSpec?: AddSpec;
 
   addLink?: AddSpec;

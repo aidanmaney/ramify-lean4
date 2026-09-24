@@ -5,10 +5,15 @@ import {
   useState,
   useRef,
   useLayoutEffect,
+  useSyncExternalStore,
+  Fragment,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
+import { CodeText } from "./codeSpans";
+import { plainTicks } from "./ticks";
 import {
   createLayoutEngine,
   HYP_FONT_PX,
@@ -34,6 +39,8 @@ import {
   CASE_LINE_H,
   bandTopH,
   inkExtent,
+  commentStripTop,
+  commentIndentOf,
   getCodeFontFamily,
   refreshCodeFontFamily,
   measureText,
@@ -44,6 +51,7 @@ import {
   TRUNK_GAP_BRANCH,
   isGhostNode,
   BADGE_FONT_PX,
+  CORNER_W,
   BADGE_H,
   badgeWidth,
   HOP_CAPTION_GAP,
@@ -66,11 +74,34 @@ import type {
 } from "./paperproof";
 import {
   applyTraces,
+  TRACEABLE_HEADS,
   isAutomationNode,
+  tacticHeadWord,
   traceIndex,
   traceKey,
   traceTip,
 } from "./trace";
+import {
+  DEFAULT_EXPERIENCE,
+  PRESETS,
+  type Experience,
+} from "./experience";
+import {
+  CHECKED_FIRST,
+  MOVE_IDS,
+  pinLabel,
+  togglePinned,
+  type BarKind,
+  type MoveId,
+  EXTRACT_MOVE_LABEL,
+  collapseMoveLabel,
+  expandMoveLabel,
+  inlineMoveLabel,
+  lintMoveLabel,
+  pillMove,
+  renameMoveLabel,
+  traceMoveLabel,
+} from "./moves";
 import { stepGoalsAfter } from "./paperproof";
 import {
   PLACEHOLDER,
@@ -186,7 +217,12 @@ import {
 } from "./gestures";
 import { HelpPanel } from "./helpPanel";
 import { TipLayer } from "./tip";
-import { TipContext, TipController, useTip } from "./tipController";
+import {
+  TIP_DWELL_MS,
+  TipContext,
+  TipController,
+  useTip,
+} from "./tipController";
 import {
   tourList,
   authorStops,
@@ -228,6 +264,21 @@ import {
   DANGER_FILL,
   WARN_FILL,
   POPUP_CHROME,
+  FLOATER_CHROME,
+  CHROME_BG,
+  CHROME_SURFACE,
+  CHROME_UNDERLAY,
+  chromeSurface,
+  CHROME_BORDER,
+  CHROME_INK,
+  CHROME_BTN,
+  CHROME_LIT,
+  CHROME_FONT,
+  CHROME_RADIUS,
+  DIAG_EDGE,
+  DIAG_WASH,
+  DISABLED_OPACITY,
+  DIM_OPACITY,
   TOKEN_VARS,
   ensurePaletteStyle,
   observeThemeChange,
@@ -292,7 +343,7 @@ const HYP_MODES: Record<
     glyph: "▸",
     glyphPx: 19,
     next: "new",
-    title: "Context: only hypotheses the rest of the proof below actually uses",
+    title: "Context: used — only hypotheses the rest of the proof below actually uses",
   },
   new: {
     // `intro`, not `binders`: the item RESERVES the width of its widest
@@ -304,19 +355,19 @@ const HYP_MODES: Record<
     glyph: "λ",
     next: "delta",
     title:
-      "Context: only hypotheses the preceding tactic introduced as a binding",
+      "Context: intro — only hypotheses the preceding tactic introduced as a binding",
   },
   delta: {
     name: "diff",
     glyph: "Δ",
     next: "full",
-    title: "Context: hypotheses this goal introduced, plus any its tactic uses",
+    title: "Context: diff — hypotheses this goal introduced, plus any its tactic uses",
   },
   full: {
     name: "all",
     glyph: "∀",
     next: "used",
-    title: "Context: every hypothesis in scope",
+    title: "Context: all — every hypothesis in scope",
   },
 };
 
@@ -334,25 +385,25 @@ const LAYOUT_MODES: Record<
     name: "outline",
     next: "spine",
     title:
-      "Layout: compact outline — every node on its own line off a left trunk",
+      "Layout: outline — a compact outline, every node on its own line off a left trunk",
   },
   spine: {
     name: "spine",
     next: "tracks",
     title:
-      "Layout: goal spine — two tracks, goals stacked tight on the left and each tactic beside its step in a right-hand track",
+      "Layout: spine — a goal spine: two tracks, goals stacked tight on the left and each tactic beside its step in a right-hand track",
   },
   tracks: {
     name: "tracks",
     next: "wide",
     title:
-      "Layout: aligned tracks — the spine with goals wrapped to a modest width, so every tactic starts at the SAME x and the two tracks read as columns",
+      "Layout: tracks — aligned tracks: the spine with goals wrapped to a modest width, so every tactic starts at the same x and the two tracks read as columns",
   },
   wide: {
     name: "wide",
     next: "stacked",
     title:
-      "Layout: wide layered tree — Sugiyama, same-depth nodes across one horizontal band",
+      "Layout: wide — a wide layered tree, nodes at the same depth share one horizontal band",
   },
 };
 
@@ -454,6 +505,10 @@ function cachedGlobals(ident: string): string[] | null {
 // EDIT_STROKE/2. The overlay's 2px border COINCIDES with that outline, which
 // is why the foreignObject is expanded by half a stroke on every side.
 const EDIT_STROKE = 2;
+/** A node box's corner radius: a tactic is the tighter card, a goal the
+ rounder one. Read by the box and by the in-place editor laid over it (which
+ grows it by `EDIT_STROKE / 2`) — one number, so the two cannot drift. */
+const nodeRx = (type: string | undefined) => (type === "tactic" ? 4 : 6);
 
 // How far the tour nub's invisible hit region reaches beyond the tab's own
 // rect, on every side. Wide enough that a pointer travelling towards the
@@ -648,10 +703,21 @@ const FLOATER_H = 36;
 const HDR_REST_H = LINE_H + 13;
 
 // The header's `▾` (open the full signature): a fixed box at the band's right
-// edge, and the right padding both header states keep clear for it.
-const HDR_BTN_W = 22;
+// edge, and the right padding both header states keep clear for it. Drawn
+// only where the resting line HIDES something (2026-09-22): where the whole
+// signature fits, there is nothing to open and the lane goes back to the
+// ordinary `HDR_PAD_X`. The box is the status bar's item height (20) — the
+// hit target — and the mark inside it a DRAWN chevron at `HDR_CHEVRON_W` ×
+// `HDR_CHEVRON_H` ink in the bar's `BAR_GLYPH_SW`: a quiet affordance at
+// about the header's lowercase x-height. (The `▾` text glyph inked ~5px and
+// read as "way too small"; 12 × 7 then read as too big, 2026-09-24.) The lane
+// reserves the BOX, so the ink can change without touching the measure.
+const HDR_BTN_W = 20;
 const HDR_BTN_RIGHT = 6;
 const HDR_BTN_LANE = HDR_BTN_W + HDR_BTN_RIGHT + 8;
+const HDR_PAD_X = 10;
+const HDR_CHEVRON_W = 8;
+const HDR_CHEVRON_H = 5;
 // The resting text's right-edge fade where it is wider than the band.
 const HDR_FADE = "linear-gradient(to right, #000 calc(100% - 24px), transparent)";
 
@@ -660,8 +726,6 @@ const RIBBON_W = 4;
 const UNDERLINE_DROP = 2.5;
 
 const HYP_LIT_PAD = 2;
-
-const HYP_LIT_DWELL_MS = 350;
 
 /** How far LEFT of both boxes the provenance connector's vertical run sits,
  so the elbow clears the node it leaves and the node it arrives at. */
@@ -934,12 +998,15 @@ export interface ProofTreeViewProps {
 
   declHeader?: string;
   /** Where `declHeader` starts in the source, and the two positions the
-   server found in it by syntax KIND (paperproof.ts): the signature's start
-   (the name ends there) and the type spec's `:` (the resting header ends
-   there). Absent → the header falls back to its first source line. */
+   positions the server found in it by syntax KIND (paperproof.ts): the
+   signature's start (the name ends there), the type spec's `:` (binders end
+   there) and the body's `:=`/`|`/`where` (the whole signature ends there).
+   The resting header is the LONGEST of those cuts that fits on one line.
+   Absent → the header falls back to its first source line. */
   declHeaderStart?: { line: number; character: number };
   declHeaderNameStop?: { line: number; character: number };
   declHeaderSigStop?: { line: number; character: number };
+  declHeaderBodyStop?: { line: number; character: number };
 
   renderDeclHeader?: (
     lines: string[],
@@ -1049,17 +1116,28 @@ export interface ProofTreeViewProps {
   /** C4 — LLM POLISH of the templated narration, through the companion. The
       widget cannot reach the network; the companion can, so the view hands it
       the templated lines and is handed sentences back. Absent, or with
-      `polishReady` false, the `polish` row is drawn disabled with
-      `polishWhy` as its title — a reader who has met the setting should find
-      out where it went. */
+      `polishReady` false, the `polish` row is NOT DRAWN (2026-09-22: a
+      reader with no key should not meet a feature that needs one). */
   onPolish?: (lines: PolishLine[]) => Promise<{ nodeId: string; text: string }[]>;
   /** Is there a companion with an API key behind `onPolish`? */
   polishReady?: boolean;
-  /** Why not, in the reader's words, when it is not. */
-  polishWhy?: string;
   /** The `ramify.narration.polish` setting — the SESSION's default, which the
       row then overrides for this session alone. */
   polishDefault?: boolean;
+
+  /** `ramify.experience` (experience.ts): fills the DEFAULTS of the hover
+      bar's buttons, the cursor's automation trace, the `⇓` offer, and the
+      lints/comments/context/brief rows. Each row the reader changes is a
+      session OVERRIDE and wins. Absent: intermediate. */
+  experience?: Experience;
+
+  /** `ramify.hoverBar.tactic` / `.goal` — the hover bar's buttons per node
+      kind, in order, where the reader SET them (the companion sends a list
+      only when `inspect()` finds one; the harness takes `?hoverbar-tactic=`).
+      Absent, the preset's list stands. A pin in the `⋯` menu wins over both
+      for the session and calls `onHoverBarChange` so the setting follows. */
+  hoverBar?: { tactic?: readonly MoveId[] | null; goal?: readonly MoveId[] | null };
+  onHoverBarChange?: (kind: BarKind, ids: MoveId[]) => void;
 
   /** D6 — ASK AN AGENT to choose among the rewrites the primitives already
       offer. The view hands over the offered rewrites (never free text) and is
@@ -1069,9 +1147,9 @@ export interface ProofTreeViewProps {
     text: string;
     primitives: { nodeId: string; kind: Rewrite["kind"]; title: string }[];
   }) => Promise<{ nodeId?: string; kind?: string; reason?: string; note?: string }>;
-  /** Is `ramify.restructure.propose` on, with a companion and a key behind it? */
+  /** Is `ramify.restructure.propose` on, with a companion and a key behind it?
+      False, the `suggest a rewrite` row is not drawn. */
   proposeReady?: boolean;
-  proposeWhy?: string;
 
   onPreviewRange?: (range: ProofStepPosition | null) => void;
 
@@ -1115,6 +1193,7 @@ export default function ProofTreeView({
   declHeaderStart,
   declHeaderNameStop,
   declHeaderSigStop,
+  declHeaderBodyStop,
   renderDeclHeader,
   onRevealHeader,
   cfStub,
@@ -1135,21 +1214,46 @@ export default function ProofTreeView({
   onApplyRewrite,
   onPolish,
   polishReady = false,
-  polishWhy,
   polishDefault = false,
   onPropose,
   proposeReady = false,
-  proposeWhy,
   onPreviewRange,
   onUndo,
   abbrev = DEFAULT_ABBREV,
   diagnostics,
   lints,
   onLints,
+  experience = DEFAULT_EXPERIENCE,
+  hoverBar,
+  onHoverBarChange,
 }: ProofTreeViewProps) {
+  const preset = PRESETS[experience];
+
+  // THE HOVER BAR'S BUTTONS, per node kind: the session's pins (`⋯` menu),
+  // else the reader's setting, else the preset — the override idiom again,
+  // so a setting arriving late from the theme file needs no effect.
+  const [pinOverride, setPinOverride] = useState<
+    Partial<Record<BarKind, MoveId[]>>
+  >({});
+  const barIds: Record<BarKind, readonly MoveId[]> = {
+    tactic: pinOverride.tactic ?? hoverBar?.tactic ?? preset.hoverBar.tactic,
+    goal: pinOverride.goal ?? hoverBar?.goal ?? preset.hoverBar.goal,
+  };
+
+  // B2's hypothesis → origin CONNECTOR (hovering a context line draws a
+  // dashed line to the step that introduced it, and washes that step). OFF
+  // by default at every experience level (2026-09-22): it drew on every pass
+  // of the pointer over a context. A reading option; the line's `<title>`
+  // says where the hypothesis came from either way.
+  const [hypOriginsOn, setHypOriginsOn] = useState(false);
   const [upToCursor, setUpToCursor] = useState(false);
 
-  const [hypMode, setHypMode] = useState<HypMode>("used");
+  // The four rows `ramify.experience` fills are OVERRIDES of the preset (the
+  // `polishOverride` idiom): null reads the preset, so a preset that arrives
+  // late — the companion's theme file is read after mount — needs no effect,
+  // and a row the reader has set keeps the reader's value.
+  const [hypModeOverride, setHypModeOverride] = useState<HypMode | null>(null);
+  const hypMode = hypModeOverride ?? preset.context;
 
   // Lean's own binder order is the DEFAULT; `Split data & props` is the
   // opt-in extra (and `proofToTree`'s option default matches, so module and
@@ -1185,7 +1289,8 @@ export default function ProofTreeView({
   const forcedReflow =
     layout === "tracks" && reflow === "off" ? REFLOW_CHARS : undefined;
 
-  const [brief, setBrief] = useState(false);
+  const [briefOverride, setBriefOverride] = useState<boolean | null>(null);
+  const brief = briefOverride ?? preset.brief;
 
   const [briefHover, setBriefHover] = useState(false);
   const briefPreviewOn = briefHover && !brief;
@@ -1197,7 +1302,8 @@ export default function ProofTreeView({
   // exactly as B4's traces do, so nothing fires it on arrival. The lints
   // themselves live with the caller (a sibling prop) and fall back to the
   // NDJSON's own field; this is only whether they are being read.
-  const [lintsOn, setLintsOn] = useState(false);
+  const [lintsOverride, setLintsOverride] = useState<boolean | null>(null);
+  const lintsOn = lintsOverride ?? preset.lints;
 
   // C4 — the POLISH reading option. The setting (`ramify.narration.polish`,
   // off by default) is the DEFAULT and the row overrides it for this session,
@@ -1218,7 +1324,9 @@ export default function ProofTreeView({
 
   const [combineOff, setCombineOff] = useState<Set<string>>(new Set());
 
-  const [commentMode, setCommentMode] = useState<CommentMode>("shown");
+  const [commentModeOverride, setCommentModeOverride] =
+    useState<CommentMode | null>(null);
+  const commentMode = commentModeOverride ?? preset.comments;
 
   // Paint-only confirmation of a mode change, so a keystroke says what it did.
   // Replaced (never queued) when a new message arrives: the timer is reset, so
@@ -1371,6 +1479,38 @@ export default function ProofTreeView({
     ids: Set<string>;
   } | null>(null);
 
+  // THE PREVIEW DWELL (2026-09-24). A hover preview that dims or washes nodes
+  // — the trash can's delete extent, the goal corner `−`'s fold, ◌'s skip,
+  // the `brief` row's wash — waits the tips' own `TIP_DWELL_MS` and is
+  // dropped if the pointer leaves first: shown at once, a pointer crossing
+  // the hover bar on its way somewhere else flashed half the tree. ONE timer,
+  // since the pointer is over one control at a time; armed in pointerenter,
+  // cancelled in pointerleave, on a click and on unmount. Handlers only —
+  // render never reads the ref. The ⌥-held preview stays immediate: holding
+  // a modifier is a deliberate ask, not a pointer passing through.
+  const dwellRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelDwell = () => {
+    if (dwellRef.current !== null) clearTimeout(dwellRef.current);
+    dwellRef.current = null;
+  };
+  const afterDwell = (show: () => void) => {
+    cancelDwell();
+    dwellRef.current = setTimeout(() => {
+      dwellRef.current = null;
+      show();
+    }, TIP_DWELL_MS);
+  };
+  const dropCornerPreview = () => {
+    cancelDwell();
+    setElidePreview((pv) => (pv?.from === "bar" ? null : pv));
+  };
+  useEffect(() => {
+    const r = dwellRef;
+    return () => {
+      if (r.current !== null) clearTimeout(r.current);
+    };
+  }, []);
+
   const [hlDismissed, setHlDismissed] = useState(false);
 
   const [editing, setEditing] = useState<{
@@ -1457,6 +1597,21 @@ export default function ProofTreeView({
   // proof change (the `proofKey` block below).
   const [hdrOpen, setHdrOpen] = useState(false);
 
+  // The frame's own element, in STATE (a callback ref), so the `⋯` menu can
+  // be portalled into it from inside the node loop without a ref read.
+  const [frameEl, setFrameEl] = useState<HTMLDivElement | null>(null);
+
+  // THE `⋯` MENU: which node it is open on, the proof it was opened in (a
+  // proof change closes it by construction as well as by the reset below),
+  // and the `⋯` button's rect in FRAME coordinates, taken at the click.
+  const [nodeMenu, setNodeMenu] = useState<{
+    id: string;
+    proof: string;
+    x: number;
+    top: number;
+    bottom: number;
+  } | null>(null);
+
   // `upNow`, where present, is read at Esc time instead of `up`: the TIP's
   // visibility lives outside the view's state (so showing one never renders
   // the tree), and a value captured at render would be stale.
@@ -1471,6 +1626,13 @@ export default function ProofTreeView({
     // FIRST: a standing tooltip is the topmost thing on screen, and Esc takes
     // it before the popover it may be describing.
     { id: "tip", up: false, upNow: tipCtl.shown, off: tipCtl.dismiss, bg: false },
+    // The `⋯` menu is the most recently opened floater whenever it is up.
+    {
+      id: "nodeMenu",
+      up: nodeMenu !== null,
+      off: () => setNodeMenu(null),
+      bg: true,
+    },
     // The open signature overlays the tree from the top (z 11), above every
     // popover below it, so it goes next. Its outside-click close is its own
     // document listener, not `bg` — a click on a node is outside it too.
@@ -1520,6 +1682,21 @@ export default function ProofTreeView({
       up: flagOpen,
       off: () => setFlagOpen(false),
       bg: true,
+    },
+
+    // The MESSAGE STRIP over the status card: chrome the reader reads rather
+    // than a prompt they answer, so it goes AFTER the prompts above — an
+    // armed delete or a pending proposal is the more urgent thing for Esc to
+    // take — and before the selection and the scopes. It is not `bg`: an error that
+    // opened itself must not be closed by a stray click on the canvas. Its
+    // state is derived far below this table, so `up` is read at Esc time
+    // (`upNow`), and `off` is two plain setters.
+    {
+      id: "diagStrip",
+      up: false,
+      upNow: () => diagStripOpen,
+      off: () => closeDiagStrip(),
+      bg: false,
     },
 
     {
@@ -2056,6 +2233,37 @@ export default function ProofTreeView({
     () => new Set<string>(),
   );
 
+  // `ramify.experience` beginner: THE CURSOR'S AUTOMATION STEP SHOWS WHAT IT
+  // USED without being asked. Only a step with a `?` form (`simp`, `grind`,
+  // …) — an `omega` has nothing to show — and only the one under the cursor,
+  // read off the BASE tree (the drawn tree is downstream of the traces). The
+  // open state is DERIVED, not written: the step is open while the cursor is
+  // on it and its trace is in hand, unless the reader shut it with `⁇`
+  // (`traceShut`). Opening is a relayout like any other, and the cursor chain
+  // is what the relayout anchors on, so the view holds still.
+  const autoTrace = useMemo(() => {
+    if (!preset.autoTrace || !highlightPos) return null;
+    const at = tacticNodeAt(tacticTargets(baseNodes), highlightPos);
+    const n = at ? baseNodes.find((x) => x.id === at) : undefined;
+    if (!n?.position || !isAutomationNode(n)) return null;
+    if (!TRACEABLE_HEADS.includes(tacticHeadWord(n.label))) return null;
+    return { id: n.id, key: traceKey(n.position.start), pos: n.position };
+  }, [preset.autoTrace, highlightPos, baseNodes]);
+  const [traceShut, setTraceShut] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const autoOpenId =
+    autoTrace && traces.has(autoTrace.key) && !traceShut.has(autoTrace.id)
+      ? autoTrace.id
+      : null;
+  const traceOpenNow = useMemo(
+    () =>
+      autoOpenId && !traceOpen.has(autoOpenId)
+        ? new Set([...traceOpen, autoOpenId])
+        : traceOpen,
+    [traceOpen, autoOpenId],
+  );
+
   const treeNodes = useMemo(() => {
     let cuts = elideCuts;
     if (combine) {
@@ -2078,7 +2286,7 @@ export default function ProofTreeView({
     // them (a closing `simp` with its trace open would stop being a leaf and
     // the goal above would hop where it used to fold), and a step a cut has
     // hidden takes its trace with it for nothing.
-    return applyTraces(applyElisions(baseNodes, cuts), traceOpen, traces);
+    return applyTraces(applyElisions(baseNodes, cuts), traceOpenNow, traces);
   }, [
     baseNodes,
     elideCuts,
@@ -2086,7 +2294,7 @@ export default function ProofTreeView({
     combineOff,
     peekKey,
     tourPeek,
-    traceOpen,
+    traceOpenNow,
     traces,
   ]);
 
@@ -2259,6 +2467,18 @@ export default function ProofTreeView({
     () => proof.steps.map((s) => s.goalBefore.id).join("\n"),
     [proof],
   );
+  // …and the fetch for the preset's auto-open, once per step per proof: the
+  // answer lands in the caller's `traces` and the derivation above opens it.
+  // An effect because it is a request, not state — nothing is set here.
+  const autoAsked = useRef(new Set<string>());
+  useEffect(() => {
+    if (!autoTrace || !onTrace || traces.has(autoTrace.key)) return;
+    const k = `${proofKey}@${autoTrace.key}`;
+    if (autoAsked.current.has(k)) return;
+    autoAsked.current.add(k);
+    onTrace(autoTrace.pos).catch(() => {});
+  }, [autoTrace, onTrace, traces, proofKey]);
+
   const [prevProof, setPrevProof] = useState(proofKey);
   const [prevShape, setPrevShape] = useState(shapeKey);
 
@@ -2285,6 +2505,7 @@ export default function ProofTreeView({
   if (proofKey !== prevProof) {
     setPrevProof(proofKey);
     setHdrOpen(false);
+    setNodeMenu(null);
     setPrevShape(shapeKey);
     setPrevBase(baseNodes);
 
@@ -2657,7 +2878,7 @@ export default function ProofTreeView({
 
   useEffect(() => {
     if (!hoverId || !hypLitTactics.has(hoverId)) return;
-    const t = setTimeout(() => setHypLit(hoverId), HYP_LIT_DWELL_MS);
+    const t = setTimeout(() => setHypLit(hoverId), TIP_DWELL_MS);
 
     return () => {
       clearTimeout(t);
@@ -2671,7 +2892,7 @@ export default function ProofTreeView({
   // to nothing: the `<title>` still says where the hypothesis came from, and
   // no ink is spent claiming a box that is not there.
   const hypOriginHit = useMemo(() => {
-    if (!hypOrigin || hypOrigin !== hoverHyp) return null;
+    if (!hypOriginsOn || !hypOrigin || hypOrigin !== hoverHyp) return null;
     const sep = hypOrigin.indexOf("\u0000");
     const gn = placed.get(hypOrigin.slice(0, sep));
     const j = Number(hypOrigin.slice(sep + 1));
@@ -2680,11 +2901,11 @@ export default function ProofTreeView({
     if (!gn || !lines || !line?.origin) return null;
     const tn = placed.get(line.origin);
     return tn ? { gn, lines, j, tn } : null;
-  }, [hypOrigin, hoverHyp, placed]);
+  }, [hypOriginsOn, hypOrigin, hoverHyp, placed]);
 
   useEffect(() => {
     if (!hoverHyp) return;
-    const t = setTimeout(() => setHypOrigin(hoverHyp), HYP_LIT_DWELL_MS);
+    const t = setTimeout(() => setHypOrigin(hoverHyp), TIP_DWELL_MS);
     return () => {
       clearTimeout(t);
       setHypOrigin(null);
@@ -2781,7 +3002,14 @@ export default function ProofTreeView({
   const rewriteCtx = useMemo((): RewriteCtx | null => {
     if (!deleteSlots || !onApplyRewrite || !getTacticEdit) return null;
     return {
-      nodes: treeNodes,
+      // The labels as WRITTEN, not as brief draws them: rewrite.ts reads a
+      // step's head word off its label (`have`, the user's `exact`), and
+      // brief's E1 turns `have hp1 : …` into `… hp1 : …` — so brief mode
+      // silently withdrew `⤵` everywhere (found 2026-09-22, when the expert
+      // preset made brief a default).
+      nodes: treeNodes.map((n) =>
+        n.elision ? { ...n, label: n.elision.original } : n,
+      ),
       slots: deleteSlots,
       src: (p) => {
         const e = getTacticEdit({ start: p, stop: p });
@@ -3048,7 +3276,7 @@ export default function ProofTreeView({
     const open = (tactic: string) => collapseRewrite(run, ctx, tactic);
     const stub = open(AUTOMATION_CANDIDATES[0]);
     if (!stub.ok) {
-      showToast(`No collapse — ${stub.why}`);
+      showToast(`Could not replace these steps — ${stub.why}`);
       return;
     }
     setProposal({
@@ -3056,7 +3284,7 @@ export default function ProofTreeView({
       kind: "collapse",
       rewrite: stub.rewrite,
       phase: "checking",
-      title: `collapse ${n} step${n === 1 ? "" : "s"} to one tactic`,
+      title: collapseMoveLabel(n),
     });
     const from = run.steps[0].position!.start;
     const to = run.steps[n - 1].position!.start;
@@ -3115,11 +3343,15 @@ export default function ProofTreeView({
     if (!onTrace || !n.position) return miss?.();
     onTrace(n.position).then(
       (ok) => {
-        if (!ok) return showToast("No trace — the server could not read one");
+        if (!ok)
+          return showToast(
+            `Lean could not say what \`${tacticHeadWord(n.label)}\` used`,
+          );
         const t = traceRef.current.get(traceKey(n.position!.start));
         go(t ? { ...n, trace: t } : n);
       },
-      () => showToast("No trace — the request failed"),
+      () =>
+        showToast("Could not ask Lean what this step used — the request failed"),
     );
   };
 
@@ -3130,7 +3362,7 @@ export default function ProofTreeView({
     withTrace(n, (node) => {
       const p = expandRewrite(node, ctx);
       if (!p.ok) {
-        showToast(`Nothing to write — ${p.why}`);
+        showToast(`Nothing to write out — ${p.why}`);
         return;
       }
       proposeRewrite(id, p.rewrite);
@@ -3153,7 +3385,7 @@ export default function ProofTreeView({
       lintFixesFor(n, ls, ctx)
         .map((f) => (f.proposal.ok ? "" : f.proposal.why))
         .find(Boolean) ?? "there is no one-edit answer";
-    const miss = () => showToast(`No fix — ${why()}`);
+    const miss = () => showToast(`No linter fix to apply — ${why()}`);
     withTrace(
       n,
       (node) => {
@@ -3323,11 +3555,51 @@ export default function ProofTreeView({
 
   const [diagSel, setDiagSel] = useState<string | null>(null);
   const diagList = diag?.ordered ?? [];
-  const diagIdx = Math.max(
-    0,
-    diagList.findIndex((o) => o.diag.key === diagSel),
-  );
+  // Where no problem has been picked (or the picked one has gone), the strip
+  // shows the FIRST ERROR where there is one — it is what opened the strip —
+  // else the first problem in source order.
+  const diagFirstError = diagList.findIndex((o) => o.diag.severity === 1);
+  const diagPicked = diagList.findIndex((o) => o.diag.key === diagSel);
+  const diagIdx =
+    diagPicked >= 0 ? diagPicked : Math.max(0, diagFirstError);
   const diagCur = diagList[diagIdx] ?? null;
+  const diagCounts: [number, number, number] = [0, 0, 0];
+  for (const o of diagList) diagCounts[o.diag.severity - 1]++;
+
+  /* THE MESSAGE STRIP (2026-09-24) — the secondary bar over the status card.
+  Its open state is DERIVED, never written by an effect: open iff the reader
+  opened it, OR the proof has an ERROR the reader has not dismissed. The
+  dismissal is keyed on a SOURCE fact — the error set's own keys (severity,
+  position, message) joined — held in state and written only by the close
+  gestures, so a NEW error re-opens the strip and a dismissed one stays shut.
+  Errors alone are serious: a warning (`declaration uses 'sorry'` is the
+  common one, and it is the author's own choice) and a lint (the proof is
+  correct) open it only through the count item. */
+  // The reader's own opening is held as the PROOF it was made on (a proof
+  // change closes everything, design rule 10 — by derivation, not a reset).
+  const [diagStripPinnedOn, setDiagStripPinned] = useState<string | null>(
+    null,
+  );
+  const diagStripPinned = diagStripPinnedOn === proofKey;
+  const [diagDismissed, setDiagDismissed] = useState<string | null>(null);
+  const diagErrorKey = diagList
+    .filter((o) => o.diag.severity === 1)
+    .map((o) => o.diag.key)
+    .join("|");
+  // Nothing left to show: a pin with nothing under it is let go, so the next
+  // lint does not arrive with the strip already open (a render-time adjust,
+  // the house idiom for state that follows a prop).
+  if (diagList.length === 0 && diagStripPinned) setDiagStripPinned(null);
+  const diagStripOpen =
+    diagList.length > 0 &&
+    (diagStripPinned ||
+      (diagErrorKey !== "" && diagErrorKey !== diagDismissed));
+  const closeDiagStrip = () => {
+    setDiagStripPinned(null);
+    if (diagErrorKey !== "") setDiagDismissed(diagErrorKey);
+  };
+  const toggleDiagStrip = () =>
+    diagStripOpen ? closeDiagStrip() : setDiagStripPinned(proofKey);
 
   const nodeKeys = useMemo(() => layoutKeys(nodes), [nodes]);
 
@@ -3355,14 +3627,23 @@ export default function ProofTreeView({
     const n = treeNodes.find((t) => t.id === id);
     if (!n?.position) return;
     anchorOn(id);
-    if (traceOpen.has(id)) {
+    if (traceOpenNow.has(id)) {
       setTraceOpen((prev) => {
         const next = new Set(prev);
         next.delete(id);
         return next;
       });
+      // Open by the preset (the cursor's step): shutting it is remembered,
+      // or it would open again on the next render.
+      if (id === autoOpenId) setTraceShut((prev) => new Set(prev).add(id));
       return;
     }
+    if (traceShut.has(id))
+      setTraceShut((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     const open = () =>
       setTraceOpen((prev) => new Set(prev).add(id));
     if (traces.has(traceKey(n.position.start))) return open();
@@ -3379,11 +3660,14 @@ export default function ProofTreeView({
       (ok) => {
         done();
         if (ok) open();
-        else showToast("No trace — the server could not read one");
+        else
+          showToast(
+            `Lean could not say what \`${tacticHeadWord(n.label)}\` used`,
+          );
       },
       () => {
         done();
-        showToast("No trace — the request failed");
+        showToast("Could not ask Lean what this step used — the request failed");
       },
     );
   };
@@ -3497,33 +3781,33 @@ export default function ProofTreeView({
 
   const applyLayout = (v: LayoutMode) => {
     setLayout(v);
-    showToast(`Layout · ${LAYOUT_MODES[v].name}`);
+    showToast(`Layout: ${LAYOUT_MODES[v].name}`);
   };
   const applyHypMode = (v: HypMode) => {
     anchorRoot();
-    setHypMode(v);
-    showToast(`Context · ${HYP_MODES[v].name}`);
+    setHypModeOverride(v);
+    showToast(`Context: ${HYP_MODES[v].name}`);
   };
   const applyCommentMode = (v: CommentMode) => {
-    setCommentMode(v);
-    showToast(`Comments · ${COMMENT_MODES[v].name}`);
+    setCommentModeOverride(v);
+    showToast(`Comments: ${COMMENT_MODES[v].name}`);
   };
   const applyBrief = (v: boolean) => {
-    setBrief(v);
-    showToast(`Brief ${v ? "on" : "off"}`);
+    setBriefOverride(v);
+    showToast(`Brief: ${v ? "on" : "off"}`);
   };
   const applyCombine = (v: boolean) => {
     setCombine(v);
     if (!v) setCombineOff(new Set());
-    showToast(`Merge ${v ? "on" : "off"}`);
+    showToast(`Merge: ${v ? "on" : "off"}`);
   };
   // D4 — turning it ON is what ASKS the server (`ProofTree.lintDecl` is a
   // re-elaboration of the declaration, so nothing fires it unasked); turning
   // it off simply stops reading. The lints themselves belong to the caller.
   const applyLints = (v: boolean) => {
-    setLintsOn(v);
+    setLintsOverride(v);
     onLints?.(v);
-    showToast(`Lints ${v ? "on" : "off"}`);
+    showToast(`Lints: ${v ? "on" : "off"}`);
   };
   // C4 — the row is a SESSION override of the setting, and it says so in the
   // toast: turning it off here does not turn the setting off. Switching it on
@@ -3531,27 +3815,27 @@ export default function ProofTreeView({
   // its title rather than silently doing nothing.
   const applyPolish = (v: boolean) => {
     setPolishOverride(v);
-    showToast(`Polish ${v ? "on" : "off"}`);
+    showToast(`Polish: ${v ? "on" : "off"}`);
   };
   const applyUpToCursor = (v: boolean) => {
     setUpToCursor(v);
-    showToast(`To cursor ${v ? "on" : "off"}`);
+    showToast(`To cursor: ${v ? "on" : "off"}`);
   };
   // Both live in the Layout popover: they are layouts, not view toggles, and a
   // list (unlike a cycle) can hold a choice and its modifiers together.
   const applySideBySide = (v: boolean) => {
     anchorRoot();
     setSideBySide(v);
-    showToast(`Side-by-side ${v ? "on" : "off"}`);
+    showToast(`Side-by-side: ${v ? "on" : "off"}`);
   };
   const applyGallery = (v: boolean) => {
     setGallery(v);
-    showToast(`Gallery ${v ? "on" : "off"}`);
+    showToast(`Gallery: ${v ? "on" : "off"}`);
   };
   const applyReflow = (v: ReflowMode) => {
     if ((v === "off") !== (reflow === "off")) anchorRoot();
     setReflow(v);
-    showToast(v === "off" ? "Width · off" : `Width · ${v} col`);
+    showToast(v === "off" ? "Width: full" : `Width: ${v} col`);
   };
 
   // NO bare-letter shortcuts. `l g b c k u` were core vim keys, and the document
@@ -3656,6 +3940,7 @@ export default function ProofTreeView({
   };
 
   const elideStep = (id: string) => {
+    cancelDwell();
     setElidePreview(null);
     const c = stepCutFor(id);
     if (!c) return;
@@ -3865,9 +4150,14 @@ export default function ProofTreeView({
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   // The status card reports when it FILLS the frame (a thin pane): it then
   // sits one lane above the host button, and the zoom rail climbs over it.
-  const [barLifted, setBarLifted] = useState(false);
-  const setBarLiftedIfChanged = (v: boolean) =>
-    setBarLifted((prev) => (prev === v ? prev : v));
+  // How far the zoom rail must climb to clear the status card's chrome: 0
+  // while the card sits in the host button's lane beside the rail, one lane
+  // for a FILLING card, and the message strip's own height on top of that
+  // when it is open (the filling card and its strip span the frame, under the
+  // rail's column). Reported by the bar's `fit`, which measures both.
+  const [barLift, setBarLift] = useState(0);
+  const setBarLiftIfChanged = (v: number) =>
+    setBarLift((prev) => (prev === v ? prev : v));
 
   const PAD_X = viewport.w;
   const PAD_Y = viewport.h;
@@ -4096,7 +4386,28 @@ export default function ProofTreeView({
     ro.observe(el);
     if (txt) ro.observe(txt);
     return () => ro.disconnect();
-  }, [declHeader, declHeaderSigStop, focusId, pathId, hdrOpen]);
+  }, [declHeader, declHeaderSigStop, declHeaderBodyStop, focusId, pathId, hdrOpen]);
+
+  // A press outside the `⋯` menu, a scroll or a wheel anywhere closes it: it
+  // is hung off a button on a tree that is about to move under it.
+  const menuUp = nodeMenu !== null;
+  useEffect(() => {
+    if (!menuUp) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest?.("[data-ptw-menu]")) return;
+      setNodeMenu(null);
+    };
+    const off = () => setNodeMenu(null);
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("scroll", off, true);
+    document.addEventListener("wheel", off, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("scroll", off, true);
+      document.removeEventListener("wheel", off, true);
+    };
+  }, [menuUp]);
 
   // Outside click closes the open signature. A document listener rather than
   // the `layers` table's `bg` flag: that one answers the tree's BACKGROUND,
@@ -4112,6 +4423,26 @@ export default function ProofTreeView({
     document.addEventListener("pointerdown", onDown, true);
     return () => document.removeEventListener("pointerdown", onDown, true);
   }, [hdrOpen]);
+
+  // The status bar's panels, the `?` panel and the open signature close on a
+  // WHEEL anywhere but inside themselves (the `?` panel and the signature
+  // scroll their own content) — design rule 10. NOT on `scroll`: a toggle row
+  // leaves its panel open, and the anchored relayout it causes scrolls the
+  // frame programmatically, which would close the panel under the click. A
+  // wheel (a trackpad's scroll included) is always the reader's own hand.
+  const floaterUp = barOpen !== null || helpOpen || hdrOpen;
+  useEffect(() => {
+    if (!floaterUp) return;
+    const off = (e: WheelEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest?.("[data-ptw-panel], [data-ptw-hdr]")) return;
+      setBarOpen(null);
+      setHelpOpen(false);
+      setHdrOpen(false);
+    };
+    document.addEventListener("wheel", off, { capture: true, passive: true });
+    return () => document.removeEventListener("wheel", off, true);
+  }, [floaterUp]);
 
   // The measurement is a REFINEMENT of a height the resting header already
   // has by construction (one `pre` line, `overflow: hidden`, 6px of padding
@@ -4159,6 +4490,30 @@ export default function ProofTreeView({
         : null,
     [declHeader, declHeaderStart, declHeaderNameStop, declHeaderSigStop],
   );
+  // The WHOLE signature, `: type` included and the body's `:=`/`where` left
+  // off — cut at `declHeaderBodyStop`, by kind, like the two above. GREEDY
+  // (2026-09-22, "the whole one can fit here so it should"): at rest the
+  // header draws the longest cut that fits its one line, measured with the
+  // text engine the tree itself uses (same code font, same px) against the
+  // band's measured width. Only the width decides, so the header's HEIGHT is
+  // the same in every state and crossing the threshold moves nothing below.
+  const hdrFull = useMemo(
+    () =>
+      declHeader && declHeaderStart
+        ? headerPrefix(declHeader, declHeaderStart, declHeaderBodyStop)
+        : null,
+    [declHeader, declHeaderStart, declHeaderBodyStop],
+  );
+  // Without the chevron the right padding is the left's, so that is the room
+  // the whole signature is asked to fit (1px slack for canvas-vs-DOM rounding).
+  const hdrFullFits =
+    hdrFull !== null &&
+    !scopeId &&
+    hdrW > 0 &&
+    measureText(hdrFull.text, NODE_FONT_PX) <= hdrW - 2 * HDR_PAD_X - 1;
+  // The `▾` is drawn only where something is hidden — or to close the open
+  // signature.
+  const hdrChevron = hdrOpen || !hdrFullFits;
   // keyword + name, for the scope trail. Without the server's split, the
   // first two words (an older server) — never a `…`.
   const declHead = useMemo(
@@ -4502,10 +4857,10 @@ export default function ProofTreeView({
       setTourLists({ ...tourLists, temp: true });
       setTourAt(null);
       setTourPeek(new Set());
-      showToast("Mark dropped (⚑) — temporary list on");
+      showToast("Mark dropped — temporary list on");
       return;
     }
-    showToast(dropping ? "Mark dropped (⚑)" : "Mark removed");
+    showToast(dropping ? "Mark dropped" : "Mark removed");
   };
 
   // `<` and `>` — PUNCTUATION, so the no-single-letter-keys rule (a bare
@@ -4601,9 +4956,8 @@ export default function ProofTreeView({
     const effW = (n: (typeof nodes)[number]) =>
       Math.max(
         n.data.w,
-        (compact && n.data.parents.length > 0 && n.data.commentW > 0
-          ? COMMENT_INDENT
-          : 0) + n.data.commentW,
+        (compact && n.data.commentW > 0 ? commentIndentOf(n.data) : 0) +
+          n.data.commentW,
       );
     const leftOf = (n: (typeof nodes)[number]) =>
       compact ? n.x - n.data.w / 2 : n.x - effW(n) / 2;
@@ -4879,7 +5233,7 @@ export default function ProofTreeView({
       document.removeEventListener("mouseup", stop);
       seamStop.current = null;
       setSeamDrag(null);
-      if (cols !== base) showToast(`Width · ${cols} col`);
+      if (cols !== base) showToast(`Width: ${cols} col`);
     };
     seamStop.current = stop;
     document.addEventListener("mousemove", onMove);
@@ -4895,7 +5249,7 @@ export default function ProofTreeView({
           x2={seamX}
           y2={extent.height}
           stroke={
-            seamDrag ? SEQ_STROKE : "var(--vscode-editorWidget-border, #cbd5e0)"
+            seamDrag ? SEQ_STROKE : CHROME_BORDER
           }
           strokeWidth={1}
           pointerEvents="none"
@@ -4927,17 +5281,26 @@ export default function ProofTreeView({
               width={54}
               height={18}
               rx={3}
-              fill="var(--vscode-editorWidget-background, rgba(255,255,255,0.97))"
-              stroke="var(--vscode-editorWidget-border, #cbd5e0)"
+              fill={CHROME_UNDERLAY}
+            />
+            <rect
+              x={0}
+              y={-9}
+              width={54}
+              height={18}
+              rx={3}
+              fill={CHROME_BG}
+              stroke={CHROME_BORDER}
             />
             <text
               x={27}
               y={0}
               dy="0.32em"
               textAnchor="middle"
-              fontFamily="monospace"
+              fontFamily={CHROME_FONT}
               fontSize={11}
-              fill="var(--vscode-icon-foreground, #2d3748)"
+              fill={CHROME_INK}
+              style={{ fontVariantNumeric: "tabular-nums" }}
             >
               {`${seamDrag.cols} col`}
             </text>
@@ -5157,7 +5520,7 @@ export default function ProofTreeView({
             height={CHIP_H + 2 * CARD_PAD}
             rx={4}
             fill="var(--ptw-surface)"
-            stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
+            stroke={CHROME_BORDER}
             strokeWidth={1}
             style={{ filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))" }}
           />
@@ -5248,7 +5611,7 @@ export default function ProofTreeView({
             strokeDasharray="4 3"
           >
             <title>
-              {`being written in the buffer (line ${cfStub.line + 1}) — the tree holds a sorry here until it elaborates` +
+              {`Being written in the buffer (line ${cfStub.line + 1}) — the tree holds a sorry here until it elaborates` +
                 (cfEditable ? "\n· double-click to edit that line here" : "")}
             </title>
           </rect>
@@ -5356,9 +5719,42 @@ export default function ProofTreeView({
     }
   }
 
+  // The node the `⋯` menu is open on (null in another proof).
+  const menuFor =
+    nodeMenu && nodeMenu.proof === proofKey ? nodeMenu.id : null;
+  const openNodeMenu = (id: string, el?: Element) => {
+    const root = el?.closest("[data-ptw-theme]");
+    if (!el || !root) return;
+    const r = el.getBoundingClientRect();
+    const f = root.getBoundingClientRect();
+    tipCtl.dismiss();
+    setNodeMenu({
+      id,
+      proof: proofKey,
+      x: r.left - f.left,
+      top: r.top - f.top,
+      bottom: r.bottom - f.top,
+    });
+  };
+
+  // A PIN in the `⋯` menu: on the bar for this node KIND, now, and — where
+  // there is a companion — in `ramify.hoverBar.<kind>` too, so it persists.
+  // Pinning appends (the new button lands just before `⋯`, beside the menu it
+  // came from); unpinning keeps the others' order.
+  const pinMove = (kind: BarKind, k: MoveId) => {
+    const on = !barIds[kind].includes(k);
+    const next = togglePinned(barIds[kind], k);
+    setPinOverride((p) => ({ ...p, [kind]: next }));
+    onHoverBarChange?.(kind, next);
+    showToast(
+      `${on ? "On" : "Off"} the bar for ${kind === "goal" ? "goals" : "tactics"}`,
+    );
+  };
+
   return (
     <TipContext.Provider value={tipCtl}>
     <div
+      ref={setFrameEl}
       data-ptw-theme={themeKind}
       data-ptw-fill={outline ? "none" : undefined}
 
@@ -5402,21 +5798,23 @@ export default function ProofTreeView({
             color: NODE_TEXT,
             background: "var(--ptw-bg)",
             borderBottom:
-              "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+              `1px solid ${CHROME_BORDER}`,
             cursor: onRevealHeader ? "pointer" : "default",
 
             // The right padding is the `▾` button's lane (`HDR_BTN_W` at
             // `HDR_BTN_RIGHT`), in both states — the button is a sibling, so
             // the open overlay's scroll never carries it away.
+            // Where the whole signature fits there is no button, and the
+            // lane is the ordinary padding.
             ...(hdrOpen
               ? {
-                  padding: `6px ${HDR_BTN_LANE}px 6px 10px`,
+                  padding: `6px ${HDR_BTN_LANE}px 6px ${HDR_PAD_X}px`,
                   maxHeight: "60%",
                   overflowY: "auto",
                   zIndex: 11,
                 }
               : {
-                  padding: `6px ${HDR_BTN_LANE}px 6px 10px`,
+                  padding: `6px ${hdrChevron ? HDR_BTN_LANE : HDR_PAD_X}px 6px ${HDR_PAD_X}px`,
                   overflow: "hidden",
                 }),
           }}
@@ -5469,13 +5867,14 @@ export default function ProofTreeView({
                       : (renderDeclHeader?.([declHead], declHead)?.[0] ??
                           declHead);
                   }
+                  if (hdrFullFits && hdrFull) return oneLine(hdrFull);
                   if (hdrRest) return oneLine(hdrRest);
                   const lines = renderDeclHeader?.(src) ?? src;
                   return (
                     <>
                       {lines[0]}
                       {src.length > 1 ? (
-                        <span style={{ opacity: 0.6 }}> …</span>
+                        <span style={{ opacity: DIM_OPACITY }}> …</span>
                       ) : null}
                     </>
                   );
@@ -5492,7 +5891,7 @@ export default function ProofTreeView({
 
             {scopeKind && !hdrOpen && (
               <>
-                <span style={{ opacity: 0.5, padding: "0 6px", flexShrink: 0 }}>
+                <span style={{ opacity: DIM_OPACITY, padding: "0 6px", flexShrink: 0 }}>
                   ›
                 </span>
                 <button
@@ -5545,7 +5944,7 @@ export default function ProofTreeView({
         </div>
       ) : null}
 
-      {declHeader ? (
+      {declHeader && hdrChevron ? (
         // A SIBLING of the header, not a child: the open overlay scrolls, and
         // the button must stay put; and its click must not reach the header's
         // reveal-in-source.
@@ -5573,17 +5972,14 @@ export default function ProofTreeView({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontFamily: "inherit",
-            fontSize: 11,
-            lineHeight: 1,
             color: NODE_TEXT,
-            opacity: hdrOpen ? 0.9 : 0.6,
+            opacity: hdrOpen ? 0.95 : 0.75,
             background: "transparent",
             border: "none",
             cursor: "pointer",
           }}
         >
-          {hdrOpen ? "▴" : "▾"}
+          <HeaderChevron up={hdrOpen} />
         </button>
       ) : null}
 
@@ -5616,7 +6012,7 @@ export default function ProofTreeView({
       />
 
       <ZoomRail
-        lifted={barLifted}
+        lift={barLift}
         onZoomIn={() => zoomBy(1.25)}
         onZoomOut={() => zoomBy(1 / 1.25)}
         onExpandAll={() => {
@@ -5637,11 +6033,11 @@ export default function ProofTreeView({
           setElideCuts(outlineCuts(new Map(baseNodes.map((n) => [n.id, n]))));
         }}
         onFit={fitWidth}
+        onReset={resetToSource}
       />
 
       <StatusBar
-        onPlace={setBarLiftedIfChanged}
-        onResetView={resetToSource}
+        onPlace={setBarLiftIfChanged}
         upToCursor={upToCursor}
         onUpToCursorChange={applyUpToCursor}
         upToEnabled={upToEnabled}
@@ -5658,31 +6054,33 @@ export default function ProofTreeView({
         onBarOpenChange={setBarOpen}
         onReflowChange={applyReflow}
         brief={brief}
-        onBriefHover={setBriefHover}
+        onBriefHover={(h: boolean) => {
+          if (h) afterDwell(() => setBriefHover(true));
+          else {
+            cancelDwell();
+            setBriefHover(false);
+          }
+        }}
         onBriefChange={applyBrief}
         lintsOn={lintsOn}
         onLintsChange={applyLints}
+        hypOriginsOn={hypOriginsOn}
+        onHypOriginsChange={(v: boolean) => {
+          setHypOriginsOn(v);
+          showToast(`Hyp origins: ${v ? "on" : "off"}`);
+        }}
         polishOn={polishOn}
-        polishEnabled={!!onPolish && polishReady}
+        // Key-gated rows are HIDDEN, not disabled, where the gate is shut
+        // (2026-09-22): no companion, no key, or the setting off.
+        polishShown={!!onPolish && polishReady}
         polishWhy={
-          !onPolish
-            ? "Polish needs the Ramify companion — the widget cannot reach a network"
-            : !polishReady
-              ? (polishWhy ??
-                "Polish is off in the companion, or no API key is set (Ramify: Set narration API key)")
-              : commentMode === "narrate"
-                ? "Rewrite each generated line into fluent English through the companion; the author's own comments are never sent (≈)"
-                : "Polish rewrites the generated lines, so it shows in Comments: narrate"
+          commentMode === "narrate"
+            ? "Rewrite each generated line into fluent English through the companion; the author's own comments are never sent (≈)"
+            : "Polish rewrites the generated lines, so it shows in Comments: narrate"
         }
         onPolishChange={applyPolish}
-        proposeEnabled={!!onPropose && proposeReady && !proposeBusy}
+        proposeShown={!!onPropose && proposeReady}
         proposeBusy={proposeBusy}
-        proposeWhy={
-          !onPropose || !proposeReady
-            ? (proposeWhy ??
-              "Turn on `ramify.restructure.propose` in the companion, and set an API key")
-            : "Ask for one of the rewrites already offered on this proof, with a reason — the elaborator still has the last word"
-        }
         onPropose={askAgent}
         commentMode={commentMode}
         onCommentModeChange={applyCommentMode}
@@ -5694,6 +6092,7 @@ export default function ProofTreeView({
         onHypGroupChange={(v) => {
           anchorRoot();
           setHypGroup(v);
+          showToast(`Split data & props: ${v ? "on" : "off"}`);
         }}
         tourLists={tourLists}
         tourAt={tourAt}
@@ -5713,8 +6112,12 @@ export default function ProofTreeView({
                 index: diagIdx,
                 count: diagList.length,
                 diag: diagCur.diag,
+                counts: diagCounts,
+                open: diagStripOpen,
                 clickable: !!diagCur.nodeId || !!onReveal,
                 onStep: stepDiag,
+                onToggle: toggleDiagStrip,
+                onClose: closeDiagStrip,
                 onGo: () => {
                   revealNode(diagCur.nodeId);
                   revealAt(diagCur.diag.range);
@@ -5740,6 +6143,7 @@ export default function ProofTreeView({
       )}
       <div
         ref={scrollRef}
+        data-ptw-scroll=""
         className="no-scrollbar"
         style={{
           width: "100%",
@@ -6005,8 +6409,14 @@ export default function ProofTreeView({
                 position,
               } = node.data;
 
-              const floatComment = !!node.data.commentFloats;
               const topH = bandTopH(node.data);
+              // The comment strip's top-left, relative to the node's centre:
+              // above the box, floated above its band, or BELOW a folded
+              // goal (`commentBelow`) — layout.ts owns all three.
+              const stripTop = commentStripTop(node.data);
+              const stripX = compact
+                ? -w / 2 + commentIndentOf(node.data)
+                : -node.data.commentW / 2;
               const boxTop = (topH - h) / 2;
               const contentTop = boxTop + NODE_PAD_Y;
               const labelTop = contentTop + hypH;
@@ -6080,7 +6490,7 @@ export default function ProofTreeView({
                   !editing?.calcStage &&
                   (!editing?.comment || !!node.data.proseLabel));
 
-              const boxRx = type === "tactic" ? 4 : 6;
+              const boxRx = nodeRx(type);
               const nodeDiags = diag?.byNode.get(id);
               const diagSev = diag?.worst.get(id) ?? null;
               const diagInk = diagSev === null ? null : diagInkOf(diagSev);
@@ -6127,12 +6537,9 @@ export default function ProofTreeView({
               // the AUTHOR's `.mark` instead, which needs a tactic whose slot
               // starts its own line.
               const stoppableHere = !isMarker && stoppable(node.data);
-              // The stop's tab, sized and inked here so the paint below is
-              // plain JSX (see `tourTabWidth`, layout.ts).
+              // The stop's tab — painted by `TourTab`, which sizes it with
+              // `tourTabWidth` (layout.ts) and inks it by whose it is.
               const tab = tourTabs.get(id);
-              const tabW = tab ? tourTabWidth(tab.n) : 0;
-              const tabInk =
-                tab?.who === "author" ? "var(--ptw-comment)" : SEQ_STROKE;
               const tabOn = !!tab && id === currentStopId;
               const tabFont = codeFont;
               // EVERY tab is clickable, and the click is the JUMP (`goToTab`)
@@ -6172,7 +6579,11 @@ export default function ProofTreeView({
                 !traceLeaf &&
                 isAutomationNode(node.data) &&
                 (!!onTrace || traces.has(traceKey(node.data.position!.start)));
-              const traceIsOpen = traceOpen.has(id);
+              const traceIsOpen = traceOpenNow.has(id);
+              // The step's own head word — what the reader's question names
+              // ("What did `simp` use?"), read off the source like the gate.
+              const stepHead =
+                node.data.trace?.tactic ?? tacticHeadWord(node.data.label);
               const traceIsBusy = traceBusy.has(id);
 
               // D1 — the two restructuring moves, decided offline from the
@@ -6189,7 +6600,10 @@ export default function ProofTreeView({
               // write. `collapsible` is a SOURCE fact; `expandable` needs a
               // trace, which the click will fetch if it is not in yet.
               const run = collapses.get(id);
-              const collapsible = !!run && !!onApplyRewrite;
+              // `ramify.experience` beginner hides `⇓` (not a reader's first
+              // move), from the bar and the `⋯` menu alike.
+              const collapsible =
+                !!run && !!onApplyRewrite && preset.offerCollapse;
               // D4 — a lint on this node with an answer (or, for
               // `linter.flexible`, one the click can reach).
               const lintable = lintFixes.get(id);
@@ -6205,6 +6619,7 @@ export default function ProofTreeView({
                 !isEditing &&
                 !traceLeaf &&
                 (automation ||
+                  revealable ||
                   goalRevealable ||
                   focusable ||
                   isFocusRoot ||
@@ -6242,32 +6657,17 @@ export default function ProofTreeView({
                 goalRevealable,
                 editable,
                 partEditable,
-                proseLabel: !!node.data.proseLabel,
                 elidable,
                 focusable,
                 isFocusRoot,
-                pathable,
-                isPathRoot,
                 anyUsedHyp: !!hyps?.some((l) => l.used),
-                hypOrigins: !!hyps?.some((l) => l.origin),
-                usesHyps: hypLitTactics.has(id),
-                usesLemmas: lemmas.length > 0,
-                branches: (node.data.branch?.arms.length ?? 0) > 0,
-                automation,
-                traceOpen: traceIsOpen,
                 ledgerRows: !!node.data.ledger?.some(
                   (r) => r.goalId !== undefined,
                 ),
-                linkGoal: barLinkPlus,
                 tourStop: myStopIds.has(id),
                 tourMarkable: markWritable,
                 tourTab: tab?.who ?? null,
-                inlinable,
-                extractable,
-                collapsible,
-                expandable,
                 renamable: (renames.get(id)?.size ?? 0) > 0,
-                lintFixable: !!lintable,
               });
 
               const diagTip = (nodeDiags ?? [])
@@ -6336,6 +6736,10 @@ export default function ProofTreeView({
                 ? `arm: ${node.data.arm.pattern}`
                 : "";
 
+              // Ticks are stripped from the UI's own sentences (a native
+              // `<title>` cannot draw a code span — ticks.ts) and left
+              // on anything quoted from the source: the label, the tactic
+              // lists, the arm patterns.
               const nodeTooltip = [
                 node.data.proseLabel ? node.data.label : "",
                 leafTip,
@@ -6343,10 +6747,10 @@ export default function ProofTreeView({
                 branchTip,
                 armTip,
                 usesTip,
-                viaTip,
+                plainTicks(viaTip),
                 foldedTip,
-                diagTip,
-                hints.map((h) => `· ${h}`).join("\n"),
+                plainTicks(diagTip),
+                hints.map((h) => `· ${plainTicks(h)}`).join("\n"),
               ]
                 .filter(Boolean)
                 .join("\n\n");
@@ -6465,6 +6869,153 @@ export default function ProofTreeView({
                   });
                 }
               };
+              // Double-click's edit, as a function the `⋯` menu's "Edit"
+              // row calls too. `li` is the wrapped line the press landed on
+              // (a merged run edits the part that line belongs to).
+              const startEdit = (li: number) => {
+                cancelPendingReveal();
+
+                if (node.data.proseLabel) {
+                  openCommentEdit();
+                  return;
+                }
+
+                let editPos = position;
+                if (partEditable) {
+                  const seg = lines[li]?.seg ?? 0;
+                  const part =
+                    partSegSpans(parts!).find((s) => seg < s.seg0 + s.span)
+                      ?.part ?? parts![0];
+                  if (!part.position) return;
+                  editPos = part.position;
+                }
+                if (!editPos) return;
+                const q = getTacticEdit!(editPos);
+                if (!q) return;
+                setEditing({
+                  id,
+                  pos: q.pos,
+                  original: q.text,
+                  value: q.text,
+
+                  ...(partEditable ? { tokPos: editPos } : {}),
+                });
+              };
+
+              // The moves no bar button carries — a click, a double-click, a
+              // corner, a context line — named for the `⋯` menu. Each row
+              // calls the handler its gesture calls. Built only for the node
+              // the menu is open on.
+              const menuHere = menuFor === id;
+              const nFold = folded?.tactics.length ?? 0;
+              const renameLabels = !proposing
+                ? [...(renames.get(id)?.values() ?? [])]
+                    .map((rn) => ({
+                      rn,
+                      label: renameMoveLabel(rn.rewrite.name, rn.to),
+                    }))
+                    .filter(
+                      (x, i, all) =>
+                        all.findIndex((y) => y.label === x.label) === i,
+                    )
+                : [];
+              const menuOnlyMoves: NodeMove[] = !menuHere
+                ? []
+                : [
+                ...(isMarker
+                  ? [
+                      {
+                        glyph: "+",
+                        label: "Bring back what this box stands for",
+                        title: "Bring back what this box stands for",
+                        shortcut: "click",
+                        onClick: () => onNodeClick(id),
+                      },
+                    ]
+                  : []),
+                ...(type === "goal" && cuttable
+                  ? [
+                      folded
+                        ? {
+                            glyph: `+${nFold}`,
+                            label: `Bring back the ${nFold} hidden step${nFold === 1 ? "" : "s"}`,
+                            title: "Bring back the hidden steps",
+                            shortcut: `click +${nFold}`,
+                            onClick: () => onNodeClick(id),
+                          }
+                        : {
+                            glyph: "−",
+                            label: "Hide everything below this goal",
+                            title: "Hide everything below this goal",
+                            shortcut: "click −",
+                            onClick: () => onNodeClick(id),
+                          },
+                    ]
+                  : []),
+                ...((editable || partEditable) && !node.data.proseLabel
+                  ? [
+                      {
+                        glyph: "edit",
+                        label: "Edit this tactic",
+                        title: "Edit this tactic",
+                        shortcut: "double-click",
+                        onClick: () => startEdit(0),
+                      },
+                    ]
+                  : []),
+                ...(commentEditable &&
+                (node.data.commentRanges?.length ?? 0) > 0
+                  ? [
+                      {
+                        glyph: "comment",
+                        label: "Edit the comment",
+                        title: "Edit the comment",
+                        shortcut: "double-click the strip",
+                        onClick: () => openCommentEdit(),
+                      },
+                    ]
+                  : []),
+                ...(tabMine
+                  ? [
+                      {
+                        glyph: "unmark",
+                        label: "Take your mark off",
+                        title: "Take your mark off",
+                        shortcut: "⌥-click its tab",
+                        onClick: () => toggleMyStop(id),
+                      },
+                    ]
+                  : nubHere
+                    ? [
+                        {
+                          glyph: "mark",
+                          label: "Drop a mark here",
+                          title: "Drop a mark here",
+                          shortcut: "click the corner",
+                          onClick: () => toggleMyStop(id),
+                        },
+                        ...(markWritable
+                          ? [
+                              {
+                                glyph: "writeMark",
+                                label: "Write a `.mark` into the source",
+                                title: "Write a `.mark` into the source",
+                                shortcut: "⌥-click the corner",
+                                onClick: () => writeMark(id),
+                              },
+                            ]
+                          : []),
+                      ]
+                    : []),
+                ...renameLabels.map(({ rn, label }) => ({
+                  glyph: `rename:${label}`,
+                  label,
+                  title: label,
+                  shortcut: "⌥-click the line",
+                  onClick: () => proposeRewrite(id, rn.rewrite),
+                })),
+              ];
+
               const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
                 e.stopPropagation();
 
@@ -6503,6 +7054,342 @@ export default function ProofTreeView({
                 onNodeClick(id);
               };
 
+              const showBarHere = hasBar && (hoverId === id || isArming);
+              // EVERY bar-able move on this node, by id — `null` where the
+              // move is not available here. The bar reads it in the READER'S
+              // order (`barIds`: the pinned list, else `ramify.hoverBar.*`,
+              // else the preset), the `⋯` menu in `MOVE_IDS` order; both
+              // through `flatMap` over ids and never by filtering an array of
+              // moves (the compiler lint reads a property read over an array
+              // of ref-touching closures as a ref read during render). Built
+              // only where it can be seen: the hovered node's bar, or the
+              // node the menu is open on. NO ⚑ (user direction, 2026-09-08):
+              // marks are the corner nub's.
+              const barKind: BarKind = type === "goal" ? "goal" : "tactic";
+              const movesFor = (k: MoveId): NodeMove[] => {
+                if (!(showBarHere || menuHere)) return [];
+                switch (k) {
+                  case "goal":
+                    return barLinkPlus
+                      ? [
+                          {
+                            id: k,
+                            glyph: "+",
+                            label: "Show the goal this step proves",
+                            shortcut: "click its row",
+                            title:
+                              "Show the goal this step proves, above it (also: click its ledger row)",
+                            onClick: () => {
+                              const lp = linkPlus.get(id)!;
+                              anchorOn(id);
+                              setChainOpen((prev) => new Set(prev).add(lp.key));
+                            },
+                          },
+                        ]
+                      : [];
+                  // B4 — WHAT DID `simp` USE? The `⁇` is the tactic's own `?`
+                  // form said twice: the affordance and the mechanism are the
+                  // same character, and it is a question, which is what the
+                  // reader is asking.
+                  case "trace": {
+                    if (!automation) return [];
+                    const said = traceMoveLabel(
+                      stepHead,
+                      traceIsBusy ? "busy" : traceIsOpen ? "open" : "closed",
+                    );
+                    return [
+                      {
+                        id: k,
+                        glyph: traceIsBusy ? "…" : "⁇",
+                        label: said,
+                        title: said,
+                        onClick: () => toggleTrace(id),
+                      },
+                    ];
+                  }
+                  case "skip":
+                    return elidable
+                      ? [
+                          {
+                            id: k,
+                            glyph: "skip",
+                            label: isCombined
+                              ? "Skip this run"
+                              : hasChildren
+                                ? "Skip this step"
+                                : "Skip this closing step",
+                            shortcut: "⌥-click",
+                            icon: <SkipIcon />,
+                            title: isCombined
+                              ? "Skip this run (⌥-click) — the whole run collapses to one dashed box (click it to restore)"
+                              : hasChildren
+                                ? "Skip this step (⌥-click) — the goal above hops over it and wears +N; the break on the line names what went (click either to restore)"
+                                : "Skip this closing step (⌥-click) — the goal above folds and wears +N (click it to restore)",
+                            onClick: () =>
+                              isCombined ? elideCombined(id) : elideStep(id),
+                            onHover: (on: boolean) => {
+                              if (on) {
+                                const p = elidePreviewFor(id);
+                                if (p)
+                                  afterDwell(() =>
+                                    setElidePreview({ ...p, from: "bar" }),
+                                  );
+                              } else {
+                                cancelDwell();
+                                setElidePreview((p) =>
+                                  p?.anchor === id && p.from === "bar"
+                                    ? null
+                                    : p,
+                                );
+                              }
+                            },
+                          },
+                        ]
+                      : [];
+                  // `»` on BOTH kinds (2026-09-22). A tactic's plain click
+                  // already reveals, so the button is the bar saying so; a
+                  // goal's is `⌘-click`.
+                  case "source":
+                    return goalRevealable
+                      ? [
+                          {
+                            id: k,
+                            glyph: "»",
+                            glyphPx: SOURCE_GLYPH_PX,
+                            label: "Show in source",
+                            shortcut: `${CMD}-click`,
+                            title: `Show in source — or ${CMD}-click the box`,
+                            onClick: () => revealAt(position!),
+                          },
+                        ]
+                      : revealable
+                        ? [
+                            {
+                              id: k,
+                              glyph: "»",
+                              glyphPx: SOURCE_GLYPH_PX,
+                              label: "Show in source",
+                              shortcut: "click",
+                              title: "Show in source — or click the box",
+                              onClick: () => revealAt(actPos!, id),
+                            },
+                          ]
+                        : [];
+                  case "focus":
+                    return focusable
+                      ? [
+                          {
+                            id: k,
+                            glyph: "◎",
+                            label: "Focus on this goal's subtree",
+                            shortcut: "⌥-click",
+                            title: "Focus this subtree (⌥-click)",
+                            onClick: () => focusOn(id),
+                          },
+                        ]
+                      : isFocusRoot
+                        ? [
+                            {
+                              id: k,
+                              glyph: "◎",
+                              label: "Back to the whole proof",
+                              shortcut: "⌥-click · Esc",
+                              title: "Back to the whole proof (⌥-click, or Esc)",
+                              onClick: exitFocus,
+                            },
+                          ]
+                        : [];
+                  case "path":
+                    return pathable
+                      ? [
+                          {
+                            id: k,
+                            glyph: "⊹",
+                            glyphPx: PATH_GLYPH_PX,
+                            label: "Show only the path to here",
+                            title:
+                              "Only this path: hide everything not on the way from the root to here, and everything not under it",
+                            onClick: () => pathOn(id),
+                          },
+                        ]
+                      : isPathRoot
+                        ? [
+                            {
+                              id: k,
+                              glyph: "⊹",
+                              glyphPx: PATH_GLYPH_PX,
+                              label: "Show the whole proof again",
+                              shortcut: "Esc",
+                              title: "Show the whole proof again (Esc)",
+                              onClick: exitPath,
+                            },
+                          ]
+                        : [];
+                  // `⧉` — the LENS: the tactic opened in a slim editor below
+                  // the infoview (the companion's).
+                  case "lens":
+                    return popoutable
+                      ? [
+                          {
+                            id: k,
+                            glyph: "⧉",
+                            label: "Open in the lens",
+                            title: "Open in the lens — the tactic in a slim editor below the infoview",
+                            onClick: () =>
+                              onPopoutEdit!(
+                                getTacticEdit?.(actPos!)?.pos ?? actPos!,
+                              ),
+                          },
+                        ]
+                      : [];
+                  // D1 — RESTRUCTURING. `⤵` puts a `have` down into its one
+                  // use, `⤴` lifts a `(by …)` out into a `have`: the arrows
+                  // point the way the text moves. Neither writes anything on
+                  // its own — the click opens a PROPOSAL, and the elaborator
+                  // decides whether it can be taken.
+                  case "inline":
+                    return inlinable && !proposing
+                      ? [
+                          {
+                            id: k,
+                            glyph: "⤵",
+                            label: inlineMoveLabel(rw!.inline!.name),
+                            icon: <InlineIcon />,
+                            title: `${inlineMoveLabel(rw!.inline!.name)} — ${CHECKED_FIRST}`,
+                            onClick: () => proposeRewrite(id, rw!.inline!),
+                            onHover: (on: boolean) =>
+                              onPreviewRange?.(
+                                on
+                                  ? {
+                                      start: rw!.inline!.edits[0].range.start,
+                                      stop: rw!.inline!.edits[0].range.end,
+                                    }
+                                  : null,
+                              ),
+                          },
+                        ]
+                      : [];
+                  case "extract":
+                    return extractable && !proposing
+                      ? [
+                          {
+                            id: k,
+                            glyph: "⤴",
+                            label: EXTRACT_MOVE_LABEL,
+                            icon: <InlineIcon up />,
+                            title: `${EXTRACT_MOVE_LABEL} — ${CHECKED_FIRST}`,
+                            onClick: () => proposeRewrite(id, rw!.extract!),
+                          },
+                        ]
+                      : [];
+                  // D2 — `⇓` takes a RUN down to one tactic, `⇑` brings what
+                  // that tactic used back up into the source. Both open the
+                  // same proposal pill.
+                  case "collapse":
+                    return collapsible && !proposing
+                      ? [
+                          {
+                            id: k,
+                            glyph: "⇓",
+                            label: collapseMoveLabel(run!.steps.length),
+                            title: `${collapseMoveLabel(run!.steps.length)} — Lean tries ${AUTOMATION_CANDIDATES.slice(0, 4).join(", ")}… and offers the first that works`,
+                            onClick: () => proposeCollapse(id, run!),
+                            onHover: (on: boolean) => {
+                              const ext = collapseRewrite(
+                                run!,
+                                collapseCtx!,
+                                "omega",
+                              );
+                              onPreviewRange?.(
+                                on && ext.ok
+                                  ? {
+                                      start: ext.rewrite.edits[0].range.start,
+                                      stop: ext.rewrite.edits[0].range.end,
+                                    }
+                                  : null,
+                              );
+                            },
+                          },
+                        ]
+                      : [];
+                  case "expand":
+                    return expandable && !proposing
+                      ? [
+                          {
+                            id: k,
+                            glyph: "⇑",
+                            label: expandMoveLabel(stepHead),
+                            title: `${expandMoveLabel(stepHead)} — ${CHECKED_FIRST}`,
+                            onClick: () => proposeExpand(id),
+                          },
+                        ]
+                      : [];
+                  // D4 — FIX THE LINT, offered only where a lint on this node
+                  // HAS a one-edit answer; the click opens the proposal pill.
+                  case "lint":
+                    return lintable && !proposing
+                      ? [
+                          {
+                            id: k,
+                            glyph: "✎",
+                            label: lintMoveLabel(lintable.title),
+                            title: `${lintMoveLabel(lintable.title)} — ${CHECKED_FIRST}`,
+                            onClick: () => proposeLintFix(id),
+                          },
+                        ]
+                      : [];
+                  case "delete": {
+                    if (!deletable || isArming) return [];
+                    const said =
+                      type === "goal"
+                        ? "Delete this goal's proof"
+                        : isCombined
+                          ? "Delete this run of tactics"
+                          : "Delete this tactic";
+                    return [
+                      {
+                        id: k,
+                        glyph: "delete",
+                        label: said,
+                        title: said,
+                        icon: <TrashIcon />,
+                        danger: true,
+                        onClick: () => {
+                          cancelDwell();
+                          setDeletePreview(null);
+                          setArming({
+                            id,
+                            spec: node.data.deleteSpec ?? delSpecs.get(id)!,
+                          });
+                        },
+                        // Hovering the can fades exactly what it takes — the
+                        // ◌ preview's rule, over the delete extent instead of
+                        // the cut's members.
+                        onHover: (on: boolean) => {
+                          if (on) {
+                            const ids = extentIds(delExtent!, id);
+                            afterDwell(() =>
+                              setDeletePreview({ anchor: id, ids }),
+                            );
+                          } else {
+                            cancelDwell();
+                            setDeletePreview((pv) =>
+                              pv?.anchor === id ? null : pv,
+                            );
+                          }
+                        },
+                      },
+                    ];
+                  }
+                }
+              };
+              const barMoves: NodeMove[] = showBarHere
+                ? barIds[barKind].flatMap(movesFor)
+                : [];
+              const moves: NodeMove[] = menuHere
+                ? [...MOVE_IDS.flatMap(movesFor), ...menuOnlyMoves]
+                : [];
+
               return (
                 <g
                   key={id}
@@ -6529,38 +7416,10 @@ export default function ProofTreeView({
                     !isEditing
                       ? (e) => {
                           e.stopPropagation();
-                          cancelPendingReveal();
-
-                          if (node.data.proseLabel) {
-                            openCommentEdit();
-                            return;
-                          }
-
-                          let editPos = position;
-                          if (partEditable) {
-                            const el = (e.target as Element).closest?.(
-                              "[data-ptw-lineidx]",
-                            ) as HTMLElement | null;
-                            const li = el ? Number(el.dataset.ptwLineidx) : 0;
-                            const seg = lines[li]?.seg ?? 0;
-                            const part =
-                              partSegSpans(parts!).find(
-                                (s) => seg < s.seg0 + s.span,
-                              )?.part ?? parts![0];
-                            if (!part.position) return;
-                            editPos = part.position;
-                          }
-                          if (!editPos) return;
-                          const q = getTacticEdit!(editPos);
-                          if (!q) return;
-                          setEditing({
-                            id,
-                            pos: q.pos,
-                            original: q.text,
-                            value: q.text,
-
-                            ...(partEditable ? { tokPos: editPos } : {}),
-                          });
+                          const el = (e.target as Element).closest?.(
+                            "[data-ptw-lineidx]",
+                          ) as HTMLElement | null;
+                          startEdit(el ? Number(el.dataset.ptwLineidx) : 0);
                         }
                       : undefined
                   }
@@ -6576,6 +7435,7 @@ export default function ProofTreeView({
                           if (hasBar || hypLights)
                             setHoverId((cur) => (cur === id ? null : cur));
                           if (hoverHighlights) onHoverTactic!(null);
+                          if (elidable || deletable) cancelDwell();
                           if (elidable)
                             setElidePreview((p) =>
                               p?.anchor === id ? null : p,
@@ -6690,20 +7550,11 @@ export default function ProofTreeView({
                           key={j}
 
                           x={
-                            (compact
-                              ? -w / 2 +
-                                (node.data.parents.length > 0
-                                  ? COMMENT_INDENT
-                                  : 0)
-                              : -node.data.commentW / 2) + line.indent
+                            stripX + line.indent
                           }
 
                           y={
-                            boxTop -
-                            topH +
-                            (floatComment
-                              ? -node.data.commentBlockH
-                              : node.data.caseH) +
+                            stripTop +
                             (j + 0.5) * COMMENT_LINE_H
                           }
                           dy="0.32em"
@@ -6723,19 +7574,10 @@ export default function ProofTreeView({
                       >
                         <rect
                           x={
-                            (compact
-                              ? -w / 2 +
-                                (node.data.parents.length > 0
-                                  ? COMMENT_INDENT
-                                  : 0)
-                              : -node.data.commentW / 2) + 1
+                            stripX + 1
                           }
                           y={
-                            boxTop -
-                            topH +
-                            (floatComment
-                              ? -node.data.commentBlockH
-                              : node.data.caseH) +
+                            stripTop +
                             3
                           }
                           width={1.5}
@@ -6749,18 +7591,9 @@ export default function ProofTreeView({
                         />
                         {(() => {
                           const mx =
-                            (compact
-                              ? -w / 2 +
-                                (node.data.parents.length > 0
-                                  ? COMMENT_INDENT
-                                  : 0)
-                              : -node.data.commentW / 2) + COMMENT_RULE_INDENT;
+                            stripX + COMMENT_RULE_INDENT;
                           const my =
-                            boxTop -
-                            topH +
-                            (floatComment
-                              ? -node.data.commentBlockH
-                              : node.data.caseH) +
+                            stripTop +
                             (node.data.commentLines.length + 0.5) *
                               COMMENT_LINE_H;
                           const mw = measureText(
@@ -6791,8 +7624,8 @@ export default function ProofTreeView({
                             >
                               <title>
                                 {node.data.commentMore.expanded
-                                  ? "collapse this comment back to its first lines"
-                                  : "show the rest of this comment"}
+                                  ? "Collapse this comment back to its first lines"
+                                  : "Show the rest of this comment"}
                               </title>
 
                               <rect
@@ -6997,7 +7830,7 @@ export default function ProofTreeView({
                         // of the author's own words.
                         const rn = renames.get(id)?.get(j);
                         const ren = rn
-                          ? `⌥-click renames \`${rn.rewrite.name}\` → \`${rn.to}\` (Mathlib's name for ${rn.rule.what})`
+                          ? `⌥-click: ${renameMoveLabel(rn.rewrite.name, rn.to)} — Mathlib's name for ${rn.rule.what}`
                           : undefined;
                         return [from, ren].filter(Boolean).join(" — ") || undefined;
                       }}
@@ -7018,65 +7851,91 @@ export default function ProofTreeView({
                       only that face has a preview — hovering `+N` would fade
                       nothing, since nothing it stands for is drawn. */}
                   {cuttable &&
-                    !hideForEdit &&
-                    (folded ? (
-                      // SEEDED: the corner leans and takes COMMENT ink, the
-                      // same ink the caption beside the break is written in,
-                      // so "the author put this away" reads at a glance from
-                      // either end of the cut. The glyph itself is unchanged
-                      // — no `§` here, so `CORNER_W`'s reserve still holds.
-                      <text
-                        x={w / 2 - 6}
-                        y={boxTop + 12}
-                        textAnchor="end"
-                        fontSize={BADGE_FONT_PX + 1}
-                        fontFamily={getCodeFontFamily()}
-                        fontStyle={folded.seeded ? "italic" : undefined}
-                        fill={
-                          folded.seeded ? "var(--ptw-comment)" : style.stroke
-                        }
-                        style={{ cursor: "pointer", letterSpacing: 0 }}
-                      >
-                        {`+${folded.tactics.length}`}
-                      </text>
-                    ) : (
-                      <text
-                        x={w / 2 - 8}
-                        y={boxTop + 12}
-                        textAnchor="middle"
-                        fontSize={NODE_FONT_PX}
-                        fontFamily={getCodeFontFamily()}
-                        fill={style.stroke}
+                    !hideForEdit && (
+                    <>
+                      {folded ? (
+                        // SEEDED: the corner leans and takes COMMENT ink, the
+                        // same ink the caption beside the break is written in,
+                        // so "the author put this away" reads at a glance from
+                        // either end of the cut. The glyph itself is unchanged
+                        // — no `§` here, so `CORNER_W`'s reserve still holds.
+                        <text
+                          x={w / 2 - 6}
+                          y={boxTop + 12}
+                          textAnchor="end"
+                          fontSize={BADGE_FONT_PX + 1}
+                          fontFamily={getCodeFontFamily()}
+                          fontStyle={folded.seeded ? "italic" : undefined}
+                          fill={
+                            folded.seeded ? "var(--ptw-comment)" : style.stroke
+                          }
+                          pointerEvents="none"
+                          style={{ letterSpacing: 0 }}
+                        >
+                          {`+${folded.tactics.length}`}
+                        </text>
+                      ) : (
+                        // DRAWN, not a text dash (2026-09-22): the 12px `−`
+                        // inked ~7 × 1px, the faintest mark on the box. A
+                        // CORNER_MINUS_W stroke at `CORNER_MINUS_SW` in the
+                        // node's stroke ink, centred where the dash's ink
+                        // was (x − 8, the x-height middle of the top line),
+                        // so its right end stays clear of `CORNER_W`'s edge.
+                        <path
+                          d={`M${w / 2 - 8 - CORNER_MINUS_W / 2} ${boxTop + 8}h${CORNER_MINUS_W}`}
+                          stroke={style.stroke}
+                          strokeWidth={CORNER_MINUS_SW}
+                          strokeLinecap="round"
+                          pointerEvents="none"
+                        />
+                      )}
+                      {/* THE HIT AREA: an invisible rect over the corner the
+                          top line leaves free (`CORNER_W` wide, the reserve
+                          `sizeOf` makes, so it lies over no text) and
+                          `CORNER_HIT_H` tall. The glyph alone was the target
+                          before — a 7 × 1 dash. Paint only, like the nub's
+                          region: the click is the node's own (a goal's click
+                          folds or opens), the rect adds the pointer cursor and
+                          carries the `−` face's fade preview. */}
+                      <rect
+                        data-ptw-corner=""
+                        x={w / 2 - CORNER_W}
+                        y={boxTop}
+                        width={CORNER_W}
+                        height={CORNER_HIT_H}
+                        fill="transparent"
+                        pointerEvents="all"
                         style={{ cursor: "pointer" }}
-                        // Hovering the glyph fades exactly what the click
-                        // would take — the skip button's preview, by the same
-                        // rule and sparing the anchor (this node) for the same
+                        // Hovering the `−` fades exactly what the click would
+                        // take — the skip button's preview, by the same rule
+                        // and sparing the anchor (this node) for the same
                         // reason: the control under the pointer must not read
-                        // disabled.
-                        onMouseEnter={
-                          myCut
-                            ? () =>
-                                setElidePreview({
-                                  anchor: id,
-                                  ids: cutExtentIds(myCut),
-                                  from: "bar",
-                                })
+                        // disabled. `+N` has no preview: nothing it stands
+                        // for is drawn.
+                        onPointerEnter={
+                          !folded && myCut
+                            ? () => {
+                                const ids = cutExtentIds(myCut);
+                                afterDwell(() =>
+                                  setElidePreview({
+                                    anchor: id,
+                                    ids,
+                                    from: "bar",
+                                  }),
+                                );
+                              }
                             : undefined
                         }
-                        onMouseLeave={
-                          myCut
-                            ? () =>
-                                setElidePreview((pv) =>
-                                  pv?.anchor === id && pv.from === "bar"
-                                    ? null
-                                    : pv,
-                                )
-                            : undefined
-                        }
-                      >
-                        −
-                      </text>
-                    ))}
+                        //
+                        // Leaving and pressing are wired on BOTH faces: the
+                        // press folds the goal, and a `+N` face with no
+                        // leave handler would strand a preview (or a pending
+                        // dwell) that the `−` face started.
+                        onPointerLeave={dropCornerPreview}
+                        onPointerDown={dropCornerPreview}
+                      />
+                    </>
+                  )}
 
                   {taggedLines ? (
                     <foreignObject
@@ -7140,7 +7999,7 @@ export default function ProofTreeView({
                                         : chainOpen.has(rowKeys[j])
                                           ? `color-mix(in srgb, ${style.stroke} 9%, transparent)`
                                           : undefined,
-                                    borderRadius: 3,
+                                    borderRadius: CHROME_RADIUS,
                                   }
                                 : null),
                             }}
@@ -7554,41 +8413,18 @@ export default function ProofTreeView({
                       (`tourTabWidth`), one coding for measurer and renderer.
                       Comment ink for the author's stops, the selection accent
                       for your own; the stop being read is FILLED. */}
-                  {tab && !hideForEdit && (
-                    <g
-                      style={{ cursor: "pointer" }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (tabMine && e.altKey) toggleMyStop(id);
-                        else goToTab(id);
-                      }}
-                    >
-                      <title>
-                        {tabMine
-                          ? `Mark ${tab.n} of ${tabStops.length} (temporary) — click to go, ⌥-click to remove`
-                          : `Mark ${tab.n} of ${tabStops.length} (source) — click to go`}
-                      </title>
-                      <rect
-                        x={-w / 2 - tabW / 2}
-                        y={boxTop - BADGE_H / 2}
-                        width={tabW}
-                        height={BADGE_H}
-                        rx={3}
-                        fill={tabOn ? tabInk : "var(--ptw-surface)"}
-                        stroke={tabInk}
-                      />
-                      <text
-                        x={-w / 2}
-                        y={boxTop}
-                        textAnchor="middle"
-                        dominantBaseline="central"
-                        fontSize={BADGE_FONT_PX}
-                        fontFamily={tabFont}
-                        fill={tabOn ? "var(--ptw-surface)" : tabInk}
-                      >
-                        {tab.n}
-                      </text>
-                    </g>
+                  {tab && !hideForEdit && !isEditing && (
+                    <TourTab
+                      cx={-w / 2}
+                      cy={boxTop}
+                      n={tab.n}
+                      total={tabStops.length}
+                      mine={tabMine}
+                      on={tabOn}
+                      font={tabFont}
+                      onJump={() => goToTab(id)}
+                      onRemove={() => toggleMyStop(id)}
+                    />
                   )}
 
                   {/* …and the nub, where that tab would stand — drawn only
@@ -7628,8 +8464,8 @@ export default function ProofTreeView({
                     >
                       <title>
                         {markWritable
-                          ? "Drop a mark here — ⌥-click writes `.mark` into the source"
-                          : "Drop a mark here — `<` and `>` read the marks"}
+                          ? plainTicks("Drop a mark here — ⌥-click writes `.mark` into the source")
+                          : plainTicks("Drop a mark here — `<` and `>` read the marks")}
                       </title>
                     </rect>
                   )}
@@ -7648,279 +8484,38 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {hasBar && (hoverId === id || isArming) && (
+                  {/* THE `⋯` MENU, portalled into the frame (HTML, above the
+                      tree) but owned by this node, so its rows are this
+                      node's own closures. It stops every mouse event at its
+                      edge: in React's tree it sits inside this `<g>` and the
+                      scroll frame, whose click and marquee handlers must not
+                      see a press on a row. */}
+                  {menuHere &&
+                    frameEl &&
+                    createPortal(
+                      <NodeMenu
+                        at={nodeMenu!}
+                        moves={moves}
+                        kind={barKind}
+                        pinned={barIds[barKind]}
+                        onPin={(k) => pinMove(barKind, k)}
+                        onClose={() => setNodeMenu(null)}
+                      />,
+                      frameEl,
+                    )}
+                  {showBarHere && (
                     <NodeActionBar
                       placement={type === "tactic" ? "right" : "top-right"}
-
                       x={w / 2 - BAR_OVERLAP}
                       y={type === "tactic" ? boxTop + h / 2 : boxTop}
+                      boxTop={boxTop}
                       actions={[
-                        // NO ⚑ (user direction, 2026-09-08): the corner nub
-                        // already offers both gestures — plain click for a
-                        // temporary mark, ⌥-click for the source's `.mark` —
-                        // and the hover bar was the second way to reach one
-                        // position.
-                        ...(barLinkPlus
-                          ? [
-                              {
-                                glyph: "+",
-                                title:
-                                  "Show the goal this step proves, above it (also: click its ledger row)",
-                                onClick: () => {
-                                  const lp = linkPlus.get(id)!;
-                                  anchorOn(id);
-                                  setChainOpen((prev) =>
-                                    new Set(prev).add(lp.key),
-                                  );
-                                },
-                              },
-                            ]
-                          : []),
-
-                        // B4 — WHAT DID `simp` USE? The `⁇` is the tactic's
-                        // own `?` form said twice: the affordance and the
-                        // mechanism are the same character, and it is a
-                        // question, which is what the reader is asking.
-                        ...(automation
-                          ? [
-                              {
-                                glyph: traceIsBusy ? "…" : "⁇",
-                                title: traceIsBusy
-                                  ? "Asking the server what this step used…"
-                                  : traceIsOpen
-                                    ? `Hide what \`${node.data.trace?.tactic ?? "this"}\` used`
-                                    : "Show what this step used — the declaration is re-elaborated with the tactic's `?` form and its `Try this` read back",
-                                onClick: () => toggleTrace(id),
-                              },
-                            ]
-                          : []),
-
-                        ...(elidable
-                          ? [
-                              {
-                                glyph: "skip",
-                                icon: <SkipIcon />,
-                                title: isCombined
-                                  ? "Skip this run (⌥-click) — the whole run collapses to one dashed box (click it to restore)"
-                                  : hasChildren
-                                    ? "Skip this step (⌥-click) — the goal above hops over it and wears +N; the break on the line names what went (click either to restore)"
-                                    : "Skip this closing step (⌥-click) — the goal above folds and wears +N (click it to restore)",
-                                onClick: () =>
-                                  isCombined
-                                    ? elideCombined(id)
-                                    : elideStep(id),
-                                onHover: (on: boolean) => {
-                                  if (on) {
-                                    const p = elidePreviewFor(id);
-                                    if (p)
-                                      setElidePreview({ ...p, from: "bar" });
-                                  } else {
-                                    setElidePreview((p) =>
-                                      p?.anchor === id && p.from === "bar"
-                                        ? null
-                                        : p,
-                                    );
-                                  }
-                                },
-                              },
-                            ]
-                          : []),
-                        ...(goalRevealable
-                          ? [
-                              {
-                                glyph: "»",
-                                title: `Reveal in source (${CMD}-click)`,
-                                onClick: () => revealAt(position!),
-                              },
-                            ]
-                          : []),
-                        ...(focusable
-                          ? [
-                              {
-                                glyph: "◎",
-                                title: "Focus this subtree (⌥-click)",
-                                onClick: () => focusOn(id),
-                              },
-                            ]
-                          : []),
-                        ...(isFocusRoot
-                          ? [
-                              {
-                                glyph: "◎",
-                                title:
-                                  "Back to the whole proof (⌥-click, or Esc)",
-                                onClick: exitFocus,
-                              },
-                            ]
-                          : []),
-                        ...(pathable
-                          ? [
-                              {
-                                glyph: "⊹",
-                                glyphPx: PATH_GLYPH_PX,
-                                title:
-                                  "Only this path: hide everything not on the way from the root to here, and everything not under it",
-                                onClick: () => pathOn(id),
-                              },
-                            ]
-                          : []),
-                        ...(isPathRoot
-                          ? [
-                              {
-                                glyph: "⊹",
-                                glyphPx: PATH_GLYPH_PX,
-                                title: "Show the whole proof again (or Esc)",
-                                onClick: exitPath,
-                              },
-                            ]
-                          : []),
-                        ...(popoutable
-                          ? [
-                              {
-                                glyph: "⧉",
-
-                                title: "Open in lens",
-                                onClick: () =>
-                                  onPopoutEdit!(
-                                    getTacticEdit?.(actPos!)?.pos ?? actPos!,
-                                  ),
-                              },
-                            ]
-                          : []),
-
-                        // D1 — RESTRUCTURING. `⤵` puts a `have` down into
-                        // its one use, `⤴` lifts a `(by …)` out into a
-                        // `have`: the arrows point the way the text moves,
-                        // and they are the same glyph mirrored because the
-                        // two moves are inverse. Neither writes anything on
-                        // its own — the click opens a PROPOSAL, and the
-                        // elaborator decides whether it can be taken.
-                        ...(inlinable && !proposing
-                          ? [
-                              {
-                                glyph: "⤵",
-                                title: `Inline \`${rw!.inline!.name}\` into the one step that uses it — the elaborator is asked first`,
-                                onClick: () =>
-                                  proposeRewrite(id, rw!.inline!),
-                                onHover: (on: boolean) =>
-                                  onPreviewRange?.(
-                                    on
-                                      ? {
-                                          start: rw!.inline!.edits[0].range.start,
-                                          stop: rw!.inline!.edits[0].range.end,
-                                        }
-                                      : null,
-                                  ),
-                              },
-                            ]
-                          : []),
-                        ...(extractable && !proposing
-                          ? [
-                              {
-                                glyph: "⤴",
-                                title:
-                                  "Hoist the `(by …)` out as `have this : … := by …` on the line above — the elaborator is asked first",
-                                onClick: () =>
-                                  proposeRewrite(id, rw!.extract!),
-                              },
-                            ]
-                          : []),
-
-                        // D2 — the two automation moves, drawn as the double
-                        // arrows the single ones already established: `⇓`
-                        // takes a RUN down to one tactic, `⇑` brings what
-                        // that tactic used back up into the source. Neither
-                        // writes; both open the same proposal pill.
-                        ...(collapsible && !proposing
-                          ? [
-                              {
-                                glyph: "⇓",
-                                title: `Collapse ${run!.steps.length} steps to one automation tactic — ${AUTOMATION_CANDIDATES.join(", ")} are tried in that order and the first that closes the goal is offered`,
-                                onClick: () => proposeCollapse(id, run!),
-                                onHover: (on: boolean) => {
-                                  const ext = collapseRewrite(
-                                    run!,
-                                    collapseCtx!,
-                                    "omega",
-                                  );
-                                  onPreviewRange?.(
-                                    on && ext.ok
-                                      ? {
-                                          start: ext.rewrite.edits[0].range.start,
-                                          stop: ext.rewrite.edits[0].range.end,
-                                        }
-                                      : null,
-                                  );
-                                },
-                              },
-                            ]
-                          : []),
-                        ...(expandable && !proposing
-                          ? [
-                              {
-                                glyph: "⇑",
-                                title: node.data.trace
-                                  ? `Write what \`${node.data.trace.tactic}\` used into the source, in core's own words`
-                                  : "Write what this automation used into the source — its lemmas are read back first, in core's own words",
-                                onClick: () => proposeExpand(id),
-                              },
-                            ]
-                          : []),
-
-                        // D4 — FIX THE LINT. `✎` is the pencil the reader
-                        // already reads as "write this for me", and it is
-                        // offered only where a lint on this node HAS a
-                        // one-edit answer. Like every other D move it writes
-                        // nothing: the click opens the same proposal pill,
-                        // and the elaborator decides.
-                        ...(lintable && !proposing
-                          ? [
-                              {
-                                glyph: "✎",
-                                title: `${lintable.title.charAt(0).toUpperCase()}${lintable.title.slice(1)} — the elaborator is asked first`,
-                                onClick: () => proposeLintFix(id),
-                              },
-                            ]
-                          : []),
-
-                        ...(deletable && !isArming
-                          ? [
-                              {
-                                glyph: "delete",
-                                icon: <TrashIcon />,
-                                danger: true,
-                                title:
-                                  type === "goal"
-                                    ? "Delete this goal's proof"
-                                    : isCombined
-                                      ? "Delete this run of tactics"
-                                      : "Delete this tactic",
-                                onClick: () => {
-                                  setDeletePreview(null);
-                                  setArming({
-                                    id,
-
-                                    spec:
-                                      node.data.deleteSpec ?? delSpecs.get(id)!,
-                                  });
-                                },
-                                // Hovering the can fades exactly what it takes
-                                // — the ◌ preview's rule, over the delete
-                                // extent instead of the cut's members.
-                                onHover: (on: boolean) => {
-                                  if (on)
-                                    setDeletePreview({
-                                      anchor: id,
-                                      ids: extentIds(delExtent!, id),
-                                    });
-                                  else
-                                    setDeletePreview((pv) =>
-                                      pv?.anchor === id ? null : pv,
-                                    );
-                                },
-                              },
-                            ]
-                          : []),
+                        ...barMoves,
+                        {
+                          glyph: "⋯",
+                          title: "More: every move on this node, what its icon means, and which ones sit on the bar",
+                          onClick: (el?: Element) => openNodeMenu(id, el),
+                        },
                       ]}
                     />
                   )}
@@ -7999,7 +8594,7 @@ export default function ProofTreeView({
                       height={CHIP_H + 2 * CARD_PAD}
                       rx={4}
                       fill="var(--ptw-surface)"
-                      stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
+                      stroke={CHROME_BORDER}
                       strokeWidth={1}
                       style={{
                         filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))",
@@ -8055,25 +8650,35 @@ export default function ProofTreeView({
                 // that closed the run, so while it is out the pill says what
                 // is being asked (`proposal.title`) and the answer replaces
                 // it with the move itself.
-                const said = proposal.title ?? proposal.rewrite.title;
+                const said = pillMove(
+                  proposal.kind,
+                  proposal.title ?? proposal.rewrite.title,
+                );
                 // An EXPAND is not about length — it writes out what the
                 // automation used and the proof is the same proof — so it
                 // does not carry the step-count clause the other three do.
                 // …and neither is a LINT FIX: `write \`·\` for the focusing
                 // dot → same length` was true and beside the point. Only the
                 // moves that claim to shorten the proof carry the clause.
+                // …and neither is a COLLAPSE (2026-09-22): "Replace these 4
+                // steps with `omega`" already says how many go.
                 const lenClause =
                   proposal.kind === "expand" ||
                   proposal.kind === "rename" ||
-                  proposal.kind === "lint"
+                  proposal.kind === "lint" ||
+                  proposal.kind === "collapse"
                     ? ""
                     : ` → ${shorter}`;
-                const label =
+                // The pill is code font throughout, so a code span cannot be
+                // told apart by face: its ticks are stripped (ticks.ts),
+                // and `chipWidth` measures exactly the string painted.
+                const label = plainTicks(
                   proposal.phase === "checking"
-                    ? `${said} — asking the elaborator…`
+                    ? `${said} — checking with Lean…`
                     : proposal.phase === "ok"
-                      ? `${proposal.rewrite.title}${lenClause} · ✓ elaborates`
-                      : `✗ ${(proposal.message ?? "it does not check").slice(0, 72)}`;
+                      ? `${pillMove(proposal.kind, proposal.rewrite.title)}${lenClause} · ✓ elaborates`
+                      : `✗ ${(proposal.message ?? "it does not check").slice(0, 72)}`,
+                );
                 const live = proposal.phase === "ok";
                 const wide = chipWidth(label, CHIP_FONT_PX);
                 const x0 = -CHIP_W_ADD / 2;
@@ -8094,7 +8699,7 @@ export default function ProofTreeView({
                       height={CHIP_H + 2 * CARD_PAD}
                       rx={4}
                       fill="var(--ptw-surface)"
-                      stroke="var(--vscode-editorWidget-border, rgba(128,128,128,0.35))"
+                      stroke={CHROME_BORDER}
                       strokeWidth={1}
                       style={{
                         filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.35))",
@@ -8107,8 +8712,8 @@ export default function ProofTreeView({
                         (live
                           ? `Write it — ${CMD}Z in the editor undoes it`
                           : proposal.phase === "checking"
-                            ? "The declaration is being re-elaborated with this rewrite spliced in"
-                            : "The elaborator rejected this rewrite; nothing was written")
+                            ? "Lean is re-checking the proof with this change in place"
+                            : "Lean rejected this change; nothing was written")
                       }
                       x={x0}
                       width={wide}
@@ -8200,13 +8805,11 @@ export default function ProofTreeView({
                         >
                           <span
                             style={{
-                              fontFamily: "monospace",
-                              fontSize: 15,
                               lineHeight: "15px",
                               color: diagInkOf(d.severity),
                             }}
                           >
-                            {diagGlyphOf(d.severity)}
+                            <DiagGlyph sev={d.severity} />
                           </span>
                           <span
                             style={{
@@ -8215,7 +8818,7 @@ export default function ProofTreeView({
                               lineHeight: "15px",
                               whiteSpace: "pre-wrap",
 
-                              color: "var(--vscode-icon-foreground, #2d3748)",
+                              color: CHROME_INK,
                             }}
                           >
                             {d.message}
@@ -8232,6 +8835,7 @@ export default function ProofTreeView({
                 const en = placed.get(editing.id);
                 if (!en) return null;
                 const { w, h } = en.data;
+                const editTab = tourTabs.get(editing.id);
 
                 const topH = bandTopH(en.data);
                 const boxTop = (topH - h) / 2;
@@ -8241,12 +8845,7 @@ export default function ProofTreeView({
                 const overlayY = proseEdit
                   ? boxTop
                   : editing.comment
-                    ? boxTop -
-                      topH +
-                      (en.data.commentFloats
-                        ? -en.data.commentBlockH
-                        : en.data.caseH) -
-                      NODE_PAD_Y
+                    ? commentStripTop(en.data) - NODE_PAD_Y
                     : editing.add || editing.calcStage
                       ? boxTop + h + 4
                       : boxTop;
@@ -8324,7 +8923,7 @@ export default function ProofTreeView({
                 // prose ink for a comment) rather than by a rectangle sitting
                 // inside another one. Width is the exception: it grows with the
                 // draft. The radius follows the outer curve of that stroke.
-                const editRx = en.data.type === "tactic" ? 4 : 6;
+                const editRx = nodeRx(en.data.type);
                 const editOuterRx = editRx + EDIT_STROKE / 2;
 
                 // An overlay standing in for the box wears the BOX'S fill: in
@@ -8632,12 +9231,12 @@ export default function ProofTreeView({
                               background: EDIT_BG,
                               color: EDIT_TEXT,
                               border: `1px solid ${NODE_STYLES.tactic.stroke}`,
-                              borderRadius: 3,
+                              borderRadius: CHROME_RADIUS,
                               fontFamily: getCodeFontFamily(),
                               fontSize: NODE_FONT_PX,
                               lineHeight: `${LINE_H}px`,
                               letterSpacing: 0,
-                              boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
+                              boxShadow: POPUP_CHROME.boxShadow,
                             }}
                           >
                             {completion.items.map((it, i) => (
@@ -8685,7 +9284,7 @@ export default function ProofTreeView({
                                 <span
                                   style={{
                                     marginLeft: "auto",
-                                    opacity: 0.55,
+                                    opacity: DIM_OPACITY,
                                     fontSize: COMMENT_FONT_PX,
                                   }}
                                 >
@@ -8697,6 +9296,23 @@ export default function ProofTreeView({
                         )}
                       </div>
                     </foreignObject>
+                    {/* The node's MARK stays on screen while it is edited:
+                        the same tab, ABOVE the editor and fully inert, so
+                        the edit neither hides the mark (which read as it
+                        being deleted) nor lets it take a click meant for
+                        the caret. */}
+                    {editTab && (
+                      <TourTab
+                        inert
+                        cx={-w / 2}
+                        cy={boxTop}
+                        n={editTab.n}
+                        total={tabStops.length}
+                        mine={editTab.who === "mine"}
+                        on={editing.id === currentStopId}
+                        font={codeFont}
+                      />
+                    )}
                   </g>
                 );
               })()}
@@ -8721,13 +9337,13 @@ const RAIL_BTN: CSSProperties = {
   fontSize: 14,
   lineHeight: 1,
   cursor: "pointer",
-  background: "var(--vscode-editorWidget-background, rgba(255,255,255,0.92))",
+  background: CHROME_SURFACE,
 
   borderWidth: 1,
   borderStyle: "solid",
-  borderColor: "var(--vscode-editorWidget-border, #cbd5e0)",
-  borderRadius: 3,
-  color: "var(--vscode-icon-foreground, #2d3748)",
+  borderColor: CHROME_BORDER,
+  borderRadius: CHROME_RADIUS,
+  color: CHROME_INK,
 };
 
 // The chrome every menu popover wears, wherever it is hung from: the bar's
@@ -8736,11 +9352,8 @@ const RAIL_BTN: CSSProperties = {
 const MENU_PANEL: CSSProperties = {
   boxSizing: "border-box",
   zIndex: 12,
-  ...POPUP_CHROME,
+  ...FLOATER_CHROME,
   padding: 4,
-  border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
-  color: "var(--vscode-icon-foreground, #2d3748)",
-  fontFamily: "system-ui, sans-serif",
   fontSize: 12,
   lineHeight: 1.4,
   textAlign: "left",
@@ -8809,78 +9422,285 @@ const diagInkOf = (sev: 1 | 2 | 3): string =>
 const diagGlyphOf = (sev: 1 | 2 | 3): string =>
   sev === 1 ? "⨯" : sev === 2 ? "⚠" : "◇";
 
+/** The same three marks, DRAWN, for the HTML chrome (the bar's diagnostics
+ item and a node's diagnostics popover). As text they came from three
+ different fallback faces and inked at three sizes: in the bar's 11px UI face
+ `⨯` was 3.7 × 3.8 px against `⚠` 9.0 × 8.2 and `◇` 10.5 (canvas, 8×) — the
+ error, the one that matters most, was the smallest mark in the row. Drawn in
+ `currentColor` at the chrome's `BAR_GLYPH_SW`, all three ink ~8 px. The text
+ glyphs stay for native `<title>`s, which cannot hold an SVG. */
+function DiagGlyph({ sev }: { sev: 1 | 2 | 3 }) {
+  return (
+    <svg
+      width={10}
+      height={10}
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={BAR_GLYPH_SW}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable="false"
+      style={{ display: "inline-block", verticalAlign: "-1px", flex: "none" }}
+    >
+      {sev === 1 ? (
+        <path d="M1.8 1.8L8.2 8.2M8.2 1.8L1.8 8.2" />
+      ) : sev === 2 ? (
+        <>
+          <path d="M5 1L9.2 8.8H0.8Z" />
+          <path d="M5 4v2" />
+        </>
+      ) : (
+        <path d="M5 0.9L9.1 5L5 9.1L0.9 5Z" />
+      )}
+    </svg>
+  );
+}
+
 interface DiagBarProps {
   index: number;
   count: number;
   diag: TreeDiagnostic;
+  /** Errors, warnings, lints — what the count item draws. */
+  counts: readonly [number, number, number];
+  /** Whether the message strip is up (derived by the view, see its state). */
+  open: boolean;
   clickable: boolean;
   onStep: (d: number) => void;
   onGo: () => void;
+  onToggle: () => void;
+  onClose: () => void;
 }
 
-function DiagnosticItem({
+const DIAG_NOUN = [
+  ["error", "errors"],
+  ["warning", "warnings"],
+  ["lint", "lints"],
+] as const;
+
+/** `2 errors, 1 lint` — the count item's words, for its tip. */
+function diagCountWords(counts: readonly [number, number, number]): string {
+  return counts
+    .map((n, i) => (n > 0 ? `${n} ${DIAG_NOUN[i][n === 1 ? 0 : 1]}` : ""))
+    .filter(Boolean)
+    .join(", ");
+}
+
+/** THE COUNT, never the message (2026-09-24). The bar's diagnostics item used
+ to draw the first message's first line, truncated to whatever room the row
+ left — `◇ This lin…` for Mathlib's `style.longLine` — with the words only in
+ the tip: a sentence cut to a stub reads as nothing. Now the item says HOW
+ MANY of each severity (`✕ 2 · ◇ 1`, the drawn `DiagGlyph`s in each
+ severity's ink) and the words live in the message strip above the card.
+ Each count reserves TWO tabular digits (`minWidth: 2ch`), so 1 → 12 moves
+ nothing; a severity appearing or going is a real change and does. The ghost
+ measures this same element, so measurer and renderer cannot drift. */
+function DiagCounts({
+  counts,
+  compact,
+}: {
+  counts: readonly [number, number, number];
+  /** The row's last resort before clipping: the WORST severity's glyph and
+   the total, `✕ 3` — chosen by `fit` only where even the all-glyph row
+   cannot hold every severity's count. */
+  compact?: boolean;
+}) {
+  const present = ([1, 2, 3] as const).filter((s) => counts[s - 1] > 0);
+  const sevs = compact ? present.slice(0, 1) : present;
+  const total = counts[0] + counts[1] + counts[2];
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 11,
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {sevs.map((s, i) => (
+        <Fragment key={s}>
+          {i > 0 && <span style={{ opacity: DIM_OPACITY }}>·</span>}
+          <span style={{ color: diagInkOf(s), display: "inline-flex" }}>
+            <DiagGlyph sev={s} />
+          </span>
+          <span
+            style={{ display: "inline-block", minWidth: "2ch", textAlign: "left" }}
+          >
+            {compact ? total : counts[s - 1]}
+          </span>
+        </Fragment>
+      ))}
+    </span>
+  );
+}
+
+/** The bar's diagnostics ITEM: the counts, and a click that opens (or shuts)
+ the message strip. Lit while the strip is up, as every bar item is while its
+ own panel is (design rule 13) — the strip is this item's panel. */
+function DiagCountItem({
+  counts,
+  open,
+  onToggle,
+  compact,
+}: DiagBarProps & { compact?: boolean }) {
+  const words = diagCountWords(counts);
+  return (
+    <BarButton
+      label={<DiagCounts counts={counts} compact={compact} />}
+      title={
+        open
+          ? `${words} — click to close the messages (Esc)`
+          : `${words} — click for the messages`
+      }
+      accent={open}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+    />
+  );
+}
+
+/** THE MESSAGE STRIP (2026-09-24) — a secondary bar floating directly ABOVE
+ the status card, the card's own width in every placement (it is the card's
+ child, `left: 0; right: 0`, so `fit` placing the card places it too).
+ Tinted by the severity of the message it shows — a wash of that ink over the
+ chrome and a left edge in it (`DIAG_WASH`/`DIAG_EDGE`) — which is what says
+ "transient notice" rather than "setting". It WRAPS, up to three lines, and
+ the tip carries the whole message where even that is not enough; nothing is
+ cut to a stub in the row. Paint only: it reserves nothing in the tree and
+ moves nothing (the rail's climb is `fit`'s report, not a layout). Clicking
+ the message does what the old pager's click did — the problem on its node
+ and in the source; `‹ n/N ›` pages every problem; `×` closes it (a
+ dismissal of the current error set, see the view's derivation). */
+function DiagStrip({
   index,
   count,
   diag,
   clickable,
   onStep,
   onGo,
-}: DiagBarProps) {
-  const ink = diagInkOf(diag.severity);
+  onClose,
+  stripRef,
+}: DiagBarProps & { stripRef: React.Ref<HTMLDivElement> }) {
   const tip = useTip();
+  const sev = diag.severity;
   return (
     <div
+      ref={stripRef}
+      data-ptw-diagstrip=""
+      role="status"
       onClick={(e) => e.stopPropagation()}
       style={{
-        minWidth: 0,
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: "100%",
+        marginBottom: DIAG_STRIP_GAP,
+        boxSizing: "border-box",
         display: "flex",
-        alignItems: "center",
-        gap: 5,
-        fontSize: 11,
-        padding: "0 6px",
-        color: "var(--vscode-icon-foreground, #2d3748)",
+        alignItems: "flex-start",
+        gap: 6,
+        padding: "4px 4px 4px 8px",
+        background: chromeSurface(DIAG_WASH[sev]),
+        border: `1px solid ${CHROME_BORDER}`,
+        borderLeft: `3px solid ${DIAG_EDGE[sev]}`,
+        borderRadius: CHROME_RADIUS,
+        boxShadow: POPUP_CHROME.boxShadow,
+        color: CHROME_INK,
+        fontFamily: CHROME_FONT,
+        fontSize: 12,
+        lineHeight: "16px",
+        whiteSpace: "normal",
+        textAlign: "left",
       }}
     >
-      <span style={{ color: ink }}>{diagGlyphOf(diag.severity)}</span>
-      {count > 1 && (
-        <>
-          <button
-            type="button"
-            style={PILL_BTN}
-            {...tip.props("Previous problem")}
-            onClick={() => onStep(-1)}
-          >
-            ‹
-          </button>
-          <span style={{ color: MUTED_FILL }}>
-            {index + 1}/{count}
-          </span>
-          <button
-            type="button"
-            style={PILL_BTN}
-            {...tip.props("Next problem")}
-            onClick={() => onStep(1)}
-          >
-            ›
-          </button>
-        </>
-      )}
       <span
-        onClick={onGo}
+        style={{
+          color: diagInkOf(sev),
+          display: "inline-flex",
+          alignItems: "center",
+          height: 16,
+          flex: "none",
+        }}
+      >
+        <DiagGlyph sev={sev} />
+      </span>
+      <span
+        onClick={clickable ? onGo : undefined}
         {...tip.props(
           clickable
             ? `${diag.message}\n\nClick to show it on its node and in the source`
             : diag.message,
         )}
         style={{
+          flex: "1 1 auto",
           minWidth: 0,
-          whiteSpace: "nowrap",
+          overflowWrap: "anywhere",
+          display: "-webkit-box",
+          WebkitBoxOrient: "vertical",
+          WebkitLineClamp: 3,
           overflow: "hidden",
-          textOverflow: "ellipsis",
           cursor: clickable ? "pointer" : "default",
         }}
       >
         {diag.message.split("\n")[0]}
+      </span>
+      <span
+        style={{
+          flex: "none",
+          display: "inline-flex",
+          alignItems: "center",
+          height: 16,
+          gap: 2,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {count > 1 && (
+          <>
+            <button
+              type="button"
+              style={PILL_BTN}
+              {...tip.props("Previous problem")}
+              onClick={() => onStep(-1)}
+            >
+              ‹
+            </button>
+            <span style={{ color: MUTED_FILL, fontSize: 11 }}>
+              {index + 1}/{count}
+            </span>
+            <button
+              type="button"
+              style={PILL_BTN}
+              {...tip.props("Next problem")}
+              onClick={() => onStep(1)}
+            >
+              ›
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          style={{ ...PILL_BTN, width: 16 }}
+          {...tip.props("Close the messages (Esc)")}
+          onClick={onClose}
+        >
+          <svg
+            width={8}
+            height={8}
+            viewBox="0 0 8 8"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={BAR_GLYPH_SW}
+            strokeLinecap="round"
+            aria-hidden
+            focusable="false"
+          >
+            <path d="M1 1L7 7M7 1L1 7" />
+          </svg>
+        </button>
       </span>
     </div>
   );
@@ -9043,7 +9863,7 @@ function RailButton({
   pressedInk,
   disabled,
 }: {
-  glyph: string;
+  glyph: ReactNode;
   glyphPx?: number;
   title: string;
   onClick: (e: React.MouseEvent) => void;
@@ -9061,7 +9881,7 @@ function RailButton({
       disabled={disabled}
       style={{
         ...(disabled
-          ? { ...RAIL_BTN, opacity: 0.35, cursor: "default" }
+          ? { ...RAIL_BTN, opacity: DISABLED_OPACITY, cursor: "default" }
           : pressed
             ? {
                 ...RAIL_BTN,
@@ -9075,6 +9895,151 @@ function RailButton({
     >
       {glyph}
     </button>
+  );
+}
+
+/** ⌥ held, as a tiny EXTERNAL STORE rather than view state: the mark tabs
+read it (a temporary mark's number turns into `×` while ⌥ is down, since
+⌥-click is what takes it off), and a keypress must repaint those few pills, not
+the 12k-line view. Same sources and the same blur rule as `useAltHeld` below —
+key events (only while the webview has focus) plus `altKey` off every pointer
+move over the page (which arrives whatever holds focus, so ⌥ held with the caret
+in the editor still shows once the pointer moves over the tree), cleared on
+window blur. Listeners are attached only while some tab is subscribed. */
+const altHeldStore = (() => {
+  let held = false;
+  const subs = new Set<() => void>();
+  const set = (v: boolean) => {
+    if (v === held) return;
+    held = v;
+    for (const f of subs) f();
+  };
+  const onKey = (e: KeyboardEvent) => set(e.altKey);
+  const onPointer = (e: PointerEvent) => set(e.altKey);
+  const clear = () => set(false);
+  return {
+    subscribe(f: () => void): () => void {
+      if (subs.size === 0) {
+        window.addEventListener("keydown", onKey);
+        window.addEventListener("keyup", onKey);
+        window.addEventListener("pointermove", onPointer, { passive: true });
+        window.addEventListener("blur", clear);
+      }
+      subs.add(f);
+      return () => {
+        subs.delete(f);
+        if (subs.size > 0) return;
+        window.removeEventListener("keydown", onKey);
+        window.removeEventListener("keyup", onKey);
+        window.removeEventListener("pointermove", onPointer);
+        window.removeEventListener("blur", clear);
+        held = false;
+      };
+    },
+    get: (): boolean => held,
+    server: (): boolean => false,
+  };
+})();
+
+/** One MARK TAB: a `BADGE_H` pill straddling a box's top-left corner, its
+number the stop's place in the reading. The rect is `tourTabWidth(n)` whatever
+is drawn inside it (`probe overlap` models that rect), so the `×` a TEMPORARY
+mark shows while ⌥ is held is a drawn glyph centred in the same pill, never a
+character that could widen it. The author's (source) tabs never change: ⌥-click
+on them just jumps.
+
+`inert` is the copy drawn ABOVE the in-place editor while its node is being
+edited: same place, same ink, but `pointerEvents: none`, no title and no ×, so
+the mark visibly survives the edit without ever taking a click meant for the
+caret (2026-09-22 — the tab used to vanish with the box, which read as the mark
+being deleted). */
+function TourTab({
+  cx,
+  cy,
+  n,
+  total,
+  mine,
+  on,
+  font,
+  inert,
+  onJump,
+  onRemove,
+}: {
+  /** The pill's centre: the box's left edge, at the box's top. */
+  cx: number;
+  cy: number;
+  n: number;
+  total: number;
+  mine: boolean;
+  on: boolean;
+  font: string;
+  inert?: boolean;
+  onJump?: () => void;
+  onRemove?: () => void;
+}) {
+  const alt = useSyncExternalStore(
+    altHeldStore.subscribe,
+    altHeldStore.get,
+    altHeldStore.server,
+  );
+  const tabW = tourTabWidth(n);
+  const ink = mine ? SEQ_STROKE : "var(--ptw-comment)";
+  const text = on ? "var(--ptw-surface)" : ink;
+  const cross = mine && alt && !inert;
+  // The × inks a square inside the pill's text box: half-arm 3 against the
+  // pill's 14px height, well inside the narrowest (one-digit) tab.
+  const arm = 3;
+  return (
+    <g
+      pointerEvents={inert ? "none" : undefined}
+      style={inert ? undefined : { cursor: "pointer" }}
+      onClick={
+        inert
+          ? undefined
+          : (e) => {
+              e.stopPropagation();
+              if (mine && e.altKey) onRemove?.();
+              else onJump?.();
+            }
+      }
+    >
+      {!inert && (
+        <title>
+          {mine
+            ? `Mark ${n} of ${total} (temporary) — click to go, ⌥-click to remove`
+            : `Mark ${n} of ${total} (source) — click to go`}
+        </title>
+      )}
+      <rect
+        x={cx - tabW / 2}
+        y={cy - BADGE_H / 2}
+        width={tabW}
+        height={BADGE_H}
+        rx={3}
+        fill={on ? ink : "var(--ptw-surface)"}
+        stroke={ink}
+      />
+      {cross ? (
+        <path
+          d={`M${cx - arm},${cy - arm}L${cx + arm},${cy + arm}M${cx + arm},${cy - arm}L${cx - arm},${cy + arm}`}
+          stroke={text}
+          strokeWidth={1.4}
+          strokeLinecap="round"
+        />
+      ) : (
+        <text
+          x={cx}
+          y={cy}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize={BADGE_FONT_PX}
+          fontFamily={font}
+          fill={text}
+        >
+          {n}
+        </text>
+      )}
+    </g>
   );
 }
 
@@ -9182,10 +10147,10 @@ function TopCentre({
             whiteSpace: "nowrap",
             ...POPUP_CHROME,
             padding: "4px 10px",
-            border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
-            borderRadius: 4,
+            border: `1px solid ${CHROME_BORDER}`,
+            borderRadius: CHROME_RADIUS,
             color: modal.ink,
-            fontFamily: "system-ui, sans-serif",
+            fontFamily: CHROME_FONT,
             fontSize: 12,
             lineHeight: 1.4,
             fontWeight: 600,
@@ -9221,11 +10186,12 @@ function TopCentre({
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            ...POPUP_CHROME,
+            ...FLOATER_CHROME,
             padding: "4px 10px",
-            border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
-            color: "var(--vscode-icon-foreground, #2d3748)",
-            fontFamily: "monospace",
+            // The UI face, as the banner above it and the bar it reports on
+            // speak (it was the lone monospace floater). Tabular figures keep
+            // an anchored `n/N` at one width from mark to mark.
+            fontVariantNumeric: "tabular-nums",
             fontSize: 12,
             lineHeight: 1.4,
           }}
@@ -9238,19 +10204,22 @@ function TopCentre({
 }
 
 function ZoomRail({
-  lifted,
+  lift,
   onZoomIn,
   onZoomOut,
   onExpandAll,
   onCollapseAll,
   onFit,
+  onReset,
 }: {
-  lifted: boolean;
+  /** Extra px to climb over the status card's chrome (`StatusBar.onPlace`). */
+  lift: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onFit: () => void;
+  onReset: () => void;
 }) {
   const { alt, syncAlt } = useAltHeld();
   return (
@@ -9273,7 +10242,7 @@ function ZoomRail({
           LANE_INSET +
           LANE_BTN_H +
           RAIL_LANE_GAP +
-          (lifted ? BAR_H + LANE_GAP : 0),
+          lift,
         zIndex: 10,
         display: "flex",
         flexDirection: "column",
@@ -9298,7 +10267,45 @@ function ZoomRail({
         onClick={(e) => (e.altKey ? onCollapseAll() : onZoomOut())}
       />
       <RailButton glyph="⛶" title="Fit width" onClick={onFit} />
+      {/* RESET, moved off the status bar (2026-09-24): it is an action on
+          the VIEW, like fit and the two fold-alls on ⌥, so it stands with
+          them. Bottom of the column, under ⛶ — both put the view back to a
+          standing start. The rail is bottom-anchored, so the three above it
+          climb one button; `lift` is unchanged (it clears the card, not the
+          rail's own height). */}
+      <RailButton
+        glyph={<ResetGlyph />}
+        title="Reset tree — the view the source asks for (folds and skips from its flags, no scoping)"
+        onClick={onReset}
+      />
     </div>
+  );
+}
+
+/** The rail's reset mark: an open circle, five-sixths round with the gap at
+ the top, its arrowhead on the right-hand end turning back ANTICLOCKWISE — `↺` drawn, so it
+ inks at the chrome's `BAR_GLYPH_SW` in every face (as text it came from a
+ fallback font at a weight of its own). ~10 × 10, level with the rail's `+`
+ and `−` at 14px monospace. */
+function ResetGlyph() {
+  return (
+    <svg
+      data-ptw-glyph="reset"
+      width={12}
+      height={12}
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={BAR_GLYPH_SW}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable="false"
+      style={{ display: "block" }}
+    >
+      <path d="M8 2.6A4 4 0 1 1 4 2.6" />
+      <path d="M8.7 5.1L8 2.6L10.5 1.9" />
+    </svg>
   );
 }
 
@@ -9343,6 +10350,10 @@ const RAIL_INSET = 4;
 const RAIL_LANE_GAP = 12;
 /** Where a FILLING status card sits: one lane above the host button. */
 const BAR_LIFT = LANE_INSET + LANE_BTN_H + LANE_GAP;
+/** The gap between the status card's top and the message strip's bottom —
+ the lane gap, the one separation between two pieces of chrome. */
+const DIAG_STRIP_GAP = LANE_GAP;
+
 
 // The card is EXACTLY the button's height — see BAR_ITEM_H for why that is a
 // fixed `height` and not a minimum.
@@ -9482,7 +10493,7 @@ const BAR_ROW: CSSProperties = {
   font: "inherit",
   textAlign: "left",
   cursor: "pointer",
-  borderRadius: 3,
+  borderRadius: CHROME_RADIUS,
 };
 
 /* THE EXTRAS SLOTS. Three of the bar's menus hold TOGGLES beside their main
@@ -9493,8 +10504,9 @@ SQUARES under the item says which are up without naming them (the popover rows
 do that) and without costing a character of the row.
 
 They are SLOTS, not a count: each extra owns a fixed position in the group and
-an unset one is simply EMPTY, so the eye with brief and to-cursor up reads
-`■ · ■` and the reader can tell WHICH is off rather than only how many. Every
+an unset one is drawn FAINT (`SLOT_OFF`; it was empty until 2026-09-24, when a lone
+lit square read as off-centre), so the eye with brief and to-cursor up reads
+`■ ▫ ■` and the reader can tell WHICH is off rather than only how many. Every
 slot therefore reserves its `SLOT_PX` whether it is set or not, which is also
 what keeps the group's centre still as extras toggle.
 
@@ -9506,6 +10518,9 @@ under the label in the text form and under the glyph box in the compact one.
 `bottom: -1` drops it into the card's own bottom padding — still inside the
 border, and clear of the label's descenders. */
 const SLOT_PX = 3;
+/** An unset slot: the ink at a quarter, so the whole group's extent — and
+therefore its centre — shows. */
+const SLOT_OFF = `color-mix(in srgb, ${CHROME_INK} 25%, transparent)`;
 const SLOT_GAP_PX = 2;
 
 /* THE DEVICE-PIXEL RATIO, live. It is not a constant even on one screen: the
@@ -9622,9 +10637,11 @@ function ExtraSlots({ slots }: { slots: boolean[] }) {
             width: size,
             height: size,
             flex: `0 0 ${size}px`,
-            background: on
-              ? "var(--vscode-icon-foreground, var(--ptw-fg))"
-              : "transparent",
+            // An UNSET slot is drawn faint rather than empty: an empty one
+            // left a lone lit square reading as off-centre (the eye with only
+            // its last extra up), where the group is centred and the square
+            // is simply in its own place (user report, 2026-09-24).
+            background: on ? CHROME_INK : SLOT_OFF,
           }}
         />
       ))}
@@ -9656,19 +10673,23 @@ function BarButton({
   return (
     <button
       type="button"
-      aria-label={title}
+      aria-label={plainTicks(title)}
       disabled={disabled}
       onClick={onClick}
-      // POINTER events for the tip, not mouse: React drops `onMouseEnter` on
-      // a DISABLED button, and the disabled rows are the ones whose tip says
-      // why (measured in the harness on `goals as TeX`).
-      onPointerEnter={(e) => ctl.enter(e.currentTarget)}
-      onPointerLeave={(e) => ctl.leave(e.currentTarget)}
-      onMouseEnter={onHover ? () => onHover(true) : undefined}
-      onMouseLeave={onHover ? () => onHover(false) : undefined}
+      // POINTER events for the tip and the hover preview, not mouse: React
+      // drops `onMouseEnter` on a DISABLED button, and a disabled control's
+      // tip is the one that says why.
+      onPointerEnter={(e) => {
+        ctl.enter(e.currentTarget);
+        onHover?.(true);
+      }}
+      onPointerLeave={(e) => {
+        ctl.leave(e.currentTarget);
+        onHover?.(false);
+      }}
       style={{
         ...BAR_ITEM,
-        opacity: disabled ? 0.35 : muted ? 0.6 : 1,
+        opacity: disabled ? DISABLED_OPACITY : muted ? DIM_OPACITY : 1,
         cursor: disabled ? "default" : "pointer",
         ...(accent ? { background: RAIL_PRESSED, color: ACCENT_TEXT } : null),
       }}
@@ -9679,10 +10700,52 @@ function BarButton({
   );
 }
 
+/* TWO ROW LOOKS, ONE PER KIND OF ROW (2026-09-22). A `pick` row is one of a
+set — Layout's four, Context's four, Comments' four — and wears the `●/○`
+radio; a `toggle` row turns ONE thing on or off independently of its
+neighbours (the reading options, the two mark lists, the modifiers below a
+divider) and wears a drawn CHECK SQUARE (`BarCheck`); an `action` row does
+something once and wears neither. The look is what tells "pick one" from
+"turn on" before the reader has clicked anything. */
+type BarRowKind = "pick" | "toggle" | "action";
+
+/** The toggle row's mark: a square at the chrome's glyph stroke
+ (`BAR_GLYPH_SW`), outline at the radio's resting 0.45 when off, filled in the
+ same `RAIL_PRESSED` the lit `●` uses with an `ACCENT_TEXT` tick when on —
+ the radio's two states, squared. Drawn, so it inks the same in every face. */
+function BarCheck({ on }: { on: boolean }) {
+  return (
+    <svg width={10} height={10} viewBox="0 0 10 10" aria-hidden>
+      <rect
+        x={1.5}
+        y={1.5}
+        width={7}
+        height={7}
+        rx={1.5}
+        fill={on ? RAIL_PRESSED : "none"}
+        stroke={on ? RAIL_PRESSED : "currentColor"}
+        strokeOpacity={on ? 1 : 0.45}
+        strokeWidth={BAR_GLYPH_SW}
+      />
+      {on && (
+        <path
+          d="M3.2 5.1 4.5 6.4 6.9 3.7"
+          fill="none"
+          stroke={ACCENT_TEXT}
+          strokeWidth={BAR_GLYPH_SW}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+  );
+}
+
 function BarRow({
   label,
   title,
   on,
+  kind = "pick",
   disabled,
   onClick,
   onHover,
@@ -9690,6 +10753,7 @@ function BarRow({
   label: ReactNode;
   title: string;
   on?: boolean;
+  kind?: BarRowKind;
   disabled?: boolean;
   onClick: () => void;
   onHover?: (h: boolean) => void;
@@ -9698,28 +10762,50 @@ function BarRow({
   return (
     <button
       type="button"
-      aria-label={title}
+      aria-label={plainTicks(title)}
+      aria-checked={kind === "action" ? undefined : !!on}
+      role={
+        kind === "pick" ? "menuitemradio" : kind === "toggle" ? "menuitemcheckbox" : undefined
+      }
       disabled={disabled}
       onClick={onClick}
-      // POINTER events for the tip, not mouse: React drops `onMouseEnter` on
-      // a DISABLED button, and the disabled rows are the ones whose tip says
-      // why (measured in the harness on `goals as TeX`).
-      onPointerEnter={(e) => ctl.enter(e.currentTarget)}
-      onPointerLeave={(e) => ctl.leave(e.currentTarget)}
-      onMouseEnter={onHover ? () => onHover(true) : undefined}
-      onMouseLeave={onHover ? () => onHover(false) : undefined}
-      style={{ ...BAR_ROW, opacity: disabled ? 0.4 : 1 }}
+      // POINTER events for the tip and the hover preview, not mouse: React
+      // drops `onMouseEnter` on a DISABLED button, and a disabled control's
+      // tip is the one that says why.
+      onPointerEnter={(e) => {
+        ctl.enter(e.currentTarget);
+        onHover?.(true);
+      }}
+      onPointerLeave={(e) => {
+        ctl.leave(e.currentTarget);
+        onHover?.(false);
+      }}
+      style={{ ...BAR_ROW, opacity: disabled ? DISABLED_OPACITY : 1 }}
     >
-      <span
-        style={{
-          flex: "0 0 12px",
-          fontSize: 10,
-          color: on ? RAIL_PRESSED : "inherit",
-          opacity: on ? 1 : 0.45,
-        }}
-      >
-        {on ? "●" : "○"}
-      </span>
+      {kind === "toggle" ? (
+        <span
+          style={{
+            flex: "0 0 12px",
+            alignSelf: "center",
+            display: "inline-flex",
+          }}
+        >
+          <BarCheck on={!!on} />
+        </span>
+      ) : kind === "action" ? (
+        <span aria-hidden style={{ flex: "0 0 12px" }} />
+      ) : (
+        <span
+          style={{
+            flex: "0 0 12px",
+            fontSize: 10,
+            color: on ? RAIL_PRESSED : "inherit",
+            opacity: on ? 1 : 0.45,
+          }}
+        >
+          {on ? "●" : "○"}
+        </span>
+      )}
       <span>{label}</span>
     </button>
   );
@@ -9782,6 +10868,7 @@ function BarPanel({
 }) {
   return (
     <div
+      data-ptw-panel=""
       onClick={(e) => e.stopPropagation()}
       style={{
         ...MENU_PANEL,
@@ -9816,7 +10903,7 @@ function BarDivider() {
         width: 1,
         height: 14,
         alignSelf: "center",
-        background: "var(--vscode-editorWidget-border, #cbd5e0)",
+        background: CHROME_BORDER,
       }}
     />
   );
@@ -9831,7 +10918,7 @@ function MenuDivider() {
       style={{
         height: 1,
         margin: "4px 6px",
-        background: "var(--vscode-editorWidget-border, #cbd5e0)",
+        background: CHROME_BORDER,
         opacity: 0.7,
       }}
     />
@@ -9851,7 +10938,7 @@ function EyeGlyph() {
       viewBox="1 3 14 10"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.2}
+      strokeWidth={BAR_GLYPH_SW}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
@@ -9864,16 +10951,15 @@ function EyeGlyph() {
   );
 }
 
-// The comment switch's head, and the width switch's, in the eye's own idiom:
-// an inline SVG in `currentColor`, cropped to its own ink and dropped into the
-// same fixed `GlyphBox`, so every item — and so every accent pill — is the
-// same height whichever of them is showing. They replace `❝` and `↔`, two
-// typographic marks that read as punctuation the bar had accidentally left in
-// rather than as the controls they are.
+// The comment switch's head, in the eye's own idiom: an inline SVG in
+// `currentColor`, cropped to its own ink and dropped into the same fixed
+// `GlyphBox`, so every item — and so every accent pill — is the same height
+// whichever form is showing. It replaced `❝`, a typographic mark that read as
+// punctuation the bar had accidentally left in. (Width's `word-wrap` mark went
+// with Width's bar item, 2026-09-24: the width is a row in the Layout panel.)
 //
-// They are the GLYPH form only: with the words back on every value item, the
-// text form is `Name: value` throughout and these two are what stands in its
-// place when the row runs out of room.
+// It is the GLYPH form only: the word forms are `Comments: show` and `show`,
+// and this is what stands in their place when the row runs out of room.
 //
 // The bubble is codicon `comment` — a rounded rectangle with a small tail off
 // the bottom-LEFT corner. It inks ~11 × 10.
@@ -9886,40 +10972,13 @@ function CommentGlyph() {
       viewBox="0 0 12 11"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.25}
+      strokeWidth={BAR_GLYPH_SW}
       aria-hidden
       focusable="false"
       style={{ display: "block" }}
     >
       <rect x={1} y={1} width={10} height={7} rx={2} />
       <path d="M3.5 8v2.2l2.4-2.2" />
-    </svg>
-  );
-}
-
-// Width, as codicon `word-wrap` draws it: text lines the second of which ends
-// in a return arrow hooking down and back to the left — the mark for "this is
-// where the line breaks", which is exactly what the setting sets. It replaces
-// `arrow-both` (two outward arrowheads between two bars), which says "this
-// much room" and reads at a glance as a resize handle. Ink ~11 × 9.
-function WidthGlyph() {
-  return (
-    <svg
-      data-ptw-glyph="word-wrap"
-      width={13}
-      height={10}
-      viewBox="0 0 13 10"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.25}
-      strokeLinecap="round"
-      aria-hidden
-      focusable="false"
-      style={{ display: "block" }}
-    >
-      <path d="M1.5 1.5h10M1.5 5h8a1.6 1.6 0 0 1 0 3.2H7.5" />
-      <path d="M9 6.8L7.3 8.2 9 9.6" />
-      <path d="M1.5 8.5h3" />
     </svg>
   );
 }
@@ -9941,14 +11000,60 @@ its stems come with the face, they thin as `glyphPx` comes down (`||` is at 8
 precisely so two full-em bars do not tower), and they move with whatever
 editor font the user has set. So the four are drawn instead, in the idiom the
 eye and the comment/width glyphs already established: inline SVG, `currentColor`,
-ONE shared `LAYOUT_GLYPH_SW`, cropped to their own ink, inside the same fixed
+ONE shared `BAR_GLYPH_SW`, cropped to their own ink, inside the same fixed
 `GlyphBox` — so nothing the ghost measures moves, and no user font reaches
 them. Ink, measured: 10.0 × 8.8, 7.7 × 8.8, 7.0 × 8.8, 9.0 × 8.8 — level in
 height as the `glyphPx` pass left them, and now level in weight as well.
 
 The OUTLINE mark keeps its SHAPE exactly: three full-width bars, `☰` as it
-stood. Only its weight moves, up to the shared stroke with the rest. */
-const LAYOUT_GLYPH_SW = 1.4;
+stood. Only its weight moves, up to the shared stroke with the rest.
+
+2026-09-22 (taste pass): the eye (1.2) and the comment/width marks (1.25)
+now draw at this stroke too, as does the signature header's chevron — every
+drawn mark in the chrome shares ONE weight, so no item looks lighter than its
+neighbour. (The hover bar's in-tree icons keep their own `HOVER_ICON_SW`: they
+scale with the tree.) */
+const BAR_GLYPH_SW = 1.4;
+/** The goal corner's drawn `−`: its length and stroke, and the corner's hit
+ height (the hit width is `CORNER_W`, the top line's reserve). The mark is
+ in-tree ink, a quiet sign at about the weight of the `+N` it becomes — the
+ chrome's `BAR_GLYPH_SW` at 8px read as the loudest thing on the box
+ (2026-09-24); the hit rect, not the ink, is the target. */
+const CORNER_MINUS_W = 6;
+const CORNER_MINUS_SW = 1.15;
+const CORNER_HIT_H = 18;
+
+/** The signature header's open/close mark: a drawn chevron (`▾` / `▴`) in the
+    status bar's stroke, so it reads as a control at any editor font. */
+function HeaderChevron({ up }: { up: boolean }) {
+  const w = HDR_CHEVRON_W;
+  const h = HDR_CHEVRON_H;
+  const m = BAR_GLYPH_SW / 2;
+  return (
+    <svg
+      data-ptw-glyph={up ? "hdr-close" : "hdr-open"}
+      width={w}
+      height={h}
+      viewBox={`0 0 ${w} ${h}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={BAR_GLYPH_SW}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      focusable="false"
+      style={{ display: "block" }}
+    >
+      <path
+        d={
+          up
+            ? `M${m} ${h - m}L${w / 2} ${m}L${w - m} ${h - m}`
+            : `M${m} ${m}L${w / 2} ${h - m}L${w - m} ${m}`
+        }
+      />
+    </svg>
+  );
+}
 
 function LayoutGlyph({ mode }: { mode: LayoutMode }) {
   return (
@@ -9959,7 +11064,7 @@ function LayoutGlyph({ mode }: { mode: LayoutMode }) {
       viewBox="0 0 12 10"
       fill="none"
       stroke="currentColor"
-      strokeWidth={LAYOUT_GLYPH_SW}
+      strokeWidth={BAR_GLYPH_SW}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
@@ -9985,12 +11090,15 @@ function LayoutGlyph({ mode }: { mode: LayoutMode }) {
   );
 }
 
-/** One of the bar's four VALUE items, as data — the two forms it can be drawn
-in and every value it could show. The text form is `Name: value` for all four
-— `prefix` is the NAME, always a word, never an icon; the icons are the glyph
-form's business. `value` is the half that changes, and `values` is every string
-it could be, which is what reserves its width. */
-const BAR_VALUE_COUNT = 5;
+/** One of the bar's VALUE items (Layout, Context, Comments and — only where
+the proof has marks — Marks), as data: the three forms it can be drawn in and
+every value it could show. The FULL form is `Name: value` — `prefix` is the
+NAME, always a word, never an icon; the VALUE form drops the name (`outline`),
+which the item's tip still opens with (`Layout: outline — …`, the title's own
+first words); the GLYPH form is the icon alone. `value` is the half that
+changes, and `values` is every string it could be, which is what reserves its
+width in both word forms. */
+type BarForm = "full" | "value" | "glyph";
 
 interface BarValueItem {
   id: string;
@@ -9999,7 +11107,6 @@ interface BarValueItem {
   value: string;
   values: string[];
   title: string;
-  accent?: boolean;
   /** The VALUE reads as OFF — dimmed, the way the width readout dims at
    `full`. Paint only: the reserve is unchanged, so nothing moves when a
    value turns off. */
@@ -10015,7 +11122,6 @@ interface BarValueItem {
 
 function StatusBar({
   onPlace,
-  onResetView,
   upToCursor,
   onUpToCursorChange,
   upToEnabled,
@@ -10036,13 +11142,14 @@ function StatusBar({
   onBriefHover,
   lintsOn,
   onLintsChange,
+  hypOriginsOn,
+  onHypOriginsChange,
   polishOn,
-  polishEnabled,
+  polishShown,
   polishWhy,
   onPolishChange,
-  proposeEnabled,
+  proposeShown,
   proposeBusy,
-  proposeWhy,
   onPropose,
   commentMode,
   onCommentModeChange,
@@ -10066,8 +11173,8 @@ function StatusBar({
   caps,
   fontFamily,
 }: {
-  onPlace: (fill: boolean) => void;
-  onResetView: () => void;
+  /** How far the zoom rail must climb over this card's chrome (see `fit`). */
+  onPlace: (lift: number) => void;
   upToCursor: boolean;
   onUpToCursorChange: (v: boolean) => void;
   upToEnabled: boolean;
@@ -10088,13 +11195,16 @@ function StatusBar({
   onBriefHover: (h: boolean) => void;
   lintsOn: boolean;
   onLintsChange: (v: boolean) => void;
+  hypOriginsOn: boolean;
+  onHypOriginsChange: (v: boolean) => void;
   polishOn: boolean;
-  polishEnabled: boolean;
+  /** False: the row is not drawn (no companion, no key, or the setting off). */
+  polishShown: boolean;
   polishWhy: string;
   onPolishChange: (v: boolean) => void;
-  proposeEnabled: boolean;
+  /** False: the row is not drawn, as `polishShown`. */
+  proposeShown: boolean;
   proposeBusy: boolean;
-  proposeWhy: string;
   onPropose: () => void;
   commentMode: CommentMode;
   onCommentModeChange: (v: CommentMode) => void;
@@ -10132,13 +11242,14 @@ function StatusBar({
   const effReflow = forcedReflow ?? reflow;
   const reflowCols = forcedReflow ?? reflowToStop(reflow);
   const reflowMax = forcedReflow ? REFLOW_MAX_CHARS : REFLOW_OFF_STOP;
-  // The VALUE is the number of columns and nothing else: the tracks layout's
-  // override used to append `(tracks)`, which is 60px of the one row the bar
-  // has, spent saying WHY the setting reads as it does. That belongs in the
-  // title, which is where a reader asks the question.
-  const widthValue = effReflow === "off" ? "full" : `${effReflow} col`;
 
   const commentName = COMMENT_MODES[commentMode].name;
+  // THE MARKS ITEM IS DRAWN ONLY WHERE THERE ARE MARKS (2026-09-24): a proof
+  // with no `.mark` and no dropped mark has nothing to read, and `Marks: –/0`
+  // was a whole item of the row saying so. `<` / `>` still work (and toast the
+  // empty message); the corner nub still drops one, and the first drop brings
+  // the item in — bar only, the tree is never laid out off the bar.
+  const hasMarks = authorCount + myCount > 0;
   // `2/5` while reading; `–/5` (an EN DASH) before it has been started, and
   // `–/0` where the reading is empty — the count is a fact about the proof
   // either way, so it is always shown. NO LIST NAME: the two slots under the
@@ -10164,8 +11275,9 @@ function StatusBar({
     </GlyphBox>
   );
 
-  // THE FOUR VALUE ITEMS, in row order. Each can be drawn as words or as its
-  // glyph, and the row decides per item (see `fit`).
+  // THE VALUE ITEMS, in row order — three, or four where there are marks.
+  // Each can be drawn `Name: value`, as the value alone, or as its glyph, and
+  // the row decides per item (see `fit`).
   const valueItems: BarValueItem[] = [
     {
       id: "layout",
@@ -10179,11 +11291,13 @@ function StatusBar({
       values: Object.values(LAYOUT_MODES).map((m) => m.name),
       title: `${LAYOUT_MODES[layout].title}. ⌥-click: next layout`,
       // No accent: the four layouts are a CHOICE AMONG EQUALS, and the item
-      // already says which one is up. Only an item naming an enabled FEATURE
-      // lights (Width alone now, the eye having gone over to slots).
-      // The list's two TOGGLES take the two slots — side-by-side only where
-      // it is effective, since in the wide layout it draws nothing.
-      slots: [sbsEnabled && sideBySide, gallery],
+      // already says which one is up. It lights only while its panel is open.
+      // The list's two TOGGLES take the first two slots — side-by-side only
+      // where it is effective, since in the wide layout it draws nothing —
+      // and the THIRD is the width, which lives in this panel now
+      // (2026-09-24): lit while labels wrap narrower than full, the reading
+      // Width's own accent used to give (so lit in tracks, which wraps).
+      slots: [sbsEnabled && sideBySide, gallery, effReflow !== "off"],
       onAlt: () => onLayoutChange(LAYOUT_MODES[layout].next),
     },
     {
@@ -10208,31 +11322,14 @@ function StatusBar({
       ),
       value: commentName,
       values: Object.values(COMMENT_MODES).map((m) => m.name),
-      title: `Comments: ${commentName} — how a tactic's prose is drawn: as strips above the box, hidden, standing in for the tactic's own text, or GENERATED from the step itself (\u2234) where the author wrote none. ⌥-click: next`,
+      title: `Comments: ${commentName} — how a tactic's prose is drawn: as strips above the box, hidden, standing in for the tactic's own text, or generated from the step itself (\u2234) where the author wrote none. ⌥-click: next`,
       onAlt: () => onCommentModeChange(COMMENT_MODES[commentMode].next),
     },
-    {
-      id: "reflow",
-      prefix: "Width:",
-      glyph: (
-        <GlyphBox>
-          <WidthGlyph />
-        </GlyphBox>
-      ),
-      value: widthValue,
-      // The widest the value can ever be: `full`, or three digits of columns.
-      values: ["full", `${REFLOW_MAX_CHARS} col`],
-      title: forcedReflow
-        ? `Width: ${widthValue} — wrap at ${forcedReflow} columns, required by the tracks layout; click for the width slider`
-        : `Width: ${widthValue} — wrap labels and context lines at a narrower width; click for the slider`,
-      // Width DOES accent: unlike the choices above it names a feature that
-      // is either on or off, and off ("full") is the tree's own wrapping.
-      accent: effReflow !== "off",
-    },
-    // THE MARKS, last in the row and so the first to compact to its glyph —
-    // it is the newest and the most transient of the five, and the two
-    // chevrons beside it keep working in either form.
-    {
+    // THE MARKS, last in the row and so the first to compact at each stage —
+    // it is the newest and the most transient of the four, and the two
+    // chevrons beside it keep working in every form. Present only where the
+    // proof has marks (`hasMarks`).
+    ...(!hasMarks ? [] : [{
       id: "tour",
       prefix: "Marks:",
       glyph: glyph("⚑", 12),
@@ -10243,13 +11340,15 @@ function StatusBar({
       // The OFF value dims, exactly as `Width: full` does, instead of
       // reading as a place in a reading that is not happening.
       dim: marksOff,
+      // Every title opens `Marks: <value> — `, so the name the VALUE form
+      // drops is the first thing its tip says.
       title: marksOff
         ? "Marks: off — both lists are off; click for the lists, ⌥-click cycles"
         : tourAt === null
-          ? `Marks: an ordered reading of the proof, not started — ${authorCount} source mark${
+          ? `Marks: ${tourValue} — an ordered reading of the proof, not started: ${authorCount} source mark${
               authorCount === 1 ? "" : "s"
             } (\`.mark\` in the source), ${myCount} temporary (the corner nub drops one, kept for this session); the two marks below say which of those lists is ON. \`<\` and \`>\` start it. Click for the two lists; ⌥-click cycles them (both → source → temp → none)`
-          : `Marks: ${Math.min(tourAt + 1, tourCount)} of ${tourCount} — the two marks below say which lists are on (source, then temporary). \`<\` and \`>\` step, Esc lets go of the current mark. Click for the two lists; ⌥-click cycles them (both → source → temp → none)`,
+          : `Marks: ${tourValue} — the two marks below say which lists are on (source, then temporary). \`<\` and \`>\` step, Esc lets go of the current mark. Click for the two lists; ⌥-click cycles them (both → source → temp → none)`,
       // NO ACCENT (user direction): the marks are a READING, not a mode that is
       // on, and the value already says how far into it you are. The two
       // SLOTS are the two TOGGLES — lit when the set is IN the reading, not
@@ -10283,7 +11382,7 @@ function StatusBar({
         </>
       ),
       onAlt: onTourCycle,
-    },
+    } satisfies BarValueItem]),
   ];
 
   /* THE ROW NEVER WRAPS, NEVER LOSES AN ITEM AND NEVER JUMPS FROM WORDS TO
@@ -10294,37 +11393,46 @@ function StatusBar({
   not do. The third — one boolean, so every word in the row vanished on the
   same pixel — was the reported "abrupt transition".
 
-  So compaction is PER ITEM and runs RIGHT TO LEFT: `kText` is the number of
-  leading value items drawn as words, the rest as glyphs, so as room runs out
-  Width goes first, then Comments, then Context, then Layout. The three
-  glyph-only items (the reading eye, `↺`, `?`) never change.
+  So compaction is PER ITEM, in THREE FORMS and TWO STAGES (2026-09-24):
+  `Layout: outline` → `outline` → the glyph. Every item gives up its NAME
+  before ANY item gives up its words — the name is what the tip says first,
+  the value is what the reader came for — and within each stage it runs RIGHT
+  TO LEFT (Marks, then Comments, Context, Layout). `names` is how many LEADING
+  items keep `Name: value`, `words` how many keep a word at all (`names ≤
+  words`); the ladder walks `names` down to 0 first, then `words`. At half an
+  infoview the row reads `outline · used · show` rather than two words and a
+  run of icons (the reported "symbol-slop"). The glyph-only items (the reading
+  eye, `?`) never change.
 
-  It is MEASURED, never guessed from a breakpoint, off a hidden GHOST of both
-  forms of every item:
+  It is MEASURED, never guessed from a breakpoint, off a hidden GHOST of all
+  three forms of every item, keyed by the item's id:
 
-    chromeW[i]  the text form with an EMPTY value — padding, prefix, gap,
-                i.e. everything the value is not
-    resv[i]     the widest that item's value could ever be, over EVERY value
-                it can take (`Layout: outline` vs `tracks`, `intro`,
-                `narrate`, `100 col`)
-    glyphW[i]   the glyph form
-    fixedW      the three glyph-only items as one group, gaps included
+    chromeW   the full form with an EMPTY value — padding, name, gap, i.e.
+              everything the value is not
+    bareW     the value form with an EMPTY value — the padding alone
+    resv      the widest that item's value could ever be, over EVERY value
+              it can take (`outline` vs `tracks`, `intro`, `narrate`, `–/99`)
+    glyphW    the glyph form
+    fixedW    the glyph-only items as one group, gaps included
 
-  `resv` is also what the real row RESERVES for each value, so a value item
-  never changes width when its value changes: `used` → `intro` moves nothing
-  to its right, and `▸` → `λ` cannot move anything either (the glyph box is a
-  fixed width). textW[i] is then exactly chromeW[i] + resv[i].
+  `resv` is also what the real row RESERVES for each value in BOTH word forms,
+  so a value item never changes width when its value changes: `used` → `intro`
+  moves nothing to its right, and `▸` → `λ` cannot move anything either (the
+  glyph box is a fixed width).
 
-  It CANNOT OSCILLATE: every measured width is independent of `kText` (the
-  chrome ghost carries no value, the glyph boxes are fixed, `resv` is over the
+  It CANNOT OSCILLATE: every measured width is independent of the stage (the
+  chrome ghosts carry no value, the glyph boxes are fixed, `resv` is over the
   whole value set), and the room comes from the FRAME, not from the card's own
   content — so neither input moves when the output flips. No hysteresis. */
-  const [kText, setKText] = useState(BAR_VALUE_COUNT);
+  const [stage, setStage] = useState<{ names: number; words: number }>({
+    names: 99,
+    words: 99,
+  });
   // Where the card sits: "right" beside the host button (the recorded
   // default), "center" in the frame, "fill" from the frame's left inset. All
   // three are decided in `fit` from the FRAME and the GHOST alone — never
   // from the card's own drawn box — so a placement can no more oscillate than
-  // `kText` can.
+  // the stage can.
   const [place, setPlace] = useState<"right" | "center" | "fill">("right");
   // Reached through a ref so `fit` (a stable callback) need not re-create
   // on every render of the parent; written in an effect, never in render.
@@ -10332,11 +11440,11 @@ function StatusBar({
   useEffect(() => {
     onPlaceRef.current = onPlace;
   });
-  const [resv, setResv] = useState<number[]>(() =>
-    Array.from({ length: BAR_VALUE_COUNT }, () => 0),
-  );
+  const [resv, setResv] = useState<Readonly<Record<string, number>>>({});
   const cardRef = useRef<HTMLDivElement | null>(null);
   const ghostRef = useRef<HTMLDivElement | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const [diagCompact, setDiagCompact] = useState(false);
   const fit = useCallback(() => {
     const card = cardRef.current;
     const ghost = ghostRef.current;
@@ -10365,31 +11473,46 @@ function StatusBar({
       Array.from(ghost.querySelectorAll<HTMLElement>(`[data-g="${k}"]`));
     const wide = (els: HTMLElement[]) =>
       els.reduce((m, el) => Math.max(m, el.getBoundingClientRect().width), 0);
-    const n = BAR_VALUE_COUNT;
-    const idx = Array.from({ length: n }, (_, i) => i);
-    const chromeW = idx.map((i) => wide(pick(`c${i}`)));
-    const glyphW = idx.map((i) => wide(pick(`g${i}`)));
-    const nextResv = idx.map((i) => Math.ceil(wide(pick(`v${i}`))));
+    // The items in ROW ORDER, read off the ghost rather than closed over:
+    // `fit` is a stable callback, and the Marks item comes and goes.
+    const ids = pick("order").map((el) => el.dataset.id ?? "");
+    const n = ids.length;
+    const chromeW = ids.map((id) => wide(pick(`c:${id}`)));
+    const bareW = ids.map((id) => wide(pick(`b:${id}`)));
+    const glyphW = ids.map((id) => wide(pick(`g:${id}`)));
+    const resvW = ids.map((id) => Math.ceil(wide(pick(`v:${id}`))));
     const fixedW = wide(pick("f"));
     if (fixedW <= 0) return;
+    // The diagnostics COUNT item, where there is one: its ghost is the very
+    // element the row draws (two tabular digits reserved per count), so what
+    // is measured is what is painted.
+    const diagFull = wide(pick("d"));
+    const diagShort = wide(pick("dc"));
 
     setResv((prev) =>
-      prev.length === n && prev.every((v, i) => v === nextResv[i])
+      Object.keys(prev).length === n &&
+      ids.every((id, i) => prev[id] === resvW[i])
         ? prev
-        : nextResv,
+        : Object.fromEntries(ids.map((id, i) => [id, resvW[i]])),
     );
 
     // Between the value items and the fixed group there is one gap per value
-    // item; the group's own two are already inside `fixedW`, and an item's
+    // item; the group's own gaps are already inside `fixedW`, and an item's
     // `after` controls carry theirs inside its own measured width.
-    const base = fixedW + n * STATUS_GAP;
-    const need = (k: number) =>
-      idx.reduce(
-        (sum, i) => sum + (i < k ? chromeW[i] + nextResv[i] : glyphW[i]),
-        base,
+    const base0 = fixedW + n * STATUS_GAP;
+    const needWith = (names: number, words: number, dw: number) =>
+      ids.reduce(
+        (sum, _, i) =>
+          sum +
+          (i < names
+            ? chromeW[i] + resvW[i]
+            : i < words
+              ? bareW[i] + resvW[i]
+              : glyphW[i]),
+        base0 + (dw > 0 ? dw + STATUS_GAP : 0),
       );
     /* THE BAR FILLS THE FRAME, and dodging the host button is a placement it
-    can only afford to make. `need(0)` is the row's FLOOR — every value item
+    can only afford to make. `need(0, 0)` is the row's FLOOR — every value item
     at its glyph, the three fixed items, the gaps — and where the lane beside
     the button cannot hold even that, dodging is not a placement at all: it
     is the row clipped down to whatever fits in the leftover strip, with the
@@ -10397,12 +11520,26 @@ function StatusBar({
     thin panel reported (a ~280px frame leaves `lane` 148 against a floor of
     ~190: two glyphs, far left, empty to the right). So the dodge is
     CONDITIONAL on the floor fitting, and the fallback is the full frame. */
-    const dodge = lane >= need(0);
+    const dodge = lane >= needWith(0, 0, diagShort);
     const avail = dodge ? lane : full;
+    // The diagnostics COUNT compacts LAST: every value item goes to its glyph
+    // before the per-severity counts fold into the worst glyph and a total.
+    const diagCompact = diagFull > 0 && needWith(0, 0, diagFull) > avail;
+    setDiagCompact(diagCompact);
+    const need = (names: number, words: number) =>
+      needWith(names, words, diagCompact ? diagShort : diagFull);
 
-    let k = 0;
-    while (k < n && need(k + 1) <= avail) k++;
-    setKText(k);
+    // The ladder, most words first: every name goes (right to left) before
+    // any word does (right to left). Stage `n` is the all-value row; `2n`
+    // the all-glyph floor, taken whether or not it fits.
+    const at = (st: number) =>
+      st <= n ? { names: n - st, words: n } : { names: 0, words: 2 * n - st };
+    let st = 0;
+    while (st < 2 * n && need(at(st).names, at(st).words) > avail) st++;
+    const got = at(st);
+    setStage((prev) =>
+      prev.names === got.names && prev.words === got.words ? prev : got,
+    );
 
     /* AND WHERE THERE IS SLACK IT IS CENTRED. The recorded reason for the
     right anchor is that the gap from the row's last item (`?`) to the host's
@@ -10417,14 +11554,25 @@ function StatusBar({
     chrome — from the ghost, never from the card's drawn box, so the
     placement can never feed back into the width that chose it, and the
     `max-width` of each placement enforces its own precondition. */
-    const cardW = need(k) + chrome;
+    const cardW = need(got.names, got.words) + chrome;
     const next = !dodge
       ? "fill"
       : cardW <= frame - 2 * (BAR_RIGHT_RESERVE + BAR_CENTER_SLACK)
         ? "center"
         : "right";
     setPlace(next);
-    onPlaceRef.current(next === "fill");
+    /* The rail's climb. Beside the button (right, center) the card and its
+    message strip keep clear of the rail's column by the button's reserve, so
+    the rail stays where it stands. A FILLING card spans the frame under the
+    rail, one lane up — and its strip spans it too, one strip higher — so the
+    rail climbs over both. The strip's height is read off its drawn box: it
+    wraps with the frame, and `fit` runs on every render and every resize. */
+    const stripH = stripRef.current?.offsetHeight ?? 0;
+    onPlaceRef.current(
+      next === "fill"
+        ? BAR_H + LANE_GAP + (stripH > 0 ? stripH + DIAG_STRIP_GAP : 0)
+        : 0,
+    );
   }, []);
 
   // After EVERY render, because a setting's own label changes width…
@@ -10443,38 +11591,49 @@ function StatusBar({
     return () => ro.disconnect();
   }, [fit]);
 
-  // One value item. `text` picks the form; `value` overrides what it shows
-  // (the ghost's chrome copy passes the empty string, so what it measures is
+  // One value item. `form` picks the form; `value` overrides what it shows
+  // (the ghost's chrome copies pass the empty string, so what they measure is
   // everything BUT the value, the value span still there to carry its gap).
-  const valueMenu = (i: number, text: boolean, value?: string) => {
-    const it = valueItems[i];
+  const valueMenu = (it: BarValueItem, form: BarForm, value?: string) => {
     const shown = value ?? it.value;
+    const valueSpan = (
+      <span
+        style={{
+          display: "inline-block",
+          // The VALUE form centres its text in the reserved width: the item's
+          // slots centre under the whole box, and a left-set `–/2` in a box
+          // sized for `99/99` stood well left of the squares meant to sit
+          // under it (user report, 2026-09-24). The full form keeps the value
+          // left-set against its name — `Layout: outline` is one phrase.
+          textAlign: form === "value" ? "center" : "left",
+          width: value === "" ? 0 : resv[it.id] || undefined,
+          opacity: it.dim ? DIM_OPACITY : 1,
+        }}
+      >
+        {shown}
+      </span>
+    );
     const menu = (
       <BarMenu
         key={it.id}
         label={
-          text ? (
+          form === "full" ? (
             <span
               style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
             >
               {it.prefix}
-              <span
-                style={{
-                  display: "inline-block",
-                  textAlign: "left",
-                  width: value === "" ? 0 : resv[i] || undefined,
-                  opacity: it.dim ? 0.6 : 1,
-                }}
-              >
-                {shown}
-              </span>
+              {valueSpan}
             </span>
+          ) : form === "value" ? (
+            valueSpan
           ) : (
             it.glyph
           )
         }
         title={it.title}
-        accent={it.accent}
+        // LIT WHILE ITS PANEL IS OPEN (2026-09-22), as `?` always was: the
+        // item the panel hangs from says so — and nothing else lights it.
+        accent={barOpen === it.id}
         slots={it.slots}
         onToggle={(x) => toggle(it.id, x)}
         onAlt={it.onAlt}
@@ -10496,13 +11655,14 @@ function StatusBar({
     );
   };
 
-  // The three items that are ALWAYS glyphs, as one group: the row's gaps run
+  // The items that are ALWAYS glyphs, as one group: the row's gaps run
   // through it, so measuring it whole counts them.
   const fixedItems = (
     <>
-      {/* The row's group boundaries: the four value menus say how the tree
-          is DRAWN, the eye how much of each node you are asked to READ, `↺`
-          is an action rather than a setting at all, and `?` is the index. */}
+      {/* The row's group boundaries: the value menus say how the tree is
+          DRAWN, the eye how much of each node you are asked to READ, and `?`
+          is the index. (`↺` sat between the last two until 2026-09-24; it is
+          an action on the view, and went to the zoom rail with the others.) */}
       <BarDivider />
       <BarMenu
         label={
@@ -10510,25 +11670,18 @@ function StatusBar({
             <EyeGlyph />
           </GlyphBox>
         }
-        title="Reading options — brief, merge, lints, polish, a suggested rewrite, to cursor; the four marks below say which of brief, merge, to cursor and lints are on"
-        // NO ACCENT: its three toggles take three SLOTS instead, which say
-        // WHICH are up where the pill only ever said "at least one".
+        title={`Reading options — brief, merge, lints, hyp origins, ${polishShown ? "polish, " : ""}${proposeShown ? "a suggested rewrite, " : ""}to cursor; the four marks below say which of brief, merge, to cursor and lints are on`}
+        // No standing accent: its toggles take SLOTS instead, which say
+        // WHICH are up where the pill only ever said "at least one". Lit
+        // only while its panel is open, like every item (2026-09-22).
+        accent={barOpen === "reading"}
         slots={readingSlots}
         onToggle={(x) => toggle("reading", x)}
       />
-      <BarDivider />
-
-      {/* `↺` (U+21BA) for reset — measured at 12px in the system UI font it
-          inks 9x11 against a tofu box's 12x15. The title keeps the word. */}
-      <BarButton
-        label={<GlyphBox w={TEXT_GLYPH_BOX_W}>↺</GlyphBox>}
-        title="Reset tree — the view the source asks for (folds and skips from its flags, no scoping)"
-        onClick={onResetView}
-      />
-      {/* …and the third boundary: `?` is the INDEX of the row, not a member
-          of it. It is declared apart (the diagnostics block drifts in between
-          the two in the real row) but the rule belongs to this group, whose
-          ghost is what `fit` measures. */}
+      {/* …and the boundary before `?`, the INDEX of the row rather than a
+          member of it. It is declared apart (the diagnostics count drifts in
+          between the two in the real row) but the rule belongs to this
+          group, whose ghost is what `fit` measures. */}
       <BarDivider />
     </>
   );
@@ -10541,7 +11694,7 @@ function StatusBar({
   const helpBtn = (
     <BarButton
       label={<GlyphBox w={TEXT_GLYPH_BOX_W}>?</GlyphBox>}
-      title="What you can do here: every gesture on the tree, in one panel (?)"
+      title="What you can do here (?)"
       accent={helpOpen}
       onClick={() => onHelpOpenChange(!helpOpen)}
     />
@@ -10612,21 +11765,21 @@ function StatusBar({
         boxSizing: "border-box",
         display: "flex",
         alignItems: "center",
-        fontFamily: "system-ui, sans-serif",
+        fontFamily: CHROME_FONT,
         fontSize: 12,
         lineHeight: 1,
         whiteSpace: "nowrap",
         ...POPUP_CHROME,
         padding: `${STATUS_PAD_Y}px ${STATUS_PAD_X}px`,
-        borderRadius: 4,
-        border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+        borderRadius: CHROME_RADIUS,
+        border: `1px solid ${CHROME_BORDER}`,
         // A LIFT, not just an outline. The card floats over the tree's own
         // canvas, so the hairline alone left it reading as ink drawn on the
         // page; this is the popovers' shadow one step deeper, which is what
         // separates the card from whatever the tree happens to draw beneath
         // it. The popovers keep POPUP_CHROME's own 0.25.
         boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
-        color: "var(--vscode-icon-foreground, #2d3748)",
+        color: CHROME_INK,
       }}
     >
       <div
@@ -10649,22 +11802,17 @@ function StatusBar({
           clipPath: "inset(-4px 0 -4px 0)",
         }}
       >
-        {Array.from({ length: BAR_VALUE_COUNT }, (_, i) =>
-          valueMenu(i, i < kText),
+        {valueItems.map((it, i) =>
+          valueMenu(
+            it,
+            i < stage.names ? "full" : i < stage.words ? "value" : "glyph",
+          ),
         )}
         {fixedItems}
 
         {diag && (
-          <div
-            style={{
-              flex: "0 1 auto",
-              minWidth: 0,
-              maxWidth: 320,
-              marginLeft: "auto",
-              paddingLeft: 6,
-            }}
-          >
-            <DiagnosticItem {...diag} />
+          <div style={{ flex: "none", marginLeft: "auto" }}>
+            <DiagCountItem {...diag} compact={diagCompact} />
           </div>
         )}
 
@@ -10690,24 +11838,35 @@ function StatusBar({
           pointerEvents: "none",
         }}
       >
-        {/* Every item's CHROME — the text form with the value emptied out,
-            so what this measures is padding, prefix and gap. */}
-        {Array.from({ length: BAR_VALUE_COUNT }, (_, i) => (
-          <span key={`c${i}`} data-g={`c${i}`}>
-            {valueMenu(i, true, "")}
+        {/* The items in ROW ORDER, for `fit` to read (it is a stable
+            callback, and the Marks item comes and goes). */}
+        {valueItems.map((it) => (
+          <span key={`o:${it.id}`} data-g="order" data-id={it.id} />
+        ))}
+        {/* Every item's CHROME in both word forms — `Name: value` and the
+            value alone, each with the value emptied out, so what they
+            measure is padding (and name, and gap). */}
+        {valueItems.map((it) => (
+          <span key={`c:${it.id}`} data-g={`c:${it.id}`}>
+            {valueMenu(it, "full", "")}
+          </span>
+        ))}
+        {valueItems.map((it) => (
+          <span key={`b:${it.id}`} data-g={`b:${it.id}`}>
+            {valueMenu(it, "value", "")}
           </span>
         ))}
         {/* …and its glyph form. */}
-        {Array.from({ length: BAR_VALUE_COUNT }, (_, i) => (
-          <span key={`g${i}`} data-g={`g${i}`}>
-            {valueMenu(i, false)}
+        {valueItems.map((it) => (
+          <span key={`g:${it.id}`} data-g={`g:${it.id}`}>
+            {valueMenu(it, "glyph")}
           </span>
         ))}
         {/* Every value each item could show, bare: the widest is what the
             real row RESERVES, so changing a setting moves nothing. */}
-        {valueItems.flatMap((it, i) =>
+        {valueItems.flatMap((it) =>
           it.values.map((v) => (
-            <span key={`v${i}-${v}`} data-g={`v${i}`}>
+            <span key={`v:${it.id}-${v}`} data-g={`v:${it.id}`}>
               {v}
             </span>
           )),
@@ -10724,7 +11883,21 @@ function StatusBar({
           {fixedItems}
           {helpBtn}
         </span>
+        {/* The diagnostics count item, measured on its own: it is present
+            only while the proof has problems. */}
+        {diag && (
+          <>
+            <span data-g="d" style={{ display: "inline-flex" }}>
+              <DiagCountItem {...diag} />
+            </span>
+            <span data-g="dc" style={{ display: "inline-flex" }}>
+              <DiagCountItem {...diag} compact />
+            </span>
+          </>
+        )}
       </div>
+
+      {diag?.open && <DiagStrip {...diag} stripRef={stripRef} />}
 
       {helpOpen && (
         <HelpPanel
@@ -10744,7 +11917,7 @@ function StatusBar({
       )}
 
       {barOpen === "layout" && (
-        <BarPanel left={menuX}>
+        <BarPanel left={menuX} width={220}>
           {(Object.keys(LAYOUT_MODES) as LayoutMode[]).map((m) => (
             <BarRow
               key={m}
@@ -10761,6 +11934,7 @@ function StatusBar({
           {/* Below the divider the rows are TOGGLES, not a choice, so they
               leave the popover open — you may want both. */}
           <BarRow
+            kind="toggle"
             label="side-by-side"
             title={
               sbsEnabled
@@ -10772,11 +11946,61 @@ function StatusBar({
             onClick={() => onSideBySideChange(!sideBySide)}
           />
           <BarRow
+            kind="toggle"
             label="gallery"
             title="Show one subtree at a time, with a pager"
             on={gallery}
             onClick={() => onGalleryChange(!gallery)}
           />
+          <MenuDivider />
+          {/* THE WIDTH, which was a bar item of its own until 2026-09-24 —
+              a setting about how the layout wraps, so it lives with the
+              layout. Same slider, same `Width: …` toast (`applyReflow`), and
+              the tracks seam still drags it; the item's third slot is lit
+              while labels wrap narrower than full. */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "3px 6px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span aria-hidden style={{ flex: "0 0 12px" }} />
+            <span>width</span>
+            <input
+              type="range"
+              min={REFLOW_MIN_CHARS}
+              max={reflowMax}
+              step={1}
+              value={reflowCols}
+              {...tip.props(
+                forcedReflow
+                  ? `Width: ${forcedReflow} col — wrap at ${forcedReflow} columns, required by the tracks layout`
+                  : "Width — wrap labels and context lines at this many columns (right end = full width)",
+              )}
+              onChange={(e) =>
+                onReflowChange(stopToReflow(Number(e.target.value)))
+              }
+              style={{
+                flex: "1 1 auto",
+                minWidth: 60,
+                margin: 0,
+                accentColor: "var(--ptw-accent)",
+              }}
+            />
+            <span
+              style={{
+                flex: "0 0 42px",
+                textAlign: "right",
+                fontVariantNumeric: "tabular-nums",
+                opacity: effReflow === "off" || forcedReflow ? DIM_OPACITY : 1,
+              }}
+            >
+              {effReflow === "off" ? "full" : `${effReflow} col`}
+            </span>
+          </div>
         </BarPanel>
       )}
 
@@ -10796,6 +12020,7 @@ function StatusBar({
           ))}
           <MenuDivider />
           <BarRow
+            kind="toggle"
             label="Split data & props"
             title="Draw each goal's context as data first, then propositions, with a divider (default: Lean's own binder order)"
             on={hypGroup}
@@ -10840,19 +12065,23 @@ function StatusBar({
         </BarPanel>
       )}
 
-      {barOpen === "tour" && (
+      {/* Gated on the item too: removing the last mark (⌥-click on its tab)
+          with this panel up takes the item away, and the panel with it. */}
+      {barOpen === "tour" && hasMarks && (
         <BarPanel left={menuX} width={210}>
           {/* TWO TOGGLES, not a choice among three: each says whether that
               set is IN the reading, and the reading is their union. Toggles,
               so the rows leave the panel open; with both off the bar item
               reads `off` and the chevrons grey. */}
           <BarRow
+            kind="toggle"
             label={`source (${authorCount})`}
             title="The marks the file carries as `.mark` — bare, or `.mark 3` for an explicit rank"
             on={tourLists.source}
             onClick={() => onTourListToggle("source")}
           />
           <BarRow
+            kind="toggle"
             label={`temporary (${myCount})`}
             title="The marks dropped from a box's top-left nub, in source order; kept for this session only — ⌥-click on the nub writes one into the source"
             on={tourLists.temp}
@@ -10867,6 +12096,7 @@ function StatusBar({
               what drives the in-place underline preview of what it would
               elide, so the row carries it. */}
           <BarRow
+            kind="toggle"
             label="brief"
             title="Hide boilerplate inside each tactic's own text"
             on={brief}
@@ -10874,6 +12104,7 @@ function StatusBar({
             onHover={onBriefHover}
           />
           <BarRow
+            kind="toggle"
             label="merge"
             title="One node per straight run of tactics"
             on={combine}
@@ -10883,34 +12114,52 @@ function StatusBar({
               server one re-elaboration of the declaration, which is why it is
               a reading option and not a payload field. */}
           <BarRow
+            kind="toggle"
             label="lints"
             title="Show Mathlib's own style linters on the steps they object to — the declaration is re-elaborated once to ask"
             on={lintsOn}
             onClick={() => onLintsChange(!lintsOn)}
           />
+          {/* B2's connector, OFF by default (2026-09-22): paint only, so the
+              row moves nothing — the line's `<title>` names the origin
+              either way. */}
+          <BarRow
+            kind="toggle"
+            label="hyp origins"
+            title="Hovering a context line points at the step that introduced it, and lights that step"
+            on={hypOriginsOn}
+            onClick={() => onHypOriginsChange(!hypOriginsOn)}
+          />
           {/* C4. Mirrors `ramify.narration.polish` for THIS session: the
               setting is the default, the row is the override, and neither
-              writes the other. Disabled where there is no companion or no
-              key, with the title saying which — the reader who has met the
-              setting should find out where it went, the `goals as TeX` rule
-              said again. */}
-          <BarRow
-            label="polish"
-            title={polishWhy}
-            on={polishOn}
-            disabled={!polishEnabled}
-            onClick={() => onPolishChange(!polishOn)}
-          />
+              writes the other. NOT DRAWN where there is no companion, no key
+              or the setting is off (2026-09-22, "hide the API key-necessary
+              stuff"). The panel's height is its rows', so a hidden row
+              leaves no gap. */}
+          {polishShown && (
+            <BarRow
+              kind="toggle"
+              label="polish"
+              title={polishWhy}
+              on={polishOn}
+              onClick={() => onPolishChange(!polishOn)}
+            />
+          )}
           {/* D6. An ACTION, not a setting: it asks once, on the proof in
               front of you, and the answer is a proposal pill on a node —
-              the same pill, the same `checkRewrite` gate, the same undo. */}
+              the same pill, the same `checkRewrite` gate, the same undo.
+              Hidden under the same rule as `polish`. */}
+          {proposeShown && (
+            <BarRow
+              kind="action"
+              label={proposeBusy ? "suggesting…" : "suggest a rewrite"}
+              title="Ask for one of the rewrites already offered on this proof, with a reason — the elaborator still has the last word"
+              disabled={proposeBusy}
+              onClick={onPropose}
+            />
+          )}
           <BarRow
-            label={proposeBusy ? "suggesting…" : "suggest a rewrite"}
-            title={proposeWhy}
-            disabled={!proposeEnabled}
-            onClick={onPropose}
-          />
-          <BarRow
+            kind="toggle"
             label="to cursor"
             title={
               upToEnabled
@@ -10921,73 +12170,7 @@ function StatusBar({
             disabled={!upToEnabled}
             onClick={() => onUpToCursorChange(!upToCursor)}
           />
-          {/* C1, THE SEAM AND NOTHING ELSE. The `latex` sidecar exists on both
-              wires and is always empty: kmill/LeanTeX does not build against
-              Lean v4.32.2 (three incompatibilities, all recorded). The row is
-              drawn rather than hidden because a reader who has met the idea —
-              the roadmap's "goal boxes' reading form" — should find out where
-              it went and why, and because the row is the thing the printer
-              will switch on the day it builds. It carries no state, so there
-              is nothing to toggle and nothing for `remapIds` or the view stash
-              to know about. */}
-          <BarRow
-            label="goals as TeX"
-            title="Needs LeanTeX, which is not built for this toolchain (Lean v4.32.2)"
-            disabled
-            onClick={() => {}}
-          />
         </BarPanel>
-      )}
-
-      {barOpen === "reflow" && (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            position: "absolute",
-            bottom: "100%",
-            left: menuX,
-            marginBottom: 4,
-            zIndex: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            boxSizing: "border-box",
-            ...POPUP_CHROME,
-            padding: "5px 9px",
-            border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
-            color: "var(--vscode-icon-foreground, #2d3748)",
-            fontSize: 11,
-            whiteSpace: "nowrap",
-            cursor: "default",
-          }}
-        >
-          <input
-            type="range"
-            min={REFLOW_MIN_CHARS}
-            max={reflowMax}
-            step={1}
-            value={reflowCols}
-            {...tip.props(
-              forcedReflow
-                ? `Wrap at ${forcedReflow} columns, required by the tracks layout`
-                : "Wrap labels and context lines at this many columns (right end = full width)",
-            )}
-            onChange={(e) =>
-              onReflowChange(stopToReflow(Number(e.target.value)))
-            }
-            style={{ width: 130, accentColor: "var(--ptw-accent)" }}
-          />
-          <span
-            style={{
-              width: 46,
-              textAlign: "right",
-              fontFamily: "monospace",
-              opacity: effReflow === "off" || forcedReflow ? 0.6 : 1,
-            }}
-          >
-            {effReflow === "off" ? "full" : `${effReflow} col`}
-          </span>
-        </div>
       )}
     </div>
   );
@@ -11144,7 +12327,7 @@ function GalleryPager({
         dy="0.32em"
         fontSize={11}
         fontFamily="monospace"
-        fill="var(--vscode-icon-foreground, #6b7280)"
+        fill={CHROME_INK}
         style={{ userSelect: "none" }}
       >
         {glyph}
@@ -11153,15 +12336,23 @@ function GalleryPager({
   );
   return (
     <g transform={`translate(${x},0)`}>
-      <title>{`branch ${index + 1} of ${count}${label ? `: ${label}` : ""} — ‹ › to cycle`}</title>
+      <title>{`Branch ${index + 1} of ${count}${label ? `: ${label}` : ""} — ‹ › to cycle`}</title>
       <rect
         x={0}
         y={0}
         width={PAGER_W}
         height={PAGER_H}
         rx={3}
-        fill="var(--vscode-editorWidget-background, #f3f4f6)"
-        stroke="var(--vscode-editorWidget-border, #d1d5db)"
+        fill={CHROME_UNDERLAY}
+      />
+      <rect
+        x={0}
+        y={0}
+        width={PAGER_W}
+        height={PAGER_H}
+        rx={3}
+        fill={CHROME_BG}
+        stroke={CHROME_BORDER}
         strokeWidth={1}
       />
       {arrow(-1, "‹", 0)}
@@ -11172,7 +12363,7 @@ function GalleryPager({
         dy="0.32em"
         fontSize={10}
         fontFamily="monospace"
-        fill="var(--vscode-icon-foreground, #6b7280)"
+        fill={CHROME_INK}
         style={{ userSelect: "none" }}
       >
         {`${index + 1}/${count}`}
@@ -11192,6 +12383,16 @@ size: at the shared 13 it inks 7x8 against `⧉`'s 10x9 and the drawn icons'
 inside 1px of every neighbour's ink height. Equal INK, not equal font size (`RailButton`'s
 own rule). */
 const PATH_GLYPH_PX = 15;
+/** `»` (reveal in source) is on EVERY default bar and was the smallest mark
+in it: 6.0 × 5.9 px of ink at the shared 13px (canvas, 8× supersampled, the
+bar's `monospace`) against `◎` 7.9, `⧉` 8.9 and the drawn icons' ~8.5. At 17 it
+inks ~7.8 tall — the `⊹` rule (equal INK, not equal font size), applied to the
+one default glyph it had not reached (2026-09-22 taste pass). */
+const SOURCE_GLYPH_PX = 17;
+/** The stroke every DRAWN hover-bar icon shares (skip, trash, inline/extract):
+the bar scales with the tree, so it keeps its own weight rather than the
+chrome's `BAR_GLYPH_SW`. */
+const HOVER_ICON_SW = 0.9;
 /** A hover bar is GLYPH BUTTONS with tooltips and nothing else (in-page tips,
 not `<title>`s: tipController.ts says why). A dwell row
 of words under them was tried and removed: the bar appears on hover over every
@@ -11229,11 +12430,33 @@ function SkipIcon() {
     <g
       fill="none"
       stroke="currentColor"
-      strokeWidth={0.9}
+      strokeWidth={HOVER_ICON_SW}
       strokeLinecap="round"
     >
       <path d="M0 -4.8 V-1.8 M0 1.8 V4.8" />
       <path d="M-2.6 -0.6 L2.6 -3 M-2.6 3 L2.6 0.6" />
+    </g>
+  );
+}
+
+/* D1's inline (`⤵`) and extract (`⤴`), DRAWN: as font glyphs they fell back
+to a symbol font that inked 12.3×12.1 px at the bar's 13px against `⊹`'s 8×8
+and the can's 9.5×8.5 (measured on the raster, 2026-09-22). Rightwards, then
+a quarter turn down (inline: the `have` goes down into its use) or up
+(extract: the block comes up out of the term), mirrored because the moves are
+inverse. The paths span 7.6 units and stroke 0.9, the can's key. */
+function InlineIcon({ up = false }: { up?: boolean }) {
+  return (
+    <g
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={HOVER_ICON_SW}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      transform={up ? "scale(1,-1)" : undefined}
+    >
+      <path d="M-3.8 -3.6 H-0.4 A2.6 2.6 0 0 1 2.2 -1 V3.6" />
+      <path d="M0.6 2 L2.2 3.6 L3.8 2" />
     </g>
   );
 }
@@ -11243,7 +12466,7 @@ function TrashIcon() {
     <g
       fill="none"
       stroke="currentColor"
-      strokeWidth={0.9}
+      strokeWidth={HOVER_ICON_SW}
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -11271,27 +12494,58 @@ interface NodeAction {
    and the drawn skip box's 9). */
   glyphPx?: number;
   title: string;
-  onClick: () => void;
+  /** The button's own element rides along, for the one move that hangs a
+   popover off it (`⋯`); every other move ignores it. */
+  onClick: (el?: Element) => void;
   /** ⌥-click, where the button has a second reading (⚑: drop MY stop, or
    write the author's `.mark` into the source). Absent, ⌥ is a plain click. */
   onAlt?: () => void;
   onHover?: (on: boolean) => void;
   danger?: boolean;
 }
+
+/** One MOVE on a node: a hover-bar button and/or a row of the `⋯` menu. The
+ menu reads `label` (the move in the reader's words, moves.ts) and `shortcut`
+ (the gesture that reaches it without the menu or the bar — absent where the
+ bar button, whose glyph heads the row, is the only way); the bar reads the
+ `NodeAction` half. One object, so a row and its button run one closure.
+ (The bar's list and the menu-only list are kept as two arrays and spread
+ together, never FILTERED: the compiler lint reads a property read over an
+ array of ref-touching closures as a ref read during render.) */
+interface NodeMove extends NodeAction {
+  label: string;
+  shortcut?: string;
+  /** The move's id where it can sit on the bar (moves.ts `MOVE_IDS`) — the
+   menu row then wears a PIN. Menu-only rows (edit, marks, rename, fold) have
+   none. */
+  id?: MoveId;
+}
+
+/** How far inside the visible frame a bar is kept when it would hang past an
+ edge. */
+const BAR_FRAME_INSET = 4;
+
 function NodeActionBar({
   placement = "top-right",
   x,
   y,
   actions,
+  boxTop,
 }: {
   placement?: "top-right" | "right";
   x: number;
   y: number;
   actions: NodeAction[];
+  /** The box's top edge (node-local), for a `right` bar that has to leave
+   the right of the box: it goes up onto the top edge, as a goal's does. */
+  boxTop?: number;
 }) {
-  const cell = BAR_BTN;
+  // ICONS ONLY (2026-09-22): every button is one `BAR_BTN` square. The
+  // icon+word bar the experience preset once drew was "way too aggro" —
+  // several times wider, it lay across the neighbouring boxes — and it is
+  // gone, not dormant; the `⋯` menu is where a glyph is put into words.
   const w =
-    actions.length * cell + (actions.length - 1) * BAR_GAP + 2 * BAR_PAD;
+    actions.length * BAR_BTN + (actions.length - 1) * BAR_GAP + 2 * BAR_PAD;
   const h = BAR_BTN + 2 * BAR_PAD;
   const { ctl } = useTip();
   const x0 = placement === "right" ? x : x - w;
@@ -11299,36 +12553,83 @@ function NodeActionBar({
     placement === "right"
       ? y - (BAR_BTN + 2 * BAR_PAD) / 2
       : y - h + BAR_OVERLAP;
+  // KEPT INSIDE THE FRAME. The bar is an overlay (it reserves nothing), so a
+  // node near the frame's edge hung it past the edge. The fix is PAINT: measured against the visible
+  // scroll frame after mount and moved by a transform written straight onto
+  // the element (the `TipLayer` idiom — no state, no relayout, and nothing a
+  // re-render resets, since `transform` is never in the JSX). A bar hung to
+  // the RIGHT of a tactic that would cross the frame's edge goes UP onto the
+  // box's top edge first (the goal bar's place — beside the label it would
+  // have covered the tactic's own text), then slides left as far as it must.
+  // Re-run every render: the bar's width and place change with the node.
+  const gRef = useRef<SVGGElement | null>(null);
+  useLayoutEffect(() => {
+    const g = gRef.current;
+    if (!g) return;
+    g.removeAttribute("transform");
+    const frame = g.closest("[data-ptw-scroll]");
+    if (!frame) return;
+    const r = g.getBoundingClientRect();
+    const f = frame.getBoundingClientRect();
+    if (r.width === 0) return;
+    const scale = r.width / w;
+    const right = f.right - BAR_FRAME_INSET;
+    const left = f.left + BAR_FRAME_INSET;
+    let dx = 0;
+    let dy = 0;
+    if (r.right > right && placement === "right" && boxTop !== undefined) {
+      // To the top-right corner, where a goal's bar sits.
+      dx = -w * scale;
+      dy = (boxTop - h + BAR_OVERLAP - y0) * scale;
+    }
+    if (r.right + dx > right) dx = right - r.right;
+    if (r.left + dx < left) dx = left - r.left;
+    if (dx !== 0 || dy !== 0)
+      g.setAttribute("transform", `translate(${dx / scale},${dy / scale})`);
+  });
   return (
-    <g data-ptw-bar="">
+    <g data-ptw-bar="" ref={gRef}>
       <rect
         x={x0}
         y={y0}
         width={w}
         height={h}
         rx={3}
-        fill="var(--vscode-editorWidget-background, #fff)"
-        stroke="var(--vscode-editorWidget-border, #cbd5e0)"
+        fill={CHROME_UNDERLAY}
+      />
+      <rect
+        x={x0}
+        y={y0}
+        width={w}
+        height={h}
+        rx={3}
+        fill={CHROME_BG}
+        stroke={CHROME_BORDER}
       />
       {actions.map((a, i) => {
-        const cx = x0 + BAR_PAD + i * (cell + BAR_GAP) + cell / 2;
-        const bx = cx - BAR_BTN / 2;
+        const bx = x0 + BAR_PAD + i * (BAR_BTN + BAR_GAP);
+        const cx = bx + BAR_BTN / 2;
+        const cy = y0 + BAR_PAD + BAR_BTN / 2;
         const ink = a.danger
           ? DANGER_FILL
-          : "var(--vscode-icon-foreground, #2d3748)";
+          : CHROME_INK;
         return (
           <g
             key={a.glyph}
             onClick={(e) => {
               e.stopPropagation();
               if (a.onAlt && e.altKey) a.onAlt();
-              else a.onClick();
+              else a.onClick(e.currentTarget);
             }}
-            aria-label={a.title}
-            onPointerEnter={(e) => ctl.enter(e.currentTarget)}
-            onPointerLeave={(e) => ctl.leave(e.currentTarget)}
-            onMouseEnter={a.onHover ? () => a.onHover!(true) : undefined}
-            onMouseLeave={a.onHover ? () => a.onHover!(false) : undefined}
+            aria-label={plainTicks(a.title)}
+            onPointerEnter={(e) => {
+              ctl.enter(e.currentTarget);
+              a.onHover?.(true);
+            }}
+            onPointerLeave={(e) => {
+              ctl.leave(e.currentTarget);
+              a.onHover?.(false);
+            }}
             style={{ cursor: "pointer" }}
           >
             <rect
@@ -11337,20 +12638,17 @@ function NodeActionBar({
               width={BAR_BTN}
               height={BAR_BTN}
               rx={2}
-              fill="var(--vscode-toolbar-hoverBackground, #f7fafc)"
-              stroke="var(--vscode-editorWidget-border, #e2e8f0)"
+              fill={CHROME_BTN}
+              stroke={CHROME_BORDER}
             />
             {a.icon ? (
-              <g
-                transform={`translate(${cx},${y0 + BAR_PAD + BAR_BTN / 2})`}
-                color={ink}
-              >
+              <g transform={`translate(${cx},${cy})`} color={ink}>
                 {a.icon}
               </g>
             ) : (
               <text
                 x={cx}
-                y={y0 + BAR_PAD + BAR_BTN / 2}
+                y={cy}
                 textAnchor="middle"
                 dominantBaseline="central"
                 fontSize={a.glyphPx ?? 13}
@@ -11364,5 +12662,242 @@ function NodeActionBar({
         );
       })}
     </g>
+  );
+}
+
+/** A push-pin, filled when the move is on the bar. 12px, drawn in
+ `currentColor` like every other icon here. */
+function PinIcon({ on }: { on: boolean }) {
+  return (
+    <svg width={12} height={12} viewBox="0 0 12 12" aria-hidden>
+      <path
+        d="M4 1.5h4M4.8 1.5v3.2L3 7h6L7.2 4.7V1.5M6 7v3.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={HOVER_ICON_SW}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {on && <path d="M4.8 1.5v3.2L3 7h6L7.2 4.7V1.5z" fill="currentColor" />}
+    </svg>
+  );
+}
+
+const MENU_ROW_LIT = CHROME_LIT;
+// The keyed row is drawn by its LIT FILL alone (`idx`); DOM focus still
+// follows it for assistive tech, but draws no ring — a ring on top of the fill
+// said the same thing twice (2026-09-22).
+const MENU_ROW_CSS =
+  "[data-ptw-menu] .ptw-menu-row:focus," +
+  "[data-ptw-menu] .ptw-menu-row:focus-visible{outline:none;box-shadow:none}";
+
+/* THE `⋯` MENU (2026-09-22). Every move on one node, in words, with the
+gesture that reaches it without the menu — the answer to "what can I do here?"
+for a reader who does not yet read the bar's glyphs. HTML, hung in the frame
+beside the tooltip layer and positioned like it (measured off the `⋯` button's
+rect, written onto the element in a layout effect, clamped inside the frame):
+an overlay, so opening it moves nothing. Rows are the node's own `NodeMove`s,
+so a row runs exactly the closure its button or gesture runs. Arrow keys,
+Home/End and Enter; Esc, a press outside, a scroll and a proof change close
+it (the view's `nodeMenu` layer). Moves that are not available are simply
+not in the list — a greyed row is a question the reader cannot act on. */
+function NodeMenu({
+  at,
+  moves,
+  kind,
+  pinned,
+  onPin,
+  onClose,
+}: {
+  at: { x: number; top: number; bottom: number };
+  moves: NodeMove[];
+  /** Which bar the pins write to: this node's kind. */
+  kind: BarKind;
+  pinned: readonly MoveId[];
+  onPin: (id: MoveId) => void;
+  onClose: () => void;
+}) {
+  const { ctl } = useTip();
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  // The row the keys are on. In STATE, not only DOM focus: the row is drawn
+  // lit from this, so the reader sees where Enter will land even where the
+  // webview has not got system focus (a press elsewhere, the hidden pane).
+  const [idx, setIdx] = useState(0);
+  const pick = (m: NodeMove) => {
+    onClose();
+    m.onClick();
+  };
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const root = box.offsetParent as HTMLElement | null;
+    if (!root) return;
+    const bw = box.offsetWidth;
+    const bh = box.offsetHeight;
+    let left = at.x;
+    left = Math.max(4, Math.min(left, root.clientWidth - bw - 4));
+    let top = at.bottom + 4;
+    if (top + bh > root.clientHeight - 4) top = at.top - 4 - bh;
+    top = Math.max(4, Math.min(top, root.clientHeight - bh - 4));
+    box.style.left = `${Math.round(left)}px`;
+    box.style.top = `${Math.round(top)}px`;
+    box.style.visibility = "visible";
+  }, [at]);
+  // DOM focus follows the lit row (the accessible half of `idx`).
+  useLayoutEffect(() => {
+    const rows =
+      boxRef.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]");
+    rows?.[idx]?.focus({ preventScroll: true });
+  }, [idx]);
+  const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const n = moves.length;
+    if (n === 0) return;
+    const go = (f: (cur: number) => number) => {
+      e.preventDefault();
+      setIdx((cur) => (f(cur) + n) % n);
+    };
+    if (e.key === "ArrowDown") go((c) => c + 1);
+    else if (e.key === "ArrowUp") go((c) => c - 1);
+    else if (e.key === "Home") go(() => 0);
+    else if (e.key === "End") go(() => n - 1);
+    else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (moves[idx]) pick(moves[idx]);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      onClose();
+    }
+  };
+  return (
+    <div
+      ref={boxRef}
+      role="menu"
+      aria-label="Moves on this node"
+      data-ptw-menu=""
+      onKeyDown={onKey}
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseMove={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      style={{
+        ...MENU_PANEL,
+        position: "absolute",
+        visibility: "hidden",
+        zIndex: 25,
+        minWidth: 200,
+        maxWidth: "min(360px, 90%)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {/* Focus draws no outline of its own; the lit row (`idx`) is what
+          says where the keys are. */}
+      <style>{MENU_ROW_CSS}</style>
+      {moves.map((m, i) => {
+        const pinOn = !!m.id && pinned.includes(m.id);
+        const pinSaid = pinLabel(pinOn, kind);
+        return (
+          <div
+            key={`${m.glyph}:${m.label}:${i}`}
+            onMouseEnter={() => setIdx(i)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              borderRadius: CHROME_RADIUS,
+              background: i === idx ? MENU_ROW_LIT : "transparent",
+            }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => pick(m)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flex: 1,
+                minWidth: 0,
+                boxSizing: "border-box",
+                padding: "3px 6px",
+                border: "none",
+                borderRadius: CHROME_RADIUS,
+                background: "transparent",
+                color: m.danger ? DANGER_FILL : "inherit",
+                font: "inherit",
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+              className="ptw-menu-row"
+            >
+              {/* THE ICON — the bar's own glyph or drawn icon, so the menu
+                  is where the bar's icons are put into words. */}
+              <span
+                aria-hidden
+                style={{
+                  width: 16,
+                  flex: "none",
+                  display: "inline-flex",
+                  justifyContent: "center",
+                  fontFamily: "monospace",
+                  fontSize: m.glyphPx ? m.glyphPx - 1 : 13,
+                }}
+              >
+                {m.icon ? (
+                  <svg width={14} height={14} viewBox="-7 -7 14 14">
+                    <g color={m.danger ? DANGER_FILL : "currentColor"}>
+                      {m.icon}
+                    </g>
+                  </svg>
+                ) : m.glyph.length <= 2 ? (
+                  m.glyph
+                ) : null}
+              </span>
+              <span
+                style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}
+              >
+                <CodeText text={m.label} />
+              </span>
+              {m.shortcut && (
+                <span style={{ flex: "none", opacity: DIM_OPACITY, fontSize: 11 }}>
+                  <CodeText text={m.shortcut} />
+                </span>
+              )}
+            </button>
+            {/* THE PIN: whether this move sits on the bar for this node's
+                kind. Its own button (a button inside the row's would not be
+                one), so a pin leaves the menu open and runs nothing else. */}
+            {m.id ? (
+              <button
+                type="button"
+                aria-label={pinSaid}
+                aria-pressed={pinOn}
+                onClick={() => onPin(m.id!)}
+                onPointerEnter={(e) => ctl.enter(e.currentTarget)}
+                onPointerLeave={(e) => ctl.leave(e.currentTarget)}
+                style={{
+                  flex: "none",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 20,
+                  height: 20,
+                  marginRight: 2,
+                  padding: 0,
+                  border: "none",
+                  borderRadius: CHROME_RADIUS,
+                  background: "transparent",
+                  color: "inherit",
+                  opacity: pinOn ? 0.9 : i === idx ? 0.5 : 0.22,
+                  cursor: "pointer",
+                }}
+              >
+                <PinIcon on={pinOn} />
+              </button>
+            ) : (
+              <span aria-hidden style={{ flex: "none", width: 22 }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

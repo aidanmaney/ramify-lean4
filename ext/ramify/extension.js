@@ -22,6 +22,17 @@ const PROPOSE_RESPONSE = "propose-response.json";
 // the pointer leaves the accepted pill and a hover `clear` into
 // `popout-request.json` would otherwise overwrite it before the watcher read.
 const RENAME_REQUEST = "rename-request.json";
+// A `⋯`-menu PIN in the tree → `ramify.hoverBar.tactic|goal`. Its own file for
+// the reason `rename` has one: the pin is clicked with the pointer on its way
+// back over the tree, whose hover `highlight`/`clear` lands in
+// `popout-request.json` a moment later and would overwrite it unread.
+const SETTINGS_REQUEST = "settings-request.json";
+// The move ids a hover-bar list may hold — package.json's enum, and
+// web/src/moves.ts `MOVE_IDS`.
+const MOVE_IDS = [
+  "source", "focus", "skip", "path", "delete", "trace", "collapse",
+  "expand", "inline", "extract", "lint", "lens", "goal",
+];
 const CHROME_BACKUP = path.join(REQUEST_DIR, "chrome-backup.json");
 const THEME_FILE = path.join(REQUEST_DIR, "theme-colors.json");
 
@@ -472,6 +483,37 @@ function publishThemeColors() {
       .getConfiguration("ramify")
       .get("hypMarkStyle");
 
+    // `ramify.experience` is passed through as a NAME; the widget owns the
+    // table (web/src/experience.ts) and fills only DEFAULTS from it. `inspect`
+    // says whether the reader chose it, for the log line below.
+    const expInfo = vscode.workspace
+      .getConfiguration("ramify")
+      .inspect("experience");
+    const experience =
+      expInfo?.workspaceFolderValue ??
+      expInfo?.workspaceValue ??
+      expInfo?.globalValue ??
+      expInfo?.defaultValue ??
+      "intermediate";
+    const experienceSet =
+      expInfo?.workspaceFolderValue !== undefined ||
+      expInfo?.workspaceValue !== undefined ||
+      expInfo?.globalValue !== undefined;
+
+    // `ramify.hoverBar.*`: sent ONLY where the reader set it (`inspect()`), so
+    // an unset list leaves the widget on the experience preset's default —
+    // the setting wins where it exists, the preset where it does not.
+    const explicit = (key) => {
+      const i = vscode.workspace.getConfiguration("ramify").inspect(key);
+      const v =
+        i?.workspaceFolderValue ?? i?.workspaceValue ?? i?.globalValue;
+      return Array.isArray(v) ? v.filter((x) => MOVE_IDS.includes(x)) : null;
+    };
+    const hoverBar = {
+      tactic: explicit("hoverBar.tactic"),
+      goal: explicit("hoverBar.goal"),
+    };
+
     const inputCfg = vscode.workspace.getConfiguration("lean4.input");
     const custom = inputCfg.get("customTranslations") || {};
     const input = {
@@ -499,6 +541,8 @@ function publishThemeColors() {
           hypMarkStyle,
           input,
           ai: aiState,
+          experience,
+          hoverBar,
           colors: Object.keys(colors).map((type) => ({
             type,
             color: colors[type],
@@ -516,7 +560,10 @@ function publishThemeColors() {
         `link marks ${linkMarks ? "on" : "off"}, ` +
         `typing hold ${typingHoldMs}ms, ` +
         `counterfactual ${counterfactual ? "on" : "off"}, ` +
-        `hyp mark ${hypMarkStyle || "highlight"}): ` +
+        `hyp mark ${hypMarkStyle || "highlight"}, ` +
+        `experience ${experience}${experienceSet ? "" : " (default)"}, ` +
+        `hover bar tactic=${hoverBar.tactic ? hoverBar.tactic.join(",") : "(preset)"} ` +
+        `goal=${hoverBar.goal ? hoverBar.goal.join(",") : "(preset)"}): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),
@@ -1092,6 +1139,44 @@ function activate(context) {
       await refreshAi();
     }),
   );
+  // `ramify.experience` as a quick pick — the setting is the whole state, so
+  // the pick just writes it and the config listener republishes.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("ramify.setExperience", async () => {
+      const cur =
+        vscode.workspace.getConfiguration("ramify").get("experience") ||
+        "intermediate";
+      const items = [
+        {
+          label: "beginner",
+          detail:
+            "The step under the cursor shows what its automation used · ⁇ on the tactic bar · narrated comments · full context · lints on",
+        },
+        {
+          label: "intermediate",
+          detail: "Comments shown · used context · lints on",
+        },
+        {
+          label: "expert",
+          detail: "Brief mode on · lints off",
+        },
+      ].map((i) => ({ ...i, description: i.label === cur ? "current" : "" }));
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder:
+          "How much should the proof tree explain itself? (fills defaults only)",
+      });
+      if (!pick) return;
+      // Write where the value that wins already lives: a workspace setting
+      // would shadow a User-scope write and the pick would do nothing.
+      const cfg = vscode.workspace.getConfiguration("ramify");
+      const target =
+        cfg.inspect("experience")?.workspaceValue !== undefined
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global;
+      await cfg.update("experience", pick.label, target);
+      say(`experience set to ${pick.label}`);
+    }),
+  );
   context.subscriptions.push(
     context.secrets.onDidChange((e) => {
       if (e.key === SECRET_KEY) void refreshAi();
@@ -1254,6 +1339,44 @@ function activate(context) {
       say(`  rename FAILED: ${e && e.stack ? e.stack : e}`);
     }
   };
+  // A `⋯`-menu pin: write the list where the value that wins already lives
+  // (a Workspace value would shadow a User-scope write), as the experience
+  // pick does. The config listener then republishes the theme file.
+  let lastSettingsNonce = null;
+  const handleSettings = async () => {
+    let req;
+    try {
+      req = JSON.parse(
+        fs.readFileSync(path.join(REQUEST_DIR, SETTINGS_REQUEST), "utf8"),
+      );
+    } catch {
+      return;
+    }
+    if (!req || req.nonce === lastSettingsNonce) return;
+    if (req.action !== "hoverbar") return;
+    if (req.setting !== "tactic" && req.setting !== "goal") return;
+    const target = vscode.Uri.parse(req.uri, true);
+    const owned =
+      !!vscode.workspace.getWorkspaceFolder(target) ||
+      vscode.workspace.textDocuments.some(
+        (d) => d.uri.toString() === target.toString(),
+      );
+    if (!owned) return;
+    lastSettingsNonce = req.nonce;
+    const ids = (req.values ?? []).filter((x) => MOVE_IDS.includes(x));
+    const key = `hoverBar.${req.setting}`;
+    const cfg = vscode.workspace.getConfiguration("ramify");
+    const scope =
+      cfg.inspect(key)?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+    try {
+      await cfg.update(key, ids, scope);
+      say(`request ${req.nonce}: ramify.${key} = [${ids.join(", ")}]`);
+    } catch (e) {
+      say(`  hoverbar FAILED: ${e && e.stack ? e.stack : e}`);
+    }
+  };
   const handlePolish = makeAiHandler(
     POLISH_REQUEST,
     POLISH_RESPONSE,
@@ -1271,6 +1394,7 @@ function activate(context) {
     const watcher = fs.watch(REQUEST_DIR, (_event, filename) => {
       if (filename === REQUEST_FILE) void handleRequest();
       else if (filename === RENAME_REQUEST) void handleRename();
+      else if (filename === SETTINGS_REQUEST) void handleSettings();
       else if (filename === POLISH_REQUEST) void handlePolish();
       else if (filename === PROPOSE_REQUEST) void handlePropose();
     });

@@ -476,7 +476,7 @@ All view controls live in a **STATUS BAR of words** — a FLOATING CARD along th
 
 **A MODE PUTS UP A BANNER AT TOP-CENTRE, and it is NOT in the bar** (`TopCentre`, ProofTreeView) — the staged calc fill in `SEQ_STROKE`, an armed delete in `DANGER_FILL`, `to cursor` last — with the `✕` whose exit IS the mode's own `layers` entry, so banner and Esc cannot disagree. It used to be an ITEM spliced into the bar's left group behind a divider, which made entering a mode RESHUFFLE the row: every item to its right moved, so arming a delete shifted the very controls you might be reaching for next. Now **the bar never changes shape while a mode is up** (measured: arming a delete leaves all nine item rects byte-identical) and the loud surface reads where the transient toast already speaks. It wears the toast's own chrome and position; the two are ONE flex column with a 6px gap, not two absolutely-positioned floaters, so a toast stacks UNDER a standing banner with no constant to measure either against (measured: banner y 8 h 26.8, toast y 40.8). The column takes no pointer events; only the banner's button does. The banner is BUILT in the view (`modal`, a chain over the mode state) and RENDERED by `TopCentre`, which is what keeps the react-hooks/refs taint out of the view's own render: `modal.onExit` closes over `layerOff`/`applyUpToCursor`, so reading the value in a conditional during render is refused — passing it to a component is not.
 
-**A mode change confirms itself in a TOAST** — paint-only, top-centre under the banner, `pointer-events: none`, the floater chrome (`POPUP_CHROME` + the editor-widget border, ink `--vscode-icon-foreground`, never a `--ptw-*` foreground over a light fallback), saying what the setting now IS (`Layout · tracks`, `Context · intro`, `Side-by-side on`, `Gallery off`, `Comments · narrate`, `Brief on`, `Merge on`, `To cursor off`, `Width · 44 col`, `Reset to the source's view`, and — since undo/redo left the bar and are KEYS now — `Undo` / `Redo` off the ⌘Z relay, read through a per-render-written `toastRef` so that listener still registers once). It lives for `TOAST_MS` (1500) on a `window.setTimeout` held in a ref and cleared on unmount — **never rAF, which a hidden webview never fires** — and a new message REPLACES the standing one and resets that timer, so holding a key down reads as one message changing rather than a stack. **Fired from the same wrapped setters the bar's items call** (`applyLayout`/`applyHypMode`/`applyCommentMode`/`applyBrief`/`applyCombine`/`applyUpToCursor`/`applyReflow`/`applySideBySide`/`applyGallery`, each keeping the `anchorRoot()` its inline predecessor did — and each keeping the absence of one, which is why `applyGallery` anchors nothing), so a click and a keystroke do the same thing and say the same thing; `COMMENT_MODES` is the one coding of the comment switch's three names and its cycle order, read by the bar's own label too.
+**A mode change confirms itself in a TOAST** — paint-only, top-centre under the banner, `pointer-events: none`, the floater chrome (`POPUP_CHROME` + the editor-widget border, ink `--vscode-icon-foreground`, never a `--ptw-*` foreground over a light fallback), saying what the setting now IS (`Layout: tracks`, `Context: intro`, `Side-by-side: off`, `Gallery: off`, `Comments: narrate`, `Brief: on`, `Merge: on`, `To cursor: off`, `Width: 44 col` — the bar's own `Name: value` form since 2026-09-22; it was `Layout · tracks` / `Brief on` until then, `Reset to the source's view`, and — since undo/redo left the bar and are KEYS now — `Undo` / `Redo` off the ⌘Z relay, read through a per-render-written `toastRef` so that listener still registers once). It lives for `TOAST_MS` (1500) on a `window.setTimeout` held in a ref and cleared on unmount — **never rAF, which a hidden webview never fires** — and a new message REPLACES the standing one and resets that timer, so holding a key down reads as one message changing rather than a stack. **Fired from the same wrapped setters the bar's items call** (`applyLayout`/`applyHypMode`/`applyCommentMode`/`applyBrief`/`applyCombine`/`applyUpToCursor`/`applyReflow`/`applySideBySide`/`applyGallery`, each keeping the `anchorRoot()` its inline predecessor did — and each keeping the absence of one, which is why `applyGallery` anchors nothing), so a click and a keystroke do the same thing and say the same thing; `COMMENT_MODES` is the one coding of the comment switch's three names and its cycle order, read by the bar's own label too.
 
 **THE WIDTH IS A DRAGGABLE SEAM in the `||` tracks layout** — the second input to the one `reflow` setting, no layout state of its own. `layout.ts` PUBLISHES the shared column the aligned pass slides every aside tactic to (`extent.trackX`, present only under tracks — `aside === "track" && !sideBySide`; the value was already computed, it was simply local); the view draws a hairline at `trackX − TRUNK_GAP_BRANCH / 2`, i.e. the middle of the gap the goals stop at (`ASIDE_TRACK_GAP` is the same 24), spanning the tree's y-extent inside the translated `<g>` so scroll and zoom apply for free, with an invisible 8px `cursor: col-resize` hit strip over it. **Rendered LAST, after the nodes**, so the strip is on top of everything and the drag cannot be swallowed by a box near the boundary. **Dragging RIGHT WIDENS** (`Δx / zoom / CHAR_W`, rounded, added to the reflow at drag start — `forcedReflow ?? reflow`, always a number in tracks — clamped to `[REFLOW_MIN_CHARS, REFLOW_MAX_CHARS]`): the goals are what the budget wraps and they sit LEFT of the seam, so more columns is more room for them. Measured in the harness: 80px right → 44 → 55 col, 80px left → back to 44, and ±2000px clamps at 20 and 100. Each step is one engine rebuild (~2-3ms, the slider's own cost) through a NON-toasting sibling of `applyReflow` (a plain `setReflow` — number→number needs no `anchorRoot`, and reflow's `viewKey` entry is on/off only), with ONE toast on mouseup. While dragging the hairline goes `SEQ_STROKE` and a `44 col` readout follows the pointer's y beside the seam. Listeners are document-level, held in a ref and removed on mouseup and on unmount — **no rAF** (hidden webview). The mousedown `stopPropagation`s so the background marquee never starts (verified: no selection rect, no pill), and the strip swallows its own `click` so the background-click dismissal does not fire. The bar's `Width: 44 col (tracks)` item and its slider keep working as the other input.
 
@@ -962,7 +962,7 @@ and it was leaking into the reader's view of it. What the reader actually sees
 on the tree is a numbered tab on a box — a **mark**. So every user-facing
 string now says mark: the bar item's prefix (`Marks:`), its title, the tab
 titles ("Mark 2 of 4 (source) — click to go"), the panel's two rows, the
-toasts ("Mark dropped (⚑)", "Mark removed", "Marks: source"), the empty-list
+toasts ("Mark dropped" — "(⚑)" until 2026-09-22 —, "Mark removed", "Marks: source"), the empty-list
 message ("No marks in the lists that are on — the corner nub drops one"), the
 `?` panel's rows and the `<`/`>` key row. The CODE keeps `tour.ts`,
 `tourLists`, `tourAt`, `TourStop`: renaming identifiers would have been a
@@ -1825,6 +1825,8 @@ generated without `--traces`, so the `auto` family's 36 nodes all take the
 
 
 ## 2026-09-09 — C1: the LaTeX seam, and why the printer is not behind it
+
+*(Superseded 2026-09-24: C1 is PUNTED and the seam described below was REMOVED — see that entry. The spike's findings stand.)*
 
 Workstream C item 1 asks for the goal box's *reading* form — `\sum_{i \in
 [0,n)}` beside the tree's `∑ i ∈ Finset.range n` — from kmill's LeanTeX, both
@@ -3447,3 +3449,462 @@ a pointerdown on the tree closes, a click inside the open overlay keeps it open
 and reveals once, a band click at rest reveals; the first node's screen rect
 identical before, during and after all of it. Without `hdr-sig` the rest text
 is today's `theorem sum_range_odd (n : ℕ) : …`.
+
+## 2026-09-22 — The key-gated rows are hidden, not disabled
+
+User direction: "Hide the API key-necessary stuff." The eye's `Reading options`
+panel drew `polish` (C4) and `suggest a rewrite` (D6) DISABLED, with the reason
+("no companion", "no API key", "the setting is off") in the title, on the
+`goals as TeX` rule that a reader who has met a feature should find out where
+it went. For a feature that needs the reader to have bought a key that rule
+reads as an advert, so both rows are now NOT DRAWN unless their gate is open.
+The gates are unchanged: `polishShown` = `onPolish && polishReady` (the widget
+passes `ai.ready`), `proposeShown` = `onPropose && proposeReady` (`ai.ready &&
+ai.propose`). While a suggestion is out the propose row stays drawn and is
+disabled (`suggesting…`), as before. The eye's own title lists the two only
+when they are drawn. `goals as TeX` (C1) is untouched: it is not key-gated, and
+its disabled row is the seam's explanation.
+
+Nothing is measured against the panel: `BarPanel`'s 196 is a `minWidth` and its
+height is its rows', so a hidden row leaves no gap; `readingSlots` never
+included either row. The not-ready titles (and the view's `polishWhy`/
+`proposeWhy` props that carried the companion's `ai.why`) are gone; the widget
+still parses `ai.why` off the theme file, unused. Nothing else the reader sees
+was key-gated: no `nodeHints`/`?` row, toast or status-bar item names polish or
+propose (the toasts fire only from the rows themselves). The companion's
+settings and its `Ramify: Set narration API key` command are unchanged.
+
+Harness: plain `/` — the panel reads `brief · merge · lints · to cursor · goals
+as TeX`, no gap; `/?polish-stub&propose-stub` (the stubs set `polishReady`/
+`proposeReady` true) — both rows back, `polish` live with the "shows in
+Comments: narrate" title.
+
+## 2026-09-22 — D1's `⤵`/`⤴` are drawn, not typed
+
+`⤵`/`⤴` fell back to a symbol font and inked 12.3×12.1 px at the bar's 13px (raster, 8× offscreen, euclid's `have hpfac` bar) against `⊹` 7.9×8.0, trash 9.5×8.5, skip 6.3×10.5; now `InlineIcon` (one path mirrored for `⤴`, stroke 0.9, 7.6-unit span) inks 8.5×8.3, in the same 20px box. `⇓`/`⇑` (4.2×7.0) and `✎` (6.7×6.7, canvas `measureText`) are not oversized and stay text.
+
+## 2026-09-22 — The moves say what they do; a `⋯` menu lists them; an experience preset fills the defaults
+
+User problem: the automation and restructuring gestures ("write automation",
+"show what this step used", `⁇ ⇓ ⇑ ⤵ ⤴ ✎`) were opaque — named after the
+feature that implements them, reachable only by a glyph. Three changes, in
+order, each gated (typecheck, lint, `counts narrate overlap order hopgap
+rewrite`) before the next.
+
+**B — name the step, not the feature.** `web/src/moves.ts` (pure) is the one
+place the moves are worded, and it names the concrete tactic or hypothesis:
+`⁇` "What did `simp` use?" / "Hide what `simp` used" / "Asking Lean what
+`simp` used…" (the head word is the trace's `tactic`, else `tacticHeadWord` of
+the label), `⇓` "Replace these N steps with automation", `⇑` "Write out what
+`simp` used", `⤵` "Move `h` into its one use", `⤴` "Pull this `by` block out
+as a `have`", `✎` "Apply the linter's fix: <LINT_FIXES sentence>", D5 "Rename
+`h` to `hx` (Mathlib style)". Bar tooltips add one clause, "Lean checks it
+first; nothing is written until you click the pill"; `⇓`'s says which
+candidates are tried (the first four and `…`). The REWRITE TITLES in
+rewrite.ts/rename.ts moved to the same words in lower case (`move `hM` into
+`obtain``, `pull the `by` block out as `have this``, `replace these 4 steps with
+`omega``, `write out what `simp` used`, `rename `h` to `hab` (Mathlib
+style)`), so the pill, the D6 agent's primitive list and `probe rewrite` read
+alike; `pillMove` capitalises and prefixes a lint's sentence. The pill: the
+checking phase reads "… — checking with Lean…", the rejected title "Lean
+rejected this change; nothing was written", and a COLLAPSE lost its step-count
+clause (the user's example: "Replace these 4 steps with `omega` · ✓
+elaborates" already says how many go). Toasts: "Can't replace these steps —
+…", "Nothing to write out — …", "No linter fix to apply — …", "Lean could not
+say what `simp` used". `GESTURES` (the `?` panel and every node `<title>`) was
+reworded to match, and a duplicated tactic `branches` row (it printed twice in
+the panel's Tactic section) was removed. `probe rewrite`'s output changed in
+exactly its ten title strings; every count is unchanged.
+
+**C — the `⋯` menu.** The last hover-bar button opens a menu of EVERY move on
+the node, in B's words, with the gesture that reaches it without the menu
+(`⌥-click`, `double-click`, `click +N`, `⌥-click the line`, `top-left
+corner`…; nothing where the bar button — whose glyph heads the row — is the
+only way). Unavailable moves are omitted, not greyed. Menu-only rows: a
+ghost's restore, a goal's hide/`+N` restore, a tactic's show-in-source (click)
+and edit (double-click), edit the comment, drop/remove a mark and write
+`.mark`, and every D5 rename the goal's context lines offer (deduplicated —
+a reflowed line answers twice). One `NodeMove[]` per node: the bar's array and
+the menu-only array spread together, so a row runs the button's closure;
+double-click's edit became `startEdit(li)`, called by both. Two things the
+React Compiler lint forced, both recorded in the code: the bar's list is its
+own array and is never `.filter`ed out of the combined one (a property read
+over an array of ref-touching closures reads to the lint as a ref read during
+render), and the menu-only list is an expression, not a helper function called
+during render (the same objection, one level up). The menu is HTML, portalled
+into the frame (`frameEl` state through a callback ref — no ref read) but
+owned by the node, so it stops mouse events at its edge (React bubbles through
+the portal into the node's `<g>` click and the scroll frame's marquee
+mousedown). Positioned in a layout effect off the `⋯` rect taken at the click
+(below it, above if no room, clamped in the frame), `TipLayer`'s idiom. The
+keyed row is `idx` STATE and drawn lit — in the hidden pane, and whenever the
+webview lacks system focus, `:focus` never matches, so a focus-only highlight
+showed nothing — with DOM focus following it; ↑ ↓ Home End Enter Space, Tab
+closes. Dismissal: Esc (`nodeMenu`, second in `layers` after the tip), a
+pointerdown outside, any scroll or wheel, a proof change. The glyph is `⋯`
+by user direction; the record's old objection (brief's rail glyph) no longer
+applies — brief moved into the eye's panel and writes `…` (U+2026) in labels;
+the only other `⋯` is a comment strip's "⋯ N more lines". Measured in the
+harness: the menu opens with the node's screen rect and the scroll offsets
+unchanged; ↓↓↓ + Enter on a `grind` picked "Write out what `grind` used" and
+its pill read "Write out what `grind` used · ✓ elaborates"; Esc, an outside
+pointerdown, a scroll and a proof change each closed it.
+
+**A — `ramify.experience`.** `beginner | intermediate | expert`, default
+intermediate (web/src/experience.ts `PRESETS`, the user-approved table):
+hover-bar words on/on/off, the cursor's automation trace auto/click/click,
+`⇓` hidden/offered/offered, lints on/on/off, Comments narrate/show/show,
+Context all/used/used, brief off/off/on. The preset ONLY FILLS DEFAULTS: every
+row the reader can toggle is a session OVERRIDE (`hypModeOverride`,
+`commentModeOverride`, `briefOverride`, `lintsOverride`; the widget keeps its
+own `lintsOverride` for `lintDecl`, both reading `PRESETS[experience].lints`),
+the `polishOverride` idiom — a preset read late from the theme file changes
+the defaults with no effect, and a row the reader set keeps its value. None of
+the seven rows is a VS Code setting of its own, so the companion has no
+explicit-vs-preset setting to arbitrate; it reads `ramify.experience` with
+`inspect()` (the Output line says `(default)` when unset) and publishes the
+name as `experience` in `theme-colors.json`; `ThemeColors.experience` in
+Ramify.lean passes it through; widget.tsx parses it. `Ramify: Set experience
+level` is a quick pick that writes the setting where the winning value lives
+(Workspace if set there, else User). The harness takes `?experience=`. Note the
+intermediate default turns `lints` ON, so the widget now asks `lintDecl` on
+arrival (8–27 ms, cached per declaration) where it used to wait for the row.
+
+Words on the bar: `BAR_WORDS` (moves.ts) — `used skip source focus all path
+lens inline extract automate write out fix delete more` — drawn after the
+glyph at `BAR_WORD_PX` 11 in the code font; `barCellW` is the ONE measure the
+bar's width and each button's rect come from. The bar was already an overlay
+(nothing reserves room) and is now up to ~300px wide, so it is KEPT INSIDE THE
+FRAME by paint: a layout effect measures it against `[data-ptw-scroll]` and
+writes a transform straight onto the `<g>` (never in the JSX). First try slid a
+tactic's right-hung bar left and it covered the tactic's own label (measured
+at a 560px viewport on `have hp1 …`); a right-hung bar that would cross the
+edge now goes UP onto the box's top-right corner — the goal bar's place — and
+only then slides left.
+
+Beginner's auto-trace: the cursor's step is found on the BASE tree
+(`tacticNodeAt(tacticTargets(baseNodes), highlightPos)`; the drawn tree is
+downstream of the traces), only for `TRACEABLE_HEADS` (an `omega` has nothing
+to show), fetched once per step per proof through `onTrace` (an effect that
+issues a request and sets nothing; the answer lands in the caller's `traces`).
+Open is DERIVED — `traceOpenNow` = `traceOpen` ∪ the cursor's step while its
+trace is in hand, unless the reader shut it with `⁇` (`traceShut`, remembered
+for the session). The relayout is anchored by the cursor chain as every
+cursor-driven relayout is: measured on record 5, cursor 37→38→37→38 over a
+`simp`, 76↔77 nodes, the step's screen rect unchanged at every stop.
+
+Expert's brief default exposed a standing bug: rewrite.ts reads a step's head
+word off its LABEL (`headWord(node.label) !== "have"`, the user's `uHead`),
+and brief's E1 draws `have hp1 : …` as `… hp1 : …`, so brief mode silently
+withdrew every `⤵`. `rewriteCtx.nodes` now carries `elision.original` as the
+label; `⤵` on euclid's `hp1` is back under brief.
+
+Screenshots (headless Chrome over CDP against the harness, euclid's
+`have hp1`): the bar at each level and the menu open at intermediate. Probes:
+`counts narrate overlap order hopgap` byte-identical to before; `rewrite`
+differs only in the ten title strings. `./dev.sh --all` built the bundle,
+`lake build Ramify`, `dist/`, and `dist/ramify-0.0.18.vsix`.
+
+## 2026-09-22 — Marks survive an edit, ⌥ shows which ones it removes, and a fold's summary stays below
+
+Three user-reported fixes, one mechanism each.
+
+**Marks while editing.** Double-clicking a marked node made its tab vanish,
+which read as the mark having been deleted. The cause was one guard: the tab
+was drawn under `!hideForEdit`, the predicate that hides the box's own chrome
+while the editor stands in for it. The editor is painted in a LATER layer (the
+`editing && …` block after every node), so simply dropping the guard would
+have put the tab UNDER the overlay. Now the in-node tab is suppressed for the
+editing node (`!isEditing`) and an INERT copy is drawn after the editor's
+`foreignObject`, in the same `<g>` and at the same `boxTop`: same place, same
+ink, same fill for the stop being read, but `pointerEvents: none`, no
+`<title>`, no ×, no click — measured in headless Chrome, `elementFromPoint` at
+the box's top-left under the tab returns the TEXTAREA. Both are one component,
+`TourTab`, so the two paints cannot drift.
+
+**⌥ on your own marks.** ⌥-click takes a TEMPORARY mark off, and nothing said
+so until you read the title. While ⌥ is held, every temporary tab draws a `×`
+in place of its number; the author's (source) tabs do not change, since
+⌥-click on them only jumps. The `×` is a PATH (half-arm 3, centred at the
+pill's centre), never a glyph, so the pill stays exactly `tourTabWidth(n)` —
+the rect `probe overlap` models. ⌥ state: the view had no such state
+(`useAltHeld` lives in `ZoomRail` precisely so a modifier press repaints two
+buttons, not the tree), and adding it to the view would re-render 12k lines on
+every ⌥. So `altHeldStore` is a module-level external store read through
+`useSyncExternalStore` by each `TourTab` — no setState in an effect, listeners
+attached only while a tab is mounted. Sources as `useAltHeld`'s, plus one:
+keydown/keyup `altKey` (focus only), `pointermove`'s `altKey` (arrives whatever
+holds focus — in the infoview the caret is normally in the editor), cleared on
+window `blur` so a missed keyup cannot leave a stuck ×.
+
+**The fold summary jumped.** In `Comments: narrate`, an open goal's first step
+wears its `∴` line in the TACTIC's strip, under the goal; folding the goal put
+the summary on the goal's OWN strip, drawn above the box — "∴ Give hp" under
+`⊢ Nat.Prime p`, then "∴ Give hp, giving Nat.Prime p" above it. Two changes:
+
+- `TreeNode.commentBelow`, stamped by `applyNarrationLines` on a goal with
+  `folded.kind === "fold"` and a GENERATED strip only (an author's comment on a
+  goal is never in the narration map, so it stays above). A HOP keeps its
+  summary above: the run below a hopped goal belongs to the axis break and its
+  caption (`TRUNK_GAP_HOP`), and a strip there would need the run widened
+  again. Layout reads the flag through one coding in layout.ts: `belowH`
+  (lines + `BELOW_GAP` 14, the trunk step gap, so in stacked the line lands
+  EXACTLY where the first step's strip was — screenshot pair below, same pixel
+  row), `bandTopH` (leaves it out), `inkExtent().down`, `nodeSpan().y1`, the
+  trunk's `bottom`/`boxBottom`, `commentStripTop` (the strip's top relative to
+  the node's y — the three strip paint sites and the comment editor now all
+  call it, where each carried its own copy of the float arithmetic) and
+  `commentIndentOf` (`COMMENT_INDENT` for a below strip, root goal included —
+  where the child's strip started). Wide: Sugiyama centres the whole reserved
+  height, so the placed `y` is lifted by `belowH/2` and the ink is centred on
+  the layer as before. Aside modes (spine, tracks): a below strip reaches right
+  into the lane where tactics float, and a floated tactic strip hangs ABOVE its
+  tactic into the gap — `probe overlap` found 2 collisions in spine on the
+  wrap record (`goal_15_50` × `tactic:goal_15_55`'s strip), fixed by raising
+  `trackFloor` past the below strip exactly as an aside tactic's box does.
+- The `, giving <statement>` clause is dropped where `<statement>` is the goal
+  the summary is WRITTEN ON: `summaryOfGoal(…, own)` from `summarize` narrates
+  its direct steps without `withGoal`; `hopSummary` does the same for a hidden
+  step whose parent is the hopped goal. Deeper goals keep the clause (the
+  statement is folded away there). Corpus effect, `probe narrate --print`: one
+  line, `ledger:80:2`, which was "Give key n, giving <the ledger's own four
+  lines>; then Give parity n, giving …" and is now "Give key n; then Give
+  parity n; then Give gap n; then Give residue". Coverage unchanged (244/244,
+  residue 0).
+
+`probe overlap` now models the strip at `commentStripTop` (not its own copy)
+and treats a BELOW strip as checked paint; it also sweeps fold-only trees in
+narrate mode, where the below strip exists — layouts checked 2300 → 4870
+(2600 below strips seen), overlaps 0. `.none` fold notes are unaffected (they
+ride `folded.note` and the `<title>`, not a strip); hop captions are unaffected
+(hops excluded above; `probe hopgap` unchanged). `counts order hopgap rewrite`
+unchanged.
+
+Screenshots (headless Chrome over CDP against the harness, `?stub-edit`):
+`c-expanded.png`/`c-folded.png` (infinitude_of_primes, `⊢ Nat.Prime p`, the
+line at the same place), `a-editing-tab-visible.png`, `b-alt-held-x.png`,
+`b-alt-held-source-vs-temp.png` (odd_sums: source `2` unchanged, temp `×`).
+
+## 2026-09-22 — The hover bar is icons only, the reader picks its buttons, and the hyp → origin connector is opt-in
+
+User feedback, on a screenshot of the bar reading `» source  ◎ focus  ⊹ path
+⋯ more` across the node below it: "Text buttons way too aggro: intrusive and
+overlapping nodes. Source focus skip path delete more should be there by
+default as icons. More gives icon explainer. Needs to be some way for users to
+set which they want on which nodes. Also drawing path from a hyp to its
+introducing goal should probably be off by default."
+
+**Icons only, always.** The icon+word bar (the `ramify.experience`
+beginner/intermediate row `barWords`, `BAR_WORDS` in moves.ts, `barCellW`,
+`BAR_WORD_PX/GAP/PAD`, the `word` field on `NodeAction`, the word `<text>` in
+`NodeActionBar`) is DELETED, not left dormant: every button is one `BAR_BTN`
+square again and the bar's width is `n·BAR_BTN + (n−1)·BAR_GAP + 2·BAR_PAD`.
+The `⋯` menu is where a glyph is put into words.
+
+**Which buttons: an id list per node kind.** moves.ts `MOVE_IDS` names every
+bar-able move — `source focus skip path delete trace collapse expand inline
+extract lint lens goal` (that order is the `⋯` menu's) — and `DEFAULT_BAR` is
+the user's `source focus skip path delete`. `⋯` is always last and is not in
+any list. Each move is still drawn only where it is available on the node
+(focus on goals, skip where `stepCut` offers it, …). `»` is now on the TACTIC
+bar too (a tactic's plain click already revealed, and the menu carried a
+separate click-only row for it, now gone — `source` is one move with a
+kind-dependent closure and shortcut). Off the default bar and into `⋯` alone:
+`⁇ ⇓ ⇑ ⤵ ⤴ ✎`, `⧉` (the LENS — the tactic opened in a slim editor group below
+the infoview) and `+` (show the goal a ledger step proves; its row click does
+the same). The view resolves the list as pin (session) → setting → preset, the
+override idiom. In render, `movesFor(id) → NodeMove[]` is one `switch`; the bar
+is `barIds[kind].flatMap(movesFor)` and the menu `MOVE_IDS.flatMap(movesFor)`
+plus the menu-only rows — ids are mapped, moves are never filtered (the
+compiler-lint rule from the menu's first entry), and the lint is clean.
+
+**Settings.** `ramify.hoverBar.tactic` and `ramify.hoverBar.goal` (package.json,
+arrays of the enum above, `uniqueItems`, default `DEFAULT_BAR`). The companion
+reads each with `inspect()` and puts it in the theme file's `hoverBar` ONLY
+where the reader set it (workspace-folder/workspace/global value), else `null`,
+so an unset list leaves the preset in charge and a set one wins; the log line
+says `(preset)` for an unset list. `ThemeColors.hoverBar` in Ramify.lean is a
+`Json` pass-through; widget.tsx `parseBarList`s it (known ids, each once).
+Presets: beginner's TACTIC bar is `source focus skip path trace delete` —
+"what did `simp` use?" is the question a beginner is asking of automation,
+and beginner already auto-opens the cursor step's trace; intermediate and
+expert use `DEFAULT_BAR` for both kinds (expert gets no extra: an expert who
+wants `⇓` on the bar pins it once). Harness: `?hoverbar-tactic=` /
+`?hoverbar-goal=` (comma-separated ids; empty = `⋯` alone).
+
+**Pins.** Each `⋯` row that is a bar move carries a push-pin toggle at its
+right (filled = on this kind's bar; `aria-label` "Show on the bar for tactics"
+/ "Take off the bar for goals", through the in-page tip). A pin is its own
+`<button>` beside the row's (a button inside a button is not one), leaves the
+menu open, applies at once (`pinOverride`, per kind, session state), toasts
+"On the bar for tactics", and calls `onHoverBarChange(kind, ids)`. Pinning
+APPENDS — the new button lands just before `⋯`, beside the menu it came from;
+unpinning keeps the others' order. The widget sends it as `popoutEdit` with
+`action: "hoverbar"`, `setting: kind`, `values: ids`, and the server routes that
+action to its OWN FILE, `settings-request.json`, for `rename-request.json`'s
+reason: the pin is clicked with the pointer on its way back over the tree,
+whose hover `highlight`/`clear` lands in `popout-request.json` a moment later.
+The companion writes `ramify.hoverBar.<kind>` where the winning value already
+lives (Workspace if set there, else User), the `setExperience` rule, and the
+config listener republishes the theme file. Offline, `window.__hoverBar`
+records each `{kind, ids}`.
+
+**The hyp → origin connector is OFF.** B2's hover (context line → dashed
+connector to the introducing step + that step's wash) is now a `Reading
+options` row, `hyp origins`, default off at every experience level and not a
+preset row (session state, no setting). `hypOriginHit` returns null while it is
+off, which removes both the connector and the wash; the dwell effect is
+untouched. The line's `<title>` still names the origin; the `?` panel's row
+says both halves. Paint only, so nothing moves.
+
+Measured (headless Chrome over CDP, `?stub-edit&trace-stub`, every node of the
+first proof, 75 nodes, pointer on each box): the new bar overlaps another node
+box on 0 nodes; so does the old icon bar reconstructed at the same anchor from
+the same node's available moves (0). Average buttons per bar 4.4 against the
+old icon bar's 4.1 — the harness has no lens, so `⧉` is missing from the
+"old" figure; in the widget the new bar is one button SHORTER on a tactic
+(`⧉` out, `»` in) and shorter still on any step offering `⁇ ⇑ ⤵ ⤴ ✎ ⇓`. Probes
+unchanged: `counts` ALL OK, `narrate` 251/251 residue 0 (the corpus's figure
+since today's earlier regeneration, not this change), `overlap` 0 over 4870,
+`order` 0 over 1384, `hopgap` min 34/34/34/43, `rewrite` ALL OK. Companion
+0.0.19. Screenshots in the session scratchpad `shots/`:
+`1-tactic-bar-default.png`, `2-goal-bar-default.png`, `3-more-menu.png`,
+`4-more-menu-after-pin.png`, `5-tactic-bar-after-pinning-trace.png`.
+
+## 2026-09-22 — The signature header is greedy, and its chevron is a control
+
+User report, on `infinitude_of_primes` in a wide panel: the header read `theorem infinitude_of_primes (N : ℕ)` with a tiny `▾` at the far right, while the whole `… : ∃ p, Nat.Prime p ∧ N < p` would easily fit — "the dropdown icon here is way too small. And we should be greedier with showing the type signature. The whole one can fit here so it should."
+
+The 2026-09-17 option 1 ("at rest show keyword + name + binders only") was a rule for the NARROW case taken as the rule for every case. Now the resting line is the LONGEST of three cuts that fits:
+
+1. the whole signature up to the body — a new server stop, `declHeaderBodyStop`, the start of the first `declValSimple` / `declValEqns` / `whereStructInst` in preorder (by KIND: the `:=`, the first `|`, or `where`), so the `: type` is shown and `:= by` never is (the body's opener says nothing the tree below does not);
+2. keyword + name + binders (`declHeaderSigStop`, as before);
+3. the first-line fallback with the right-edge fade.
+
+The decision is `measureText(full, NODE_FONT_PX) <= hdrW − 2·HDR_PAD_X − 1` — the tree's own canvas measurer (same code font, same px) against the band's width, which the existing ResizeObserver already holds in `hdrW` state; no new effect, no setState in render. Measured in the harness: at 486px the full text inks 455 of 466 available; the switch happens at ~476px of band. The header is one `pre` line in every state, so its height is 29 either side of the threshold (measured at 534/526px viewport) and nothing below moves.
+
+The chevron is drawn ONLY where something is hidden (or to close the open signature): where (1) fits there is nothing to open, the button is not rendered and the right padding drops from `HDR_BTN_LANE` to `HDR_PAD_X`. The text `▾` at 11px inked about 5px at opacity 0.6; it is now `HeaderChevron`, a drawn SVG at 12×7 ink in `LAYOUT_GLYPH_SW` (1.4, the status bar's stroke) in a 20×28 box at opacity 0.75 (0.95 open), labels "Show/Hide the full signature" through the in-page tip layer as before.
+
+Wire: `declHeaderBodyStop : Option Lsp.Position` in `ProofTreeData` (Ramify.lean), `Proof.declHeaderBodyStop` + `stableProofOf` (paperproof.ts), widget.tsx's `ProofTreeData` and the view prop. The NDJSON carries no header (as before), so the corpus is untouched and `gen.sh` was not run; the harness stubs it with `&hdr-body=l:c`. Live check: `probe lsp ../lean/ProofTreeScratch.lean 11 4 --json` gives `declHeaderBodyStop {line 10, character 64}`, the `:=`.
+
+## 2026-09-22 — Taste pass: one ink, one face, one radius, one stroke, one voice
+
+User request: "Run a consistency and taste pass over anything that gets rendered to the screen. Intuitive and simple + straightforward design language." The rules it produced are in CLAUDE.md's **Design language** paragraph; this entry is the evidence and the changes. Measured in the harness over CDP (headless Chrome, 2×, `?stub-edit&trace-stub`, light and dark, 1100 and 420 px), glyph inks on an 8× canvas.
+
+**The dark harness was a light product.** Every floater read `--vscode-editorWidget-*` / `--vscode-icon-foreground` / `--vscode-toolbar-hoverBackground` / `--vscode-list-activeSelectionBackground` straight, each with a LIGHT literal fallback (`#cbd5e0`, `#2d3748`, `rgba(255,255,255,0.97)`, `#f7fafc`…), 36 sites in ProofTreeView.tsx, 3 in tip.tsx, 2 in helpPanel.tsx. Where the host does not set them (the harness, any host that omits them) a dark theme drew white status bar, rail, hover bar, menus and tips with dark ink. Now theme.ts owns `--ptw-chrome-bg/-border/-ink/-btn/-lit` and `--ptw-focus`, each wrapping the SAME host variable with a fallback derived from `--ptw-bg`/`--ptw-fg` (`CHROME_*` exports); inside VS Code nothing changes, since the host variable still wins. `FLOATER_CHROME` (POPUP_CHROME + border + ink + face) is what `MENU_PANEL` and the tip spread.
+
+**One face.** The status bar, menus and modal banner said `system-ui, sans-serif`, the tip `var(--vscode-font-family, …)`, the toast `monospace` — three faces for one kind of thing, and the toast repeated the bar's own words (`Layout · spine`) in a different font from the bar. All chrome is `CHROME_FONT` (the host face), the toast with `tabular-nums` so an anchored `n/N` keeps its width. widget.tsx's loading/relay-error lines too (and `#888` became `--vscode-descriptionForeground`). Lean text stays in the code font; the hover bar's and rail's glyphs stay `monospace`, because every ink measurement in this record was taken there.
+
+**One radius, two opacities, one shadow.** HTML chrome radius 3 everywhere (`CHROME_RADIUS`) — the modal banner (4) sat directly above the toast (3) in one column, and the status card (4) beside the rail's buttons (3). Node radii were written twice (box and in-place editor); now `nodeRx`. Disabled was 0.35 on bar items, rail and chevrons and 0.4 on menu rows → `DISABLED_OPACITY` 0.35; secondary text ranged 0.5 / 0.55 / 0.6 / 0.65 → `DIM_OPACITY` 0.6 (header `…`, scope `›`, completion kind, menu shortcut, width readout, dimmed values). The completion list's shadow (0.18) takes the popovers' own.
+
+**One stroke in the chrome.** The eye drew at 1.2, the comment/width marks at 1.25, the layout marks and the header chevron at 1.4: `LAYOUT_GLYPH_SW` is renamed `BAR_GLYPH_SW` and every drawn chrome mark uses it (screenshots at 420 px: the compact row now reads as one weight). The hover bar's in-tree icons keep 0.9, now named `HOVER_ICON_SW`.
+
+**Glyphs that inked off-size.** `»` (on every default bar) inked 6.0 × 5.9 at the bar's 13px against `◎` 7.9, `⧉` 8.9 and the drawn icons' ~8.5 — the `⊹` rule had never reached it; `SOURCE_GLYPH_PX` 17 (≈ 7.8). The diagnostics marks came from three fallback faces: in the bar's 11px UI face `⨯` inked 3.7 px against `⚠` 9.0 and `◇` 10.5 — the error was the smallest mark in the row. `DiagGlyph` draws all three (~8 px, `BAR_GLYPH_SW`) in the bar item and the node's diagnostics popover; native `<title>`s keep the text glyphs.
+
+**Voice.** Context titles now name their value like Layout's (`Context: used — …`); all-caps emphasis left the UI strings (`GENERATED`, `SAME`, `AUTHOR's`, `KIND`, `AND`, `PEEKED`, `SOURCE`, `WHOLE`); native titles start upper-case (`Collapse this comment…`, `Show the rest…`, `Being written in the buffer…`, `Branch 2 of 3…`, `Click to dismiss`); `(or Esc)` → `(Esc)`; `Can't` → `Could not`; `Escape` → `Esc`; `->` → `→`; `E.g.` inside a note → `e.g.`. The width toast said `Width · off` while the bar said `Width: full` — now `Width · full` (and, after the follow-up below, `Width: full`). Menu shortcuts name their target (`double-click the strip`, `click the corner`, beside `⌥-click the corner`). The `?` panel's hover rows were stale since the icons-only bar: the tactic row promised `⧉ lens` (now in `⋯`) and was gated on the lens capability; both rows now list the default bar (`» reveal, skip, ⊹ path and the trash can`; goals `» reveal, ◎ focus, ⊹ path and the trash can`) and the tactic row is no longer gated. Narration joined clauses as `…; then This is exactly …` — `continueClause` lower-cases the opening WORD of a clause after `; then ` (a plain capitalised word followed by a space, comma or colon only, so `Nat.Prime …` is untouched).
+
+Not applied — judgment calls, restyles, or recorded choices — are listed in the session's `taste-pass.md` (radio vs checkbox rows, `?`'s accent, the toast separator `·` vs the bar's `:`, the `(⚑)` in mark toasts, literal backticks in tips and menus, the goal corner `−`'s hit target, among others).
+
+Probes: `counts` ALL OK, `narrate` 251/251 residue 0, `overlap` 0 over 4870, `order` 0 over 1384, `hopgap` min 34/34/34/43, `rewrite` ALL OK — unchanged, as nothing measured moved (every size change was paint inside a fixed box, or a bar glyph the ghost measures).
+
+## 2026-09-22 — Taste pass, applied: row looks, lit items, one toast form, code spans, a corner you can hit
+
+The eight proposals the taste pass left open (`taste-pass.md`), all approved ("Go").
+
+**Pick rows and toggle rows look different.** `BarRow` takes `kind: "pick" | "toggle" | "action"`. Pick rows (Layout's four, Context's four, Comments' four) keep the `●/○` radio; toggle rows (every Reading option, both Marks lists, and the modifiers under a divider — side-by-side, gallery, `Split data & props`) wear `BarCheck`, a drawn 7px square at `BAR_GLYPH_SW` with `rx` 1.5: outline at the radio's resting 0.45 when off, filled `RAIL_PRESSED` with an `ACCENT_TEXT` tick when on — the radio's two states, squared, so it is the same ink in light and dark. `suggest a rewrite` is an ACTION (it asks once) and wears neither — a blank 12px slot, so its label stays in the column. The rows gained `role` `menuitemradio`/`menuitemcheckbox` + `aria-checked`.
+
+**Every bar item is lit while its own panel is open**, as `?` always was: `accent={it.accent || barOpen === it.id}` on the value items and `barOpen === "reading"` on the eye. The standing accent rule is unchanged — only Width lights for a setting (`effReflow !== "off"`); Layout, Context, Comments, Marks and the eye light only for the panel. Paint only: the accent is a background, and the ghost measures no background.
+
+**Toasts speak the bar's form.** `Layout: spine`, `Context: used`, `Comments: narrate`, `Width: 44 col` / `Width: full`, `Brief: on`, `Merge: off`, `Lints: on`, `Polish: on`, `To cursor: off`, `Side-by-side: on`, `Gallery: off`, `Hyp origins: on` — and `Split data & props: on`, which had no toast at all. `Marks: …` already had a colon. This reverses the recorded `Layout · tracks` form (the 2026-09 toast paragraph above is amended to say so); `·` stays the LIST joiner (rule 9).
+
+**No ⚑ where there is none.** `Mark dropped (⚑)` → `Mark dropped` (and `… — temporary list on`): marks on a node are numbered tabs and a dashed nub. The ⚑ is still the Marks bar item's glyph, the one place it is drawn.
+
+**Backticks: one rule, `ticks.ts`.** `plainTicks` strips a `` `…` `` span's ticks (a pair on one line; a lone tick, a Lean name literal inside quoted code, is left); `CodeText` (codeSpans.tsx — a separate file only because react-refresh wants a component module to export components) draws the span in the editor's code font at 0.94em with no chip. Drawn as code: the `⋯` menu's rows and shortcut column (`What did omega use?`, `Write a .mark into the source`), the `?` panel's rows, notes and section titles (`textTransform: none` on the code, since the titles are upper-cased). Stripped: every in-page tip (in `useTip().props`, `BarButton`, `BarRow`, the hover bar's `aria-label` — the accessible name loses the ticks too — and once more in `TipLayer`), the node `<title>`'s UI sentences (hints, the trace's `via` line, diagnostics; NOT the label, tactic lists or arm patterns, which quote the source), the nub's title, and the proposal pill — which is code font throughout, so a span could not be told apart by face; `chipWidth` measures the stripped string it paints.
+
+**The goal corner is a target.** The `−` was a 12px text dash (≈ 7 × 1 px ink) and its only hit target. Now a DRAWN stroke, `CORNER_MINUS_W` 8 at `BAR_GLYPH_SW`, centred where the dash's ink was (x `w/2 − 8`, y `boxTop + 8`, the top line's x-height middle), so its right end is where the dash's was; and one invisible `[data-ptw-corner]` rect, `CORNER_W` (22) × `CORNER_HIT_H` (18), at the box's top-right — exactly the top-line reserve `sizeOf` already makes, so it lies over no text and nothing is re-measured. The rect carries the cursor and the `−` face's fade preview (moved off the glyph, which is now `pointerEvents: none`); the click stays the goal's own (a goal's click folds/opens). `+N` is unchanged (same x, same anchor). `probe overlap` 0, `order` 0 — unchanged.
+
+**The keyed `⋯` row is its fill alone.** `MENU_ROW_CSS` now sets `outline: none; box-shadow: none` on `:focus` and `:focus-visible`; DOM focus still follows `idx` (measured: the focused element is the lit `menuitem`, outline `none`, shadow `none`).
+
+**Copy and small things.** The tactic `»` title `Show in source (click)` → `Show in source — or click the box` (the goal's `(⌘-click)` → `— or ⌘-click the box`, parallel). `wide`'s title lost `Sugiyama` (`nodes at the same depth share one horizontal band`). A lint diagnostic leads with the linter's own words and ends its first line `(linter: unusedTactic)` — the pager shows the first line, and it used to open on the id. `linter.flexible`'s fix sentence: `write out what simp used, so later steps do not depend on it`. The `?` panel: `the elaborator says` → `Lean says`, `Alectryon flags` → `Source flags`. The `⋯` menu's pin draws at `HOVER_ICON_SW` 0.9 (was 1.1; checked at 2× — it reads). The width readouts (`44 col` on the seam drag and in the width panel) speak `CHROME_FONT` with `tabular-nums` (they are chrome; the seam readout's 54px rect still holds `100 col`).
+
+**Dismissal audit.** The `⋯` menu and the tip already closed on press/scroll/wheel. The bar's panels, the `?` panel and the open signature did not close on a wheel: one effect now closes all three on a `wheel` anywhere outside `[data-ptw-panel]` / `[data-ptw-hdr]` (the `?` panel and the signature scroll their own content). NOT on `scroll`: a toggle row leaves its panel open, and the anchored relayout it causes scrolls the frame programmatically — measured, `brief` toggled with the panel open keeps it open. Harness (CDP, both themes): Layout, Reading options, Width and `?` all close on a wheel over the tree; `?` stays open on a wheel over itself.
+
+Screenshots (2×, light and dark): `scratchpad/shots/taste2-{light,dark}-{reading,marks,layout,context,toast,tip,menu-omega,corner,corner-hover,corner-folded,help}.png`.
+
+Probes: `counts` ALL OK, `narrate` 251/251 residue 0, `overlap` 0 over 4870, `order` 0 over 1384, `hopgap` min 34/34/34/43, `rewrite` ALL OK — no number moved.
+
+## 2026-09-24 — C1 punted; a smaller header chevron and goal corner; hover previews wait the tip dwell
+
+Four requests, prepared for the public repository (so nothing dead is left behind).
+
+**C1 (goals as TeX) is PUNTED, and the seam is gone.** Upstream LeanTeX does not build on v4.32.2 (the three incompatibilities in the 2026-09-09 entry) and half of what the fork prints reads worse than Lean's own print. The user will talk to its authors; failing that, a custom printer gets built later. Until then an always-empty field and a disabled row are dead weight in a public tree, so both went: `ProofTree.LatexGoal` and its doc block (ProofTreeComments.lean), `ProofTreeData.latex` (Ramify.lean), `resultToJson`'s `latex` parameter and its non-empty-only write (Ppharness.lean), `Proof.latex?` / `LatexGoal` and the `stableProofOf` line (paperproof.ts), and the Reading options' disabled `goals as TeX` row with its title and comment (ProofTreeView.tsx; two comments that cited it as the measured disabled-row case now say it generically). widget.tsx's `incoming` never carried the field and no client code read it. `gen.sh` was NOT run: the field was written non-empty only and was always empty, so `grep -c '"latex"' web/public/sample.ndjson` is 0 — the corpus never carried it. The roadmap's C1 now reads "punted" with the same reason; the idea (a reading form beside Lean's print, bundled KaTeX) is kept there, and the 2026-09-09 entry keeps the spike's detail for whoever picks it up.
+
+**The header chevron, smaller.** 12 × 7 ink (the 2026-09-22 fix for a `▾` that inked ~5px) read too big — louder than the signature it opens. Now `HDR_CHEVRON_W` × `HDR_CHEVRON_H` = 8 × 5 ink, same `BAR_GLYPH_SW`, about the header's lowercase x-height; the hit box stays `HDR_BTN_W` 20 × 28. The measurer is untouched because it never measured the ink: the lane (`HDR_BTN_LANE`) reserves the BOX, and `hdrFits` tests against `HDR_PAD_X`. Measured in the harness at 380px: button 20 × 28, svg 8 × 5.
+
+**The goal corner `−`, quieter.** `CORNER_MINUS_W` 8 at `BAR_GLYPH_SW` 1.4 → 6 at `CORNER_MINUS_SW` 1.15, in the node's stroke ink as before, same centre (x `w/2 − 8`, y `boxTop + 8`). It is in-tree ink, not chrome, so it no longer borrows the chrome's stroke; at 2× beside a folded `+5` it now reads at the numeral's weight. The invisible `[data-ptw-corner]` hit rect is unchanged (`CORNER_W` 22 × `CORNER_HIT_H` 18), `+N` is unchanged (same x, anchor and font), and nothing measured moved.
+
+**Hover previews wait the tip dwell.** Hovering the trash can, the goal corner's `−` or ◌ dimmed what the click would take IMMEDIATELY, so a pointer crossing the hover bar on its way elsewhere flashed half the tree. Every hover preview that dims or washes nodes now waits `TIP_DWELL_MS` (1000, imported from tipController.ts — one constant for "the pointer has come to rest") and is dropped if the pointer leaves first. Mechanism: `afterDwell(show)` / `cancelDwell()` in ProofTreeView, ONE timer in a ref (the pointer is over one control at a time), armed in the pointerenter handler and cleared in pointerleave, on the gesture's click (`elideStep`, the trash's arming), on the node's own leave, and on unmount; render never reads the ref, and nothing is set in an effect. The hover bar's buttons, `BarButton` and `BarRow` now fire `onHover` from POINTER events (beside the tip's own), and the corner rect carries `onPointerEnter`/`onPointerLeave`/`onPointerDown` — leave and press are wired on BOTH faces, since the press folds the goal and a `+N` face with no leave handler would have stranded a preview or a pending dwell. Audit of the other hover previews: the `brief` row's wash (hovering the row paints what brief would elide) now waits the same dwell; the used-hyp wash and the hyp-origin connector already dwelt at `HYP_LIT_DWELL_MS` 350 in an effect's timer — ALIGNED to `TIP_DWELL_MS` and the separate constant deleted, so the tree has one hover timing. Left immediate, deliberately: the ⌥-held skip preview (a held modifier is an ask, not a pointer passing through) and the `⤵`/`⇓` hovers, which light the EDITOR's range rather than any node. Measured in the harness over CDP with real `Input.dispatchMouseEvent` moves: corner `−` 0 dimmed at 300 ms, 24 at 1100 ms, 0 after leaving; left at 300 ms → 0 at 1300 ms. Trash: 0 / 24 / cancelled 0. ◌ (odd_sums had only single-step skips, whose extent is the anchor alone, so proof 3): 0 / 2 / cancelled 0. `brief` row: the tree's SVG unchanged at 300 ms, grown at 1100 ms.
+
+**A probe race, fixed in passing.** `probe lsp … 28 2` crashed intermittently (`r` undefined): the reader treated a server-to-client REQUEST whose id happened to equal a pending client id as that call's response. `lsp.mjs` now resolves a pending call only on a message without a `method`. Five runs clean after.
+
+Probes: `counts` ALL OK, `narrate` ALL OK residue 0, `overlap` 0 over 4870, `order` 0 over 1384, `hopgap` min 34/34/34/43, `rewrite` ALL OK. `lake build Ramify` and `ppharness` build; `probe lsp ../lean/ProofTreeTour.lean … --all` returns every tour declaration. Screenshots (2×): `scratchpad/shots/punt-{header-380,header-chevron-zoom,corner-zoom,corner-plusN-zoom,reading-options,corner-dwell-1100,dwell-delete-1100,dwell-skip-1100}.png`.
+
+### 2026-09-24 — The `?` panel, stripped
+
+User direction: "Aggressively strip the help popover prose. Items and descriptions; half of that is intuitable." `GESTURES` (gestures.ts) went from ~55 rows, many carrying a second-line `note`, to 17 one-line rows in seven sections (Goals, Tactics, Marks, Dashed boxes, Comments, Background, Keys). What went: every `note` (the field is gone), every row for a hover-bar icon (`⊹ ⁇ ⤵ ⤴ ⇓ ⇑ ✎ +` and the trash — each has its own tooltip and its row in the `⋯` menu, which is the icon explainer), every `hover` row (a tooltip explaining a tooltip), the frontier chips (labelled buttons), `Comments: narrate` (the bar's own tooltip), the background click, the ghost hover. The mark rows, previously repeated under Goals and Tactics, are one `Marks` section. `says` stays in title form (`click to fold …`) because `nodeHints` still feeds node `<title>`s from the same list; the panel drops the leading `to `. Ten `NodeGates` fields no row reads any more (`pathable`, `isPathRoot`, `automation`, `traceOpen`, `linkGoal`, `inlinable`, `extractable`, `collapsible`, `expandable`, `lintFixable`) were removed with their setters, along with five the earlier trim orphaned (`proseLabel`, `hypOrigins`, `usesHyps`, `usesLemmas`, `branches`). A node's title therefore no longer lists its bar moves — the bar and `⋯` say them.
+
+Follow-up the same day (user report: "ellipses are no good"): the input column was a fixed 132px with `text-overflow: ellipsis`, which cut `⌥-click a context line` to `⌥-click a contex…`. The panel is now ONE grid (`max-content minmax(0, 1fr)`) across every section, so the input column is the longest input's width and nothing is cut; the panel went 420 → 500px (`86vw` cap) so the descriptions mostly hold one line. Merged back, one clause each, the facts from the old prose that are not guessable: edit keys (Enter / ⇧Enter / `\alpha` → α), the skip's break naming what went, `.mark 3` ranks, a mark's fold opening only while it is read, Esc backing out most recent first, rename touching only a generic `h`/`this`, and two legends — `§`/italics (hidden because the source asked) and `∴` (written by Ramify, not the author).
+
+## 2026-09-24 — The diagnostics item counts; the messages get a strip of their own
+
+**Report.** The status bar's diagnostics pager drew the first diagnostic's first line, truncated to whatever the row left: `◇ This lin…` for Mathlib's `style.longLine` lint, the words only in the tooltip. Unreadable. User direction: "keep count then add a secondary status bar over the status bar tinged color-wise to denote transient help-dialogue. On by default for serious stuff, optional open from lower status bar for other stuff."
+
+**The item counts, never quotes.** `DiagCountItem` draws per-severity counts (`✕ 2 · ⚠ 1 · ◇ 3`) in the drawn `DiagGlyph`s and each severity's ink. Each count reserves two tabular digits (`minWidth: 2ch` + `tabular-nums`), so 1 → 12 moves nothing; a severity appearing or going is a real change and does. It used to be a shrinkable `flex: 0 1 auto` block outside `fit`'s arithmetic (the row squeezed it into the stub); now it is `flex: none` and IN `need`: the ghost carries the very element (`data-g="d"`), so measurer and renderer are one. At a ~380px frame the full form did not fit beside the all-glyph row (it clipped `?` — measured), so there is a COMPACT form (`dc`: the worst severity's glyph and the TOTAL, `✕ 3`), chosen by `fit` only where the all-glyph row cannot hold the full one — the counts compact LAST, after every value item has gone to its glyph. The dodge floor is taken with the compact form (the old item could shrink to nothing, so this is the nearest equivalent). Reserving the widest plausible form (all three severities at two digits, ~105px) was considered and declined: on a thin panel it would push every value item to its glyph for counts that are almost never all present. Tip: `2 errors, 1 lint — click for the messages` (`… — click to close the messages (Esc)` while open). Lit while the strip is up (design rule 13: the strip is this item's panel).
+
+**The message strip.** `DiagStrip`, a child of the status card at `left: 0; right: 0; bottom: 100%` + `LANE_GAP`, so it has the card's horizontal extent in all three placements with no geometry of its own. Tinted per severity by new tokens (`--ptw-diag-{error,warn,lint}-wash` = 13/13/11% of `--ptw-danger`/`--ptw-warn`/`--ptw-comment` mixed into `--ptw-chrome-bg`, so it stays opaque over the tree and the chrome ink stays readable on either side of the luminance split; `-edge` is the ink whole, a 3px left border). Content: glyph, the message's FIRST line (`(linter: …)` untouched), wrapping, clamped at 3 lines with the whole message in the tip; `‹ n/N ›` when there are several; a drawn `×`. The message click is the old pager's (`revealNode` + `revealAt`). No enter fade: a hidden webview runs no animation frames and an opacity animation could have stuck at 0. The bar's panels and `?` still hang from the card's top and paint OVER the strip (later in the card's DOM) — the most recently opened thing wins.
+
+**When it opens by itself — a derivation.** Open iff (the reader opened it on THIS proof: `diagStripPinnedOn === proofKey`, so a proof change closes it with no reset) OR (the proof has an error AND the error set's key — the error diagnostics' `key`s, which are severity + position + message prefix, joined — is not `diagDismissed`). `diagDismissed` is written only by the close gestures (`×`, Esc, the item's click while open). So a NEW error re-opens the strip; a dismissed set stays shut across re-elaborations. With nothing left to show a reader's pin is let go by a render-time adjust (so the next lint does not arrive open). **Errors only are serious**: a warning is most often `declaration uses 'sorry'`, the author's own choice mid-proof, and a lint means the proof checks. Where no problem has been picked the strip shows the FIRST ERROR (it is what opened it), else the first problem in source order.
+
+**Esc and the rail.** `diagStrip` is a `layers` row after the prompts (an armed delete or a pending proposal is the more urgent thing for Esc) and before `selection`; `bg: false`, since an error that opened itself must not close on a stray canvas click; its `up` is read through `upNow` because the derivation sits below the table. The rail's `lifted: boolean` became `lift: number`, reported by `fit` via `StatusBar.onPlace`: 0 beside the button, `BAR_H + LANE_GAP` for a filling card, plus the strip's measured height + gap when the strip is up (the filling card's strip spans the frame under the rail's column). Measured in the harness at 420px: strip top 673, rail bottom 660; at 1100px the right/centre card keeps the strip clear of the rail's column by the button's reserve and the rail does not move.
+
+Harness: `?diag-stub=ewl` (App.tsx) — one letter per diagnostic on the proof's steps: an error whose first line is long enough to wrap, `declaration uses 'sorry'`, and a `style.longLine`-shaped lint.
+
+## 2026-09-24 — The bar sheds names before words; Width, reset and an empty Marks leave it
+
+**Report.** "Symbol-slop moved from the rail to the status bar — only Layout and Context are labelled at half-width infoview." At a ~560px frame the row read `Layout: outline · Context: used · ▢ · ↔ · ⚑ ‹ › · eye · ↺ · ?`: two items in words and a run of icons whose meaning lived only in their tips. Approved plan A + B, plus "reset to the rail".
+
+**A — three forms, two stages.** A value item is now drawn `Name: value` (FULL), `value` (VALUE), or its glyph (GLYPH). The ladder is stage-wise across the row: every item sheds its NAME (right to left: Marks, Comments, Context, Layout) before ANY item drops to its glyph (again right to left). State is `stage = {names, words}` (`names ≤ words`; item `i` is full below `names`, value below `words`, glyph otherwise), replacing `kText`. `fit` walks `st = 0 … 2n` (`st ≤ n`: `names = n − st`; beyond: `words = 2n − st`) and takes the first that fits; `2n`, the all-glyph floor, is `need(0, 0)` and still decides the dodge, the diagnostics count's compact form and the rail's climb exactly as before. The ghost carries all three forms per item, keyed by the item's ID rather than its index (Marks comes and goes, and `fit` is a stable callback, so it reads the row order off the ghost's `data-g="order"` spans): `c:<id>` the full form with the value emptied, `b:<id>` the value form emptied (padding alone), `g:<id>` the glyph, `v:<id>` every value bare; `resv` is a `Record<id, number>` and reserves the widest value in BOTH word forms, so a value change moves nothing in either. Measured (1100 frame, cycling all four Layouts, four Contexts, four Comments): one card width, **398.81**. Every value item's tip now OPENS `Name: value — …` (the Layout titles were `Layout: compact outline — …` and are now `Layout: outline — a compact outline, …`; the Marks titles `Marks: –/3 — …` / `Marks: 2/5 — …`), so the name the value form drops is the first thing its tip says.
+
+**B — fewer items.**
+- **Width** is a `width` row in the LAYOUT panel, under the side-by-side/gallery toggles and a divider: the same slider (`REFLOW_MIN_CHARS … full`, forced to `REFLOW_MAX_CHARS` in tracks), the same dimmed `full`/`N col` readout, the same `applyReflow` and so the same `Width: …` toast; the tracks seam still drags it. Panel `minWidth` 150 → 220 to hold it. What relied on the item: its ACCENT (lit while wrapping narrower than full) becomes Layout's THIRD SLOT (`effReflow !== "off"`, so lit in tracks, which wraps); it had no slot and no ⌥-cycle, so nothing else moved. `WidthGlyph`, the `"reflow"` bar id and its panel are deleted; design rule 13's "plus Width while it wraps" is struck.
+- **↺ reset** is the rail's fourth button, below `⛶` (both put the view back to a standing start), `ResetGlyph` drawn at `BAR_GLYPH_SW` (an open circle with the gap at the top and its head turning anticlockwise), same `resetToSource`, same title. The rail is bottom-anchored with no measured height, so the column grows upward and `lift` (which clears the card, not the rail) is unchanged: rail buttons at y 636/666/696/726 in an 800px viewport at every width.
+- **Marks** is drawn only where the proof HAS marks in either list (`hasMarks = authorCount + myCount > 0`). Both lists off with marks present still reads `Marks: off`, dimmed. `<`/`>` still step and toast the empty message; the Marks panel is gated on `hasMarks` too, so removing the last mark with the panel up takes both away. Dropping the FIRST mark by the nub on a markless proof (560 frame): bar `Layout: outline · Context: used · show · eye · ?` → `Layout: outline · used · show · –/1 ‹ › · eye · ?`; every `g[data-node]` transform and the scroll position byte-identical before and after — bar only.
+- **The diagnostics count** was already conditional (`diag` is null while `diagList` is empty); verified, unchanged.
+
+**What the bar holds (harness, dark, 2× headless Chrome; `shots/bar2-*.png`):**
+
+| frame | no marks | with marks (odd_sums, 3 source) | placement |
+|---|---|---|---|
+| 1100 | `Layout: outline · Context: used · Comments: show · eye · ?` (399) | `… · Comments: show · Marks: –/3 ‹ › · eye · ?` (544) | centred |
+| 560 | `Layout: outline · Context: used · show · eye · ?` (330) | `Layout: outline · used · show · –/3 ‹ › · eye · ?` (382) | right / right |
+| 380 | `outline · used · ▢ · eye · ?` (205) | `outline · used · show · ⚑ ‹ › · eye · ?` (315) | right / fill |
+
+So at half-width every item keeps a WORD; only Layout (and, without marks, Context) keep their names. At 380 with marks the card fills one lane up and the rail climbs over it, as before.
+
+### 2026-09-24 — Slots centred under what they mark
+
+User report (screenshot, half-width infoview): the squares under `–/2` and under the eye sat off-centre. Two causes. (1) A value item's box is RESERVED to its widest value (`99/99`), the slots centre under the box, and the value form set its text LEFT in it — measured `–/2` ink centre vs slot centre was ~25px apart. The VALUE form now centres its text in the reserve (the full form keeps it left-set against its name, one phrase); measured after: 229.6 vs 229.5 at 560px. (2) An unset slot was EMPTY, so the eye with only its last extra up showed one square at the group's right end. Unset slots are now drawn FAINT (`SLOT_OFF`, the chrome ink at 25%), so the group's extent — and its centre — shows, and the position still says WHICH extra is up.
+
+### 2026-09-24 — Saying plainly what comes from Paperproof
+
+Before the public sync, the user asked that the docs be clear about how Ramify builds on Paperproof: "It's MIT licensed but we need to be kind". The licence was already honoured (NOTICE carried Paperproof's full MIT text), but the README gave it one clause, and NOTICE called Ramify "a thin wrapper". The README now has a **Built on Paperproof** section, and NOTICE's Paperproof entry was rewritten to match. Both name Anton Kovsharov, Evgenia Karunus and the contributors. They say what is Paperproof's: the idea of reading a proof as the history of its goals and hypotheses, and `BetterParser_Tree`, where every tree starts. Ramify calls it unchanged, pinned to a commit, not forked. `web/src/paperproof.ts` mirrors its structures, and `haveUses` reads its `tacticDependsOn`. The two docs also say what Ramify adds, and that it keeps all of it in extra data keyed by position, never inside the parser's structures. The README also points readers who want the paper view at Paperproof itself. INSTALL.md's "graciously build upon" became a pointer to NOTICE.
+
+The same pass rewrote `dist/Demo.lean` and the Tour's docstrings. Both still taught the old top-right rail (`⊞/⊟`, `↶`, `❮❯`, `¶`, `⇝`, the top-left diagnostics pill), which has not existed since the status bar. Now they describe:
+- the goal corner's `−` / `+N`;
+- the status bar's Layout, Context and Comments, the eye and `?`;
+- the rail's ⌥ fold-alls;
+- the hover bar's `◌ ◎ ⊹` and the trash can;
+- `⋯` and the lens inside it;
+- the diagnostics count and its message strip.
+
+INSTALL.md now points at the 0.0.19 `.vsix` and lists `ramify.experience` and `ramify.hoverBar.*`.

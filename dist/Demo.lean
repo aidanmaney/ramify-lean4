@@ -18,20 +18,21 @@ else, every edit included, works with the Lean package alone.
 * **Move the cursor** between tactics — the matching node takes an accent
   outline and the view scrolls to it. Click a tactic node to go the other way
   `[companion]`.
-* **Fold** a goal box (click it) to hide the proof below it; the rail's `⊞`/`⊟`
-  expand and collapse everything.
-* **Double-click a tactic** to edit it in place. Escape cancels, Enter commits
-  (⌘/Ctrl-Enter for a multi-line tactic). The edit lands through the editor's
-  own pipeline, so ⌘Z in the editor undoes it. (`↶` at the top of the rail does
-  the same from here `[companion]`.)
-* **Hover a box** for its action bar: `»` reveal in source `[companion]`, `◎`
-  focus this subtree, `◌` elide the step into the trunk (leaving a ghost you
-  can click back open), `⊘` delete (which arms first — the second click is the
-  one that writes; the extent also lights up in the buffer `[companion]`).
-* **The rail, top right**, is the whole view: layout (`☰` outline, `⊦` goal
-  spine, `∥` aligned tracks, `⋔` wide tree), `◫` side-by-side branches, `¶`
-  wrap width, `⋯` brief labels, `⇉` merge straight runs, `▸`/`Δ`/`∀`/`↓`
-  context breadth, `⇝` linearize, `❮❯` one branch at a time.
+* **Fold** a goal: the `−` at its top-right corner hides the proof below it
+  as `+N`, and clicking `+N` brings it back. ⌥-click the rail's `−` / `+`
+  (bottom right) to fold or open everything.
+* **Double-click a tactic** to edit it in place. Esc cancels, Enter commits
+  (⇧Enter adds a line). The edit lands through the editor's own pipeline, so
+  ⌘Z undoes it (from the tree too `[companion]`).
+* **Hover a box** for its bar: `»` reveal in source `[companion]`, `◎` focus
+  this subtree, `◌` skip the step (a break on the line says what went; click
+  `+N` to bring it back), `⊹` the path to it, the trash can to delete (it arms
+  first — the second click writes; the extent lights up in the buffer
+  `[companion]`), and `⋯`, which names every move the box has.
+* **The status bar**, along the bottom, is the whole view: `Layout` (outline,
+  spine, tracks, wide; side-by-side, gallery, label width), `Context` (which
+  hypotheses each goal shows), `Comments`, the eye's reading options (brief
+  labels, merge straight runs, …), and `?`, which lists every gesture.
 * **The `sorry` in `stub_me` below** is an ordinary editable tactic node —
   double-click it and write the real proof. That is also how the tree's own
   `calc` gestures leave a link they have not proved yet.
@@ -58,8 +59,8 @@ theorem add_zero_eq (a b : Nat) (h : a = b) : a + 0 = b := by
   exact h
 
 /-- A case split, so the tree has something to branch. Each branch is a
-separate column under the tactic that opened it; the `⇳`/`❮❯` rail controls are
-about exactly this. -/
+separate branch under the tactic that opened it; `Layout`'s side-by-side and
+gallery rows are about exactly this. -/
 theorem le_or_lt (a b : Nat) : a ≤ b ∨ b < a := by
   rcases Nat.lt_or_ge b a with h | h
   · right
@@ -77,8 +78,7 @@ theorem zero_add_eq (n : Nat) : 0 + n = n := by
 
 /-- A `have`, which opens a side proof AND continues the main line. The tree
 draws the side proof as a branch and keeps the continuation on the trunk; the
-`◌` elide gesture on the `have` is the one that puts a finished side proof
-away. -/
+`−` on the side proof's goal puts a finished side proof away. -/
 theorem have_demo (a b : Nat) (h : a = b) : a + 0 = b + 0 := by
   have key : a + 0 = a := Nat.add_zero a
   rw [key, Nat.add_zero]

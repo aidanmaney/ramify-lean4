@@ -83,11 +83,6 @@ structure ProofTreeData where
 
   openBlock     : Option ProofTree.Recover.OpenBlock := none
 
-  -- C1 (seam only): a LaTeX reading of each goal print, keyed by goal id.
-  -- Always EMPTY on this toolchain — the printer (kmill/LeanTeX) does not
-  -- build against v4.32.2. See ProofTreeComments.LatexGoal.
-  latex         : Array ProofTree.LatexGoal := #[]
-
   diagnostics   : Array TreeDiag := #[]
 
   cfLine        : Option Nat := none
@@ -113,6 +108,13 @@ structure ProofTreeData where
   binders; with neither, the end of the keyword/`declId`. The widget's resting
   header is the text up to here (keyword, name, binders). -/
   declHeaderSigStop : Option Lsp.Position := none
+
+  /-- Where the header ENDS and the body begins: the start of the
+  declaration's value node — `declValSimple` (its `:=`), `declValEqns` (the
+  first `|`) or `whereStructInst` (`where`) — the first in preorder, found by
+  KIND. The widget's greedy resting header is the text up to here (keyword,
+  name, binders, `: type`), shown whole wherever it fits on one line. -/
+  declHeaderBodyStop : Option Lsp.Position := none
 
   cfDraftTokens : Array TacticToken := #[]
 
@@ -620,6 +622,11 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
         ``Lean.Parser.Command.abbrev, ``Lean.Parser.Command.theorem] snap.stx
       return decls[0]? |>.bind (·.getHead?) |>.bind (·.getTailPos?)
         |>.map fileMap.utf8PosToLspPos
+    let declHeaderBodyStop? : Option Lsp.Position :=
+      (ProofTree.nodesOfKind [``Lean.Parser.Command.declValSimple,
+          ``Lean.Parser.Command.declValEqns,
+          ``Lean.Parser.Command.whereStructInst] snap.stx)[0]?
+        |>.bind (·.getPos?) |>.map fileMap.utf8PosToLspPos
     let mut headerToks : Array TacticToken := #[]
     let mut declHeader : String := ""
     if let some dStart := declStart? then
@@ -696,6 +703,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       declHeaderStart := declStart?,
       declHeaderNameStop := declHeaderNameStop?,
       declHeaderSigStop := declHeaderSigStop?,
+      declHeaderBodyStop := declHeaderBodyStop?,
       diagnostics := treeDiags,
       steps       := parsedTree.steps,
       allGoals    := parsedTree.allGoals.toList,
@@ -1577,7 +1585,15 @@ structure PopoutEditParams where
   stop   : Lsp.Position
   action : String := "popout"
 
-  annotations : Array GoalAnnotation := #[]
+  /- Every optional field is an `Option`: the derived `FromJson` ignores
+  defaults, so a plain field with one is still REQUIRED on the wire, and the
+  widget's calls send only what their action uses (2026-09-22: `setting` and
+  `values` added as plain fields failed every lens/highlight call). -/
+  annotations : Option (Array GoalAnnotation) := none
+  /-- `hoverbar` only: which list (`tactic`/`goal`) and the move ids, in order —
+  a `⋯`-menu pin asking the companion to write `ramify.hoverBar.<setting>`. -/
+  setting : Option String := none
+  values : Option (Array String) := none
   deriving FromJson, ToJson
 
 /-! ## The companion's request directory
@@ -1624,13 +1640,21 @@ def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
       ("start", toJson params.start),
       ("stop", toJson params.stop),
       ("action", toJson params.action),
-      ("annotations", toJson params.annotations)
+      ("annotations", toJson (params.annotations.getD #[])),
+      ("setting", toJson (params.setting.getD "")),
+      ("values", toJson (params.values.getD #[]))
     ]
     -- `rename` (the D1 extract's follow-up) gets a file of its own: it is
     -- written as the pointer leaves the accepted pill, so a hover `clear` or
     -- `preview-clear` landing in `popout-request.json` a moment later would
     -- overwrite it before the companion's watcher read it.
-    let file := if params.action == "rename" then "rename-request.json" else "popout-request.json"
+    -- `hoverbar` (a `⋯`-menu pin → `ramify.hoverBar.*`) likewise: the pin is
+    -- clicked with the pointer on its way back to the tree, whose hover
+    -- `highlight`/`clear` would overwrite a shared file first.
+    let file :=
+      if params.action == "rename" then "rename-request.json"
+      else if params.action == "hoverbar" then "settings-request.json"
+      else "popout-request.json"
     writeCompanionRequest file payload
     return "ok"
 
@@ -1867,6 +1891,12 @@ structure ThemeColors where
   input : InputConfig := {}
 
   ai : AiConfig := {}
+  /-- `ramify.experience`: `beginner`/`intermediate`/`expert`, or empty (the
+  client's default). Passed through; the client owns the table. -/
+  experience : String := ""
+  /-- `ramify.hoverBar.{tactic,goal}` where the reader SET them (`inspect()`),
+  else absent. Passed through; the client owns the move ids. -/
+  hoverBar : Json := Json.null
   colors : Array ThemeTokenColor := #[]
   deriving ToJson
 
@@ -1882,6 +1912,8 @@ instance : FromJson ThemeColors where
           hypMarkStyle := jsonField j "hypMarkStyle" "highlight",
           input := jsonField j "input" {},
           ai := jsonField j "ai" {},
+          experience := jsonField j "experience" "",
+          hoverBar := (j.getObjVal? "hoverBar").toOption.getD Json.null,
           colors := jsonField j "colors" #[] }
 
 structure ThemeColorsParams where

@@ -280,6 +280,11 @@ export interface Proof {
       KIND; without one, the end of the binders or of the name. The resting
       header is the text up to here: keyword, name, binders. */
   declHeaderSigStop?: { line: number; character: number };
+  /** Where the header's BODY begins — the `:=` of `declValSimple` (or the
+      first `|` of `declValEqns`, or `where`), by KIND. The text up to here is
+      the whole signature, `: type` included: the resting header shows it
+      wherever it fits on one line. */
+  declHeaderBodyStop?: { line: number; character: number };
 
   proofId?: string;
 
@@ -290,18 +295,6 @@ export interface Proof {
   cfStubPos?: { line: number; character: number };
 
   openBlock?: OpenBlock;
-
-  /** C1 — a LaTeX reading of each goal print, keyed by the goal id the tree
-      already draws. ALWAYS EMPTY today: the producer (kmill/LeanTeX) does not
-      build against Lean v4.32.2, so the seam ships and the reading option that
-      would consume it is drawn disabled. See docs/design-record.md 2026-09-09. */
-  latex?: LatexGoal[];
-}
-
-/** One goal's statement in LaTeX. Plain data, so it rides both wires. */
-export interface LatexGoal {
-  goalId: string;
-  tex: string;
 }
 
 export interface OpenBlock {
@@ -336,10 +329,10 @@ export function stableProofOf(p: Proof): Proof {
     declHeaderStart: p.declHeaderStart,
     declHeaderNameStop: p.declHeaderNameStop,
     declHeaderSigStop: p.declHeaderSigStop,
+    declHeaderBodyStop: p.declHeaderBodyStop,
     cfLine: p.cfLine,
     cfStubPos: p.cfStubPos,
     openBlock: p.openBlock,
-    latex: p.latex,
   };
 }
 

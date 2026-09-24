@@ -28,6 +28,13 @@ import { calcEdit, fillRange, offsetToPosition } from "./calcEdit";
 import { deleteEdit } from "./deleteEdit";
 import type { RewriteEdit } from "./rewrite";
 import type { Lint } from "./lints";
+import {
+  DEFAULT_EXPERIENCE,
+  PRESETS,
+  parseExperience,
+  type Experience,
+} from "./experience";
+import { parseBarList, type BarKind, type MoveId } from "./moves";
 import type { PolishLine } from "./narrate";
 import {
   filterDiagnostics,
@@ -45,7 +52,7 @@ import {
   type TaggedGoalEntry,
 } from "./taggedRender";
 import { taggedSubterms } from "./taggedText";
-import { observeThemeChange } from "./theme";
+import { CHROME_FONT, CHROME_RADIUS, observeThemeChange } from "./theme";
 import {
   makeTacticRenderer,
   renderTacticTokens,
@@ -234,6 +241,7 @@ type ProofTreeData = Proof & {
   declHeaderStart?: { line: number; character: number };
   declHeaderNameStop?: { line: number; character: number };
   declHeaderSigStop?: { line: number; character: number };
+  declHeaderBodyStop?: { line: number; character: number };
 
   cfDraft?: string;
 
@@ -260,6 +268,11 @@ interface Settings {
    is the whole answer to "can this be asked at all"; the key never appears
    here or anywhere else this side of the extension. */
   ai: { polish: boolean; propose: boolean; ready: boolean; why: string };
+  /** `ramify.experience` (experience.ts) — the preset the defaults come from. */
+  experience: Experience;
+  /** `ramify.hoverBar.{tactic,goal}` — `null` where the reader has not set
+   it (the companion reads it with `inspect()`), so the preset's list stands. */
+  hoverBar: { tactic: MoveId[] | null; goal: MoveId[] | null };
 }
 
 /** How often the companion's answer file is asked for, and how long before the
@@ -298,6 +311,8 @@ const DEFAULT_SETTINGS: Settings = {
   hypMarkStyle: "highlight",
   abbrev: DEFAULT_ABBREV,
   ai: DEFAULT_AI,
+  experience: DEFAULT_EXPERIENCE,
+  hoverBar: { tactic: null, goal: null },
 };
 
 interface ThemeColorsResponse {
@@ -315,6 +330,8 @@ interface ThemeColorsResponse {
     custom: { abbreviation: string; symbol: string }[];
   };
   ai?: { polish?: boolean; propose?: boolean; ready?: boolean; why?: string };
+  experience?: string;
+  hoverBar?: { tactic?: unknown; goal?: unknown } | null;
   colors?: { type: string; color: string }[];
 }
 
@@ -348,6 +365,11 @@ function parseSettings(r: ThemeColorsResponse, prev: Settings): Settings {
       propose: r.ai?.propose === true,
       ready: r.ai?.ready === true,
       why: r.ai?.why ?? "",
+    },
+    experience: parseExperience(r.experience),
+    hoverBar: {
+      tactic: parseBarList(r.hoverBar?.tactic),
+      goal: parseBarList(r.hoverBar?.goal),
     },
   };
 }
@@ -427,6 +449,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     abbrev,
     hypMarkStyle,
     ai,
+    experience,
+    hoverBar,
   } = useSettings(rs, docRev);
 
   const st = useAsyncPersistent<ProofTreeData>(
@@ -650,8 +674,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // the next declaration asks it again. The guard is `proofKey`, which moves
   // only when the DECLARATION does — a cursor move inside one proof costs
   // nothing, which is the whole reason these are not on the payload.
-  const [lintsWanted, setLintsWanted] = useState(false);
-  const wantLints = (on: boolean) => setLintsWanted(on);
+  // The preset's `lints` row is the DEFAULT; the reader's toggle overrides it
+  // (the view holds the same override, so the two agree without syncing).
+  const [lintsOverride, setLintsOverride] = useState<boolean | null>(null);
+  const lintsWanted = lintsOverride ?? PRESETS[experience].lints;
+  const wantLints = (on: boolean) => setLintsOverride(on);
   // The requester is memoised on the cursor and so is a fresh closure on
   // every move; the effect must not be. A ref written in an effect is the
   // `toastRef` pattern — nothing reads it during render.
@@ -1145,6 +1172,23 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
 
     callCompanion("reveal", getTacticEdit(p)?.pos ?? p, lensGoals);
 
+  // A `⋯`-menu PIN: the view has already applied it for the session; this
+  // asks the companion to write `ramify.hoverBar.<kind>` so it persists. One
+  // way, best-effort — without a companion the pin still holds until the
+  // widget reloads.
+  const setHoverBar = (kind: BarKind, ids: MoveId[]) => {
+    rs.call("ProofTree.popoutEdit", {
+      uri: pos.uri,
+      start: ORIGIN,
+      stop: ORIGIN,
+      action: "hoverbar",
+      setting: kind,
+      values: ids,
+    }).catch((e: unknown) =>
+      console.error("[proof-tree] hoverbar RPC failed:", e),
+    );
+  };
+
   const popoutEdit = (p: ProofStepPosition) => {
     lensOpened.current = true;
     callCompanion("popout", p, lensGoals);
@@ -1158,11 +1202,18 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   }, [lensGoals]);
 
   const body = !stable ? (
-    <div style={{ fontFamily: "monospace", fontSize: 12, color: "#888", padding: 4 }}>
+    <div
+      style={{
+        fontFamily: CHROME_FONT,
+        fontSize: 12,
+        color: "var(--vscode-descriptionForeground, #888)",
+        padding: 4,
+      }}
+    >
       {st.state === "rejected"
         ? `Proof tree error: ${mapRpcError(st.error).message}`
         : st.state === "resolved"
-          ? "No proof tree here — place the cursor inside a tactic proof."
+          ? "No proof tree here — place the cursor inside a tactic proof"
           : "Loading proof tree…"}
     </div>
   ) : (
@@ -1171,17 +1222,20 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       {relayError && (
         <div
           onClick={() => setRelayError(null)}
-          title="click to dismiss"
+          title="Click to dismiss"
           style={{
-            fontFamily: "monospace",
+            fontFamily: CHROME_FONT,
             fontSize: 11,
             padding: "2px 6px",
             cursor: "pointer",
-            color: "var(--vscode-errorForeground, #c53030)",
+            // Foreground ink, not errorForeground: on themes whose validation
+            // background is an opaque pink the two were the same colour.
+            color: "var(--vscode-foreground)",
             background: "var(--vscode-inputValidation-errorBackground, #fff5f5)",
+            overflowWrap: "anywhere",
             border:
               "1px solid var(--vscode-inputValidation-errorBorder, #fc8181)",
-            borderRadius: 3,
+            borderRadius: CHROME_RADIUS,
           }}
         >
           Ramify: {relayError}
@@ -1206,6 +1260,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         declHeaderStart={declHeaderStart}
         declHeaderNameStop={stable?.proof.declHeaderNameStop}
         declHeaderSigStop={stable?.proof.declHeaderSigStop}
+        declHeaderBodyStop={stable?.proof.declHeaderBodyStop}
         renderDeclHeader={renderDeclHeader}
         onRevealHeader={
           declHeaderStart
@@ -1251,10 +1306,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onPolish={askPolish}
         polishReady={ai.ready}
         polishDefault={ai.polish}
-        polishWhy={ai.why || undefined}
         onPropose={askPropose}
         proposeReady={ai.ready && ai.propose}
-        proposeWhy={ai.why || undefined}
+        experience={experience}
+        hoverBar={hoverBar}
+        onHoverBarChange={setHoverBar}
       />
     </div>
   );

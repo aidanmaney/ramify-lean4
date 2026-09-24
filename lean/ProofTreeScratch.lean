@@ -17,12 +17,11 @@ theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   refine ⟨p, hp, ?_⟩
   -- Step 3: show N < p by contradiction.
   by_contra hle
-  -- If p ≤ N then p divides N!, and it already divides N! + 1.
-  have hpfac : p ∣ Nat.factorial N := Nat.dvd_factorial (hp.pos) (by order)
   -- p ∣ N! and p ∣ N! + 1, so p ∣ 1.
-  rw [Nat.dvd_add_right hpfac] at hpdvd
+  have hpdf : p ≤ N := by order
+  rw [Nat.dvd_add_right (Nat.dvd_factorial (hp.pos) hpdf)] at hpdvd
   -- But a prime cannot divide 1.
-  grind [Nat.not_prime_one, Nat.dvd_one]
+  grind only [Nat.not_prime_one, Nat.dvd_one]
 
 theorem my_zero_add (n : ℕ) : 0 + n = n := by
   induction n with

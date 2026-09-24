@@ -3,7 +3,7 @@
   "displayName": "Ramify",
   "description": "Lean proofs-as-trees visualizer and editor that lives in the infoview",
   "publisher": "aidan",
-  "version": "0.0.17",
+  "version": "0.0.19",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -21,11 +21,116 @@
       {
         "command": "ramify.setNarrationKey",
         "title": "Ramify: Set narration API key"
+      },
+      {
+        "command": "ramify.setExperience",
+        "title": "Ramify: Set experience level"
       }
     ],
     "configuration": {
       "title": "Ramify",
       "properties": {
+        "ramify.experience": {
+          "type": "string",
+          "enum": ["beginner", "intermediate", "expert"],
+          "enumDescriptions": [
+            "The automation step under the cursor shows what it used, and the tactic hover bar carries `⁇` (what did it use?); `Comments: narrate`; `Context: all`; lints on; the replace-with-automation move is not offered.",
+            "`Comments: show`; `Context: used`; lints on; every move offered.",
+            "Brief mode on; lints off; every move offered."
+          ],
+          "default": "intermediate",
+          "markdownDescription": "How much the proof tree explains itself. A preset: it only fills the DEFAULTS of the tree's reading options (the hover bar's buttons where `ramify.hoverBar.*` is not set, the automation trace, `Comments`, `Context`, `lints`, `brief`) — anything you switch in the tree itself keeps your choice for the session. Also: `Ramify: Set experience level`."
+        },
+        "ramify.hoverBar.tactic": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "source",
+              "focus",
+              "skip",
+              "path",
+              "delete",
+              "trace",
+              "collapse",
+              "expand",
+              "inline",
+              "extract",
+              "lint",
+              "lens",
+              "goal"
+            ],
+            "enumDescriptions": [
+              "» Show in source",
+              "◎ Focus on this goal's subtree (or back to the whole proof)",
+              "◌ Skip this step while reading (where it has one continuation or is a leaf)",
+              "⊹ Show only the path from the root to here",
+              "Delete (trash can; arms first, then writes)",
+              "⁇ What did the automation (`simp`, `grind`, `aesop`…) use?",
+              "⇓ Replace a closing run of steps with one automation tactic",
+              "⇑ Write out what the automation used",
+              "⤵ Move a single-use `have` into its one use",
+              "⤴ Pull a `(by …)` block out as a `have`",
+              "✎ Apply the linter's fix",
+              "⧉ Open the tactic in the lens",
+              "+ Show the goal a calc/constructor step proves"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "source",
+            "focus",
+            "skip",
+            "path",
+            "delete"
+          ],
+          "markdownDescription": "The buttons on the hover bar of a **tactic** box, left to right, each drawn only where the move is available on that box. `⋯` (every move on the box, with what each icon means and a pin to put it on the bar) is always last and is not listed. Pinning in `⋯` writes this setting. Unset, the `ramify.experience` preset decides (beginner also shows `trace`)."
+        },
+        "ramify.hoverBar.goal": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "source",
+              "focus",
+              "skip",
+              "path",
+              "delete",
+              "trace",
+              "collapse",
+              "expand",
+              "inline",
+              "extract",
+              "lint",
+              "lens",
+              "goal"
+            ],
+            "enumDescriptions": [
+              "» Show in source",
+              "◎ Focus on this goal's subtree (or back to the whole proof)",
+              "◌ Skip this step while reading (where it has one continuation or is a leaf)",
+              "⊹ Show only the path from the root to here",
+              "Delete (trash can; arms first, then writes)",
+              "⁇ What did the automation (`simp`, `grind`, `aesop`…) use?",
+              "⇓ Replace a closing run of steps with one automation tactic",
+              "⇑ Write out what the automation used",
+              "⤵ Move a single-use `have` into its one use",
+              "⤴ Pull a `(by …)` block out as a `have`",
+              "✎ Apply the linter's fix",
+              "⧉ Open the tactic in the lens",
+              "+ Show the goal a calc/constructor step proves"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "source",
+            "focus",
+            "skip",
+            "path",
+            "delete"
+          ],
+          "markdownDescription": "The buttons on the hover bar of a **goal** box, left to right, each drawn only where the move is available on that box. `⋯` (every move on the box, with what each icon means and a pin to put it on the bar) is always last and is not listed. Pinning in `⋯` writes this setting. Unset, the `ramify.experience` preset decides."
+        },
         "ramify.outlineOnly": {
           "type": "boolean",
           "default": false,

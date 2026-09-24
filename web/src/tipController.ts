@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { plainTicks } from "./ticks";
 
 /* THE IN-PAGE TOOLTIP — the controller half (the paint is `TipLayer`, tip.tsx).
 
@@ -144,7 +145,8 @@ export function useTip() {
   return {
     ctl,
     props: (text: string | undefined) => ({
-      "aria-label": text || undefined,
+      // Ticks stripped: a tip cannot draw a code span (ticks.ts).
+      "aria-label": text ? plainTicks(text) : undefined,
       onPointerEnter: (e: { currentTarget: Element }) => ctl.enter(e.currentTarget),
       onPointerLeave: (e: { currentTarget: Element }) => ctl.leave(e.currentTarget),
     }),

@@ -110,7 +110,7 @@ proc.stdout.on("data", (d) => {
     if (buf.length < start + len) break;
     const msg = JSON.parse(buf.toString("utf8", start, start + len));
     buf = buf.subarray(start + len);
-    if (msg.id !== undefined && pending.has(msg.id)) { const { res, rej } = pending.get(msg.id); pending.delete(msg.id); msg.error ? rej(new Error(JSON.stringify(msg.error))) : res(msg.result); }
+    if (!msg.method && msg.id !== undefined && pending.has(msg.id)) { const { res, rej } = pending.get(msg.id); pending.delete(msg.id); msg.error ? rej(new Error(JSON.stringify(msg.error))) : res(msg.result); }
     else if (msg.method) { notes.push(msg); for (const w of [...waiters]) if (w(msg)) waiters.splice(waiters.indexOf(w), 1); }
   }
 });

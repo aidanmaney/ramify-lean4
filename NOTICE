@@ -20,10 +20,20 @@ this repository actually hands you:
 MIT licence. Copyright (c) 2023 Anton Kovsharov.
 <https://github.com/Paper-Proof/paperproof>
 
-Ramify's Lean side is a thin wrapper around Paperproof's `BetterParser_Tree`:
-it post-processes that parser's output and mirrors its `ProofStep`, `GoalInfo`
-and `Hypothesis` structures field for field. The parser itself is not forked or
-modified.
+By Anton Kovsharov, Evgenia Karunus and the Paperproof contributors. Ramify
+owes its starting point to Paperproof: the idea that a Lean proof reads best as
+the history of its goals and hypotheses, and the parser that recovers that
+history from Lean's InfoTree.
+
+Concretely, every tree Ramify draws begins as the output of Paperproof's
+`BetterParser_Tree`, which Ramify calls unchanged, as a dependency pinned to
+one commit. Ramify also mirrors that parser's `ProofStep`, `GoalInfo` and
+`Hypothesis` structures field for field (`web/src/paperproof.ts`), and it reads
+the parser's `tacticDependsOn` to find which steps use a hypothesis. Everything
+else Ramify adds is kept outside those structures, in separate data keyed by
+each step's source position. That additional data covers recovery of broken or
+term-mode proofs, comments, diagnostics and more. The parser itself is not
+forked or modified.
 
     MIT License
 

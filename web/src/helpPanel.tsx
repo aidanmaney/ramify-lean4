@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { Fragment, type CSSProperties } from "react";
 
 import {
   GESTURES,
@@ -6,10 +6,11 @@ import {
   type Caps,
   type Gesture,
 } from "./gestures";
-import { POPUP_CHROME } from "./theme";
+import { CHROME_BORDER, CHROME_INK, POPUP_CHROME } from "./theme";
 import { useTip } from "./tipController";
+import { CodeText } from "./codeSpans";
 
-const INK = "var(--vscode-icon-foreground, #2d3748)";
+const INK = CHROME_INK;
 
 export function HelpPanel({
   caps,
@@ -32,19 +33,19 @@ export function HelpPanel({
   const tip = useTip();
   return (
     <div
-
+      data-ptw-panel=""
       onClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
         ...(anchor ?? { left: 0, bottom: "100%", marginBottom: 4 }),
-        width: 420,
-        maxWidth: "min(420px, 78vw)",
+        width: 500,
+        maxWidth: "min(500px, 86vw)",
         maxHeight: "min(70vh, 520px)",
         overflowY: "auto",
         boxSizing: "border-box",
         ...POPUP_CHROME,
         padding: "10px 12px",
-        border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
+        border: `1px solid ${CHROME_BORDER}`,
         color: INK,
         fontSize: 12,
         lineHeight: 1.5,
@@ -83,58 +84,60 @@ export function HelpPanel({
           ✕
         </button>
       </div>
-      {GESTURE_SECTIONS.map((s) => {
-        const rows = shown.filter((g) => g.target === s.target);
-        if (rows.length === 0) return null;
-        return (
-          <div key={s.target} style={{ marginTop: 8 }}>
-            <div
-              style={{
-                fontSize: 11,
-                letterSpacing: 0.3,
-                textTransform: "uppercase",
-                opacity: 0.65,
-                marginBottom: 2,
-              }}
-            >
-              {s.title}
-            </div>
-            {rows.map((g, i) => (
-              <Row key={i} g={g} fontFamily={fontFamily} />
-            ))}
-          </div>
-        );
-      })}
+      {/* ONE grid for every section, so the input column is as wide as the
+          longest input anywhere (max-content) and no input is cut with `…`. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "max-content minmax(0, 1fr)",
+          columnGap: 8,
+          rowGap: 2,
+        }}
+      >
+        {GESTURE_SECTIONS.map((s) => {
+          const rows = shown.filter((g) => g.target === s.target);
+          if (rows.length === 0) return null;
+          return (
+            <Fragment key={s.target}>
+              <div
+                style={{
+                  gridColumn: "1 / -1",
+                  fontSize: 11,
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  opacity: 0.65,
+                  marginTop: 8,
+                }}
+              >
+                <CodeText text={s.title} />
+              </div>
+              {rows.map((g, i) => (
+                <Row key={i} g={g} fontFamily={fontFamily} />
+              ))}
+            </Fragment>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 function Row({ g, fontFamily }: { g: Gesture; fontFamily: string }) {
   return (
-    <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+    <>
       <span
         style={{
-          flex: "0 0 126px",
           fontFamily,
           textAlign: "right",
           opacity: 0.95,
           whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
         }}
       >
         {g.input}
       </span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        {g.says}
-        {g.note && (
-          <span
-            style={{ display: "block", opacity: 0.7, fontSize: 11 }}
-          >
-            {g.note}
-          </span>
-        )}
+      <span style={{ minWidth: 0 }}>
+        <CodeText text={g.says.replace(/^to /, "")} />
       </span>
-    </div>
+    </>
   );
 }

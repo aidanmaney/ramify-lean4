@@ -11,21 +11,23 @@ the infoview prints them; green boxes are tactics. Try, in order:
 * **Move the cursor** through the tactics below — the matching node lights up
   and the tree scrolls along with you. Click a tactic node to jump back the
   other way; hover one to light its range up in the buffer.
-* **Click a goal box** to fold its subtree; click again to open it.
-  [⊞]/[⊟] expand and collapse everything.
+* **The `−` at a goal's top-right corner** folds everything below it into
+  `+N`; click `+N` to open it again. ⌥-click the rail's `−` / `+` (bottom
+  right) to fold or open every branch at once.
 * The two branch goals wear their case names (`inl`, `inr`) as small badges,
   and this proof's source comments ride the nodes they annotate.
-* Cycle the context breadth with the [Δ] button: Δ what this goal gained,
-  ∀ everything in scope, ▸ only what the next tactic uses, ↓ only what the
-  previous tactic bound. The `▸` gutter marks the used hypotheses.
+* **The status bar** along the bottom holds the reading controls. `Context`
+  picks which hypotheses each goal shows: `used` (only those the proof below
+  uses), `intro`, `diff`, or `all`. The `▸` gutter marks the ones the next
+  tactic uses. `?` lists every gesture.
 * Hover any identifier in a label, e.g. `Nat.le_total`, `h`, `rcases`, for
   type/doc popups.
 -/
 theorem tour_reading (n m : Nat) : n ≤ m ∨ m ≤ n := by
   -- .mark The split is the whole proof. `Nat.le_total` hands back one of two
   -- cases, and each branch closes with the hypothesis it was given.
-  -- (A `.mark` flag makes this an author's TOUR STOP: turn the status bar's
-  -- Tour item to `author` and `<` / `>` walk the stops in order.)
+  -- (A `.mark` flag makes this a source MARK: the status bar's Marks item
+  -- counts it, and `<` / `>` walk the marks in order.)
   rcases Nat.le_total n m with h | h
   · left
     exact h
@@ -34,20 +36,20 @@ theorem tour_reading (n m : Nat) : n ≤ m ∨ m ≤ n := by
 
 /-! ## 2 · Reshaping the view
 
-An induction proof with two named cases followed by a straight run to
-demonstrate the layout gestures [⑃]:
+An induction proof with two named cases followed by a straight run, to try
+the view controls on:
 
-* [❮❯] **gallery**: one branch at a time, paged by the `‹ n/m ›` pager under
-  the split. Move the cursor into the hidden case in the buffer and the
-  gallery pages to it by itself.
-* [◫] **side-by-side**: branches as columns instead of a stack. Pairs with
-  [¶] reflow, which wraps labels at a narrower column so the columns fit.
-* [⇉] **combine**: merge each straight run of tactics into one stacked node —
-  the `have`/`rw` run in the `succ` case becomes a single box.
-* [⋯] **brief**: collapse boilerplate inside labels to `…` — hover to
-  peek at what it hides.
-* [⇝] linearize a path; [⇥]/[⇳] elide a run or a vertical band: pick two
-  nodes and the stretch between them folds to a restorable marker. -/
+* **Layout** (status bar): `outline`, `spine`, `tracks` or `wide`, plus
+  **side-by-side** (branches as columns), **gallery** (one branch at a time,
+  paged; move the cursor into the hidden case and it pages there by itself)
+  and a width slider that wraps labels narrower.
+* **The eye** (reading options): **merge** turns each straight run of tactics
+  into one stacked box (the `have`/`rw` run in the `succ` case), and **brief**
+  shortens boilerplate inside labels to `…` (hover to see what it hides).
+* **Hover a box** for its bar: `◌` skips a step (the line keeps a break naming
+  what went), `◎` focuses a subtree, `⊹` draws the path to it, and `⋯` names
+  every move the box has. Drag across the background to select a stretch and
+  put it away in one go. -/
 theorem tour_reshaping (n : Nat) : n + 0 = 0 + n := by
   induction n with
   | zero => rfl
@@ -57,17 +59,17 @@ theorem tour_reshaping (n : Nat) : n + 0 = 0 + n := by
 
 /-! ## 3 · Editing from the tree
 
-Every write goes through the editor's own pipeline, so ⌘Z (or the rail's
-[↶]/[↷]) undoes it like any other edit:
+Every write goes through the editor's own pipeline, so ⌘Z undoes it like any
+other edit:
 
 * **Double-click** a tactic to edit it in place. The overlay keeps its syntax
   colouring while you type and expands unicode the way this buffer does, i.e.
   `\dvd` → `∣`, `\ne` → `≠`, and completes from what is already here:
   hypotheses, subterms, global constants/tactics.
-* The hover bar on a tactic carries [⧉] — the lens: a slim pane under the
+* A tactic's `⋯` menu carries `⧉`, the lens: a slim pane under the
   infoview that annotates lines with the goal state after tactics run, i.e.
   `⊢ …`, or `∎` where the line closes its goals.
-* [⊘] on the bar arms a delete: the extent lights up in the buffer, every
+* The trash can on the bar arms a delete: the extent lights up in the buffer, every
   node it would remove dims in the tree, and a second click on the count
   confirms. On a goal it clears the whole sub-proof, returning the goal to
   the frontier (see below). -/
@@ -81,7 +83,7 @@ theorem tour_editing (a b : Nat) (h : a ∣ b) (hb : b ≠ 0) : a ∣ b * b ∧ 
 
 * Tactics and intermediate goals are stacked in the tree.
   Try commenting out a step here and then adding it back via the tree.
-  Note: a `rw`'s implicit `rfl` starts folded — click it, or [⊞], to see it. -/
+  Note: a `rw`'s implicit `rfl` starts folded — click its `+N` to see it. -/
 theorem tour_calc (a b c : Nat) : (a + b) + c = c + (b + a) := by
   calc
     (a + b) + c = a + (b + c) := by rw [Nat.add_assoc a b c]
@@ -107,11 +109,11 @@ theorem tour_frontier (n : Nat) : 0 < n + 1 ∧ n + 0 = n := by
 The first two tactics below fail and are shown in the tree.
 The `exact` tactic doesn't get to run but is shown as a dashed ghost.
 The error rides the node as a thick cap on the left edge: hover to see the
-message. The pill at the top left enumerates each problem in the proof;
-`‹ ›` moves between them.
+message. The status bar counts the problems in the proof; errors also open a
+strip above it with the message, and `‹ ›` moves between them.
 
-To fix it, delete [⊘] the dashed `rw`, or double-click it and write what you
-meant. -/
+To fix it, delete the dashed `rw` (the trash can), or double-click it and write
+what you meant. -/
 theorem tour_errors (a b : Nat) : a + b = b + a := by
   have hmul : a * b = b * a := by exact Nat.add_comm a b
   rw [Nat.succ_ne_zero]

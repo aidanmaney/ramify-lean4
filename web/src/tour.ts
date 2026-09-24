@@ -31,7 +31,7 @@ export interface TourStop {
 }
 
 /** WHICH SETS are in the reading. Two independent toggles, not a kind: the
-`source` set is the file's `.mark`s and `temp` the ⚑s of this session, and the
+`source` set is the file's `.mark`s and `temp` the corner nub's drops of this session, and the
 list being read is their UNION in one order. There is no "off" and no `all` —
 a proof arrives with BOTH on, and the last one on cannot be turned off (there
 would be nothing left to read). Not having STARTED is a `tourAt` of null,

@@ -20,7 +20,6 @@ def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
     (lemmaRefs : Array ProofTree.LemmaRef)
     (branches : Array ProofTree.BranchInfo)
     (openBlock : Option ProofTree.Recover.OpenBlock)
-    (latex : Array ProofTree.LatexGoal := #[])
     (lints : Array ProofTree.Lint := #[]) : Json :=
   Json.mkObj [
     ("steps",    toJson r.steps),
@@ -52,10 +51,6 @@ def resultToJson (r : Result) (comments : Array ProofTree.SourceComment)
       out := out.setObjVal! "branches" (toJson branches)
     if let some ob := openBlock then
       out := out.setObjVal! "openBlock" (toJson ob)
-    -- C1: non-empty only, so an untouched corpus is byte-identical. The
-    -- printer is not built on this toolchain, so this is always empty today.
-    unless latex.isEmpty do
-      out := out.setObjVal! "latex" (toJson latex)
     -- D4: non-empty only, so a corpus generated without `--lint` is
     -- byte-identical to one generated before D4 existed.
     unless lints.isEmpty do

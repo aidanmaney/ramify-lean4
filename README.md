@@ -13,7 +13,21 @@ buffer and the undo stack stay authoritative.
 
 Reading the tree is a second, separate vocabulary — four layout modes, elision,
 context breadth, brief labels, narration from the proof's own comments — all on
-one floating rail, none of it touching the file.
+one status bar, none of it touching the file.
+
+## Built on Paperproof
+
+Ramify would not exist without [Paperproof](https://github.com/Paper-Proof/paperproof),
+by Anton Kovsharov, Evgenia Karunus and its contributors. Paperproof showed that
+a Lean proof reads well as the history of its goals and hypotheses, and its
+parser, `BetterParser_Tree`, is what turns Lean's InfoTree into that history.
+Every tree Ramify draws starts from that parser's output: Ramify calls it
+unchanged (a Lake dependency pinned to one commit, not a fork), mirrors its
+`ProofStep` / `GoalInfo` / `Hypothesis` structures in `web/src/paperproof.ts`,
+and reads its `tacticDependsOn` for which steps use which hypotheses. What Ramify
+adds sits beside that output, in extra data keyed by each step's position: a
+different renderer, reading controls, and editing the source from the tree. If
+you want the proof-as-paper view itself, use Paperproof; it is excellent.
 
 - **Using it in your own project?** See [INSTALL.md](INSTALL.md).
 - **Working on it?** [CLAUDE.md](CLAUDE.md) is the engineering record —
@@ -146,7 +160,8 @@ MIT — see [LICENSE](LICENSE). The extension carries its own copy at
 `ext/ramify/LICENSE`, because `vsce` only looks next to
 `package.json` and would otherwise ship the `.vsix` with no licence in it.
 
-Ramify builds on Paperproof (MIT), ProofWidgets (Apache-2.0) and
+Ramify builds on Paperproof (MIT; see [Built on Paperproof](#built-on-paperproof)),
+ProofWidgets (Apache-2.0) and
 `@leanprover/unicode-input` (Apache-2.0, bundled into the renderer). See
 [NOTICE](NOTICE) for the full third-party notices, including which of them are
 fetched at build time and which are redistributed here.

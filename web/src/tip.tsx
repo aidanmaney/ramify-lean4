@@ -1,6 +1,7 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
-import { POPUP_CHROME } from "./theme";
+import { FLOATER_CHROME } from "./theme";
 import { TipContext } from "./tipController";
+import { plainTicks } from "./ticks";
 
 /** Gap between the target and the tip, and the tip's inset from the frame. */
 const TIP_GAP = 6;
@@ -77,11 +78,8 @@ export function TipLayer() {
         boxSizing: "border-box",
         width: "max-content",
         maxWidth: TIP_MAX_W,
-        ...POPUP_CHROME,
+        ...FLOATER_CHROME,
         padding: "4px 8px",
-        border: "1px solid var(--vscode-editorWidget-border, #cbd5e0)",
-        color: "var(--vscode-icon-foreground, #2d3748)",
-        fontFamily: "var(--vscode-font-family, system-ui, sans-serif)",
         fontSize: 11,
         lineHeight: "15px",
         textAlign: "left",
@@ -89,7 +87,7 @@ export function TipLayer() {
         overflowWrap: "anywhere",
       }}
     >
-      {tip.text}
+      {plainTicks(tip.text)}
     </div>
   );
 }

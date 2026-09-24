@@ -125,7 +125,7 @@ export const LINT_FIXES: Record<string, string> = {
   "linter.style.lambdaSyntax": "write `fun` for `λ`",
   "linter.unnecessarySeqFocus": "write `;` for `<;>`",
   "linter.haveLet": "`have` binds a Type — write `let`",
-  "linter.flexible": "write what `simp` used, so the step is not flexible",
+  "linter.flexible": "write out what `simp` used, so later steps do not depend on it",
 };
 
 /** How long `have` is, in the one fix that replaces a keyword by position

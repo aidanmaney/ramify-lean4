@@ -89,7 +89,9 @@ export function lintDiagnostics(
     severity: SEVERITY_LINT as 3,
     range: { start: l.start, stop: l.stop },
     fullRange: { start: l.start, stop: l.stop },
-    message: `${lintName(l)} — ${l.message}`,
+    // The linter's own words lead (the pager shows the first line); its
+    // name — what `set_option` would turn off — closes that line.
+    message: withLinterName(l.message, lintName(l)),
     linter: l.linter,
     nodeId: nodeOf.get(l),
   }));
@@ -221,4 +223,12 @@ export function attachDiagnostics(
     unattached: ordered.filter((o) => !o.nodeId).map((o) => o.diag),
     chipCovered,
   };
+}
+
+/** `msg` with ` (linter: name)` at the end of its FIRST line. */
+function withLinterName(msg: string, name: string): string {
+  const nl = msg.indexOf("\n");
+  return nl < 0
+    ? `${msg} (linter: ${name})`
+    : `${msg.slice(0, nl)} (linter: ${name})${msg.slice(nl)}`;
 }

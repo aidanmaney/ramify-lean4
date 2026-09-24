@@ -6,6 +6,9 @@ import {
   type ProofRecord,
 } from "./paperproof";
 import type { Lint } from "./lints";
+import type { TreeDiagnostic } from "./diagnostics";
+import { parseExperience } from "./experience";
+import { parseBarList, type BarKind, type MoveId } from "./moves";
 import type { PolishLine } from "./narrate";
 import { proofTitle } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
@@ -85,6 +88,26 @@ const STUB_EDIT = QUERY.has("stub-edit");
 
 const NO_LEDGER = QUERY.has("no-ledger");
 
+/** `ramify.experience` without a companion: `?experience=beginner|intermediate|expert`
+ (experience.ts). Absent or unknown, intermediate — the setting's default. */
+const EXPERIENCE = parseExperience(QUERY.get("experience"));
+
+/** `ramify.hoverBar.tactic` / `.goal` without a companion:
+ `?hoverbar-tactic=source,trace,delete` (moves.ts ids, comma-separated; an
+ empty value is a bar of `⋯` alone). Absent, the preset's list. A pin in the
+ `⋯` menu records `{kind, ids}` in `window.__hoverBar`, where the widget would
+ ask the companion to write the setting. */
+const HOVER_BAR = {
+  tactic: parseBarList(QUERY.get("hoverbar-tactic")),
+  goal: parseBarList(QUERY.get("hoverbar-goal")),
+};
+const recordHoverBar = (kind: BarKind, ids: MoveId[]) => {
+  const w = window as unknown as {
+    __hoverBar?: { kind: BarKind; ids: MoveId[] }[];
+  };
+  (w.__hoverBar ??= []).push({ kind, ids });
+};
+
 const CF_STUB = (() => {
   const v = QUERY.get("cf-stub");
   if (v === null) return null;
@@ -158,6 +181,42 @@ function stubLints(proof: Proof): Lint[] {
       message: "this tactic does nothing",
     });
   return out;
+}
+
+/** `?diag-stub=ewl` — DIAGNOSTICS without a server (2026-09-24). The harness
+ has no `publishDiagnostics`, so the ribbon, the bar's count item and the
+ message strip over the card had nothing to draw offline. One letter per
+ diagnostic, placed on the proof's steps in order: `e` an error (its first
+ line long enough to wrap the strip), `w` a warning (`declaration uses
+ 'sorry'`), `l` a lint shaped like Mathlib's `style.longLine` — the report
+ that retired the truncated pager. FICTIONS about the steps they sit on. */
+const DIAG_STUB = QUERY.get("diag-stub");
+
+const STUB_MESSAGES = {
+  e: "The rfl tactic failed. Possible reasons: the goal is not a reflexive relation (neither `=` nor a relation with a @[refl] lemma), or its two sides are not definitionally equal\nn : ℕ\n⊢ n + 0 = 0 + n",
+  w: "declaration uses 'sorry'",
+  l: "This line exceeds the 100 character limit, please shorten your line! (linter: style.longLine)",
+} as const;
+
+function stubDiagnostics(proof: Proof, spec: string): TreeDiagnostic[] {
+  const steps = proof.steps.filter((s) => s.position);
+  return [...spec].flatMap((ch, i) => {
+    if (ch !== "e" && ch !== "w" && ch !== "l") return [];
+    const step = steps[Math.min(i + 1, steps.length - 1)];
+    if (!step?.position) return [];
+    const range = { start: step.position.start, stop: step.position.stop };
+    const severity = ch === "e" ? 1 : ch === "w" ? 2 : 3;
+    return [
+      {
+        key: `stub:${i}:${ch}`,
+        severity,
+        range,
+        fullRange: range,
+        message: STUB_MESSAGES[ch],
+        ...(ch === "l" ? { linter: "linter.style.longLine" } : {}),
+      } satisfies TreeDiagnostic,
+    ];
+  });
 }
 
 const HYP_MARK_STUB =
@@ -347,6 +406,9 @@ export default function App() {
       hypMarkStyle={HYP_MARK_STUB}
       proof={proof!}
       ledger={!NO_LEDGER}
+      experience={EXPERIENCE}
+      hoverBar={HOVER_BAR}
+      onHoverBarChange={recordHoverBar}
 
       {...(STUB_EDIT
         ? {
@@ -453,6 +515,10 @@ export default function App() {
           }
         : {})}
 
+      {...(DIAG_STUB !== null
+        ? { diagnostics: stubDiagnostics(proof!, DIAG_STUB) }
+        : {})}
+
       {...(LINT_STUB
         ? {
             lints: proof!.lints?.length ? proof!.lints : stubLints(proof!),
@@ -504,7 +570,7 @@ export default function App() {
       {...(QUERY.get("hdr")
         ? {
             declHeader: QUERY.get("hdr")!.replace(/\\n/g, "\n"),
-            // The server's by-kind split, stubbed: `&hdr-name=l:c&hdr-sig=l:c`
+            // The server's by-kind split, stubbed: `&hdr-name=l:c&hdr-sig=l:c&hdr-body=l:c`
             // against a header starting at 0:0 (the NDJSON carries no header).
             declHeaderStart: { line: 0, character: 0 },
             ...(QUERY.get("hdr-name")
@@ -512,6 +578,9 @@ export default function App() {
               : {}),
             ...(QUERY.get("hdr-sig")
               ? { declHeaderSigStop: stubPos(QUERY.get("hdr-sig")!) }
+              : {}),
+            ...(QUERY.get("hdr-body")
+              ? { declHeaderBodyStop: stubPos(QUERY.get("hdr-body")!) }
               : {}),
             // Records each reveal-in-source in `window.__reveals`.
             onRevealHeader: () => {

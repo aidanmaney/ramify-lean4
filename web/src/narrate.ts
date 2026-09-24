@@ -604,17 +604,47 @@ function tacticsBelow(id: string, ctx: NarrateCtx): number {
   return n;
 }
 
+/** A clause joined on after `; then ` continues ONE sentence, so its opening
+ WORD loses its capital (`…; then prove both parts`, not `…; then Prove both
+ parts`). Only a plain capitalised word followed by a space, comma or colon is
+ touched — a constant (`Nat.Prime …`, `Finset.sum_range_succ`) or a symbol
+ opening the clause is left exactly as it is. (2026-09-22 taste pass.) */
+const continueClause = (s: string) =>
+  /^[A-Z][a-z]+(?=[ ,:])/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+
+const thenJoin = (parts: string[]) =>
+  parts.map((p, i) => (i === 0 ? p : continueClause(p))).join("; then ");
+
 const moreSteps = (k: number) => (k > 0 ? ` (${k} more step${k === 1 ? "" : "s"})` : "");
 
-function summaryOfGoal(g: TreeNode, ctx: NarrateCtx, budget: number): string {
+/** `own` marks the goal the summary is WRITTEN ON (the top call from
+ `summarize`, whose result is only ever drawn on that goal's own strip): a
+ closing step directly under it would say `, giving <statement>` about the very
+ box the words sit beside, so its steps are narrated without the clause
+ (2026-09-22 — "Give hp, giving Nat.Prime p" under `⊢ Nat.Prime p`). Deeper
+ goals keep it: there the statement is folded away and the clause is the only
+ thing that says what was closed. */
+function summaryOfGoal(
+  g: TreeNode,
+  ctx: NarrateCtx,
+  budget: number,
+  own = false,
+): string {
   const tac = childrenOf(g, ctx).filter((c) => c.type === "tactic");
   if (tac.length === 0) return "";
-  const parts = tac.map((t) => summaryOfTactic(t, ctx, budget)).filter((s) => s);
-  return parts.join("; then ");
+  const parts = tac
+    .map((t) => summaryOfTactic(t, ctx, budget, !own))
+    .filter((s) => s);
+  return thenJoin(parts);
 }
 
-function summaryOfTactic(t: TreeNode, ctx: NarrateCtx, budget: number): string {
-  const head = narrateStep(t, ctx, true);
+function summaryOfTactic(
+  t: TreeNode,
+  ctx: NarrateCtx,
+  budget: number,
+  withGoal = true,
+): string {
+  const head = narrateStep(t, ctx, withGoal);
   if (budget <= 0) return head + moreSteps(tacticsBelow(t.id, ctx));
 
   const { proof, main } = opened(t, ctx);
@@ -625,7 +655,7 @@ function summaryOfTactic(t: TreeNode, ctx: NarrateCtx, budget: number): string {
   }
   if (main.length === 1) {
     const rest = summaryOfGoal(main[0], ctx, budget - 1);
-    if (rest) out += `; then ${rest}`;
+    if (rest) out += `; then ${continueClause(rest)}`;
   } else if (main.length > 1) {
     const arms = main
       .map((g) => {
@@ -650,7 +680,7 @@ export function summarize(nodes: TreeNode[], ctx = narrateCtx(nodes)): Map<strin
       clip(
         n.type === "tactic"
           ? summaryOfTactic(n, ctx, SUMMARY_DEPTH)
-          : summaryOfGoal(n, ctx, SUMMARY_DEPTH),
+          : summaryOfGoal(n, ctx, SUMMARY_DEPTH, true),
         SUMMARY_CAP,
       ),
     );
@@ -668,14 +698,20 @@ function hopSummary(
   f: NonNullable<TreeNode["folded"]>,
   byPos: Map<string, TreeNode>,
   ctx: NarrateCtx,
+  goalId: string,
 ): string {
   const hidden = f.parts
     .map((p) => (p.position ? byPos.get(posKey(p.position.start)) : undefined))
     .filter((n): n is TreeNode => !!n);
-  const lines = hidden.slice(0, 2).map((n) => narrateStep(n, ctx, true));
+  // A hidden step standing directly under the hopped goal would name that
+  // goal's own statement — the box this summary is written on — so it goes
+  // without the `giving` clause (see `summaryOfGoal`'s `own`).
+  const lines = hidden
+    .slice(0, 2)
+    .map((n) => narrateStep(n, ctx, parentOf(n, ctx)?.id !== goalId));
   if (lines.length === 0)
     return `${f.tactics.length} step${f.tactics.length === 1 ? "" : "s"} hidden`;
-  return lines.join("; then ") + moreSteps(Math.max(0, hidden.length - 2));
+  return thenJoin(lines) + moreSteps(Math.max(0, hidden.length - 2));
 }
 
 /** What each DRAWN node's strip says in `Comments: narrate`, keyed by id and
@@ -740,7 +776,9 @@ export function narrationOf(base: TreeNode[], drawn: TreeNode[]): Narration {
     // exactly what went. A HOP took one step and what it opened beside the
     // continuation, so the summary is composed from the parts it names.
     const text =
-      f.kind === "fold" ? (sums.get(d.id) ?? "") : hopSummary(f, byPos, ctx);
+      f.kind === "fold"
+        ? (sums.get(d.id) ?? "")
+        : hopSummary(f, byPos, ctx, d.id);
     if (text) out.set(d.id, NARRATE_MARK + clip(text, SUMMARY_CAP));
   }
   return { text: out, ctx };
@@ -771,7 +809,14 @@ export function applyNarrationLines(
     const t = text.get(n.id);
     if (t === undefined) return n;
     const p = polished?.get(n.id);
-    return { ...n, comment: p ? POLISH_MARK + clip(p, SUMMARY_CAP) : t };
+    const comment = p ? POLISH_MARK + clip(p, SUMMARY_CAP) : t;
+    // A FOLDED goal's summary hangs BELOW the box, where the first step's
+    // strip stood while the goal was open — collapsing leaves the words in
+    // place (see `TreeNode.commentBelow`). A hop keeps its child and its axis
+    // break below the box, so its summary stays above.
+    return n.type === "goal" && n.folded?.kind === "fold"
+      ? { ...n, comment, commentBelow: true }
+      : { ...n, comment };
   });
 }
 

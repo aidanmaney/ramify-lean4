@@ -28,6 +28,12 @@
 //    pretty-print, which is one line for a multi-line tactic), no rewrite is
 //    offered at all rather than an edit computed from a paraphrase.
 import type { ProofStepPosition, TacticSlot } from "./paperproof";
+import {
+  EXTRACT_TITLE,
+  collapseTitle,
+  expandTitle,
+  inlineTitle,
+} from "./moves";
 import type { TreeNode } from "./types";
 import { deleteEdit, deleteExtent } from "./deleteEdit";
 import { childIndex } from "./elide";
@@ -366,7 +372,7 @@ export function inlineRewrite(node: TreeNode, ctx: RewriteCtx): Proposal {
         a.range.start.line - b.range.start.line ||
         a.range.start.character - b.range.start.character,
       ),
-      title: `inline \`${u.name}\` into \`${uHead}\``,
+      title: inlineTitle(u.name, uHead),
     },
   };
 }
@@ -467,7 +473,7 @@ export function extractRewrite(node: TreeNode, ctx: RewriteCtx): Proposal {
           newText: "this",
         },
       ],
-      title: `extract \`by\` as \`have this\``,
+      title: EXTRACT_TITLE,
       renameAt: { line: insertAt.line, character: me.indent + "have ".length },
     },
   };
@@ -750,7 +756,7 @@ export function collapseRewrite(
       edits: [
         { range: { start: ext.start, end: ext.stop }, newText: tactic },
       ],
-      title: `these ${run.steps.length} steps are \`${tactic}\``,
+      title: collapseTitle(run.steps.length, tactic),
     },
   };
 }
@@ -789,7 +795,7 @@ export function expandRewrite(node: TreeNode, ctx: RewriteCtx): Proposal {
       edits: [
         { range: { start: me.start, end: me.stop }, newText: text },
       ],
-      title: `write what \`${t.tactic}\` used`,
+      title: expandTitle(t.tactic),
     },
   };
 }

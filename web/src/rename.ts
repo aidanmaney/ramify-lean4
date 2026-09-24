@@ -59,6 +59,7 @@
 //    the wrong bytes — the same rule D1 states and for the same reason.
 import type { TreeNode, HypLine } from "./types";
 import type { Pos, Proposal, RewriteCtx, RewriteEdit } from "./rewrite";
+import { renameTitle } from "./moves";
 import {
   topLevelAssign,
   advance,
@@ -377,7 +378,7 @@ export function renameRewrite(
       name,
       targetId: intro.id,
       edits,
-      title: `rename \`${name}\` → \`${sug.name}\``,
+      title: renameTitle(name, sug.name),
     },
   };
 }
