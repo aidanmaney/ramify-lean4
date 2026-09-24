@@ -18,16 +18,15 @@ one status bar, none of it touching the file.
 ## Built on Paperproof
 
 Ramify would not exist without [Paperproof](https://github.com/Paper-Proof/paperproof),
-by Anton Kovsharov, Evgenia Karunus and its contributors. Paperproof showed that
-a Lean proof reads well as the history of its goals and hypotheses, and its
-parser, `BetterParser_Tree`, is what turns Lean's InfoTree into that history.
-Every tree Ramify draws starts from that parser's output: Ramify calls it
-unchanged (a Lake dependency pinned to one commit, not a fork), mirrors its
-`ProofStep` / `GoalInfo` / `Hypothesis` structures in `web/src/paperproof.ts`,
-and reads its `tacticDependsOn` for which steps use which hypotheses. What Ramify
-adds sits beside that output, in extra data keyed by each step's position: a
-different renderer, reading controls, and editing the source from the tree. If
-you want the proof-as-paper view itself, use Paperproof; it is excellent.
+by Anton Kovsharov, Evgenia Karunus and other contributors. We graciously build
+upon their parser for this project.
+
+Concretely: every tree Ramify draws starts from `BetterParser_Tree`'s output.
+Ramify calls it unchanged (a Lake dependency pinned to one commit, not a fork),
+mirrors its `ProofStep` / `GoalInfo` / `Hypothesis` structures in
+`web/src/paperproof.ts`, and reads its `tacticDependsOn` for which steps use
+which hypotheses. Everything Ramify adds sits beside that output, in extra data
+keyed by each step's position.
 
 - **Using it in your own project?** See [INSTALL.md](INSTALL.md).
 - **Working on it?** [CLAUDE.md](CLAUDE.md) is the engineering record —
