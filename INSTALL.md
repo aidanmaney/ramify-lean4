@@ -153,7 +153,7 @@ ext/ramify/       the VS Code extension
 ```
 
 > [!Note]
-> This is just a build, not the source, and is not intended to be edited. Hence why `web/dist/proofTreeWidget.js` is minified. The real source and development tooling is in another repo.
+> This is just a build, not the source, and is not intended to be edited. Hence why `web/dist/proofTreeWidget.js` is minified. The real source and development tooling is on this repository's [`dev`](https://github.com/aidanmaney/ramify-lean4/tree/dev) branch.
 
 Ramify is MIT licensed; see [LICENSE](LICENSE). It builds on Paperproof, ProofWidgets and `@leanprover/unicode-input`; see [NOTICE](NOTICE) for the breakdown.
 
