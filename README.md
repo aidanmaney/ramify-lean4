@@ -2,7 +2,8 @@
 
 An interactive proof tree widget for Lean 4 drawn in the VS Code Lean infoview. It reads the tactics under your cursor and lets you read and edit the source proof from the tree. Comes in two parts: the widget and a VS Code extension.
 
-<img height="420" alt="screenshot of the widget with multiple cases and comments" src="https://github.com/user-attachments/assets/194dec0a-3c54-428f-b495-9d8d4d220eea" />
+<img width="813" height="882" alt="image" src="https://github.com/user-attachments/assets/f17400d8-79b3-4b4c-a3d3-5cf6c59c1667" />
+
 
 
 Quickstart: see [INSTALL.md](INSTALL.md#quickstart).
