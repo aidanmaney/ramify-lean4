@@ -1,4 +1,4 @@
-import { injectStyleOnce } from "./taggedRender";
+import { injectStyleOnce } from "./taggedCore";
 
 function luminanceOf(color: string): number | null {
   const s = color.trim();

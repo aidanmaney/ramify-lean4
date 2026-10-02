@@ -3,6 +3,7 @@ import { Fragment, useLayoutEffect, useRef, type CSSProperties } from "react";
 import {
   GESTURES,
   GESTURE_SECTIONS,
+  gestureShown,
   type Caps,
   type Gesture,
 } from "./gestures";
@@ -12,7 +13,7 @@ import {
   CHROME_TEXT,
   DIM_OPACITY,
 } from "./theme";
-import { injectStyleOnce } from "./taggedRender";
+import { injectStyleOnce } from "./taggedCore";
 import { useTip } from "./tipController";
 import { CodeText } from "./codeSpans";
 import { focusBox, useRestoreFocus } from "./panelKeys";
@@ -54,7 +55,7 @@ export function HelpPanel({
   stated where the button is. */
   anchor?: CSSProperties;
 }) {
-  const shown = GESTURES.filter((g) => !g.needs || caps[g.needs]);
+  const shown = GESTURES.filter((g) => gestureShown(g, caps));
   const tip = useTip();
   const ref = useRef<HTMLDivElement | null>(null);
   // Opened from the keyboard (`?`, F1, Enter on the button), focus moves into

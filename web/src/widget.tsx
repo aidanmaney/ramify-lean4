@@ -49,11 +49,8 @@ import { WidgetBoundary } from "./errorBoundary";
 import type { HypMarkStyle } from "./theme";
 import { useOverride } from "./useOverride";
 import { hashString } from "./hash";
-import {
-  injectStyleOnce,
-  makeTaggedRenderers,
-  type TaggedGoalEntry,
-} from "./taggedRender";
+import { makeTaggedRenderers, type TaggedGoalEntry } from "./taggedRender";
+import { injectStyleOnce } from "./taggedCore";
 import { taggedSubterms } from "./taggedText";
 import {
   CHROME_FONT,
@@ -70,11 +67,9 @@ import {
 import {
   makeTacticRenderer,
   renderTacticTokens,
-  type Elision,
-  type LabelToken,
-  type TacticToken,
   type TacticTokenInfo,
 } from "./tacticTokens";
+import type { Elision, LabelToken, TacticToken } from "./tacticCore";
 
 const HOVER_DWELL_MS = 180;
 

@@ -61,6 +61,9 @@ export type Caps = {
    (the widget: an `applyEdit`, a source lookup and the delete slots). */
   restructure: boolean;
   undo: boolean;
+  /** C4 — a model can reword the generated narration (a companion with a
+   key behind `onPolish`); without it no `≈` line can appear. */
+  polish: boolean;
 };
 
 export type GestureTarget =
@@ -87,7 +90,16 @@ export type Gesture = {
   when?: (g: NodeGates) => boolean;
 
   needs?: keyof Caps;
+
+  /** The row's wording where `unless` is ABSENT: a pair of rows, one per side
+   of a capability, says what the reader can do here without naming a move
+   that is not on offer (the static viewer has no edits). */
+  unless?: keyof Caps;
 };
+
+/** The rows this session's capabilities admit. */
+export const gestureShown = (g: Gesture, caps: Caps) =>
+  (!g.needs || caps[g.needs]) && (!g.unless || !caps[g.unless]);
 
 export const gestureText = (g: Gesture) => `${g.input} ${g.says}`;
 
@@ -205,11 +217,19 @@ export const GESTURES: Gesture[] = [
     target: "strip",
     input: "≈",
     says: "= a model reworded the generated line",
+    needs: "polish",
   },
   {
     target: "background",
     input: "drag",
     says: "to select a region, then fold, skip or write a flag from the pill",
+    needs: "flags",
+  },
+  {
+    target: "background",
+    input: "drag",
+    says: "to select a region, then fold or skip it from the pill",
+    unless: "flags",
   },
   { target: "background", input: `${CMD}-scroll`, says: "to zoom" },
   {
@@ -243,6 +263,13 @@ export const GESTURES: Gesture[] = [
     target: "keys",
     input: "⇧F10",
     says: "to open the moves menu (on an open goal it has the chips' moves, on a calc its every-row toggle)",
+    needs: "add",
+  },
+  {
+    target: "keys",
+    input: "⇧F10",
+    says: "to open the moves menu (on a calc, its every-row toggle)",
+    unless: "add",
   },
   {
     target: "keys",

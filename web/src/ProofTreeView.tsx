@@ -317,7 +317,7 @@ import { BAR_GAP, BAR_OVERLAP } from "./hoverBarMetrics";
 import { appliesToKind, disabledSlot, MOVE_LOOK } from "./moveSlots";
 import { MENU_ICON } from "./menuIcons";
 import { clipText } from "./clipText";
-import { injectStyleOnce } from "./taggedRender";
+import { injectStyleOnce } from "./taggedCore";
 import { useOverride } from "./useOverride";
 import { addChipGlyph, chipCopy, chipRows, HOLE_GLYPH } from "./chipMoves";
 import { NodeActionBar, NodeMenu, type NodeMove } from "./nodeBar";
@@ -651,6 +651,25 @@ export interface ProofTreeViewProps {
       is what asks the server; nothing here fires it unasked. Absent (the
       harness) the option simply draws whatever `lints` already holds. */
   onLints?: (on: boolean) => void;
+
+  /** The reading state to START in, where a caller has one to restore (the
+      static viewer's deep links): the layout, the context mode and the
+      comment mode. Read at mount only; each is the same session state the
+      status bar changes, so the reader's own choice wins from then on.
+      Absent, the defaults (outline; the preset's context and comments). */
+  initialView?: {
+    layout?: LayoutMode;
+    context?: HypMode;
+    comments?: CommentMode;
+  };
+
+  /** Told the three `initialView` values whenever one changes, so a caller
+      can keep a shareable link in step (the viewer writes its URL hash). */
+  onViewState?: (s: {
+    layout: LayoutMode;
+    context: HypMode;
+    comments: CommentMode;
+  }) => void;
 }
 
 export default function ProofTreeView({
@@ -705,6 +724,8 @@ export default function ProofTreeView({
   experience = DEFAULT_EXPERIENCE,
   hoverBar,
   onHoverBarChange,
+  initialView,
+  onViewState,
 }: ProofTreeViewProps) {
   const preset = PRESETS[experience];
 
@@ -732,14 +753,18 @@ export default function ProofTreeView({
   // (`useOverride`): a preset that arrives late — the companion's theme file
   // is read after mount — needs no effect, and a row the reader has set keeps
   // the reader's value.
-  const [hypMode, setHypMode] = useOverride<HypMode>(preset.context);
+  const [hypMode, setHypMode] = useOverride<HypMode>(
+    initialView?.context ?? preset.context,
+  );
 
   // Lean's own binder order is the DEFAULT; `Split data & props` is the
   // opt-in extra (and `proofToTree`'s option default matches, so module and
   // bar cannot drift).
   const [hypGroup, setHypGroup] = useState(false);
 
-  const [layout, setLayout] = useState<LayoutMode>("stacked");
+  const [layout, setLayout] = useState<LayoutMode>(
+    initialView?.layout ?? "stacked",
+  );
   const { compact, aside } = layoutArgs(layout);
 
   const [reflow, setReflow] = useState<ReflowMode>("off");
@@ -761,6 +786,7 @@ export default function ProofTreeView({
     flags: !!onEditTactic && !!deleteSlots,
     restructure: !!onApplyRewrite && !!getTacticEdit && !!deleteSlots,
     undo: !!onUndo,
+    polish: !!onPolish && polishReady,
   };
 
   const forcedReflow =
@@ -800,8 +826,13 @@ export default function ProofTreeView({
   const [combineOff, setCombineOff] = useState<Set<string>>(new Set());
 
   const [commentMode, setCommentMode] = useOverride<CommentMode>(
-    preset.comments,
+    initialView?.comments ?? preset.comments,
   );
+  // The caller's link follows the reading state (no state here: a callback
+  // out to an external system, the page's URL).
+  useEffect(() => {
+    onViewState?.({ layout, context: hypMode, comments: commentMode });
+  }, [onViewState, layout, hypMode, commentMode]);
 
   // Paint-only confirmation of a mode change, so a keystroke says what it did.
   // Replaced (never queued) when a new message arrives: the timer is reset, so
