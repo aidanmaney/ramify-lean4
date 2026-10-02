@@ -84,17 +84,6 @@ const GROUP_STYLE = {
   flex: "none",
 } as const;
 
-// The readout's widest form: each count as all nines of at least two digits,
-// so `1 open` and `12 open` reserve alike (and a hundred-odd steps reserve
-// three), and every part present whatever is zero.
-const nines = (n: number) => 10 ** Math.max(2, String(n).length) - 1;
-const statusGhost = (i: StatusInfo): StatusInfo => ({
-  ...i,
-  steps: nines(i.steps),
-  open: nines(i.open),
-  hidden: nines(i.hidden),
-});
-
 export function StatusBar({
   onPlace,
   upToEnabled,
@@ -461,7 +450,7 @@ export function StatusBar({
   const [diagCompact, setDiagCompact] = useState(false);
   // Whether the status readout is drawn. Decided in `fit` from the ghost and
   // the frame alone, like the stage.
-  const [statusOn, setStatusOn] = useState(false);
+  const [statusForm, setStatusForm] = useState<0 | 1 | 2>(0);
   const fit = useCallback(() => {
     const card = cardRef.current;
     const ghost = ghostRef.current;
@@ -505,8 +494,10 @@ export function StatusBar({
     // is measured is what is painted.
     const diagFull = wide(pick("d"));
     const diagShort = wide(pick("dc"));
-    // The status readout at its WIDEST (see the ghost); 0 where there is none.
+    // The status readout at its ACTUAL width, in its two forms (with and
+    // without the name); 0 where there is none.
     const statusW = wide(pick("status"));
+    const statusShortW = wide(pick("status-short"));
 
     setResv((prev) =>
       Object.keys(prev).length === n &&
@@ -572,8 +563,8 @@ export function StatusBar({
     // before the per-severity counts fold into the worst glyph and a total.
     const diagCompact = diagFull > 0 && needWith(0, 0, diagFull) > avail;
     setDiagCompact(diagCompact);
-    const need = (names: number, words: number) =>
-      needWith(names, words, diagCompact ? diagShort : diagFull);
+    const need = (names: number, words: number, sw = 0) =>
+      needWith(names, words, diagCompact ? diagShort : diagFull, sw);
 
     // The ladder, most words first: every name goes (right to left) before
     // any word does (right to left). Stage `n` is the all-value row; `2n`
@@ -581,18 +572,22 @@ export function StatusBar({
     const at = (st: number) =>
       st <= n ? { names: n - st, words: n } : { names: 0, words: 2 * n - st };
     let st = 0;
-    while (st < 2 * n && need(at(st).names, at(st).words) > avail) st++;
+    while (st < 2 * n && need(at(st).names, at(st).words, statusW) > avail)
+      st++;
     const got = at(st);
     setStage((prev) =>
       prev.names === got.names && prev.words === got.words ? prev : got,
     );
-    /* THE STATUS READOUT IS THE FIRST ITEM TO GO, and it goes to NOTHING, not
-    to a glyph: it is drawn only at the first stage of the ladder (every item
-    still `Name: value`), and only where the row WITH it still fits. Short of
-    that it is dropped before any value item sheds its name. Its width is its
-    widest text (the ghost), so a count changing moves neither the decision
-    nor the stage. */
-    setStatusOn(statusW > 0 && st === 0 && needWith(n, n, diagCompact ? diagShort : diagFull, statusW) <= avail);
+    /* THE STATUS READOUT IS THE LAST ITEM TO GO (2026-10-02, revised). It is
+    state, not a setting, so it keeps its place until the settings have
+    compacted as far as they go: the ladder above is walked with the readout
+    at its full ACTUAL width, and only where even the all-glyph floor cannot
+    hold it does it shed its name, then go to nothing. Its width depends on
+    the proof and its cuts, never on the stage, so it cannot oscillate. */
+    const dw = diagCompact ? diagShort : diagFull;
+    const fits = (sw: number) =>
+      sw > 0 && needWith(got.names, got.words, dw, sw) <= avail;
+    setStatusForm(fits(statusW) ? 2 : fits(statusShortW) ? 1 : 0);
     setLifted(!dodge);
     /* The rail's climb. In the lane the strip and its message strip keep
     clear of the rail's column by the button's reserve, so the rail stays
@@ -800,9 +795,9 @@ export function StatusBar({
             arrival moves nothing), a divider where the count follows them,
             the count, `?`. */}
         <div style={{ ...GROUP_STYLE, marginLeft: "auto" }}>
-          {statusOn && status && (
+          {statusForm > 0 && status && (
             <>
-              <StatusReadout info={status} />
+              <StatusReadout info={statusForm === 2 ? status : { ...status, name: "" }} />
               <BarDivider />
             </>
           )}
@@ -877,13 +872,17 @@ export function StatusBar({
         <span data-g="help" style={{ display: "inline-flex" }}>
           {helpBtn}
         </span>
-        {/* The status readout at its widest: every part present, each count
-            reserved at two digits (more where it has more), the name as it
-            will be shown — so a count changing never changes `fit`'s answer. */}
+        {/* The status readout as it will be drawn, in both forms: its actual
+            text, so the strip never reserves more than it shows. */}
         {status && (
-          <span data-g="status" style={{ display: "inline-flex" }}>
-            <StatusReadout info={statusGhost(status)} />
-          </span>
+          <>
+            <span data-g="status" style={{ display: "inline-flex" }}>
+              <StatusReadout info={status} />
+            </span>
+            <span data-g="status-short" style={{ display: "inline-flex" }}>
+              <StatusReadout info={{ ...status, name: "" }} />
+            </span>
+          </>
         )}
         {/* The diagnostics count item, measured on its own: it is present
             only while the proof has problems. */}
