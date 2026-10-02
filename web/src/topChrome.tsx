@@ -601,12 +601,12 @@ export function ZoomRail({
           visible on the button it applies to rather than only in a tooltip. */}
       <RailButton
         glyph={alt ? "⊞" : "+"}
-        title={`Zoom in (${CMD}-scroll zooms at the cursor) — ⌥-click unfolds every branch and restores every skipped run`}
+        title={`Zoom in (${CMD}-scroll zooms at the cursor) — ⌥-click: Expand all, show every step: clear every fold and skip (Undo in the toast)`}
         onClick={(e) => (e.altKey ? onExpandAll() : onZoomIn())}
       />
       <RailButton
         glyph={alt ? "⊟" : "−"}
-        title="Zoom out — ⌥-click folds every branch"
+        title="Zoom out — ⌥-click: Collapse to the outline, fold each branch where it leaves the trunk (Undo in the toast)"
         onClick={(e) => (e.altKey ? onCollapseAll() : onZoomOut())}
       />
       <RailButton glyph="⛶" title="Fit width" onClick={onFit} />

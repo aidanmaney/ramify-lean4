@@ -220,19 +220,11 @@ export const BAR_ROW: CSSProperties = {
   borderRadius: CHROME_RADIUS,
 };
 
-/* THE EXTRAS SLOTS. Three of the bar's menus hold TOGGLES beside their main
-setting — Layout's side-by-side and gallery, Context's `Split data & props`,
-and the reading eye's brief/merge/to-cursor — and none of them shows in the
-item's own label, which names the choice and not the extras. A row of small
-SQUARES under the item says which are up without naming them (the popover rows
-do that) and without costing a character of the row.
-
-They are SLOTS, not a count: each extra owns a fixed position in the group and
-an unset one is drawn FAINT (`SLOT_OFF`; it was empty until 2026-09-24, when a lone
-lit square read as off-centre), so the eye with brief and to-cursor up reads
-`■ ▫ ■` and the reader can tell WHICH is off rather than only how many. Every
-slot therefore reserves its `SLOT_PX` whether it is set or not, which is also
-what keeps the group's centre still as extras toggle.
+/* THE DOT (2026-10-02). Every bar item carries AT MOST ONE small square under
+it, lit when something in that item's panel is switched on (non-default) and
+absent otherwise. It says THAT, never WHICH: the item's tip names what is on
+(`Layout: outline · side-by-side — …`, the eye's list). It replaces the
+per-extra positional slots, which were an undecodable code.
 
 It is ABSOLUTELY POSITIONED inside the item's fixed 20px box, so it can reach
 neither the row's height (ONE HEIGHT) nor the item's width (STABLE WIDTH) —
@@ -242,10 +234,6 @@ under the label in the text form and under the glyph box in the compact one.
 `bottom: -1` drops it into the card's own bottom padding — still inside the
 border, and clear of the label's descenders. */
 export const SLOT_PX = 3;
-
-/** An unset slot: the ink at a quarter, so the whole group's extent — and
-therefore its centre — shows. */
-export const SLOT_OFF = `color-mix(in srgb, ${CHROME_INK} 25%, transparent)`;
 
 export const SLOT_GAP_PX = 2;
 
@@ -326,8 +314,8 @@ export interface BarValueItem {
    `full`. Paint only: the reserve is unchanged, so nothing moves when a
    value turns off. */
   dim?: boolean;
-  // The extras behind this item's menu, one per fixed slot (see `ExtraSlots`).
-  slots?: boolean[];
+  // Lit when something in this item's panel is on (see `ExtraSlots`).
+  dot?: boolean;
   onAlt?: () => void;
   /** Controls drawn immediately AFTER this item's button, inside the same
    inline group — the tour's `‹ ›`. They ride both of `valueMenu`'s forms, so

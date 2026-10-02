@@ -1,4 +1,4 @@
-import { Fragment, useRef, type CSSProperties } from "react";
+import { Fragment, useLayoutEffect, useRef, type CSSProperties } from "react";
 
 import {
   GESTURES,
@@ -62,6 +62,28 @@ export function HelpPanel({
   // mouse, nothing moves. Closing hands focus back to whatever had it if it
   // was inside the panel.
   useRestoreFocus(ref, focusBox);
+  // HUNG FROM ITS ITEM like every panel — by the `?` item's RIGHT edge (it is
+  // the last item in the row, so a left-hung 320px panel would run off the
+  // frame). Paint only: `left` and a clamp transform written to the element,
+  // measured from the strip (its containing block) and the frame.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const strip = el?.offsetParent as HTMLElement | null;
+    if (!el || !strip) return;
+    const btn = Array.from(
+      strip.querySelectorAll<HTMLElement>('[aria-haspopup="dialog"][aria-expanded="true"]'),
+    ).find((b) => !b.closest("[data-g]"));
+    if (!btn) return;
+    const frame = (strip.offsetParent as HTMLElement | null) ?? strip;
+    const sr = strip.getBoundingClientRect();
+    const br = btn.getBoundingClientRect();
+    el.style.transform = "";
+    el.style.left = `${br.right - sr.left - strip.clientLeft - el.offsetWidth}px`;
+    const r = el.getBoundingClientRect();
+    const f = frame.getBoundingClientRect();
+    const dx = Math.max(Math.min(0, f.right - 4 - r.right), f.left + 4 - r.left);
+    if (dx !== 0) el.style.transform = `translateX(${dx}px)`;
+  });
   injectStyleOnce("ptw-help", HELP_CSS);
   return (
     <div

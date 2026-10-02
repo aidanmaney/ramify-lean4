@@ -30,7 +30,9 @@ export const openedByKeyboard = () => lastInputKeyboard;
  `useRestoreFocus`'s `focusIn`. Module-level, so its identity is stable. */
 export function focusFirstRow(box: HTMLElement) {
   const rows = Array.from(
-    box.querySelectorAll<HTMLElement>("[role^=menuitem]:not(:disabled)"),
+    box.querySelectorAll<HTMLElement>(
+      "[role^=menuitem]:not(:disabled):not([data-ptw-slider])",
+    ),
   );
   const first =
     rows.find((r) => r.getAttribute("aria-checked") === "true") ?? rows[0];
@@ -65,7 +67,8 @@ export function useRestoreFocus(
 
 /** The rows a panel's arrow keys move between: its menu items and its range
  slider (Up/Down leave the slider for the next row; Left/Right stay its own). */
-const PANEL_STOPS = "[role^=menuitem]:not(:disabled), input[type=range]";
+const PANEL_STOPS =
+  "[role^=menuitem]:not(:disabled):not([data-ptw-slider]), input[type=range]";
 
 /** Keyboard on a PANEL of rows — the pattern `NodeMenu` uses: Up/Down/Home/End
  walk the rows, Tab closes (focus returns to the trigger through `BarPanel`'s

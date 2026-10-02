@@ -142,8 +142,8 @@ export function DiagCountItem({
       label={<DiagCounts counts={counts} compact={compact} />}
       title={
         open
-          ? `${words} — click to close the messages (Esc)`
-          : `${words} — click for the messages`
+          ? `Problems: ${words} — click to close the messages (Esc)`
+          : `Problems: ${words} — click for the messages`
       }
       accent={open}
       onClick={(e) => {

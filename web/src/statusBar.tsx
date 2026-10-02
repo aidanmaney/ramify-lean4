@@ -214,8 +214,8 @@ export function StatusBar({
   const hasMarks = authorCount + myCount > 0;
   // `2/5` while reading; `–/5` (an EN DASH) before it has been started, and
   // `–/0` where the reading is empty — the count is a fact about the proof
-  // either way, so it is always shown. NO LIST NAME: the two slots under the
-  // item say which sets are in, so the value is just the place.
+  // either way, so it is always shown. NO LIST NAME and no dots: the value is
+  // just the place (the panel's checkboxes say which sets are in).
   // …and `off` where BOTH lists are off: there is no reading at all then, so
   // a count would be a fact about nothing. It is drawn as an OFF value — the
   // dimming `Width: full` wears — rather than accented away.
@@ -228,7 +228,17 @@ export function StatusBar({
   // ONE dot under the eye, with the absolute meaning every other slot has:
   // lit when ANY reading option is on; the tip names which.
   const readingNames = readingOn(reading);
-  const readingSlots = [readingNames.length > 0];
+  // Layout's panel options that are ON: side-by-side only where it is
+  // effective (wide draws nothing), and the width while labels wrap.
+  const layoutTitle = LAYOUT_MODES[layout].title;
+  const layoutCut = layoutTitle.indexOf(" — ");
+  const layoutHead = layoutCut < 0 ? layoutTitle : layoutTitle.slice(0, layoutCut);
+  const layoutRest = layoutCut < 0 ? "" : layoutTitle.slice(layoutCut);
+  const layoutOn = [
+    ...(sbsEnabled && sideBySide ? ["side-by-side"] : []),
+    ...(gallery ? ["gallery"] : []),
+    ...(effReflow !== "off" ? ["narrower width"] : []),
+  ];
 
   // A compact label is drawn in the TREE's code font, not the bar's system UI
   // font: these glyphs were designed to sit in that stack and several are
@@ -254,15 +264,12 @@ export function StatusBar({
       ),
       value: LAYOUT_MODES[layout].name,
       values: Object.values(LAYOUT_MODES).map((m) => m.name),
-      title: `${LAYOUT_MODES[layout].title}. ⌥-click: next layout`,
+      title: `${layoutHead}${layoutOn.length > 0 ? ` · ${layoutOn.join(" · ")}` : ""}${layoutRest}${layoutOn.length > 0 ? " (a dot means a panel option is on)" : ""}. ⌥-click: next layout`,
       // No accent: the four layouts are a CHOICE AMONG EQUALS, and the item
       // already says which one is up. It lights only while its panel is open.
-      // The list's two TOGGLES take the first two slots — side-by-side only
-      // where it is effective, since in the wide layout it draws nothing —
-      // and the THIRD is the width, which lives in this panel now
-      // (2026-09-24): lit while labels wrap narrower than full, the reading
-      // Width's own accent used to give (so lit in tracks, which wraps).
-      slots: [sbsEnabled && sideBySide, gallery, effReflow !== "off"],
+      // ONE dot, lit when any panel option is on (`layoutOn`, which the tip
+      // lists): side-by-side, gallery, or labels wrapping narrower than full.
+      dot: layoutOn.length > 0,
       onAlt: () => onLayoutChange(LAYOUT_MODES[layout].next),
     },
     {
@@ -271,10 +278,10 @@ export function StatusBar({
       glyph: glyph(HYP_MODES[hypMode].glyph, HYP_MODES[hypMode].glyphPx),
       value: HYP_MODES[hypMode].name,
       values: Object.values(HYP_MODES).map((m) => m.name),
-      title: `${HYP_MODES[hypMode].title}. ⌥-click: next breadth`,
-      // `Split data & props` is the OPT-IN extra — Lean's own binder order is
+      title: `${HYP_MODES[hypMode].title}${hypGroup ? " · data & props split (a dot means a panel option is on)" : ""}. ⌥-click: next breadth`,
+      // `split data & props` is the OPT-IN extra — Lean's own binder order is
       // the default — so the one slot is lit when the split is SET.
-      slots: [hypGroup],
+      dot: hypGroup,
       onAlt: () => onHypModeChange(HYP_MODES[hypMode].next),
     },
     {
@@ -287,7 +294,7 @@ export function StatusBar({
       ),
       value: commentName,
       values: Object.values(COMMENT_MODES).map((m) => m.name),
-      title: `Comments: ${commentName} — how a tactic's prose is drawn: as strips above the box, hidden, standing in for the tactic's own text, or generated from the step itself (\u2234) where the author wrote none. ⌥-click: next`,
+      title: `Comments: ${commentName} — how a tactic's prose is drawn: as strips above the box, hidden, standing in for the tactic's own text, or generated from the step itself (\u2234) where the author wrote none. ⌥-click: next mode`,
       onAlt: () => onCommentModeChange(COMMENT_MODES[commentMode].next),
     },
     // READING, the last of the LEFT group: how much of each node you are asked
@@ -317,7 +324,7 @@ export function StatusBar({
       title: `Reading options: ${readingNames.length > 0 ? readingNames.join(" · ") : "all off"} — click to change`,
       // No standing accent: its toggles take the SLOT instead, which says
       // that at least one is up. Lit only while its panel is open.
-      slots: readingSlots,
+      dot: readingNames.length > 0,
     },
     // THE MARKS, last in the ladder and so the first to compact at each
     // stage — it is the newest and the most transient of the five, and the
@@ -339,17 +346,15 @@ export function StatusBar({
       // Every title opens `Marks: <value> — `, so the name the VALUE form
       // drops is the first thing its tip says.
       title: marksOff
-        ? "Marks: off — both lists are off; click for the lists, ⌥-click cycles"
+        ? "Marks: off — both lists are off; click for the lists. ⌥-click: next list"
         : tourAt === null
           ? `Marks: ${tourValue} — an ordered reading of the proof, not started: ${authorCount} source mark${
               authorCount === 1 ? "" : "s"
-            } (\`.mark\` in the source), ${myCount} temporary (the corner nub drops one, kept for this session); the two marks below say which of those lists is ON. \`<\` and \`>\` start it. Click for the two lists; ⌥-click cycles them (both → source → temp → none)`
-          : `Marks: ${tourValue} — the two marks below say which lists are on (source, then temporary). \`<\` and \`>\` step, Esc lets go of the current mark. Click for the two lists; ⌥-click cycles them (both → source → temp → none)`,
-      // NO ACCENT (user direction): the marks are a READING, not a mode that is
-      // on, and the value already says how far into it you are. The two
-      // SLOTS are the two TOGGLES — lit when the set is IN the reading, not
-      // when it merely has stops: they look like switches, so they are.
-      slots: [tourLists.source, tourLists.temp],
+            } (\`.mark\` in the source), ${myCount} temporary (the corner nub drops one, kept for this session); \`<\` and \`>\` start it. Click for the two lists. ⌥-click: next list`
+          : `Marks: ${tourValue} — \`<\` and \`>\` step, Esc lets go of the current mark. Click for the two lists. ⌥-click: next list`,
+      // NO ACCENT, NO DOT (user direction): the marks are a READING, not a
+      // mode that is on, and the value already says how far into it you are
+      // and, as `off`, whether the lists are in.
       after: (
         <>
           <BarButton
@@ -630,8 +635,8 @@ export function StatusBar({
         style={{
           display: "inline-block",
           // The VALUE form centres its text in the reserved width: the item's
-          // slots centre under the whole box, and a left-set `–/2` in a box
-          // sized for `99/99` stood well left of the squares meant to sit
+          // dot centres under the whole box, and a left-set `–/2` in a box
+          // sized for `99/99` stood well left of the dot meant to sit
           // under it (user report, 2026-09-24). The full form keeps the value
           // left-set against its name — `Layout: outline` is one phrase.
           textAlign: form === "value" ? "center" : "left",
@@ -672,7 +677,7 @@ export function StatusBar({
         // item the panel hangs from says so — and nothing else lights it.
         accent={barOpen === it.id}
         open={barOpen === it.id}
-        slots={it.slots}
+        dot={it.dot}
         onToggle={(x) => toggle(it.id, x)}
         onAlt={it.onAlt}
       />
@@ -905,15 +910,14 @@ export function StatusBar({
           caps={caps}
           fontFamily={fontFamily}
           onClose={() => onHelpOpenChange(false)}
-          // Hung from the strip's LEFT edge, which is `LANE_INSET` from the
-          // frame's whatever the row carries — a fixed x, so the panel lands
-          // on screen at every width the row compacts through.
+          // Starts at the strip's left edge; HelpPanel then hangs it from
+          // the `?` item's RIGHT edge (a layout effect, clamped in the frame).
           anchor={{ left: 0, bottom: "100%", marginBottom: 4 }}
         />
       )}
 
       {barOpen === "layout" && (
-        <BarPanel left={menuX} width={220} label="Layout" onClose={close}>
+        <BarPanel left={menuX} label="Layout" onClose={close}>
           {(Object.keys(LAYOUT_MODES) as LayoutMode[]).map((m) => (
             <BarRow
               key={m}
@@ -988,6 +992,9 @@ export function StatusBar({
               the tracks seam still drags it; the item's third slot is lit
               while labels wrap narrower than full. */}
           <div
+            role="menuitem"
+            data-ptw-slider=""
+            aria-label="Width — wrap labels and context lines at this many columns"
             style={{
               display: "flex",
               alignItems: "center",
@@ -1045,7 +1052,7 @@ export function StatusBar({
       )}
 
       {barOpen === "context" && (
-        <BarPanel left={menuX} width={190} label="Context" onClose={close}>
+        <BarPanel left={menuX} label="Context" onClose={close}>
           {(Object.keys(HYP_MODES) as HypMode[]).map((m) => (
             <BarRow
               key={m}
@@ -1061,7 +1068,7 @@ export function StatusBar({
           <MenuDivider />
           <BarRow
             kind="toggle"
-            label="Split data & props"
+            label="split data & props"
             title="Draw each goal's context as data first, then propositions, with a divider (default: Lean's own binder order)"
             on={hypGroup}
             onClick={() => onHypGroupChange(!hypGroup)}
@@ -1071,24 +1078,11 @@ export function StatusBar({
 
       {barOpen === "comments" && (
         <BarPanel left={menuX} label="Comments" onClose={close}>
-          {(
-            [
-              ["shown", "Comments drawn as strips above the box"],
-              ["hidden", "No comment strips; the room goes back to the tree"],
-              [
-                "instead",
-                "A commented tactic's prose stands in for its label, inside the box",
-              ],
-              [
-                "narrate",
-                "Strips as above, and where the author wrote none a line generated from the step itself (∴); a folded goal's strip summarises what it hides",
-              ],
-            ] as const
-          ).map(([v, title]) => (
+          {(Object.keys(COMMENT_MODES) as CommentMode[]).map((v) => (
             <BarRow
               key={v}
               label={COMMENT_MODES[v].name}
-              title={title}
+              title={COMMENT_MODES[v].title}
               on={commentMode === v}
               onClick={() => {
                 onCommentModeChange(v);
@@ -1102,7 +1096,7 @@ export function StatusBar({
       {/* Gated on the item too: removing the last mark (⌥-click on its tab)
           with this panel up takes the item away, and the panel with it. */}
       {barOpen === "tour" && hasMarks && (
-        <BarPanel left={menuX} width={210} label="Marks" onClose={close}>
+        <BarPanel left={menuX} label="Marks" onClose={close}>
           {/* TWO TOGGLES, not a choice among three: each says whether that
               set is IN the reading, and the reading is their union. Toggles,
               so the rows leave the panel open; with both off the bar item
@@ -1110,7 +1104,7 @@ export function StatusBar({
           <BarRow
             kind="toggle"
             label={`source (${authorCount})`}
-            title="The marks the file carries as `.mark` — bare, or `.mark 3` for an explicit rank"
+            title="The marks the file carries as `.mark` — bare, or `.mark 3` for an explicit rank. ⌥-click the Marks item cycles the lists (both → source → temp → none)"
             on={tourLists.source}
             onClick={() => onTourListToggle("source")}
           />
@@ -1134,7 +1128,7 @@ export function StatusBar({
       )}
 
       {barOpen === "reading" && (
-        <BarPanel left={menuX} width={196} label="Reading options" onClose={close}>
+        <BarPanel left={menuX} label="Reading options" onClose={close}>
           {/* Toggles, so every row leaves the panel open. The rows are
               experience.ts's `READING_OPTIONS`, in its order. `brief`'s hover
               drives the in-place underline preview of what it would elide.
@@ -1169,7 +1163,7 @@ export function StatusBar({
               {o.id === "polish" && proposeShown && (
                 <BarRow
                   kind="action"
-                  label={proposeBusy ? "suggesting…" : "suggest a rewrite"}
+                  label={proposeBusy ? "Suggesting…" : "Suggest a rewrite"}
                   title="Ask for one of the rewrites already offered on this proof, with a reason — the elaborator still has the last word"
                   disabled={proposeBusy}
                   onClick={onPropose}

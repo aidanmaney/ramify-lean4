@@ -129,17 +129,37 @@ export type CommentMode = "shown" | "hidden" | "instead" | "narrate";
 // One coding of the comment switch's three stops: the word the bar prints and
 // the ⌥-cycle's order. StatusBar's own row list keeps its per-row titles, but
 // the NAME lives here so bar label and toast cannot drift.
-export const COMMENT_MODES: Record<CommentMode, { name: string; next: CommentMode }> =
-  {
-    shown: { name: "show", next: "hidden" },
-    hidden: { name: "hide", next: "instead" },
-    // `instead` used to print the word "narrate"; C2/C3 took that word for the
-    // GENERATED prose, which is what a reader means by it, and gave this mode
-    // back the name it has always had in the code — the author's comment
-    // standing in INSTEAD of the tactic's own text.
-    instead: { name: "in place", next: "narrate" },
-    narrate: { name: "narrate", next: "shown" },
-  };
+export const COMMENT_MODES: Record<
+  CommentMode,
+  { name: string; next: CommentMode; title: string }
+> = {
+  shown: {
+    name: "show",
+    next: "hidden",
+    title: "Comments: show — comments drawn as strips above the box",
+  },
+  hidden: {
+    name: "hide",
+    next: "instead",
+    title: "Comments: hide — no comment strips; the room goes back to the tree",
+  },
+  // `instead` used to print the word "narrate"; C2/C3 took that word for the
+  // GENERATED prose, which is what a reader means by it, and gave this mode
+  // back the name it has always had in the code — the author's comment
+  // standing in INSTEAD of the tactic's own text.
+  instead: {
+    name: "in place",
+    next: "narrate",
+    title:
+      "Comments: in place — a commented tactic's prose stands in for its label, inside the box",
+  },
+  narrate: {
+    name: "narrate",
+    next: "shown",
+    title:
+      "Comments: narrate — strips as above, and where the author wrote none a line generated from the step itself (∴); a folded goal's strip summarises what it hides",
+  },
+};
 
 export const REFLOW_OFF_STOP = REFLOW_MAX_CHARS + 1;
 

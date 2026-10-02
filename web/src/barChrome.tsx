@@ -1,5 +1,5 @@
 // The status bar's small parts: buttons, checks, rows, panels and menus, the drawn glyphs (eye, comment,
-// chevron, layout marks), the glyph box, and the extras slots under a bar item.
+// chevron, layout marks), the glyph box, and the one dot under a bar item.
 import {
   Fragment,
   useCallback,
@@ -36,7 +36,6 @@ import {
   HDR_CHEVRON_W,
   MENU_PANEL,
   SLOT_GAP_PX,
-  SLOT_OFF,
   SLOT_PX,
   type StatusInfo,
   STATUS_GAP,
@@ -149,7 +148,7 @@ correction converge in one pass instead of chasing itself.
 
 A transform on an absolutely-positioned span reaches no layout, so both
 standing promises hold untouched: ONE HEIGHT and STABLE WIDTH. */
-function ExtraSlots({ slots }: { slots: boolean[] }) {
+function ExtraSlots({ on }: { on: boolean }) {
   const dpr = useDevicePixelRatio();
   const ref = useRef<HTMLSpanElement | null>(null);
   // The nudge in force, held twice: as STATE (what the render draws) and in a
@@ -205,7 +204,9 @@ function ExtraSlots({ slots }: { slots: boolean[] }) {
   }, [dpr, ratio, scale]);
   useLayoutEffect(snap);
 
-  if (slots.length === 0) return null;
+  // ONE dot, drawn only while lit: an unlit square on every item is chrome
+  // that says nothing.
+  if (!on) return null;
   return (
     <span
       ref={ref}
@@ -223,21 +224,14 @@ function ExtraSlots({ slots }: { slots: boolean[] }) {
         transform: `translate(${nudge.dx}px, ${nudge.dy}px)`,
       }}
     >
-      {slots.map((on, i) => (
-        <span
-          key={i}
-          style={{
-            width: size,
-            height: size,
-            flex: `0 0 ${size}px`,
-            // An UNSET slot is drawn faint rather than empty: an empty one
-            // left a lone lit square reading as off-centre (the eye with only
-            // its last extra up), where the group is centred and the square
-            // is simply in its own place (user report, 2026-09-24).
-            background: on ? CHROME_INK : SLOT_OFF,
-          }}
-        />
-      ))}
+      <span
+        style={{
+          width: size,
+          height: size,
+          flex: `0 0 ${size}px`,
+          background: CHROME_INK,
+        }}
+      />
     </span>
   );
 }
@@ -248,7 +242,7 @@ export function BarButton({
   accent,
   muted,
   disabled,
-  slots,
+  dot,
   popup,
   expanded,
   onClick,
@@ -259,8 +253,8 @@ export function BarButton({
   accent?: boolean;
   muted?: boolean;
   disabled?: boolean;
-  // One entry per extra behind this menu, in a FIXED order; see `ExtraSlots`.
-  slots?: boolean[];
+  // Lit when something in this item's panel is switched on; see `ExtraSlots`.
+  dot?: boolean;
   /** What the button opens, for assistive tech; `expanded` is whether it is up. */
   popup?: "menu" | "dialog";
   expanded?: boolean;
@@ -296,27 +290,32 @@ export function BarButton({
       }}
     >
       {label}
-      <ExtraSlots slots={slots ?? []} />
+      <ExtraSlots on={!!dot} />
     </button>
   );
 }
 
 /** THE STATUS READOUT (2026-10-02): `tour_reading · 5 steps · 1 open · 4 hidden`
- — a readout, not a setting, so no `Name:` and no slots. One `<span>` so the
+ — a readout, not a setting, so no `Name:` and no dot. One `<span>` so the
  ghost measures one unit; its two counts that can be acted on are real
  `<button>`s styled as text (`BARE_BTN`) — `open` goes to the next open goal,
  `hidden` expands everything — and the name and the step count are inert.
  Drawn at `DIM_OPACITY`, like secondary text. */
 export function StatusReadout({ info }: { info: StatusInfo }) {
-  const { props } = useTip();
+  const { props, ctl } = useTip();
   const p = statusParts(info);
   const sep = <span style={{ whiteSpace: "pre" }}> · </span>;
-  const btn = (text: string, label: string, run: () => void) => (
+  const btn = (text: string, label: string, run: () => void) => {
+    const n = parseInt(text, 10);
+    const tip = label.replace("{n}", Number.isNaN(n) ? text : String(n));
+    return (
     <button
       type="button"
       data-ptw-baritem=""
-      aria-label={label}
+      aria-label={tip}
       onClick={run}
+      onPointerEnter={(e) => ctl.enter(e.currentTarget)}
+      onPointerLeave={(e) => ctl.leave(e.currentTarget)}
       style={{
         ...BARE_BTN,
         font: "inherit",
@@ -333,7 +332,8 @@ export function StatusReadout({ info }: { info: StatusInfo }) {
     >
       {text}
     </button>
-  );
+    );
+  };
   return (
     <span
       role="group"
@@ -359,13 +359,13 @@ export function StatusReadout({ info }: { info: StatusInfo }) {
       {p.open && (
         <>
           {sep}
-          {btn(p.open, "Go to the next open goal", info.onOpen)}
+          {btn(p.open, "Open goals: {n} — click to go to the next", info.onOpen)}
         </>
       )}
       {p.hidden && (
         <>
           {sep}
-          {btn(p.hidden, "Expand all hidden steps", info.onHidden)}
+          {btn(p.hidden, "Hidden steps: {n} — click to expand all", info.onHidden)}
         </>
       )}
     </span>
@@ -453,7 +453,12 @@ export function BarRow({
         ctl.leave(e.currentTarget);
         onHover?.(false);
       }}
-      style={{ ...BAR_ROW, opacity: disabled ? DISABLED_OPACITY : 1 }}
+      data-ptw-baritem=""
+      style={{
+        ...BAR_ROW,
+        opacity: disabled ? DISABLED_OPACITY : 1,
+        background: "var(--ptw-bar-item-bg, transparent)",
+      }}
     >
       {kind === "toggle" ? (
         <span
@@ -503,7 +508,8 @@ with the `menuitem` role, so `panelKeys`' ↑/↓ reach every one in turn and it
 ←/→ move between them (the row is a `[data-ptw-rowgroup]`); the tip and the
 aria-label are `name — what it does`, the name being the full one the short
 label stands for. Left-aligned, `CHROME_TEXT_SM`, a `·` between — the voice the
-bar's own lists use. Actions leave the panel up, like every action row. */
+bar's own lists use. Actions leave the panel up, like every action row.
+RULE: a LONE action in a panel is a full `BarRow kind="action"`; a GROUP of 2+ is this compact row. */
 export function BarActionRow({
   actions,
 }: {
@@ -576,7 +582,7 @@ export function BarMenu({
   title,
   accent,
   open,
-  slots,
+  dot,
   onToggle,
   onAlt,
 }: {
@@ -585,7 +591,7 @@ export function BarMenu({
   accent?: boolean;
   /** Its panel is up (`aria-expanded`). */
   open?: boolean;
-  slots?: boolean[];
+  dot?: boolean;
   onToggle: (x: number) => void;
   // ⌥-click advances the setting to its next value instead of opening the
   // list — the same wrapper the list's own rows call, so it toasts and
@@ -602,7 +608,7 @@ export function BarMenu({
       label={label}
       title={title}
       accent={accent}
-      slots={slots}
+      dot={dot}
       popup="menu"
       expanded={open}
       onClick={(e) => {
@@ -682,13 +688,16 @@ export function BarPanel({
         bottom: "100%",
         left,
         marginBottom: 4,
-        minWidth: width ?? 150,
+        minWidth: width ?? MENU_MIN_W,
       }}
     >
       {children}
     </div>
   );
 }
+
+/** One minimum width for every bar panel (the recorded Reading width); Help is a document and keeps its own. */
+export const MENU_MIN_W = 196;
 
 /** The room a panel keeps from the frame's edge when it is slid back inside. */
 const PANEL_EDGE = 4;
