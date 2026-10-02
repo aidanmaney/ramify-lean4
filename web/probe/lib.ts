@@ -23,3 +23,10 @@ export { describePreset, EXPERIENCES } from "../src/experience";
 export type * from "../src/types";
 export * from "../src/matrixScenes";
 export * from "../src/matrixCells";
+// The static viewer's pure modules (`probe viewer`).
+export { checkPayload, PayloadError, PAYLOAD_VERSION, proofSlug } from "../src/viewerPayload";
+export { parseLink, formatLink } from "../src/viewerLink";
+export { lexPaint } from "../src/sourceLex";
+export { GESTURES, gestureShown, gestureText } from "../src/gestures";
+export { flattenTaggedText } from "../src/taggedText";
+export { HYP_MODES, LAYOUT_MODES, COMMENT_MODES } from "../src/viewModes";

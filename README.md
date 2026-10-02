@@ -29,6 +29,9 @@ which hypotheses. Everything Ramify adds sits beside that output, in extra data
 keyed by each step's position.
 
 - **Using it in your own project?** See [INSTALL.md](INSTALL.md).
+- **Showing a proof to someone without Lean?** The static viewer publishes
+  proofs as a website (or one self-contained HTML file) that reads like the
+  tree in the infoview, with no Lean server behind it: [docs/viewer.md](docs/viewer.md).
 - **Working on it?** Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
   gate and the branch model; [CLAUDE.md](CLAUDE.md) is the engineering record —
   constraints, measurements, and the reasons behind the non-obvious choices

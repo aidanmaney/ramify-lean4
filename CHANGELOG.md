@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**The static viewer**
+- Proofs can be published as a static website, or as one self-contained HTML file, that draws the same tree as the infoview with no Lean server: hovers, comments, diagnostics, every layout and reading option, and a coloured source pane beside the tree that the tree follows. Lean runs once, on the author's machine (`web/scripts/publish.mjs`); see `docs/viewer.md`.
+- `ppharness --widget-data` emits what only the widget carried before (diagnostics, tactic tokens, the declaration header, tagged goals and token hovers), from the same harvest functions the widget calls.
+- The `?` panel no longer mentions model polish, flag writes or the frontier chips where they cannot be used.
+
 ## 1.0.0 — 2026-09-28
 
 The first stable release. The 0.0.x releases were pre-release builds; there is no upgrade path to describe from them beyond installing this one.

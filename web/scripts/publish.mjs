@@ -217,7 +217,11 @@ function indexPage(entries) {
       const rows = e.payload.proofs
         .map((p) => {
           const slug = p.name ?? `@${p.index}`;
-          const head = (p.proof.declHeader ?? "").split("\n")[0];
+          // The statement as written, without the `:= by` that opens the body.
+          const head = (p.proof.declHeader ?? "")
+            .replace(/\s+/g, " ")
+            .replace(/\s*:=\s*(by)?\s*$/, "")
+            .trim();
           const errs = (p.proof.diagnostics ?? []).filter((d) => d.severity === 1).length;
           return `<li><a href="view.html#file=${encodeURIComponent(e.name)}&amp;proof=${encodeURIComponent(slug)}"><code>${esc(head || slug)}</code></a>${errs ? ` <span class="err">${errs} error${errs > 1 ? "s" : ""}</span>` : ""}</li>`;
         })
@@ -254,7 +258,8 @@ main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 15px; margin: 28px 0 2px; }
 code { font-family: "JuliaMono", "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 13px; }
-a { color: var(--link); }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
 ul { padding-left: 0; list-style: none; margin: 6px 0; }
 li { padding: 3px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .dim { color: var(--dim); }

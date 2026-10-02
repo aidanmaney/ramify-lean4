@@ -8,7 +8,15 @@
 //   npm run probe -- lsp <file.lean> <line> <col> [--json] [--cf=0] [--all]
 //                                        [--trace] [--rewrite] [--collapse]
 //                                        [--rename] [--direct] [--lint]
-//                                        [--edits]
+//                                        [--edits] [--wire]
+//
+// `--wire` (with `--all`) is ONE HARVEST, BOTH WIRES' gate: it also runs the
+// CLI (`ppharness --widget-data`) over the same file and compares, for every
+// declaration, what both wires carry of the widget-only groups — tactic edits,
+// the header and its cuts, diagnostics (the RPC's file-wide list cut to the
+// declaration, as the CLI's is), the token hovers (by start, doc and covered
+// text) and the tagged goals (by CONTENT: goal ids are mvar ids, which
+// renumber per elaboration). Any difference is a fork in the harvest.
 //
 // `--lint` is D4's live gate: it calls `ProofTree.lintDecl` (one re-elaboration
 // of the declaration with Mathlib's own linters on), prints every lint with
@@ -64,7 +72,7 @@
 // `$/lean/rpc/connect` for a sessionId; `$/lean/rpc/call` with
 // {textDocument, position, sessionId, method, params}.  Messages come from
 // `d.toDiagnostic.message`, never `stripTags`.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   proofToTree,
   inlineRewrite,
@@ -183,6 +191,39 @@ const editRows = (r) => {
   return rows;
 };
 
+// `--wire`: the CLI's records for this file, compared group by group.
+const wirePayloads = [];
+function wireCompare(live) {
+  const out = execFileSync("lake", ["env", path.join(leanDir, ".lake/build/bin/ppharness"), abs, "--widget-data"], { cwd: leanDir, encoding: "utf8", maxBuffer: 1 << 30 });
+  const cli = out.split("\n").filter(Boolean).map((l) => JSON.parse(l).data.proof);
+  const flat = (t) => (!t ? "" : "text" in t ? t.text : "append" in t ? t.append.map(flat).join("") : flat(t.tag[1]));
+  const le = (a, b) => a.line < b.line || (a.line === b.line && a.character <= b.character);
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const goalsOf = (r) => (r.taggedGoals ?? []).map((g) => JSON.stringify([flat(g.goal.type), g.goal.hyps.map((h) => [h.names, flat(h.type), flat(h.val)])])).sort();
+  const hoversOf = (r) => (r.tokenInfos ?? []).map((t) => [t.start, t.doc ?? null, t.code ? flat(t.code) : null]);
+  const rows = [];
+  let bad = 0;
+  for (const r of live) {
+    if (!r.declRange) continue;
+    const c = cli.find((x) => same(x.declRange, r.declRange));
+    const dr = r.declRange;
+    const diags = (r.diagnostics ?? []).filter((d) => le(d.range.start, dr.stop) && le(dr.start, d.range.stop));
+    const checks = c ? {
+      edits: same(r.tacticEdits, c.tacticEdits),
+      header: ["declHeader", "declHeaderTokens", "declHeaderStart", "declHeaderNameStop", "declHeaderSigStop", "declHeaderBodyStop"].every((k) => same(r[k], c[k])),
+      diagnostics: same(diags, c.diagnostics),
+      hovers: same(hoversOf(r), hoversOf(c)),
+      goals: same(goalsOf(r), goalsOf(c)),
+    } : { record: false };
+    const ok = Object.values(checks).every(Boolean);
+    if (!ok) bad++;
+    rows.push({ decl: r.proofId, ...Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, v ? "same" : "DIFF"])) });
+  }
+  console.table(rows);
+  console.log(bad ? `${bad} declaration(s) DIFFER between the wires` : `${rows.length} declarations: both wires identical`);
+  return bad;
+}
+
 console.error(`elaborated ${path.basename(abs)} in ${tElab}ms`);
 if (flags.all) {
   const lines = text.split("\n");
@@ -197,9 +238,14 @@ if (flags.all) {
     const res = await call(j + 1, 2);
     rows.push(row(j + 1, 2, res));
     if (flags.edits) allEdits.push(...editRows(res.r).map((e) => ({ decl: lines[i].split(" ")[1] ?? "", ...e })));
+    if (flags.wire) wirePayloads.push(res.r);
     i = j;
   }
   console.table(rows);
+  if (flags.wire) {
+    const bad = wireCompare(wirePayloads);
+    process.exitCode = bad ? 1 : 0;
+  }
   if (flags.edits) {
     const bad = allEdits.filter((e) => e.reaches === "SHORT" || e.verbatim === "NO");
     console.log(`\n${allEdits.length} tacticEdits entries, ${bad.length} short of or off their slot`);
@@ -517,4 +563,4 @@ if (flags.all) {
 }
 try { await Promise.race([request("shutdown", null), new Promise((r) => setTimeout(r, 2000))]); notify("exit", null); } catch { /* the server may already be gone */ }
 proc.kill();
-process.exit(0);
+process.exit(process.exitCode ?? 0);

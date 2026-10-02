@@ -289,6 +289,7 @@ lean/                       the Lean sources the package compiles
   Ramify.lean               the panel widget + RPC machinery
   ProofTreeComments.lean    handles comments and editing
   ProofTreeRecover.lean     supplemental parser for erroring tactics and term proofs
+  ProofTreeHarvest.lean     diagnostics, tactic tokens, header and hovers for the tree
 web/dist/proofTreeWidget.js the renderer bundle
 ext/ramify/       the VS Code extension
 ```

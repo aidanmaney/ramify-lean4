@@ -33,3 +33,7 @@ web/probe/lib.mjs
 # gen.sh deliberately does not (they are not in proofs/, so they never reach
 # the tracked sample.ndjson). Regenerated from their sources' mtimes.
 web/probe/eval-extra.ndjson
+
+# The static viewer's generated site (web/scripts/publish.mjs). Deployed to
+# GitHub Pages from its own branch, never committed here.
+site/
