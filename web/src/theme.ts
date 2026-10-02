@@ -270,12 +270,18 @@ const PALETTE_CSS = `
   --ptw-tok-comment: color-mix(in srgb, var(--ptw-raw-comment) 53%, var(--ptw-fg));
 }
 
-/* Keyboard focus, one ring for every chrome button (the browser's own default
-   is invisible on the bar's filled pills). --ptw-focus is the editor's
-   focusBorder. Only :focus-visible, so a mouse click draws nothing. */
+/* Keyboard focus, one ring for every chrome button: 1px and INSET, VS Code's
+   own idiom, so it follows each control's own radius and never grows outside
+   the strip it sits in. --ptw-focus is the editor's focusBorder. Only
+   :focus-visible, so a mouse click draws nothing. */
 [data-ptw-theme] button:focus-visible {
-  outline: 2px solid var(--ptw-focus);
-  outline-offset: 1px;
+  outline: 1px solid var(--ptw-focus);
+  outline-offset: -1px;
+}
+
+/* The status bar's items wash on hover, as VS Code's status-bar items do. */
+[data-ptw-theme] [data-ptw-baritem]:not(:disabled):hover {
+  --ptw-bar-item-bg: var(--ptw-chrome-btn);
 }
 
 /* Outline mode (the rail's □): drop the fills, keep the borders. Last in the

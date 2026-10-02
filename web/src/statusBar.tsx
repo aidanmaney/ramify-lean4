@@ -53,6 +53,7 @@ import {
   TEXT_GLYPH_BOX_W,
 } from "./barMetrics";
 import {
+  BarActionRow,
   BarButton,
   BarDivider,
   BarMenu,
@@ -907,26 +908,27 @@ export function StatusBar({
               2026-10-02: it is an action on the view, and the rail is the
               zoom). They leave the panel up, like every action row; the
               toast's Undo brings back what each replaced. */}
-          <BarRow
-            kind="action"
-            icon={null}
-            label="Expand all"
-            title="Show every step: clear every fold and skip (Undo in the toast brings them back)"
-            onClick={onExpandAll}
-          />
-          <BarRow
-            kind="action"
-            icon={null}
-            label="Collapse to the outline"
-            title="Fold each branch where it leaves the trunk, so only the spine is drawn (Undo in the toast brings the folds back)"
-            onClick={onCollapseAll}
-          />
-          <BarRow
-            kind="action"
-            icon={null}
-            label="Reset tree"
-            title="Put the view back to what the source asks for: folds and skips from its flags, no scoping, no temporary marks (Undo in the toast brings the view back)"
-            onClick={onReset}
+          <BarActionRow
+            actions={[
+              {
+                label: "Expand all",
+                name: "Expand all",
+                title: "show every step: clear every fold and skip (Undo in the toast brings them back)",
+                onClick: onExpandAll,
+              },
+              {
+                label: "Collapse",
+                name: "Collapse to the outline",
+                title: "fold each branch where it leaves the trunk, so only the spine is drawn (Undo in the toast brings the folds back)",
+                onClick: onCollapseAll,
+              },
+              {
+                label: "Reset",
+                name: "Reset tree",
+                title: "put the view back to what the source asks for: folds and skips from its flags, no scoping, no temporary marks (Undo in the toast brings the view back)",
+                onClick: onReset,
+              },
+            ]}
           />
           <MenuDivider />
           {/* THE WIDTH, which was a bar item of its own until 2026-09-24 —

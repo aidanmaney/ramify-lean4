@@ -1,6 +1,7 @@
 // The status bar's small parts: buttons, checks, rows, panels and menus, the drawn glyphs (eye, comment,
 // chevron, layout marks), the glyph box, and the extras slots under a bar item.
 import {
+  Fragment,
   useCallback,
   useEffect,
   useState,
@@ -16,6 +17,7 @@ import {
   RAIL_PRESSED,
   CHROME_BORDER,
   CHROME_INK,
+  CHROME_TEXT_SM,
   DISABLED_OPACITY,
   DIM_OPACITY,
 } from "./theme";
@@ -263,6 +265,7 @@ export function BarButton({
   return (
     <button
       type="button"
+      data-ptw-baritem=""
       aria-label={plainTicks(title)}
       aria-haspopup={popup}
       aria-expanded={popup ? !!expanded : undefined}
@@ -414,6 +417,72 @@ export function BarRow({
       )}
       <span>{label}</span>
     </button>
+  );
+}
+
+/* ONE ROW OF SHORT ACTIONS under a panel's divider (`Expand all · Collapse ·
+Reset`), where three `BarRow`s took three full rows. Each is a real `<button>`
+with the `menuitem` role, so `panelKeys`' ↑/↓ reach every one in turn and its
+←/→ move between them (the row is a `[data-ptw-rowgroup]`); the tip and the
+aria-label are `name — what it does`, the name being the full one the short
+label stands for. Left-aligned, `CHROME_TEXT_SM`, a `·` between — the voice the
+bar's own lists use. Actions leave the panel up, like every action row. */
+export function BarActionRow({
+  actions,
+}: {
+  actions: {
+    label: string;
+    name: string;
+    title: string;
+    onClick: () => void;
+    disabled?: boolean;
+  }[];
+}) {
+  const { ctl } = useTip();
+  return (
+    <div
+      role="group"
+      data-ptw-rowgroup=""
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 2,
+        padding: "3px 6px",
+        fontSize: CHROME_TEXT_SM,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {actions.map((a, i) => (
+        <Fragment key={a.name}>
+          {i > 0 && (
+            <span aria-hidden style={{ opacity: DIM_OPACITY }}>
+              ·
+            </span>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            data-ptw-baritem=""
+            aria-label={plainTicks(`${a.name} — ${a.title}`)}
+            disabled={a.disabled}
+            onClick={a.onClick}
+            onPointerEnter={(e) => ctl.enter(e.currentTarget)}
+            onPointerLeave={(e) => ctl.leave(e.currentTarget)}
+            style={{
+              ...BAR_ROW,
+              width: "auto",
+              alignItems: "center",
+              padding: "2px 5px",
+              fontSize: CHROME_TEXT_SM,
+              opacity: a.disabled ? DISABLED_OPACITY : 1,
+              background: "var(--ptw-bar-item-bg, transparent)",
+            }}
+          >
+            {a.label}
+          </button>
+        </Fragment>
+      ))}
+    </div>
   );
 }
 

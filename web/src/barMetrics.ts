@@ -162,7 +162,9 @@ So height comes only from these two numbers: 20 + 2 * STATUS_PAD_Y + 2 (the
 card's border) = 26. Vertical padding on the item is therefore ZERO — the
 height and `alignItems: center` do that work — and every glyph sits inside a
 fixed-size box (`GlyphBox`) so no font size can reach the layout at all.
-`borderRadius` is half the item's height, so the accent draws as a PILL. */
+`borderRadius` is `CHROME_RADIUS`: items are FLAT, like VS Code's own status-bar
+items (2026-10-02; they were `BAR_ITEM_H / 2` pills, and the focus ring followed
+the pill — a fat squircle on a flat strip). */
 export const BAR_ITEM_H = 20;
 
 // The item's side padding, and so the accent pill's own side margin. It has
@@ -182,8 +184,10 @@ export const BAR_ITEM: CSSProperties = {
   height: BAR_ITEM_H,
   padding: `0 ${BAR_ITEM_PAD_X}px`,
   border: "none",
-  borderRadius: BAR_ITEM_H / 2,
-  background: "transparent",
+  borderRadius: CHROME_RADIUS,
+  // A hover wash, paint only: the variable is set by `[data-ptw-baritem]:hover`
+  // in theme.ts and an accented item's inline background wins over it.
+  background: "var(--ptw-bar-item-bg, transparent)",
   color: "inherit",
   font: "inherit",
   whiteSpace: "nowrap",
