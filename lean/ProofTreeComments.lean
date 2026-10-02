@@ -184,15 +184,19 @@ def tacticInfoRoots (tree : Elab.InfoTree) (extra : Option Syntax := none) :
     | .ofTacticInfo ti => acc.push ti.stx
     | _ => acc
 
+/-- Every node of one of `kinds`, in pre-order. One accumulator threads the
+walk: the per-level `out ++ …` it replaces copied every subtree's result at
+every ancestor, and this is called from every tactic root. -/
+partial def nodesOfKindAux (kinds : List SyntaxNodeKind) (stx : Syntax)
+    (out : Array Syntax) : Array Syntax :=
+  match stx with
+  | .node _ k args =>
+    let out := if kinds.contains k then out.push stx else out
+    args.foldl (fun o a => nodesOfKindAux kinds a o) out
+  | _ => out
+
 def nodesOfKind (kinds : List SyntaxNodeKind) (stx : Syntax) : Array Syntax :=
-  Id.run do
-    let mut out := #[]
-    match stx with
-    | .node _ k args =>
-      if kinds.contains k then out := out.push stx
-      for a in args do out := out ++ nodesOfKind kinds a
-    | _ => pure ()
-    return out
+  nodesOfKindAux kinds stx #[]
 
 structure TacticSlot where
 
@@ -226,6 +230,9 @@ def collectRwLocations (fileMap : FileMap) (tree : Elab.InfoTree)
   let src := fileMap.source
   let roots := tacticInfoRoots tree extra
   let mut out : Array RwLocation := #[]
+  -- what `out` already holds, by byte range: the `out.any` it replaces made
+  -- the dedup quadratic in the number of `rw`s
+  let mut seenRw : Std.HashSet (Nat × Nat) := {}
   for root in roots do
     for stx in nodesOfKind
         [``Lean.Parser.Tactic.rwSeq, ``Lean.Parser.Tactic.rewriteSeq] root do
@@ -233,7 +240,7 @@ def collectRwLocations (fileMap : FileMap) (tree : Elab.InfoTree)
       let start := fileMap.utf8PosToLspPos r.start
       let stop  := fileMap.utf8PosToLspPos r.stop
 
-      if out.any (fun l => l.start == start && l.stop == stop) then continue
+      if seenRw.contains (r.start.byteIdx, r.stop.byteIdx) then continue
       let afterRules :=
         match (nodesOfKind [``Lean.Parser.Tactic.rwRuleSeq] stx)[0]?
                 >>= (·.getRange? (canonicalOnly := true)) with
@@ -246,6 +253,7 @@ def collectRwLocations (fileMap : FileMap) (tree : Elab.InfoTree)
           | none    => false)
         | continue
       let some lr := loc.getRange? (canonicalOnly := true) | continue
+      seenRw := seenRw.insert (r.start.byteIdx, r.stop.byteIdx)
       out := out.push
         { start, stop, text := String.Pos.Raw.extract src lr.start lr.stop }
   return out
@@ -286,15 +294,17 @@ def tacticSlots (fileMap : FileMap) (tree : Elab.InfoTree)
   let src := fileMap.source
   let roots := tacticInfoRoots tree extra
   let mut blocks : Array (Lean.Syntax.Range × Array Lean.Syntax.Range) := #[]
+  let mut seenBlocks : Std.HashSet (Nat × Nat) := {}
   for root in roots do
     for seq in nodesOfKind tacticSeqKinds root do
       let some r := seq.getRange? (canonicalOnly := true) | continue
-      if blocks.any fun (br, _) => br.start == r.start && br.stop == r.stop then
+      if seenBlocks.contains (r.start.byteIdx, r.stop.byteIdx) then
         continue
 
       let kids := (seqChildrenStx seq).filterMap
         (·.getRange? (canonicalOnly := true))
       unless kids.isEmpty do
+        seenBlocks := seenBlocks.insert (r.start.byteIdx, r.stop.byteIdx)
         blocks := blocks.push (r, kids)
   let mut out : Array TacticSlot := #[]
   for (br, kids) in blocks do
@@ -340,15 +350,15 @@ def collectTacticTails (fileMap : FileMap) (tree : Elab.InfoTree)
     (extra : Option Syntax := none) : Array TacticTail := Id.run do
   let src := fileMap.source
   let roots := tacticInfoRoots tree extra
-  let mut seenSeqs : Array Lean.Syntax.Range := #[]
+  let mut seenSeqs : Std.HashSet (Nat × Nat) := {}
   let mut out : Array TacticTail := #[]
   for root in roots do
     for seq in nodesOfKind tacticSeqKinds root do
 
       let some sr := seq.getRange? (canonicalOnly := true) | continue
-      if seenSeqs.any (fun r => r.start == sr.start && r.stop == sr.stop) then
+      if seenSeqs.contains (sr.start.byteIdx, sr.stop.byteIdx) then
         continue
-      seenSeqs := seenSeqs.push sr
+      seenSeqs := seenSeqs.insert (sr.start.byteIdx, sr.stop.byteIdx)
       for child in seqChildrenStx seq do
 
         if child.getKind == ``Lean.calcTactic then continue

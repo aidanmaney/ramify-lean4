@@ -12,23 +12,24 @@ below, and the tree appears in the infoview panel. It follows the cursor.
 
 Things to try, roughly in order. A few of them reach back OUT into the editor,
 which the infoview gives a widget no way to do on its own — those are marked
-`[companion]` and need the VS Code extension (see INSTALL.md). Everything
+`[needs the extension]` and need the VS Code extension (see INSTALL.md).
+Everything
 else, every edit included, works with the Lean package alone.
 
 * **Move the cursor** between tactics — the matching node takes an accent
   outline and the view scrolls to it. Click a tactic node to go the other way
-  `[companion]`.
+  `[needs the extension]`.
 * **Fold** a goal: the `−` at its top-right corner hides the proof below it
   as `+N`, and clicking `+N` brings it back. ⌥-click the rail's `−` / `+`
   (bottom right) to fold or open everything.
 * **Double-click a tactic** to edit it in place. Esc cancels, Enter commits
   (⇧Enter adds a line). The edit lands through the editor's own pipeline, so
-  ⌘Z undoes it (from the tree too `[companion]`).
-* **Hover a box** for its bar: `»` reveal in source `[companion]`, `◎` focus
+  ⌘Z undoes it (from the tree too `[needs the extension]`).
+* **Hover a box** for its bar: `»` show in source `[needs the extension]`, `◎` focus
   this subtree, `◌` skip the step (a break on the line says what went; click
   `+N` to bring it back), `⊹` the path to it, the trash can to delete (it arms
   first — the second click writes; the extent lights up in the buffer
-  `[companion]`), and `⋯`, which names every move the box has.
+  `[needs the extension]`), and `⋯`, which names every move the box has.
 * **The status bar**, along the bottom, is the whole view: `Layout` (outline,
   spine, tracks, wide; side-by-side, gallery, label width), `Context` (which
   hypotheses each goal shows), `Comments`, the eye's reading options (brief

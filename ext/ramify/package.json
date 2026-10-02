@@ -3,8 +3,39 @@
   "displayName": "Ramify",
   "description": "Lean proofs-as-trees visualizer and editor that lives in the infoview",
   "publisher": "aidan",
-  "version": "0.0.19",
+  "version": "1.0.0",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aidanmaney/ramify-lean4"
+  },
+  "bugs": {
+    "url": "https://github.com/aidanmaney/ramify-lean4/issues"
+  },
+  "homepage": "https://github.com/aidanmaney/ramify-lean4#readme",
+  "categories": [
+    "Programming Languages",
+    "Visualization",
+    "Education"
+  ],
+  "keywords": [
+    "lean",
+    "lean4",
+    "proof",
+    "theorem prover",
+    "infoview",
+    "mathlib"
+  ],
+  "extensionDependencies": [
+    "leanprover.lean4"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Ramify does not run code from the workspace, but it acts on files and settings on your behalf: it reads and writes request files in ~/.proof-tree-companion, opens files, applies the edits you make from the tree, changes your user-level editor settings while the lens is open, and — only if you turn the narration or rewrite-suggestion settings on and store an API key — sends proof text to the Anthropic API. A workspace's own settings can switch the model features on, but they do nothing without an API key that you stored yourself."
+    },
+    "virtualWorkspaces": false
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -20,7 +51,7 @@
       },
       {
         "command": "ramify.setNarrationKey",
-        "title": "Ramify: Set narration API key"
+        "title": "Ramify: Set model API key"
       },
       {
         "command": "ramify.setExperience",
@@ -32,22 +63,23 @@
       "properties": {
         "ramify.experience": {
           "type": "string",
+          "scope": "resource",
           "enum": ["beginner", "intermediate", "expert"],
           "enumDescriptions": [
-            "The automation step under the cursor shows what it used, and the tactic hover bar carries `⁇` (what did it use?); `Comments: narrate`; `Context: all`; lints on; the replace-with-automation move is not offered.",
-            "`Comments: show`; `Context: used`; lints on; every move offered.",
-            "Brief mode on; lints off; every move offered."
+            "Comments: narrate · Context: all · Brief: off · Lints: on · Hypothesis origins: on · Automation trace: opens by itself for the step under the cursor · Tactic hover bar: default, plus ⁇ · Replace with automation (⇓): not offered",
+            "Comments: show · Context: used · Brief: off · Lints: on · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered",
+            "Comments: show · Context: used · Brief: on · Lints: off · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered"
           ],
           "default": "intermediate",
-          "markdownDescription": "How much the proof tree explains itself. A preset: it only fills the DEFAULTS of the tree's reading options (the hover bar's buttons where `ramify.hoverBar.*` is not set, the automation trace, `Comments`, `Context`, `lints`, `brief`) — anything you switch in the tree itself keeps your choice for the session. Also: `Ramify: Set experience level`."
+          "markdownDescription": "How much the proof tree explains itself. A preset: it only fills the defaults of the tree's reading options (the hover bar's buttons where `ramify.hoverBar.*` is not set, the automation trace, `Comments`, `Context`, `lints`, `brief`, `hypothesis origins`) — anything you switch in the tree itself keeps your choice for the session. Also: `Ramify: Set experience level`."
         },
         "ramify.hoverBar.tactic": {
           "type": "array",
+          "scope": "resource",
           "items": {
             "type": "string",
             "enum": [
               "source",
-              "focus",
               "skip",
               "path",
               "delete",
@@ -62,7 +94,6 @@
             ],
             "enumDescriptions": [
               "» Show in source",
-              "◎ Focus on this goal's subtree (or back to the whole proof)",
               "◌ Skip this step while reading (where it has one continuation or is a leaf)",
               "⊹ Show only the path from the root to here",
               "Delete (trash can; arms first, then writes)",
@@ -79,53 +110,38 @@
           "uniqueItems": true,
           "default": [
             "source",
-            "focus",
             "skip",
             "path",
             "delete"
           ],
-          "markdownDescription": "The buttons on the hover bar of a **tactic** box, left to right, each drawn only where the move is available on that box. `⋯` (every move on the box, with what each icon means and a pin to put it on the bar) is always last and is not listed. Pinning in `⋯` writes this setting. Unset, the `ramify.experience` preset decides (beginner also shows `trace`)."
+          "markdownDescription": "The buttons on the hover bar of a **tactic** box, left to right, each drawn only where the move is available on that box. `⋯` (every move on the box, with what each icon means and a pin to put it on the bar) is always last and is not listed. Pinning in `⋯` writes this setting. Unset, the `ramify.experience` preset decides (beginner also shows `⁇`)."
         },
         "ramify.hoverBar.goal": {
           "type": "array",
+          "scope": "resource",
           "items": {
             "type": "string",
             "enum": [
               "source",
               "focus",
-              "skip",
               "path",
               "delete",
-              "trace",
               "collapse",
-              "expand",
-              "inline",
-              "extract",
-              "lint",
-              "lens",
-              "goal"
+              "lint"
             ],
             "enumDescriptions": [
               "» Show in source",
               "◎ Focus on this goal's subtree (or back to the whole proof)",
-              "◌ Skip this step while reading (where it has one continuation or is a leaf)",
               "⊹ Show only the path from the root to here",
               "Delete (trash can; arms first, then writes)",
-              "⁇ What did the automation (`simp`, `grind`, `aesop`…) use?",
               "⇓ Replace a closing run of steps with one automation tactic",
-              "⇑ Write out what the automation used",
-              "⤵ Move a single-use `have` into its one use",
-              "⤴ Pull a `(by …)` block out as a `have`",
-              "✎ Apply the linter's fix",
-              "⧉ Open the tactic in the lens",
-              "+ Show the goal a calc/constructor step proves"
+              "✎ Apply the linter's fix"
             ]
           },
           "uniqueItems": true,
           "default": [
             "source",
             "focus",
-            "skip",
             "path",
             "delete"
           ],
@@ -139,7 +155,7 @@
         "ramify.linkMarks": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Draw the connectors' node-type marks: a dot near either end of a line for goals, a dash for tactics."
+          "markdownDescription": "Draw the connectors' node-type marks: a dot near either end of a line for goals, a dash for tactics. Off by default."
         },
         "ramify.linkTint": {
           "type": "boolean",
@@ -156,10 +172,15 @@
           "default": true,
           "markdownDescription": "Wrap long lines in the lens. Does not affect other editors or windows. Skipped when you already wrap globally."
         },
+        "ramify.lensHideChrome": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Hide editor tabs, breadcrumbs, the minimap and sticky scroll while the lens is open, so the small lens editor is mostly code. Ramify remembers the values it changes and restores them when the lens closes, and on the next start if VS Code quit with the lens open. These are user-level settings, so while the lens is open they change in every window. Turn this off to leave them alone."
+        },
         "ramify.counterfactual": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "While you are typing a tactic and the proof doesn't elaborate (e.g. because it has errors), show the tree as if the line you are writing were `sorry` so the tree keeps its full shape, replaced with the real tree when the proof is fixed. Costs one re-elaboration of the current theorem per edited line (cached)."
+          "markdownDescription": "While you are typing a tactic and the proof doesn't elaborate (e.g. because it has errors), show the tree as if the line you are writing were `sorry` so the tree keeps its full shape, replaced with the real tree when the proof is fixed. Costs one Lean re-check of the current theorem per edited line (cached)."
         },
         "ramify.hypMarkStyle": {
           "type": "string",
@@ -170,7 +191,7 @@
         "ramify.narration.polish": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "In `Comments: narrate`, send each generated line to a model to be rewritten as fluent English (shown with `≈` instead of `∴`). The rewrite is constrained: it keeps every symbol and name, adds no facts, and never sees anything you wrote yourself — your own comments are not sent. Needs an API key (`Ramify: Set narration API key`). Off by default; the tree's own templated narration needs nothing."
+          "markdownDescription": "In `Comments: narrate`, send each generated line to a model to be rewritten as fluent English (shown with `≈` instead of `∴`). The rewrite is constrained: it keeps every symbol and name, adds no facts, and never sees anything you wrote yourself — your own comments are not sent. Needs an API key (`Ramify: Set model API key`). Off by default; the tree's own templated narration needs nothing."
         },
         "ramify.narration.model": {
           "type": "string",
@@ -180,12 +201,12 @@
         "ramify.restructure.propose": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Let `suggest a rewrite` (in the tree's reading options) ask a model to pick one of the restructurings the tree already offers, with a one-line reason. The model chooses among offered moves and never writes text; whatever it picks is still re-elaborated before you are offered it. Needs an API key (`Ramify: Set narration API key`). Off by default."
+          "markdownDescription": "Let `suggest a rewrite` (in the tree's reading options) ask a model to pick one of the restructurings the tree already offers, with a one-line reason. The model chooses among offered moves and never writes text; whatever it picks is still checked by Lean before you are offered it. Needs an API key (`Ramify: Set model API key`). Off by default."
         },
         "ramify.restructure.renameAfterHoist": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "After you accept an **extract** (the tree's `⤴`, which hoists a `(by …)` into `have this : … := by …`), open the editor's own **Rename Symbol** on the new `this`, so you can type the name you want. Lean renames the binder and every use; press Escape to keep `this`."
+          "markdownDescription": "After you accept an **extract** (the tree's `⤴`, which hoists a `(by …)` into `have this : … := by …`), open the editor's own **Rename Symbol** on the new `this`, so you can type the name you want. Lean renames the binder and every use; press Esc to keep `this`."
         },
         "ramify.typingHoldMs": {
           "type": "integer",

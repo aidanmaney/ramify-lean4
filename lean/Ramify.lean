@@ -32,6 +32,15 @@ structure TreeDiag where
   leanTags  : Array Nat := #[]
   deriving Server.RpcEncodable
 
+/-- The wire's severity number: 1 error, 2 warning, 3 anything else. -/
+def sevOf : Option Lsp.DiagnosticSeverity → Nat
+  | some .error => 1
+  | some .warning => 2
+  | _ => 3
+
+/-- A message's first line, trimmed. -/
+def firstLine (t : String) : String := (t.trimAscii.toString.splitOn "\n").headD t
+
 structure TacticTokenInfo where
 
   start : Lsp.Position
@@ -126,6 +135,208 @@ structure ProofTreeData where
 def tacticNames (ctx : Elab.ContextInfo) : IO (Array String) :=
   ctx.runMetaM .empty do
     return (← Tactic.Doc.allTacticDocs).map (·.userName)
+
+def lastDotPos? (s : String) : Option String.Pos.Raw := Id.run do
+  let mut p : String.Pos.Raw := ⟨0⟩
+  let mut found : Option String.Pos.Raw := none
+  while !String.Pos.Raw.atEnd s p do
+    if String.Pos.Raw.get s p == '.' then found := some p
+    p := String.Pos.Raw.next s p
+  return found
+
+def minCompletionQuery : Nat := 3
+
+def maxCompletionNames : Nat := 50
+
+/-- Stop scanning the environment after this many matches. A bound on the
+match list that is collected and sorted, not a speed-up: measured on a
+Mathlib environment (2026-09-28) the scan is ~800 ms warm however early it
+stops (the cost is walking every constant), and a cap of 200 dropped the short
+names (`mul` lost `Mul`, `Prime` lost `Nat.Prime`) where 5000 and 20000 return
+exactly the full scan's 50 for `add_comm`, `Nat.succ`, `mul`, `Prime`, `le_of`. -/
+def maxCompletionMatches : Nat := 5000
+
+/-- One completable declaration, taken apart ONCE: the name and the LOWER-CASED
+last component as bytes. `Char.toLower` is ASCII-only, so lower-casing both
+sides is exactly the per-character test the scan used to do. -/
+structure CompletionEntry where
+  name : Name
+  last : ByteArray
+
+/-- The header half of the completion scan, precomputed: every eligible header
+declaration (Lean's own `getEligibleHeaderDecls`, so the same rules) whose name
+is a `.str` that is neither private nor an internal detail, in that map's own
+iteration order — the order matters, because `maxCompletionMatches` truncates
+by traversal — filed two ways, each list keeping that order:
+
+* `byFirst`: by the first byte of the lower-cased last component (a query
+  whose fragment is non-empty scans one of 256 lists, not all 437k), and
+  `byTwo`: by its first two bytes (`mul` scans the `mu` list, not the `m` one —
+  measured 75 ms against a dozen);
+* `byParent`: by the lower-cased `Name.toString` of the PARENT (a namespace
+  query, `Nat.` or `Nat.su`, scans that namespace alone).
+
+There is no list for the one query shape neither can answer (no namespace and
+an empty fragment): the RPC's own three-character floor makes it unreachable, so
+`scanNames` answers it with nothing.
+
+Why buckets and not a faster loop: the Ramify library is NOT precompiled, so the
+worker INTERPRETS this file, and an interpreted per-entry test costs ~0.6 µs —
+measured 2026-09-28: 270 ms a query over 437k entries with the tightest
+byte-compare loop that could be written, against ~800 ms for the original walk
+of Lean's `HashMap`. The work has to be not done, not done faster.
+
+A file worker is one process per file and the header is fixed for its life, so a
+single entry suffices; `key` (the header's constant count) is a guard, not the
+identity. -/
+structure CompletionIndex where
+  key : Nat
+  byFirst : Array (Array CompletionEntry)
+  byTwo : Std.HashMap UInt16 (Array CompletionEntry)
+  byParent : Std.HashMap String (Array CompletionEntry)
+
+initialize completionIndex : IO.Ref (Option CompletionIndex) ← IO.mkRef none
+
+/-- The pieces of a name completion may offer, else none. -/
+def completableParts? (declName : Name) : Option (ByteArray × Name) :=
+  match declName with
+  | .str parent s =>
+    if isPrivateName declName || declName.isInternalDetail then none
+    else some (s.toLower.toUTF8, parent)
+  | _ => none
+
+/-- `e` appended to the list filed under `k`. -/
+def addTo {α : Type} [BEq α] [Hashable α] (m : Std.HashMap α (Array CompletionEntry))
+    (k : α) (e : CompletionEntry) : Std.HashMap α (Array CompletionEntry) :=
+  m.alter k fun
+    | some es => some (es.push e)
+    | none => some #[e]
+
+/-- Build the index from Lean's own eligible-header-declaration map, in one
+pass. Cold cost on Mathlib (437k entries): Lean's map ~2.3 s (shared with the
+editor's own completion, paid once per worker) plus this walk ~2–3 s,
+interpreted. -/
+def buildCompletionIndex : MetaM CompletionIndex := do
+  let env ← getEnv
+  let key := env.constants.map₁.size
+  let mut byFirst : Array (Array CompletionEntry) := .replicate 256 #[]
+  let mut byTwo : Std.HashMap UInt16 (Array CompletionEntry) := {}
+  let mut byParent : Std.HashMap String (Array CompletionEntry) := {}
+  -- parents repeat (one namespace, many entries): render each `Name` once.
+  let mut rendered : Std.HashMap Name String := {}
+  for (declName, _) in (← Server.Completion.getEligibleHeaderDecls env) do
+    let some (last, parent) := completableParts? declName | continue
+    let e : CompletionEntry := { name := declName, last }
+    if 0 < last.size then
+      byFirst := byFirst.modify (last.get! 0).toNat (·.push e)
+    if 1 < last.size then
+      byTwo := addTo byTwo ((last.get! 0).toUInt16 * (256 : UInt16) + (last.get! 1).toUInt16) e
+    let ps ← match rendered[parent]? with
+      | some ps => pure ps
+      | none =>
+        let ps := parent.toString.toLower
+        rendered := rendered.insert parent ps
+        pure ps
+    byParent := addTo byParent ps e
+  return { key, byFirst, byTwo, byParent }
+
+/-- Set while a background build is in flight, so a query that arrives mid-build
+waits for it rather than repeating five seconds of work. -/
+initialize completionIndexBuilding : IO.Ref Bool ← IO.mkRef false
+
+def getCompletionIndex : MetaM CompletionIndex := do
+  let env ← getEnv
+  let key := env.constants.map₁.size
+  let cached : IO (Option CompletionIndex) := do
+    if let some ix ← completionIndex.get then
+      if ix.key == key then return some ix
+    return none
+  if let some ix ← cached then return ix
+  -- a background build is under way: wait for it (bounded), don't repeat it.
+  let mut waited := 0
+  while (← completionIndexBuilding.get) && waited < 60000 do
+    IO.sleep 25
+    waited := waited + 25
+    if let some ix ← cached then return ix
+  let ix ← buildCompletionIndex
+  completionIndex.set (some ix)
+  return ix
+
+/-- Start building the index off the request path, once. Called where a payload
+is built (the file's header is elaborated by then), so the reader's first
+completion finds it ready instead of paying for it. Nothing waits on the task:
+failure leaves the flag down and the first query builds for itself. -/
+def prewarmCompletionIndex (ctx : Elab.ContextInfo) : IO Unit := do
+  if (← completionIndex.get).isSome then return
+  let started ← completionIndexBuilding.modifyGet fun b => (!b, true)
+  unless started do return
+  let _ ← IO.asTask (prio := .dedicated) do
+    try
+      let ix ← ctx.runMetaM .empty buildCompletionIndex
+      completionIndex.set (some ix)
+    catch _ => pure ()
+    completionIndexBuilding.set false
+
+/-- `pre` is a byte prefix of `s`. -/
+def bytePrefix (pre s : ByteArray) : Bool :=
+  pre.size ≤ s.size && go 0
+where
+  go (i : Nat) : Bool :=
+    if i < pre.size then pre.get! i == s.get! i && go (i + 1) else true
+  termination_by pre.size - i
+
+/-- The scan proper, pure: a header list (already narrowed by the caller) then
+`locals` (the file's own declarations, few, taken apart on the fly), stopping at
+`maxCompletionMatches` exactly as the old traversal did. `lcNs?` is only
+consulted for locals — the header list is already that namespace's. -/
+def scanEntries (lcNs? : Option String) (frag : String)
+    (entries : Array CompletionEntry) (locals : Array Name) : Array String := Id.run do
+  let lcFrag := frag.toLower.toUTF8
+  let mut acc : Array String := #[]
+  for e in entries do
+    if bytePrefix lcFrag e.last then
+      acc := acc.push e.name.toString
+      if acc.size ≥ maxCompletionMatches then return acc
+  for declName in locals do
+    if let some (last, parent) := completableParts? declName then
+      if bytePrefix lcFrag last then
+        if let some ns := lcNs? then
+          unless parent.toString.toLower == ns do continue
+        acc := acc.push declName.toString
+        if acc.size ≥ maxCompletionMatches then return acc
+  return acc
+
+def scanNames (query : String) : MetaM (Array String) := do
+  let (nsQuery?, frag) :=
+    match lastDotPos? query with
+    | some p =>
+      (some (String.Pos.Raw.extract query ⟨0⟩ p),
+       String.Pos.Raw.extract query (String.Pos.Raw.next query p) query.rawEndPos)
+    | none => (none, query)
+  let ix ← getCompletionIndex
+  -- `map₂` are exactly the local declarations (Lean's `forEligibleDeclsM`).
+  let env ← getEnv
+  let locals ← IO.mkRef (#[] : Array Name)
+  env.constants.map₂.forM fun name _ => do
+    if Lean.Meta.allowCompletion env name then locals.modify (·.push name)
+  let lcNs? := nsQuery?.map String.toLower
+  -- The header entries this query can match, in traversal order.
+  let header : Array CompletionEntry :=
+    match lcNs? with
+    | some ns => (ix.byParent[ns]?).getD #[]
+    | none =>
+      let fb := frag.toLower.toUTF8
+      if 1 < fb.size then
+        (ix.byTwo[fb[0]!.toUInt16 * (256 : UInt16) + fb[1]!.toUInt16]?).getD #[]
+      else match fb[0]? with
+        | some b => ix.byFirst[b.toNat]!
+        | none => #[]
+  let names := scanEntries lcNs? frag header (← locals.get)
+  -- shortest first, ties alphabetical; `String.length` is O(n), so each is
+  -- measured once rather than at every comparison.
+  let keyed := names.map fun n => (n.length, n)
+  let keyed := keyed.qsort fun (la, a) (lb, b) => la < lb || (la == lb && a < b)
+  return (keyed.map (·.2)).take maxCompletionNames
 
 private def jsonField {α : Type} [FromJson α] (j : Json) (k : String)
     (dflt : α) : α :=
@@ -271,8 +482,9 @@ def parserDocAt (env : Environment) (root : Syntax) (pos : String.Pos.Raw) :
     | return none
   stack.findSomeM? fun (stx, _) => do
     let .node _ kind _ := stx | pure none
+    let some rng := stx.getRange? | pure none
     let some doc ← findDocString? env kind | pure none
-    return some (doc, stx.getRange?.get!)
+    return some (doc, rng)
 
 def popupNonempty (env : Environment) (info : Elab.Info) : IO Bool := do
   match info with
@@ -352,9 +564,24 @@ def HoverIndex.innermost (idx : HoverIndex) (p : Nat)
           best := some it
   return best.map fun it => (it.start, it.stop, it.info)
 
+-- Keyed on the document version, the declaration's start and a HASH of the
+-- diagnostics (range, severity, message text) — not their count, which a
+-- message that changed under the same count would leave stale.
 initialize proofTreeCache :
 
-    IO.Ref (Option ((String × Nat × Nat × Nat) × ProofTreeData)) ← IO.mkRef none
+    IO.Ref (Option ((String × Nat × Nat × UInt64) × ProofTreeData)) ← IO.mkRef none
+
+/-- The message's own text nodes; an embedded expression or goal is not
+walked (a change there is a change in the source, hence in the version). -/
+private partial def messageHash : Widget.TaggedText Widget.MsgEmbed → UInt64
+  | .text s => hash s
+  | .append ts => ts.foldl (fun h t => mixHash h (messageHash t)) 0
+  | .tag _ t => messageHash t
+
+private def diagnosticsHash (ds : Array Widget.InteractiveDiagnostic) : UInt64 :=
+  ds.foldl (init := hash ds.size) fun h d =>
+    mixHash h <| mixHash (hash (d.range.start.line, d.range.start.character,
+        d.range.end.line, d.range.end.character, sevOf d.severity?)) (messageHash d.message)
 
 private def tokenInfoAt (env : Environment) (stx : Syntax) (hoverIdx : HoverIndex)
     (src : String) (fileMap : FileMap)
@@ -654,7 +881,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       let hb := fileMap.lspPosToUtf8Pos dStart
       let he := fileMap.lspPosToUtf8Pos bodyStart
       if hb.byteIdx < he.byteIdx then
-        declHeader := (String.Pos.Raw.extract src hb he).trimRight
+        declHeader := (String.Pos.Raw.extract src hb he).trimAsciiEnd.toString
         let hEnd := fileMap.utf8PosToLspPos ⟨hb.byteIdx + declHeader.utf8ByteSize⟩
         headerToks := allTokens.filterMap fun t =>
           if posLE dStart t.pos && posLE t.tailPos hEnd then
@@ -692,7 +919,9 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
     let branches ← ProofTree.branches fileMap snap.infoTree parsedTree.steps
 
     let tacticNames ← match anyGoalContext snap.infoTree with
-      | some (ctx, _) => tacticNames ctx
+      | some (ctx, _) =>
+        prewarmCompletionIndex ctx
+        tacticNames ctx
       | none => pure #[]
     return {
       proofId,
@@ -806,10 +1035,16 @@ private inductive CfEntry where
 
 initialize cfElabCache : IO.Ref (Option (UInt64 × CfEntry)) ← IO.mkRef none
 
+/-- The live counterfactual's cancel token.  A pending elaboration is
+abandoned by the CLIENT after 20 s but the task keeps running; a new cf sets
+this token first, so at most one elaboration is ever burning CPU (the cache
+above is one slot for the same reason). -/
+initialize cfCancel : IO.Ref (Option IO.CancelToken) ← IO.mkRef none
+
 private def cfExitSettleMs : Nat := 750
 
 initialize cfServeCache :
-    IO.Ref (Option (UInt64 × Nat × Nat × UInt64 × ProofTreeData)) ←
+    IO.Ref (Option (Nat × Nat × Nat × UInt64 × ProofTreeData)) ←
   IO.mkRef none
 
 private def tokensInSpan (snap : Snapshots.Snapshot) (fileMap : FileMap)
@@ -872,7 +1107,10 @@ private def reElabDecl (doc : FileWorker.EditableDocument) (text : String)
     -- Mathlib's linters on; `Elab.async` is forced off either way, which is
     -- what makes `runLintersAsync` run the linters SYNCHRONOUSLY and log them
     -- into the state this returns.
-    (opts : Options → Options := id) :
+    (opts : Options → Options := id)
+    -- The counterfactual's abandon switch: elaboration polls it (heartbeat
+    -- checks) and stops, so a superseded cf does not keep running.
+    (cancelTk? : Option IO.CancelToken := none) :
     RequestM (Option ReElab) := do
   let (snaps, _, _) ← doc.cmdSnaps.getFinishedPrefix
 
@@ -898,7 +1136,7 @@ private def reElabDecl (doc : FileWorker.EditableDocument) (text : String)
     return none
   let cmdCtx : Command.Context := {
     fileName := doc.meta.uri, fileMap := map,
-    cmdPos := prev.mpState.pos, snap? := none, cancelTk? := none }
+    cmdPos := prev.mpState.pos, snap? := none, cancelTk? }
   let ref ← IO.mkRef cmdState0
   Command.withLoggingExceptions
     (Elab.getResetInfoTrees *> Command.elabCommandTopLevel stx) cmdCtx ref
@@ -924,10 +1162,12 @@ private def rawStepsIn (sn : Snapshots.Snapshot) (fm : FileMap) : RequestM Nat :
 
 private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
     (draftCol : Nat)
-    (cfText : String) (stubByte : Nat) : RequestM (Option ProofTreeData) := do
+    (cfText : String) (stubByte : Nat) (cancelTk : IO.CancelToken) :
+    RequestM (Option ProofTreeData) := do
   let fileMap := doc.meta.text
   let lineStart := fileMap.lspPosToUtf8Pos ⟨pos.line, 0⟩
-  let some re ← reElabDecl doc cfText lineStart.byteIdx | return none
+  let some re ← reElabDecl doc cfText lineStart.byteIdx (cancelTk? := some cancelTk)
+    | return none
   let cfMap := re.map
   let synth := re.snap
   let mut cfDiags : Array TreeDiag := #[]
@@ -941,8 +1181,8 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
     let e := match m.endPos with
       | some e => cfMap.leanPosToLspPos e
       | none => s
-    let sev := match m.severity with
-      | .error => 1 | .warning => 2 | .information => 3
+    let sev := sevOf (match m.severity with
+      | .error => some .error | .warning => some .warning | .information => none)
     cfDiags := cfDiags.push {
       range := ⟨s, e⟩, fullRange := ⟨s, e⟩, severity := sev, message := text
       leanTags := if text.startsWith "unsolved goals" then #[1] else #[] }
@@ -997,33 +1237,37 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
   let draft := splice.draft
 
   let stepStartsHere := real.steps.any fun s => s.position.start.line == pos.line
-  if let some (sh, seen, ln, ck, blob) ← cfServeCache.get then
-    if ln == pos.line && !stepStartsHere then
-      let srcHash : UInt64 := hash fileMap.source
+  -- The serve cache is keyed on the document VERSION (as `proofTreeCache` is):
+  -- the same version is the same text. Across versions the spliced text is the
+  -- test, and it is built once, only where something needs it.
+  let ver := doc.meta.version
+  let cached ← cfServeCache.get
+  let near : Bool := match cached with
+    | some (_, _, ln, _, _) => ln == pos.line && !stepStartsHere
+    | none => false
+  if let some (cv, seen, _, _, blob) := cached then
+    if near && cv == ver then
       let now ← IO.monoMsNow
-
-      if sh == srcHash then
-        if now - seen ≥ cfExitSettleMs && payloadHealthy real pos then
-          cfServeCache.set none
-          return real
-
-        cfServeCache.set (some (srcHash, seen, ln, ck, blob))
-        return withDraft blob draft splice.draftCol
-      if ck == hash (splice.text ()) then
-
-        cfServeCache.set (some (srcHash, now, ln, ck, blob))
-        return withDraft blob draft splice.draftCol
-  unless cfWanted real pos stepStartsHere do return ← serveReal real
-
+      if now - seen ≥ cfExitSettleMs && payloadHealthy real pos then
+        cfServeCache.set none
+        return real
+      return withDraft blob draft splice.draftCol
+  let wanted := cfWanted real pos stepStartsHere
+  unless near || wanted do return ← serveReal real
   let cfText := splice.text ()
   let cfKey : UInt64 := hash cfText
-  let srcHash : UInt64 := hash fileMap.source
   let now ← IO.monoMsNow
+  if let some (_, _, ln, ck, blob) := cached then
+    if near && ck == cfKey then
+      cfServeCache.set (some (ver, now, ln, ck, blob))
+      return withDraft blob draft splice.draftCol
+  unless wanted do return ← serveReal real
+
   if let some (k, entry) ← cfElabCache.get then
     if k == cfKey then
       match entry with
       | .done (some blob) =>
-        cfServeCache.set (some (srcHash, now, pos.line, cfKey, blob))
+        cfServeCache.set (some (ver, now, pos.line, cfKey, blob))
         return withDraft blob draft splice.draftCol
       | .done none => return ← serveReal real
       | .pending t0 =>
@@ -1031,16 +1275,24 @@ private def maybeCounterfactual (wantCf : Bool) (pos : Lsp.Position)
         if now - t0 < 20000 then
           return { real with cfPending := true }
   cfElabCache.set (some (cfKey, .pending now))
+  -- One cf at a time: stop the superseded elaboration (an abandoned 20 s one
+  -- included) before starting this one.
+  if let some old ← cfCancel.get then old.set
+  let tk ← IO.CancelToken.new
+  cfCancel.set (some tk)
   let rc ← read
   let _ ← IO.asTask (prio := .default) do
-    let res ← match ← ((computeCf doc pos splice.draftCol cfText splice.stubByte).run rc).toBaseIO with
+    let res ← match ← ((computeCf doc pos splice.draftCol cfText splice.stubByte tk).run rc).toBaseIO with
       | .ok res => pure res
       | .error _ => pure none
 
+    -- A cancelled run's answer is an interrupted elaboration, and its key is
+    -- no longer the cache's: write nothing.
+    if ← tk.isSet then return
     cfElabCache.set (some (cfKey, .done res))
     if let some blob := res then
 
-      cfServeCache.set (some (srcHash, ← IO.monoMsNow, pos.line, cfKey, blob))
+      cfServeCache.set (some (ver, ← IO.monoMsNow, pos.line, cfKey, blob))
   return { real with cfPending := true }
 
 private def cfNudgePos? (fileMap : FileMap) (pos : Lsp.Position) :
@@ -1084,7 +1336,7 @@ private def realPayloadFor (doc : FileWorker.EditableDocument) (fileMap : FileMa
     let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
 
     let interactiveDiags := (← doc.collectCurrentDiagnostics).toArray
-    let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, interactiveDiags.size)
+    let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, diagnosticsHash interactiveDiags)
 
     let cachedReal? : Option ProofTreeData :=
       match ← proofTreeCache.get with
@@ -1105,9 +1357,7 @@ private def realPayloadFor (doc : FileWorker.EditableDocument) (fileMap : FileMa
           let full := d.fullRange?.getD d.range
           { range := ⟨d.range.start, d.range.end⟩
             fullRange := ⟨full.start, full.end⟩
-            severity := match d.severity? with
-              | some .error => 1 | some .warning => 2 | _ => 3
-
+            severity := sevOf d.severity?
             message := d.toDiagnostic.message
             isSilent := d.isSilent?.getD false
             leanTags := (d.leanTags?.getD #[]).map fun
@@ -1126,7 +1376,10 @@ def getProofTree (params : GetProofTreeParams) : RequestM (RequestTask ProofTree
   let atCursor : RequestM (RequestTask ProofTreeData) :=
     let cursorPos := fileMap.lspPosToUtf8Pos params.pos
     RequestM.bindWaitFindSnap doc (fun s => s.endPos >= cursorPos)
-      (notFoundX := throw ⟨.invalidParams, s!"no snapshot found at {params.pos}"⟩)
+      -- An empty or not-yet-elaborated file has no snapshot at the cursor: that
+      -- is "no proof here", the same payload a position outside any
+      -- declaration gets, not an error the infoview would print.
+      (notFoundX := RequestM.pureTask (pure { steps := [], allGoals := [] }))
       (x := fun snap => do withCf (← realPayloadFor doc fileMap snap))
   match cfNudgePos? fileMap params.pos with
   | none => atCursor
@@ -1369,6 +1622,14 @@ def checkRewrite (params : CheckRewriteParams) :
         return ({ verdict := "structural", before
                   message := some "no edits" } : CheckRewriteResult)
       let declByte := declByteOf fileMap snap real
+      -- An edit that starts before the declaration cannot be the client's
+      -- own (every edit is computed from a tactic range inside it), and
+      -- splicing it in would re-elaborate a different declaration's text.
+      -- `semantic`, not `structural`: the rewrite parsed nothing at all, and
+      -- `structural` promises "it does not parse"; the pill shows the message.
+      if params.edits.any fun e => (fileMap.lspPosToUtf8Pos e.start).byteIdx < declByte then
+        return ({ verdict := "semantic", before
+                  message := some "edit outside the declaration" } : CheckRewriteResult)
       let text := applyRewriteEdits fileMap params.edits
       let some re ← reElabDecl doc text declByte
         | return ({ verdict := "structural", before
@@ -1383,9 +1644,8 @@ def checkRewrite (params : CheckRewriteParams) :
         i := i + 1
       match firstErr with
       | some (isParse, t) =>
-        let line := (t.trim.splitOn "\n").headD t
         return { verdict := if isParse then "structural" else "semantic"
-                 before, message := some line }
+                 before, message := some (firstLine t) }
       | none =>
         return { verdict := "benign", ok := true, before
                  steps := ← rawStepsIn re.snap re.map })
@@ -1443,9 +1703,31 @@ def closingCandidates : Array String :=
   #["omega", "simp", "linarith", "norm_num", "grind", "decide", "ring",
     "simp_all", "aesop"]
 
+/-- Per-candidate heartbeat budget for `tryClose` (thousands, as
+`maxHeartbeats` counts them). `aesop`/`grind` on a run they cannot close would
+otherwise search until the option the FILE sets (possibly `0`, unlimited) ends
+it; a candidate that needs more than this is not a one-click answer anyway. A
+file's own smaller limit stands. -/
+def tryCloseHeartbeats : Nat := 200000
+
+def withCandidateBudget (o : Options) : Options :=
+  let cur := maxHeartbeats.get o
+  if cur == 0 || tryCloseHeartbeats < cur then maxHeartbeats.set o tryCloseHeartbeats
+  else o
+
+/-- Keyed on the document, the run's extent AND the candidate list the answer
+was computed for: a call with its own `tactics` is not answered from the
+default list's result. -/
 initialize tryCloseCache :
-    IO.Ref (Option ((String × Nat × Nat × Nat) × TryCloseResult)) ←
+    IO.Ref (Option ((String × Nat × Nat × Nat × Array String) × TryCloseResult)) ←
   IO.mkRef none
+
+/-- The newest `tryClose`'s cancel token, as `cfCancel` is the newest
+counterfactual's: a click is abandoned when another replaces it, and the older
+one's remaining candidates (up to nine re-elaborations) must not keep burning
+CPU. The RPC's own cancellation (the client's `$/cancelRequest`, or an edit) is
+polled beside it between candidates. -/
+initialize tryCloseCancel : IO.Ref (Option IO.CancelToken) ← IO.mkRef none
 
 @[server_rpc_method]
 def tryClose (params : TryCloseParams) :
@@ -1468,17 +1750,23 @@ def tryClose (params : TryCloseParams) :
       let t := (fileMap.lspPosToUtf8Pos b.stop).byteIdx
       if t < s then
         return { message := some "the run's extent runs backwards" }
-      let key := (doc.meta.uri, doc.meta.version, s, t)
+      let cands := match params.tactics with
+        | some c => if c.isEmpty then closingCandidates else c
+        | none => closingCandidates
+      let key := (doc.meta.uri, doc.meta.version, s, t, cands)
       if let some (k, cached) ← tryCloseCache.get then
         if k == key then return cached
+      if let some old ← tryCloseCancel.get then old.set
+      let tk ← IO.CancelToken.new
+      tryCloseCancel.set (some tk)
+      let rc ← read
+      let cancelled : BaseIO Bool := do
+        return (← tk.isSet) || (← rc.cancelTk.wasCancelled)
       let declByte := declByteOf fileMap snap real
       let before ← rawStepsIn snap fileMap
       let src := fileMap.source
       let pre := String.Pos.Raw.extract src ⟨0⟩ ⟨s⟩
       let post := String.Pos.Raw.extract src ⟨t⟩ src.rawEndPos
-      let cands := match params.tactics with
-        | some c => if c.isEmpty then closingCandidates else c
-        | none => closingCandidates
       let mut tried : Array String := #[]
       let mut times : Array Nat := #[]
       let mut lastMsg : Option String := none
@@ -1486,23 +1774,27 @@ def tryClose (params : TryCloseParams) :
       let mut out : TryCloseResult :=
         { before := before, verdict := "none", message := some nothing }
       for cand in cands do
+        -- Abandoned (superseded, or the request was cancelled): stop, and
+        -- leave nothing in the cache — an interrupted candidate is not an
+        -- answer about the text.
+        if ← cancelled then return { before := before, message := some "cancelled" }
         let t0 ← IO.monoMsNow
         let text := pre ++ cand ++ post
-        let re? ← reElabDecl doc text declByte
+        let re? ← reElabDecl doc text declByte (opts := withCandidateBudget)
+          (cancelTk? := some tk)
+        if ← cancelled then return { before := before, message := some "cancelled" }
         let dt := (← IO.monoMsNow) - t0
         tried := tried.push cand
         times := times.push dt
         match re? with
         | none => lastMsg := some "the spliced declaration did not parse"
         | some re =>
-          let mut i := 0
           let mut firstErr : Option String := none
           for m in re.msgs do
             if m.severity == .error && firstErr.isNone then
               firstErr := some (← m.data.toString)
-            i := i + 1
           match firstErr with
-          | some e => lastMsg := some ((e.trim.splitOn "\n").headD e)
+          | some e => lastMsg := some (firstLine e)
           | none =>
             out := { tactic := some cand, verdict := "benign", ok := true,
                      before := before, steps := ← rawStepsIn re.snap re.map,
@@ -1513,52 +1805,6 @@ def tryClose (params : TryCloseParams) :
         out := { out with tried := tried, ms := times, message := msg }
       tryCloseCache.set (some (key, out))
       return out)
-
-partial def ciPrefix (pref s : String) : Bool :=
-  go ⟨0⟩ ⟨0⟩
-where
-  go (pi si : String.Pos.Raw) : Bool :=
-    if String.Pos.Raw.atEnd pref pi then true
-    else if String.Pos.Raw.atEnd s si then false
-    else if (String.Pos.Raw.get pref pi).toLower ==
-        (String.Pos.Raw.get s si).toLower then
-      go (String.Pos.Raw.next pref pi) (String.Pos.Raw.next s si)
-    else false
-
-def lastDotPos? (s : String) : Option String.Pos.Raw := Id.run do
-  let mut p : String.Pos.Raw := ⟨0⟩
-  let mut found : Option String.Pos.Raw := none
-  while !String.Pos.Raw.atEnd s p do
-    if String.Pos.Raw.get s p == '.' then found := some p
-    p := String.Pos.Raw.next s p
-  return found
-
-def minCompletionQuery : Nat := 3
-
-def maxCompletionNames : Nat := 50
-
-def scanNames (query : String) : MetaM (Array String) := do
-  let (nsQuery?, frag) :=
-    match lastDotPos? query with
-    | some p =>
-      (some (String.Pos.Raw.extract query ⟨0⟩ p),
-       String.Pos.Raw.extract query (String.Pos.Raw.next query p) query.rawEndPos)
-    | none => (none, query)
-  let acc ← IO.mkRef (#[] : Array String)
-  Server.Completion.forEligibleDeclsM fun declName _ => do
-
-    let .str parent s := declName | return ()
-    unless ciPrefix frag s do return ()
-    if isPrivateName declName || declName.isInternalDetail then return ()
-    if let some ns := nsQuery? then
-      let ps := parent.toString
-
-      unless ps.utf8ByteSize == ns.utf8ByteSize && ciPrefix ns ps do return ()
-    acc.modify (·.push declName.toString)
-  let names ← acc.get
-  let names := names.qsort fun a b =>
-    a.length < b.length || (a.length == b.length && a < b)
-  return names.take maxCompletionNames
 
 structure CompletionNamesParams where
   pos   : Lsp.Position
@@ -1605,19 +1851,48 @@ every response read all go through these three. -/
 /-- The companion's directory, without creating it — the read side, which must
 not mint a directory just to find it empty. -/
 private def companionHome : IO (Option System.FilePath) := do
-  let some home ← IO.getEnv "HOME" | return none
+  -- `HOME` on POSIX, `USERPROFILE` on Windows (the extension's `os.homedir()`).
+  let home? ← do
+    match ← IO.getEnv "HOME" with
+    | some h => if h.isEmpty then IO.getEnv "USERPROFILE" else pure (some h)
+    | none => IO.getEnv "USERPROFILE"
+  let some home := home? | return none
+  if home.isEmpty then return none
   return some (System.FilePath.mk home / ".proof-tree-companion")
 
 /-- The companion's directory, created if absent — the write side. -/
 private def companionDir : IO System.FilePath := do
-  let some dir ← companionHome | throw <| IO.userError "no HOME"
+  let some dir ← companionHome
+    | throw <| IO.userError "neither HOME nor USERPROFILE is set"
   IO.FS.createDirAll dir
   return dir
 
-/-- Write one request file for the companion's `fs.watch` to pick up. -/
+/-- Write one request file for the companion's `fs.watch` to pick up. The
+write is ATOMIC — a UNIQUE sibling `<name>.<nanos>.tmp` (concurrent `popoutEdit`
+tasks must not share a temp name, or one tears the other's file or loses it to
+ENOENT), then a rename onto the target — so the watcher, which fires on the
+first byte, never reads a half-written file (the extension dispatches only on
+the request names, so a `.tmp` event is inert). A failed write or rename removes
+the temp file best-effort and rethrows. -/
 private def writeCompanionRequest (name : String) (payload : Json) : IO Unit := do
   let dir ← companionDir
-  IO.FS.writeFile (dir / name) payload.compress
+  let tmp := dir / s!"{name}.{← IO.monoNanosNow}.tmp"
+  try
+    IO.FS.writeFile tmp payload.compress
+    IO.FS.rename tmp (dir / name)
+  catch e =>
+    let _ ← (IO.FS.removeFile tmp).toBaseIO
+    throw e
+
+/-- `writeCompanionRequest` for an RPC: an IO failure (no home, a read-only
+directory, a full disk) is reported as a request error naming the file and the
+cause, which the widget's relay/ask paths already surface, rather than as a raw
+IO error. -/
+private def sendCompanionRequest (name : String) (payload : Json) : RequestM Unit := do
+  match ← (writeCompanionRequest name payload).toBaseIO with
+  | .ok _ => pure ()
+  | .error e =>
+    throw ⟨.internalError, s!"could not write the extension request {name}: {e}"⟩
 
 /-- Read a companion response file, or `none` where it is absent or unparseable
 (the companion writes it whole, but a read can still land mid-write). -/
@@ -1625,7 +1900,9 @@ private def readCompanionFile (name : String) : IO (Option Json) := do
   let some dir ← companionHome | return none
   let file := dir / name
   unless ← file.pathExists do return none
-  let txt ← IO.FS.readFile file
+  -- a file that vanished or is unreadable between the check and the read is
+  -- "no answer yet", like one that is absent
+  let .ok txt ← (IO.FS.readFile file).toBaseIO | return none
   match Json.parse txt with
   | .error _ => return none
   | .ok j => return some j
@@ -1655,7 +1932,7 @@ def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
       if params.action == "rename" then "rename-request.json"
       else if params.action == "hoverbar" then "settings-request.json"
       else "popout-request.json"
-    writeCompanionRequest file payload
+    sendCompanionRequest file payload
     return "ok"
 
 /-! ## C4 / D6 — the companion channel, in the direction the widget cannot go
@@ -1707,7 +1984,7 @@ instance : FromJson PolishRequestParams where
 @[server_rpc_method]
 def polishRequest (params : PolishRequestParams) : RequestM (RequestTask String) := do
   RequestM.asTask do
-    writeCompanionRequest "polish-request.json" <| Json.mkObj [
+    sendCompanionRequest "polish-request.json" <| Json.mkObj [
       ("id", toJson params.id),
       ("proofKey", toJson params.proofKey),
       ("lines", toJson params.lines)
@@ -1781,7 +2058,7 @@ instance : FromJson ProposeRequestParams where
 @[server_rpc_method]
 def proposeRequest (params : ProposeRequestParams) : RequestM (RequestTask String) := do
   RequestM.asTask do
-    writeCompanionRequest "propose-request.json" <| Json.mkObj [
+    sendCompanionRequest "propose-request.json" <| Json.mkObj [
       ("id", toJson params.id),
       ("proofKey", toJson params.proofKey),
       ("text", toJson params.text),
@@ -1897,6 +2174,10 @@ structure ThemeColors where
   /-- `ramify.hoverBar.{tactic,goal}` where the reader SET them (`inspect()`),
   else absent. Passed through; the client owns the move ids. -/
   hoverBar : Json := Json.null
+  /-- `{version, pid, at}` stamped by a LIVE companion on every publish; absent
+  where the file is left over from an extension that is gone (or predates the
+  stamp). The client's only answer to "is there a companion". Passed through. -/
+  companion : Json := Json.null
   colors : Array ThemeTokenColor := #[]
   deriving ToJson
 
@@ -1914,20 +2195,60 @@ instance : FromJson ThemeColors where
           ai := jsonField j "ai" {},
           experience := jsonField j "experience" "",
           hoverBar := (j.getObjVal? "hoverBar").toOption.getD Json.null,
+          companion := (j.getObjVal? "companion").toOption.getD Json.null,
           colors := jsonField j "colors" #[] }
 
 structure ThemeColorsParams where
+  /-- The document the widget is showing. Where given, the file's `byFolder`
+  entry for the workspace folder that contains it (the longest matching
+  folder) is merged over the top-level values (every key it holds replaces the
+  top-level one), so one window's workspace settings do not leak into
+  another's. Absent: the top-level values,
+  as before. An `Option`, so a caller that omits it still decodes. -/
+  uri : Option String := none
   deriving FromJson, ToJson
 
+/-- A path as the extension writes a folder key: forward slashes, no leading
+slash before a Windows drive letter. -/
+private def normFolderPath (p : String) : String :=
+  let p := p.replace "\\" "/"
+  match p.toList with
+  | '/' :: c :: ':' :: rest => if c.isAlpha then String.ofList (c :: ':' :: rest) else p
+  | _ => p
+
+/-- The `byFolder` entry whose key is the longest folder prefix of the
+document's path, or `none`. -/
+private def folderEntry? (byFolder : Json) (uri : String) : Option Json :=
+  match System.Uri.fileUriToPath? uri, byFolder with
+  | some path, .obj kvs =>
+    let doc := normFolderPath path.toString
+    let hits := kvs.toArray.filter fun ⟨k, _⟩ =>
+      let k := normFolderPath k
+      doc == k || doc.startsWith (if k.endsWith "/" then k else k ++ "/")
+    let best := hits.foldl (init := (none : Option (String × Json))) fun acc ⟨k, v⟩ =>
+      match acc with
+      | some (bk, _) => if k.length > bk.length then some (k, v) else acc
+      | none => some (k, v)
+    best.map (·.2)
+  | _, _ => none
+
 @[server_rpc_method]
-def themeColors (_ : ThemeColorsParams) : RequestM (RequestTask ThemeColors) := do
+def themeColors (params : ThemeColorsParams) : RequestM (RequestTask ThemeColors) := do
   RequestM.asTask do
     let some dir ← companionHome | return {}
     let file := dir / "theme-colors.json"
 
     unless ← file.pathExists do return {}
-    let txt ← IO.FS.readFile file
-    match Json.parse txt >>= fromJson? with
+    let .ok txt ← (IO.FS.readFile file).toBaseIO | return {}
+    let .ok j := Json.parse txt | return {}
+    -- Per-folder settings (the extension writes `byFolder`, keyed by the
+    -- workspace folder's path, each entry holding the same setting keys as the
+    -- top level): the entry for the document's folder is laid over the top
+    -- level before it is decoded, so every setting it carries wins.
+    let j := match params.uri.bind (folderEntry? ((j.getObjVal? "byFolder").toOption.getD .null)) with
+      | some entry => j.mergeObj entry
+      | none => j
+    match fromJson? j with
     | .error _ => return {}
     | .ok (c : ThemeColors) => return c
 

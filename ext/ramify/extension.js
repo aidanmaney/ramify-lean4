@@ -8,6 +8,114 @@ function say(msg) {
   if (log) log.appendLine(`[${new Date().toISOString()}] ${msg}`);
 }
 
+const errText = (e) => (e && e.message ? e.message : String(e));
+const errStack = (e) => (e && e.stack ? e.stack : String(e));
+
+// ─── Request-file hygiene ──────────────────────────────────────────────────
+// Everything in ~/.proof-tree-companion is written by another process (the Lean
+// server) and is readable and writable by any other program of the user's, so
+// every request is DATA: parsed under a guard, shape-checked before use, and a
+// bad one is logged and dropped — it must never throw out of a watcher
+// callback, and it must never reach a VS Code API as anything but the type it
+// was checked to be.
+const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+const isObj = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+const isCoord = (n) => Number.isInteger(n) && n >= 0 && n <= 0x7fffffff;
+const isPos = (p) => isObj(p) && isCoord(p.line) && isCoord(p.character);
+const str = (x, max) => (typeof x === "string" ? x.slice(0, max) : "");
+
+/** A request file's JSON object, or null where it is absent, oversized, torn
+ mid-write, unparseable or not an object. Silent: a half-written file is read
+ whole on the next event. */
+function readJsonFile(name) {
+  try {
+    const buf = fs.readFileSync(path.join(REQUEST_DIR, name));
+    if (buf.length > MAX_REQUEST_BYTES) {
+      say(`${name}: over ${MAX_REQUEST_BYTES} bytes — ignored`);
+      return null;
+    }
+    const j = JSON.parse(buf.toString("utf8"));
+    return isObj(j) ? j : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Write `payload` to `file` through a temp name and a rename, so a reader (the
+ widget's poll, another window) never sees half a file; the temp name is unique
+ per process and write, and the watcher ignores it (it dispatches on known
+ files only). */
+let writeSeq = 0;
+function writeJsonAtomic(file, payload, space) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${writeSeq++}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, space));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    throw e;
+  }
+}
+
+/** `req.uri` as a Uri, or null. */
+function requestUri(req) {
+  if (typeof req.uri !== "string" || req.uri.length === 0 || req.uri.length > 4096)
+    return null;
+  try {
+    return vscode.Uri.parse(req.uri, true);
+  } catch {
+    return null;
+  }
+}
+
+/** `req.start`/`req.stop` as a Range, or null unless both are {line, character}
+ of finite non-negative integers. */
+function requestRange(req) {
+  if (!isPos(req.start) || !isPos(req.stop)) return null;
+  return new vscode.Range(
+    req.start.line,
+    req.start.character,
+    req.stop.line,
+    req.stop.character,
+  );
+}
+
+/** Nonces are numbers from the server's clock (or strings); anything else is
+ not a request this side wrote. */
+const validNonce = (n) =>
+  (typeof n === "number" && Number.isFinite(n)) ||
+  (typeof n === "string" && n.length > 0 && n.length <= 200);
+
+// A Windows/macOS file system is case-insensitive by default, so the workspace
+// comparison folds case there and only there.
+const foldCase = (p) =>
+  process.platform === "win32" || process.platform === "darwin" ? p.toLowerCase() : p;
+
+/** Is a document with this uri open in this window? */
+const isOpen = (uri) => {
+  const key = uri.toString();
+  return vscode.workspace.textDocuments.some((d) => d.uri.toString() === key);
+};
+
+/** Does THIS window act on a request about `target`? Either the document is
+ open here, or it lies under one of this window's workspace folders. The folder
+ test is on NORMALISED paths with a trailing separator, so `<root>/../elsewhere`
+ and `<root>-sibling` are outside; a non-file uri falls back to VS Code's own
+ folder lookup. */
+function ownsUri(target) {
+  if (isOpen(target)) return true;
+  if (target.scheme !== "file") return !!vscode.workspace.getWorkspaceFolder(target);
+  const t = foldCase(path.resolve(target.fsPath));
+  return (vscode.workspace.workspaceFolders ?? []).some((f) => {
+    if (f.uri.scheme !== "file") return false;
+    const root = foldCase(path.resolve(f.uri.fsPath));
+    return t === root || t.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+  });
+}
+
 const REQUEST_DIR = path.join(os.homedir(), ".proof-tree-companion");
 const REQUEST_FILE = "popout-request.json";
 // C4 / D6 — the two channels that go OUT to a model. The widget's webview
@@ -27,12 +135,31 @@ const RENAME_REQUEST = "rename-request.json";
 // back over the tree, whose hover `highlight`/`clear` lands in
 // `popout-request.json` a moment later and would overwrite it unread.
 const SETTINGS_REQUEST = "settings-request.json";
-// The move ids a hover-bar list may hold — package.json's enum, and
-// web/src/moves.ts `MOVE_IDS`.
+// The move ids a hover-bar list may hold — package.json's enums, and
+// web/src/moves.ts `MOVE_IDS`. A list is per node KIND: an id that can never
+// draw on that kind is not accepted (web/src/moveSlots.ts `appliesToKind`:
+// `focus` is goal-only, `TACTIC_ONLY_MOVES` tactic-only). scripts/check-sync.mjs
+// asserts all of it equal.
 const MOVE_IDS = [
   "source", "focus", "skip", "path", "delete", "trace", "collapse",
   "expand", "inline", "extract", "lint", "lens", "goal",
 ];
+const TACTIC_ONLY_MOVES = ["skip", "trace", "expand", "inline", "extract", "lens", "goal"];
+const MOVE_IDS_FOR = {
+  tactic: MOVE_IDS.filter((x) => x !== "focus"),
+  goal: MOVE_IDS.filter((x) => !TACTIC_ONLY_MOVES.includes(x)),
+};
+/** `list` cut down to the ids a node of `kind` can draw, each once, in the
+ order given. */
+const idsFor = (kind, list) =>
+  [...new Set(list)].filter((x) => MOVE_IDS_FOR[kind].includes(x));
+// gen-experience:start (scripts/gen-experience.mjs — do not edit by hand)
+const EXPERIENCE_DETAIL = {
+  beginner: "Comments: narrate · Context: all · Brief: off · Lints: on · Hypothesis origins: on · Automation trace: opens by itself for the step under the cursor · Tactic hover bar: default, plus ⁇ · Replace with automation (⇓): not offered",
+  intermediate: "Comments: show · Context: used · Brief: off · Lints: on · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered",
+  expert: "Comments: show · Context: used · Brief: on · Lints: off · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered",
+};
+// gen-experience:end
 const CHROME_BACKUP = path.join(REQUEST_DIR, "chrome-backup.json");
 const THEME_FILE = path.join(REQUEST_DIR, "theme-colors.json");
 
@@ -149,28 +276,23 @@ function scopeColor(rules, want) {
   return best ?? sub;
 }
 
-function customizations(themeName) {
+function customizations(themeName, tokenBlob, semBlob) {
   const pick = (cfg) => {
     if (!cfg || typeof cfg !== "object") return [{}];
     const scoped = cfg[`[${themeName}]`];
     return scoped && typeof scoped === "object" ? [cfg, scoped] : [cfg];
   };
-  const ed = vscode.workspace.getConfiguration("editor");
   const tm = [];
-  for (const c of pick(ed.get("tokenColorCustomizations")))
+  for (const c of pick(tokenBlob))
     if (Array.isArray(c.textMateRules)) tm.push(...c.textMateRules);
   const sem = {};
-  for (const c of pick(ed.get("semanticTokenColorCustomizations")))
+  for (const c of pick(semBlob))
     if (c.rules && typeof c.rules === "object") Object.assign(sem, c.rules);
   return { tokenColors: tm, semanticTokenColors: sem };
 }
 
-function resolveTokenColors() {
-  const themeName = vscode.workspace
-    .getConfiguration("workbench")
-    .get("colorTheme");
-  const base = loadTheme(activeThemeFile());
-  const custom = customizations(themeName);
+function resolveTokenColors(file, custom) {
+  const base = loadTheme(file);
   const theme = {
     tokenColors: base.tokenColors.concat(custom.tokenColors),
     semanticTokenColors: Object.assign(
@@ -218,6 +340,16 @@ const API_URL = "https://api.anthropic.com/v1/messages";
 const API_VERSION = "2023-06-01";
 const SECRET_KEY = "ramify.narrationApiKey";
 const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+const API_TIMEOUT_MS = 30000;
+// Input caps: a request file is another process's data, and a model call is
+// money. Over the cap the input is TRUNCATED (and logged), never refused — the
+// first lines/primitives are the ones the widget lists first.
+const MAX_POLISH_LINES = 200;
+const MAX_PROPOSE_PRIMITIVES = 50;
+const MAX_PROPOSE_TEXT = 8000;
+// `globalState` answer cache: the most recent N entries, oldest evicted.
+const CACHE_LIMIT = 200;
+const CACHE_INDEX = "ramify.answerCache.index";
 
 /** What the widget is told, through the theme file. `ready` is the whole
  answer to "can this be asked at all". */
@@ -243,14 +375,19 @@ async function apiKey() {
  activation, on any `ramify` setting change, and after the key is set. */
 async function refreshAi() {
   const cfg = aiConfig();
-  const key = await apiKey();
+  let key = "";
+  try {
+    key = await apiKey();
+  } catch (e) {
+    say(`refreshAi: cannot read the key: ${errText(e)}`);
+  }
   aiState = {
     polish: cfg.polish,
     propose: cfg.propose,
     ready: !!key,
     why: key
       ? ""
-      : "No API key — run “Ramify: Set narration API key”, or set ANTHROPIC_API_KEY",
+      : "No API key — run “Ramify: Set model API key”, or set ANTHROPIC_API_KEY",
   };
   publishThemeColors();
 }
@@ -260,31 +397,41 @@ async function callModel({ system, user, maxTokens }) {
   const key = await apiKey();
   if (!key) throw new Error("no API key");
   const cfg = aiConfig();
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": API_VERSION,
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content: user }],
-    }),
-  });
-  if (!res.ok) {
-    // The body can carry the key back in an error echo on some proxies, so
-    // only the status is logged or surfaced.
-    throw new Error(`API returned ${res.status}`);
+  let body;
+  try {
+    // The signal covers the body read too: a stalled connection ends the ask
+    // (and the widget's poll gets its `error`) rather than hanging it.
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": API_VERSION,
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: "user", content: user }],
+      }),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      // The body can carry the key back in an error echo on some proxies, so
+      // only the status is logged or surfaced.
+      throw new Error(`API returned ${res.status}`);
+    }
+    body = await res.json();
+  } catch (e) {
+    if (e && (e.name === "TimeoutError" || e.name === "AbortError"))
+      throw new Error(`the model did not answer within ${API_TIMEOUT_MS / 1000}s`);
+    throw e;
   }
-  const body = await res.json();
-  const text = (body.content || [])
-    .filter((b) => b.type === "text")
+  const text = (Array.isArray(body && body.content) ? body.content : [])
+    .filter((b) => b && b.type === "text" && typeof b.text === "string")
     .map((b) => b.text)
     .join("");
-  const u = body.usage || {};
+  const u = (body && body.usage) || {};
   return { text, usage: `${u.input_tokens ?? "?"}→${u.output_tokens ?? "?"} tok` };
 }
 
@@ -294,7 +441,28 @@ function parseJsonBody(text) {
   const a = text.indexOf("{");
   const b = text.lastIndexOf("}");
   if (a < 0 || b <= a) throw new Error("no JSON in the reply");
-  return JSON.parse(text.slice(a, b + 1));
+  const j = JSON.parse(text.slice(a, b + 1));
+  if (!isObj(j)) throw new Error("the reply is not a JSON object");
+  return j;
+}
+
+/** Store an answer and evict the oldest past CACHE_LIMIT. The index is a list
+ of keys in insertion order; where it does not exist yet (an install that
+ cached before the bound did), it is seeded from the polish keys already there,
+ in whatever order VS Code lists them. */
+async function cachePut(key, value) {
+  if (!memento) return;
+  let index = memento.get(CACHE_INDEX);
+  if (!Array.isArray(index))
+    index = memento.keys().filter((k) => k.startsWith("polish:"));
+  index = index.filter((k) => k !== key);
+  index.push(key);
+  const evicted = index.splice(0, Math.max(0, index.length - CACHE_LIMIT));
+  await Promise.all([
+    ...evicted.map((old) => memento.update(old, undefined)),
+    memento.update(key, value),
+    memento.update(CACHE_INDEX, index),
+  ]);
 }
 
 function hashOf(s) {
@@ -306,10 +474,8 @@ function hashOf(s) {
   return (h >>> 0).toString(36);
 }
 
-function writeResponse(name, payload) {
-  fs.mkdirSync(REQUEST_DIR, { recursive: true });
-  fs.writeFileSync(path.join(REQUEST_DIR, name), JSON.stringify(payload));
-}
+const writeResponse = (name, payload) =>
+  writeJsonAtomic(path.join(REQUEST_DIR, name), payload);
 
 // THE CONSTRAINED PROMPT. Every clause is a restriction: rewrite, do not
 // generate; keep the symbols; add no facts; one line per input, same order;
@@ -327,13 +493,29 @@ const POLISH_SYSTEM = [
 ].join("\n");
 
 async function polish(req) {
-  const lines = Array.isArray(req.lines) ? req.lines : [];
+  const raw = Array.isArray(req.lines) ? req.lines : [];
+  if (raw.length > MAX_POLISH_LINES)
+    say(`polish ${req.id}: ${raw.length} lines, truncated to ${MAX_POLISH_LINES}`);
+  // Shape-checked and length-capped, so what is hashed, cached and sent is
+  // exactly what was validated.
+  const lines = raw
+    .slice(0, MAX_POLISH_LINES)
+    .filter((l) => isObj(l) && typeof l.nodeId === "string" && typeof l.template === "string")
+    .map((l) => ({
+      nodeId: str(l.nodeId, 200),
+      template: str(l.template, 1000),
+      tactic: str(l.tactic, 1000),
+      goalBefore: str(l.goalBefore, 2000),
+      goalAfter: str(l.goalAfter, 2000),
+    }));
   const t0 = Date.now();
-  const key = `polish:${req.proofKey || ""}:${hashOf(
-    lines.map((l) => `${l.nodeId} ${l.template}`).join(""),
+  // Same hash input as ever (NUL between id and template, \x01 between lines),
+  // so answers cached by an earlier version still hit.
+  const key = `polish:${str(req.proofKey, 200)}:${hashOf(
+    lines.map((l) => `${l.nodeId}\0${l.template}`).join("\x01"),
   )}`;
   const hit = memento && memento.get(key);
-  if (hit) {
+  if (Array.isArray(hit)) {
     say(`polish ${req.id}: ${lines.length} line(s) from cache`);
     writeResponse(POLISH_RESPONSE, { id: req.id, lines: hit });
     return;
@@ -359,10 +541,10 @@ async function polish(req) {
   });
   const parsed = parseJsonBody(text);
   const wanted = new Set(lines.map((l) => l.nodeId));
-  const out = (parsed.lines || [])
-    .filter((l) => l && wanted.has(l.nodeId) && typeof l.text === "string")
-    .map((l) => ({ nodeId: l.nodeId, text: l.text }));
-  if (memento) await memento.update(key, out);
+  const out = (Array.isArray(parsed.lines) ? parsed.lines : [])
+    .filter((l) => isObj(l) && wanted.has(l.nodeId) && typeof l.text === "string")
+    .map((l) => ({ nodeId: l.nodeId, text: l.text.slice(0, 500) }));
+  await cachePut(key, out);
   say(
     `polish ${req.id}: ${lines.length} line(s) in, ${out.length} out, ` +
       `${Date.now() - t0}ms, ${usage}`,
@@ -382,7 +564,17 @@ const PROPOSE_SYSTEM = [
 ].join("\n");
 
 async function propose(req) {
-  const prims = Array.isArray(req.primitives) ? req.primitives : [];
+  const rawPrims = Array.isArray(req.primitives) ? req.primitives : [];
+  if (rawPrims.length > MAX_PROPOSE_PRIMITIVES)
+    say(`propose ${req.id}: ${rawPrims.length} primitives, truncated to ${MAX_PROPOSE_PRIMITIVES}`);
+  const prims = rawPrims
+    .slice(0, MAX_PROPOSE_PRIMITIVES)
+    .filter((p) => isObj(p) && typeof p.nodeId === "string" && typeof p.kind === "string")
+    .map((p) => ({
+      nodeId: str(p.nodeId, 200),
+      kind: str(p.kind, 60),
+      title: str(p.title, 300),
+    }));
   const t0 = Date.now();
   if (prims.length === 0) {
     writeResponse(PROPOSE_RESPONSE, { id: req.id, note: "nothing offered" });
@@ -392,7 +584,7 @@ async function propose(req) {
     system: PROPOSE_SYSTEM,
     user: [
       "PROOF:",
-      String(req.text || "").slice(0, 8000),
+      str(req.text, MAX_PROPOSE_TEXT),
       "",
       "OFFERED REWRITES:",
       ...prims.map((p, i) => `${i}. [${p.kind}] ${p.title}`),
@@ -420,99 +612,331 @@ async function propose(req) {
   );
 }
 
-/** One handler for both channels: read the request, refuse it if the setting
- that gates it is off, run it, and write an `error` response on any failure so
- the widget's poll ends rather than timing out. */
-function makeAiHandler(file, responseFile, gate, run) {
-  let lastId = null;
+// OWNERSHIP FOR THE MODEL CHANNELS. Unlike the other requests these carry no
+// uri (only an id, the declaration name and the lines), so the "does this
+// window own the document" test has nothing to read, and with several VS Code
+// windows open every one of them would make the same paid call. The rule:
+//  1. only a window with a Lean document open is eligible (a window with none
+//     cannot have hosted the widget that asked);
+//  2. among those, the window the user is in — `window.state.focused` — has the
+//     first go, and an unfocused one yields AI_CLAIM_YIELD_MS before trying;
+//  3. whoever then creates the per-request claim file (`wx`, atomic across
+//     processes) answers; every other window drops the request.
+// So exactly one window answers, the focused one whenever there is one. If the
+// claim directory cannot be written the window answers anyway: a doubled call
+// costs a few cents, a dead feature costs the feature.
+const CLAIM_DIR = path.join(REQUEST_DIR, "ai-claims");
+const AI_CLAIM_YIELD_MS = 150;
+const CLAIM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+async function claimAiRequest(channel, id) {
+  const hasLean = vscode.workspace.textDocuments.some(
+    (d) => d.languageId === "lean4" || d.languageId === "lean",
+  );
+  if (!hasLean) return false;
+  if (!vscode.window.state.focused) await sleep(AI_CLAIM_YIELD_MS);
+  try {
+    fs.mkdirSync(CLAIM_DIR, { recursive: true });
+    const name = `${channel}-${id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100)}`;
+    fs.closeSync(fs.openSync(path.join(CLAIM_DIR, name), "wx"));
+    return true;
+  } catch (e) {
+    if (e && e.code === "EEXIST") return false;
+    say(`${channel}: claim failed (${errText(e)}) — answering anyway`);
+    return true;
+  }
+}
+
+/** Claims older than a day are dead weight; ids are minted per widget session. */
+function pruneClaims() {
+  try {
+    const now = Date.now();
+    for (const f of fs.readdirSync(CLAIM_DIR)) {
+      const file = path.join(CLAIM_DIR, f);
+      if (now - fs.statSync(file).mtimeMs > CLAIM_MAX_AGE_MS) fs.unlinkSync(file);
+    }
+  } catch {}
+}
+
+/** One request-file handler. Every request is DATA from another process, so
+ the shape is fixed here and each channel supplies only what differs:
+   file, tag   the request file and the word its log lines open with;
+   key         the field that identifies a write (`nonce`, or `id` for the model
+               channels) and `validKey`, what counts as one;
+   check(req)  a string (why the request is dropped, logged) or the ctx that
+               `owns` and `run` take; may put `what` in it to be logged once the
+               request is accepted;
+   owns(ctx, req)  does THIS window act on it (may be async);
+   run(req, ctx)   does the work; a throw goes to `fail(e, req, ctx)`, else it is
+               logged with its stack.
+ A write is handled once: the key is consumed before the ownership test, so a
+ re-read of the same write (the watcher may deliver it again) is a no-op in
+ every window. Nothing needs a guard of its own: the watcher's `run` logs any
+ rejection that does escape. */
+function makeHandler({ tag, file, key = "nonce", validKey = validNonce, check, owns, run, fail }) {
+  let last = null;
   return async () => {
-    let req;
-    try {
-      req = JSON.parse(fs.readFileSync(path.join(REQUEST_DIR, file), "utf8"));
-    } catch {
+    const req = readJsonFile(file);
+    if (!req) return;
+    const id = req[key];
+    if (!validKey(id)) {
+      say(`${tag}: no usable ${key} — ignored`);
       return;
     }
-    if (!req || !req.id || req.id === lastId) return;
-    lastId = req.id;
+    if (id === last) return;
+    last = id;
+    const ctx = check ? check(req) : {};
+    if (typeof ctx === "string") {
+      say(`${tag} ${id}: ${ctx} — ignored`);
+      return;
+    }
+    if (!(await owns(ctx, req))) {
+      say(`${tag} ${id}: left to another window`);
+      return;
+    }
+    if (ctx.what) say(`${tag} ${id}: ${ctx.what}`);
     try {
-      if (!aiConfig()[gate])
-        throw new Error(`ramify.${gate === "polish" ? "narration.polish" : "restructure.propose"} is off`);
-      await run(req);
+      await run(req, ctx);
     } catch (e) {
-      say(`${gate} ${req.id}: FAILED: ${e && e.message ? e.message : e}`);
-      writeResponse(responseFile, {
-        id: req.id,
-        error: String(e && e.message ? e.message : e).slice(0, 200),
-      });
+      if (fail) fail(e, req, ctx);
+      else say(`${tag} ${id}: FAILED: ${errStack(e)}`);
     }
   };
 }
 
+/** The model channels: refuse the request if the setting that gates it is off
+ (checked by the window that claimed, so its `error` answer is the only one
+ written and the widget's poll ends at once), and write an `error` response on
+ any failure so the poll ends rather than timing out. */
+function makeAiHandler(gate, file, responseFile, run) {
+  return makeHandler({
+    tag: gate,
+    file,
+    key: "id",
+    validKey: (id) => typeof id === "string" && id.length > 0 && id.length <= 200,
+    owns: (_, req) => claimAiRequest(gate, req.id),
+    run: async (req) => {
+      if (!aiConfig()[gate])
+        throw new Error(`ramify.${gate === "polish" ? "narration.polish" : "restructure.propose"} is off`);
+      await run(req);
+    },
+    fail: (e, req) => {
+      say(`${gate} ${req.id}: FAILED: ${errText(e)}`);
+      writeResponse(responseFile, { id: req.id, error: errText(e).slice(0, 200) });
+    },
+  });
+}
+
+/** What each `popout-request.json` action does. `range`: it addresses text, so
+ `start`/`stop` must be a Range; `chatty`: it fires on every hover and is not
+ logged. This table is the validation, the logging and the dispatch. */
+const ACTIONS = {
+  highlight: { range: true, chatty: true, run: (t, r) => highlight(t, r) },
+  clear: { chatty: true, run: () => highlight(null, null) },
+  preview: { range: true, chatty: true, run: (t, r) => preview(t, r) },
+  "preview-clear": { chatty: true, run: () => preview(null, null) },
+  annotate: { chatty: true, run: (t, _r, anns) => annotate(t, anns) },
+  undo: { run: (t) => runEditorCommand(t, "undo") },
+  redo: { run: (t) => runEditorCommand(t, "redo") },
+  reveal: {
+    range: true,
+    run: async (t, r, anns) => {
+      await reveal(t, r);
+      annotate(t, anns);
+    },
+  },
+  popout: {
+    range: true,
+    run: async (t, r, anns) => {
+      await popout(t, r);
+      annotate(t, anns);
+    },
+  },
+};
+
+const handleRequest = makeHandler({
+  tag: "request",
+  file: REQUEST_FILE,
+  check: (req) => {
+    const target = requestUri(req);
+    if (!target) return "bad uri";
+    const action = req.action === undefined || req.action === "" ? "popout" : req.action;
+    if (typeof action !== "string" || !Object.hasOwn(ACTIONS, action))
+      return `unknown action ${JSON.stringify(String(action).slice(0, 40))}`;
+    const def = ACTIONS[action];
+    const range = requestRange(req);
+    if (def.range && !range)
+      return `${action}: start/stop are not {line, character} non-negative integers`;
+    return {
+      target,
+      action,
+      def,
+      range,
+      annotations: Array.isArray(req.annotations) ? req.annotations : [],
+      what: def.chatty ? null : `action=${action} uri=${target.toString()}`,
+    };
+  },
+  owns: (ctx) => ownsUri(ctx.target),
+  run: async (req, { target, def, range, annotations }) => {
+    await def.run(target, range, annotations);
+    if (!def.chatty) say(`request ${req.nonce}: done`);
+  },
+  fail: (e, req, { action }) => {
+    say(`request ${req.nonce}: FAILED: ${errStack(e)}`);
+    void vscode.window.showErrorMessage(`Ramify: ${action} failed: ${errText(e)}`);
+  },
+});
+
+// A rename acts on a document this window has OPEN (it was just edited here);
+// another window's companion sees the same file and must not act.
+const handleRename = makeHandler({
+  tag: "rename",
+  file: RENAME_REQUEST,
+  check: (req) => {
+    const target = requestUri(req);
+    const range = requestRange(req);
+    if (!target || !range) return "bad uri or range";
+    return {
+      target,
+      range,
+      what: `action=rename uri=${target.toString()} at ${range.start.line}:${range.start.character}`,
+    };
+  },
+  owns: (ctx) => isOpen(ctx.target),
+  run: (req, ctx) => renameAfterHoist(ctx.target, ctx.range, req.nonce),
+});
+
+// A `⋯`-menu pin: write the list where the value that wins already lives (a
+// Workspace value would shadow a User-scope write), as the experience pick
+// does. The config listener then republishes the theme file.
+const handleSettings = makeHandler({
+  tag: "settings",
+  file: SETTINGS_REQUEST,
+  check: (req) => {
+    if (req.action !== "hoverbar") return "unknown action";
+    const kind = req.setting;
+    if (kind !== "tactic" && kind !== "goal") return "unknown setting";
+    const target = requestUri(req);
+    if (!target) return "bad uri";
+    if (!Array.isArray(req.values)) return "values is not an array";
+    return { target, kind, ids: idsFor(kind, req.values) };
+  },
+  owns: (ctx) => ownsUri(ctx.target),
+  run: async (req, { target, kind, ids }) => {
+    const key = `hoverBar.${kind}`;
+    await vscode.workspace
+      .getConfiguration("ramify", target)
+      .update(key, ids, writeTarget(key, target));
+    say(`settings ${req.nonce}: ramify.${key} = [${ids.join(", ")}]`);
+  },
+});
+
+const handlePolish = makeAiHandler("polish", POLISH_REQUEST, POLISH_RESPONSE, polish);
+const handlePropose = makeAiHandler("propose", PROPOSE_REQUEST, PROPOSE_RESPONSE, propose);
+
+// Stamped into the theme file so the widget can tell a LIVE companion from a
+// file an uninstalled one left behind (which carried nothing to tell by).
+// `companionAt` is the activation time, never the publish time: a publish that
+// changed nothing must leave the file byte-identical, so it can be skipped.
+let companionVersion = "";
+let companionAt = 0;
+
+const SETTING_LEVELS = [
+  ["workspaceFolderValue", () => vscode.ConfigurationTarget.WorkspaceFolder],
+  ["workspaceValue", () => vscode.ConfigurationTarget.Workspace],
+  ["globalValue", () => vscode.ConfigurationTarget.Global],
+];
+/** The `inspect()` level that holds the value that wins, if the reader set one. */
+const explicitLevel = (info) => SETTING_LEVELS.find(([k]) => info?.[k] !== undefined);
+/** The value the reader set (folder, else workspace, else user), or undefined. */
+const explicitValue = (info) => {
+  const l = explicitLevel(info);
+  return l ? info[l[0]] : undefined;
+};
+
+/** Every `ramify.*` setting the widget reads, in the theme file's own names,
+ as they stand for one resource (a workspace folder's uri; `undefined` is the
+ window's own view). `experience` is a NAME (the widget owns the table and
+ fills only defaults from it); `hoverBar` lists are sent ONLY where the reader
+ set them, each cut down to the ids its kind can draw, so an unset list leaves
+ the widget on the preset's default. `experienceSet` is for the log alone. */
+function ramifySettings(resource) {
+  const cfg = vscode.workspace.getConfiguration("ramify", resource);
+  const expInfo = cfg.inspect("experience");
+  const explicitBar = (kind) => {
+    const v = explicitValue(cfg.inspect(`hoverBar.${kind}`));
+    return Array.isArray(v) ? idsFor(kind, v) : null;
+  };
+  return {
+    outline: cfg.get("outlineOnly") === true,
+    linkTint: cfg.get("linkTint") === true,
+    linkMarks: cfg.get("linkMarks") === true,
+    typingHoldMs: cfg.get("typingHoldMs"),
+    counterfactual: cfg.get("counterfactual") !== false,
+    hypMarkStyle: cfg.get("hypMarkStyle"),
+    experience: explicitValue(expInfo) ?? expInfo?.defaultValue ?? "intermediate",
+    experienceSet: explicitValue(expInfo) !== undefined,
+    hoverBar: { tactic: explicitBar("tactic"), goal: explicitBar("goal") },
+  };
+}
+
+/** Where a write to `ramify.<key>` must go to take effect: the level that
+ already holds the value that wins (a Workspace or Folder value would shadow a
+ User-scope write), else User. */
+function writeTarget(key, resource) {
+  const info = vscode.workspace.getConfiguration("ramify", resource).inspect(key);
+  const l = explicitLevel(info);
+  return l ? l[1]() : vscode.ConfigurationTarget.Global;
+}
+
+/** The token colours the theme gives the six kinds the widget paints, cached on
+ what they are computed from: the theme's name and the two customisation blobs.
+ A `ramify.*` change (and every publish that is not a theme change) re-reads
+ neither the theme's JSON nor the extension list. A theme file that cannot be
+ found is not cached, so it is looked for again. */
+let tokenColorCache = { key: null, colors: null };
+function tokenColors(themeName) {
+  const ed = vscode.workspace.getConfiguration("editor");
+  const tokenBlob = ed.get("tokenColorCustomizations");
+  const semBlob = ed.get("semanticTokenColorCustomizations");
+  const key = JSON.stringify([themeName, tokenBlob, semBlob]);
+  if (tokenColorCache.key === key) return tokenColorCache.colors;
+  const file = activeThemeFile();
+  const colors = resolveTokenColors(file, customizations(themeName, tokenBlob, semBlob));
+  tokenColorCache = file ? { key, colors } : { key: null, colors: null };
+  return colors;
+}
+
 function publishThemeColors() {
   try {
-    fs.mkdirSync(REQUEST_DIR, { recursive: true });
-    const colors = resolveTokenColors();
-    const name = vscode.workspace
-      .getConfiguration("workbench")
-      .get("colorTheme");
-
+    const name = vscode.workspace.getConfiguration("workbench").get("colorTheme");
+    const colors = tokenColors(name);
     const brackets =
       vscode.workspace
         .getConfiguration("editor")
         .get("bracketPairColorization.enabled") !== false;
 
-    const outline =
-      vscode.workspace.getConfiguration("ramify").get("outlineOnly") ===
-      true;
-
-    const linkTint =
-      vscode.workspace.getConfiguration("ramify").get("linkTint") === true;
-
-    const linkMarks =
-      vscode.workspace.getConfiguration("ramify").get("linkMarks") === true;
-
-    const typingHoldMs = vscode.workspace
-      .getConfiguration("ramify")
-      .get("typingHoldMs");
-
-    const counterfactual =
-      vscode.workspace.getConfiguration("ramify").get("counterfactual") !==
-      false;
-
-    const hypMarkStyle = vscode.workspace
-      .getConfiguration("ramify")
-      .get("hypMarkStyle");
-
-    // `ramify.experience` is passed through as a NAME; the widget owns the
-    // table (web/src/experience.ts) and fills only DEFAULTS from it. `inspect`
-    // says whether the reader chose it, for the log line below.
-    const expInfo = vscode.workspace
-      .getConfiguration("ramify")
-      .inspect("experience");
-    const experience =
-      expInfo?.workspaceFolderValue ??
-      expInfo?.workspaceValue ??
-      expInfo?.globalValue ??
-      expInfo?.defaultValue ??
-      "intermediate";
-    const experienceSet =
-      expInfo?.workspaceFolderValue !== undefined ||
-      expInfo?.workspaceValue !== undefined ||
-      expInfo?.globalValue !== undefined;
-
-    // `ramify.hoverBar.*`: sent ONLY where the reader set it (`inspect()`), so
-    // an unset list leaves the widget on the experience preset's default —
-    // the setting wins where it exists, the preset where it does not.
-    const explicit = (key) => {
-      const i = vscode.workspace.getConfiguration("ramify").inspect(key);
-      const v =
-        i?.workspaceFolderValue ?? i?.workspaceValue ?? i?.globalValue;
-      return Array.isArray(v) ? v.filter((x) => MOVE_IDS.includes(x)) : null;
-    };
-    const hoverBar = {
-      tactic: explicit("hoverBar.tactic"),
-      goal: explicit("hoverBar.goal"),
-    };
+    // The top-level values are this window's own view; `byFolder` carries one
+    // entry per workspace folder with the same keys, which the Lean side lays
+    // over the top level for a document under that folder, so a workspace
+    // setting in one window does not leak into another's.
+    const { experienceSet, ...top } = ramifySettings(undefined);
+    const mine = {};
+    for (const f of vscode.workspace.workspaceFolders ?? []) {
+      if (f.uri.scheme !== "file") continue;
+      const { experienceSet: _, ...entry } = ramifySettings(f.uri);
+      mine[path.resolve(f.uri.fsPath)] = entry;
+    }
+    // Read-modify-write: another window's folders keep their entries, this
+    // window replaces only its own. (Two windows publishing in the same
+    // instant can lose one entry until its next publish; the rename is atomic
+    // so the file itself is never torn.)
+    const prior = readJsonFile("theme-colors.json");
+    const byFolder = {};
+    if (prior && isObj(prior.byFolder))
+      for (const [k, v] of Object.entries(prior.byFolder))
+        if (isObj(v)) byFolder[k] = v;
+    Object.assign(byFolder, mine);
 
     const inputCfg = vscode.workspace.getConfiguration("lean4.input");
     const custom = inputCfg.get("customTranslations") || {};
@@ -527,41 +951,31 @@ function publishThemeColors() {
       })),
     };
 
-    fs.writeFileSync(
-      THEME_FILE,
-      JSON.stringify(
-        {
-          theme: name,
-          brackets,
-          outline,
-          linkTint,
-          linkMarks,
-          typingHoldMs,
-          counterfactual,
-          hypMarkStyle,
-          input,
-          ai: aiState,
-          experience,
-          hoverBar,
-          colors: Object.keys(colors).map((type) => ({
-            type,
-            color: colors[type],
-          })),
-        },
-        null,
-        1,
-      ),
-    );
+    const payload = {
+      theme: name,
+      brackets,
+      ...top,
+      input,
+      ai: aiState,
+      byFolder,
+      companion: { version: companionVersion, pid: process.pid, at: companionAt },
+      colors: Object.keys(colors).map((type) => ({ type, color: colors[type] })),
+    };
+    // Compared with what is ON DISK, not with what this window last wrote: the
+    // file is shared, and another window may have replaced it since.
+    if (prior && JSON.stringify(prior, null, 1) === JSON.stringify(payload, null, 1)) return;
+    writeJsonAtomic(THEME_FILE, payload, 1);
 
+    const { hoverBar } = top;
     say(
       `theme "${name}" (brackets ${brackets ? "on" : "off"}, ` +
-        `outline ${outline ? "on" : "off"}, ` +
-        `link tint ${linkTint ? "on" : "off"}, ` +
-        `link marks ${linkMarks ? "on" : "off"}, ` +
-        `typing hold ${typingHoldMs}ms, ` +
-        `counterfactual ${counterfactual ? "on" : "off"}, ` +
-        `hyp mark ${hypMarkStyle || "highlight"}, ` +
-        `experience ${experience}${experienceSet ? "" : " (default)"}, ` +
+        `outline ${top.outline ? "on" : "off"}, ` +
+        `link tint ${top.linkTint ? "on" : "off"}, ` +
+        `link marks ${top.linkMarks ? "on" : "off"}, ` +
+        `typing hold ${top.typingHoldMs}ms, ` +
+        `counterfactual ${top.counterfactual ? "on" : "off"}, ` +
+        `hyp mark ${top.hypMarkStyle || "highlight"}, ` +
+        `experience ${top.experience}${experienceSet ? "" : " (default)"}, ` +
         `hover bar tactic=${hoverBar.tactic ? hoverBar.tactic.join(",") : "(preset)"} ` +
         `goal=${hoverBar.goal ? hoverBar.goal.join(",") : "(preset)"}): ` +
         Object.keys(colors)
@@ -569,7 +983,7 @@ function publishThemeColors() {
           .join(" "),
     );
   } catch (e) {
-    say(`theme colours failed: ${e}`);
+    say(`theme colours failed: ${errText(e)}`);
   }
 }
 
@@ -585,15 +999,16 @@ const STATIC_STRIP = {
 const STRIP_KEYS = Object.keys(STATIC_STRIP);
 let strippedOriginals = null;
 
-function readChromeBackup() {
-  try {
-    return JSON.parse(fs.readFileSync(CHROME_BACKUP, "utf8"));
-  } catch {
-    return null;
-  }
+const readChromeBackup = () => readJsonFile(path.basename(CHROME_BACKUP));
+
+/** The pid a backup names, or 0. `process.kill(0)` and a negative pid address
+ a process GROUP, so only a positive integer is ever probed. */
+function backupPid(prior) {
+  return prior && Number.isInteger(prior.pid) && prior.pid > 0 ? prior.pid : 0;
 }
 
 function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -602,14 +1017,34 @@ function pidAlive(pid) {
   }
 }
 
+/** The `originals` of a backup file, cut down to what this module may write
+ back: ONLY the STRIP_KEYS, each `null` (was unset) or a value of the type
+ STATIC_STRIP gives that key. The file lives where any program of the user's
+ can edit it, and each surviving entry becomes a `cfg.update(Global)` — so an
+ unknown key, or a known one with the wrong type, is dropped and logged rather
+ than written into the user's settings. */
+function sanitiseOriginals(raw) {
+  const out = {};
+  if (!isObj(raw)) return out;
+  for (const key of STRIP_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+    const v = raw[key];
+    if (v === null || typeof v === typeof STATIC_STRIP[key]) out[key] = v;
+    else say(`chrome backup: ignoring ${key} (unexpected ${typeof v})`);
+  }
+  for (const key of Object.keys(raw))
+    if (!STRIP_KEYS.includes(key)) say(`chrome backup: ignoring unknown key ${JSON.stringify(key)}`);
+  return out;
+}
+
 async function stripEditorChrome() {
   if (strippedOriginals) return;
   const cfg = vscode.workspace.getConfiguration();
 
   const prior = readChromeBackup();
   let originals;
-  if (prior && prior.pid !== process.pid && pidAlive(prior.pid)) {
-    originals = prior.originals;
+  if (prior && backupPid(prior) !== process.pid && pidAlive(backupPid(prior))) {
+    originals = sanitiseOriginals(prior.originals);
   } else {
     originals = {};
     for (const key of STRIP_KEYS) {
@@ -618,35 +1053,55 @@ async function stripEditorChrome() {
   }
   strippedOriginals = originals;
   try {
-    fs.writeFileSync(
-      CHROME_BACKUP,
-      JSON.stringify({ pid: process.pid, originals }),
-    );
-  } catch {}
+    writeJsonAtomic(CHROME_BACKUP, { pid: process.pid, originals });
+  } catch (e) {
+    say(`chrome backup not written: ${errText(e)}`);
+  }
   for (const [key, val] of Object.entries(STATIC_STRIP)) {
-    await cfg.update(key, val, vscode.ConfigurationTarget.Global);
+    try {
+      await cfg.update(key, val, vscode.ConfigurationTarget.Global);
+    } catch (e) {
+      say(`chrome: cannot set ${key}: ${errText(e)}`);
+    }
   }
 }
 
 async function restoreEditorChrome(fromDisk) {
-  let originals = strippedOriginals;
-  if (!originals && fromDisk) {
-    const prior = readChromeBackup();
-    if (prior && !pidAlive(prior.pid)) originals = prior.originals;
-  }
-  if (!originals) return;
-  strippedOriginals = null;
-  const cfg = vscode.workspace.getConfiguration();
-  for (const [key, orig] of Object.entries(originals)) {
-    await cfg.update(
-      key,
-      orig === null ? undefined : orig,
-      vscode.ConfigurationTarget.Global,
-    );
-  }
   try {
-    fs.unlinkSync(CHROME_BACKUP);
-  } catch {}
+    let originals = strippedOriginals;
+    if (!originals && fromDisk) {
+      const prior = readChromeBackup();
+      // A dead pid means the window that stripped is gone (VS Code quit or
+      // crashed with the lens open); a live one still owns its strip.
+      if (prior && !pidAlive(backupPid(prior))) originals = sanitiseOriginals(prior.originals);
+    }
+    if (!originals) return;
+    strippedOriginals = null;
+    const cfg = vscode.workspace.getConfiguration();
+    let failed = false;
+    for (const key of STRIP_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(originals, key)) continue;
+      const orig = originals[key];
+      try {
+        await cfg.update(
+          key,
+          orig === null ? undefined : orig,
+          vscode.ConfigurationTarget.Global,
+        );
+      } catch (e) {
+        failed = true;
+        say(`chrome: cannot restore ${key}: ${errText(e)}`);
+      }
+    }
+    // A backup that could not be fully applied stays, so the next start tries
+    // again.
+    if (failed) return;
+    try {
+      fs.unlinkSync(CHROME_BACKUP);
+    } catch {}
+  } catch (e) {
+    say(`restoreEditorChrome failed: ${errStack(e)}`);
+  }
 }
 
 const FOCUS_GROUP_CMDS = [
@@ -885,6 +1340,8 @@ function lensEditor(uri) {
   );
 }
 
+const MAX_ANNOTATIONS = 5000;
+
 function annotate(uri, items) {
   const ed = lensEditor(uri);
   if (!ed) return;
@@ -893,13 +1350,14 @@ function annotate(uri, items) {
     return;
   }
   const opts = [];
-  for (const a of items) {
-    if (typeof a.line !== "number" || a.line < 0 || a.line >= ed.document.lineCount)
+  for (const a of items.slice(0, MAX_ANNOTATIONS)) {
+    if (!isObj(a) || !Number.isInteger(a.line) || a.line < 0 || a.line >= ed.document.lineCount)
       continue;
+    if (typeof a.text !== "string") continue;
     const end = ed.document.lineAt(a.line).range.end;
     opts.push({
       range: new vscode.Range(end, end),
-      renderOptions: { after: { contentText: a.text } },
+      renderOptions: { after: { contentText: a.text.slice(0, 2000) } },
     });
   }
   ed.setDecorations(goalDecoration, opts);
@@ -961,7 +1419,7 @@ async function popout(uri, selection) {
   say(`  popout: infoview column=${infoColumn}`);
   if (!focusCmd) {
     void vscode.window.showErrorMessage(
-      "Ramify: no Lean infoview group found to attach the lens to.",
+      "Ramify: Open the Lean infoview first, then run Ramify: Open Tactic in Lens",
     );
     return;
   }
@@ -973,7 +1431,10 @@ async function popout(uri, selection) {
 
   await sizeLens(lensColumn);
   await showInLens(doc, selection, lensColumn);
-  await stripEditorChrome();
+  // `ramify.lensHideChrome` (default on): off leaves tabs, breadcrumbs, the
+  // minimap and sticky scroll as the reader has them. A strip already in force
+  // is still undone when the lens closes.
+  if (flag("lensHideChrome", true)) await stripEditorChrome();
 }
 
 // D1 EXTRACT → RENAME SYMBOL (2026-09-17). The widget has just written
@@ -1030,19 +1491,12 @@ async function leanRenameReady(doc, range) {
   return null;
 }
 
-async function renameAfterHoist(req) {
-  const tag = `rename ${req.nonce}`;
+async function renameAfterHoist(uri, range, nonce) {
+  const tag = `rename ${nonce}`;
   if (!flag("restructure.renameAfterHoist", true)) {
     say(`${tag}: skipped — ramify.restructure.renameAfterHoist is off`);
     return;
   }
-  const uri = vscode.Uri.parse(req.uri, true);
-  const range = new vscode.Range(
-    req.start.line,
-    req.start.character,
-    req.stop.line,
-    req.stop.character,
-  );
   const t0 = Date.now();
   const doc = await vscode.workspace.openTextDocument(uri);
 
@@ -1096,6 +1550,8 @@ async function renameAfterHoist(req) {
 }
 
 function activate(context) {
+  companionVersion = String(context.extension?.packageJSON?.version ?? "0");
+  companionAt = Date.now();
   log = vscode.window.createOutputChannel("Ramify");
   context.subscriptions.push(
     log,
@@ -1113,7 +1569,10 @@ function activate(context) {
   );
   say(`activated (pid ${process.pid}), watching ${REQUEST_DIR}`);
 
-  void restoreEditorChrome(true);
+  // Undo a strip left by a window that quit (or died) with the lens open. Runs
+  // when the first Lean file opens — see `activationEvents`.
+  restoreEditorChrome(true).catch((e) => say(`restore on start: ${errText(e)}`));
+  pruneClaims();
 
   // C4/D6 — the key lives in VS Code's own secret storage and nowhere else;
   // the cache is `globalState`, so re-opening a proof costs nothing.
@@ -1122,7 +1581,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("ramify.setNarrationKey", async () => {
       const v = await vscode.window.showInputBox({
-        prompt: "Anthropic API key for Ramify's narration polish",
+        prompt: "Anthropic API key for Ramify's model features (polish and suggest a rewrite)",
         placeHolder: "sk-ant-…  (leave empty to clear)",
         password: true,
         ignoreFocusOut: true,
@@ -1130,12 +1589,12 @@ function activate(context) {
       if (v === undefined) return;
       if (v.trim() === "") {
         await context.secrets.delete(SECRET_KEY);
-        void vscode.window.showInformationMessage("Ramify: narration API key cleared.");
+        void vscode.window.showInformationMessage("Ramify: model API key cleared");
       } else {
         await context.secrets.store(SECRET_KEY, v.trim());
-        void vscode.window.showInformationMessage("Ramify: narration API key stored.");
+        void vscode.window.showInformationMessage("Ramify: model API key stored");
       }
-      say("narration API key updated");
+      say("model API key updated");
       await refreshAi();
     }),
   );
@@ -1144,23 +1603,18 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("ramify.setExperience", async () => {
       const cur =
-        vscode.workspace.getConfiguration("ramify").get("experience") ||
-        "intermediate";
-      const items = [
-        {
-          label: "beginner",
-          detail:
-            "The step under the cursor shows what its automation used · ⁇ on the tactic bar · narrated comments · full context · lints on",
-        },
-        {
-          label: "intermediate",
-          detail: "Comments shown · used context · lints on",
-        },
-        {
-          label: "expert",
-          detail: "Brief mode on · lints off",
-        },
-      ].map((i) => ({ ...i, description: i.label === cur ? "current" : "" }));
+        vscode.workspace
+          .getConfiguration(
+            "ramify",
+            vscode.window.activeTextEditor?.document.uri ??
+              vscode.workspace.workspaceFolders?.[0]?.uri,
+          )
+          .get("experience") || "intermediate";
+      const items = ["beginner", "intermediate", "expert"].map((label) => ({
+        label,
+        detail: EXPERIENCE_DETAIL[label],
+        description: label === cur ? "current" : "",
+      }));
       const pick = await vscode.window.showQuickPick(items, {
         placeHolder:
           "How much should the proof tree explain itself? (fills defaults only)",
@@ -1168,40 +1622,43 @@ function activate(context) {
       if (!pick) return;
       // Write where the value that wins already lives: a workspace setting
       // would shadow a User-scope write and the pick would do nothing.
-      const cfg = vscode.workspace.getConfiguration("ramify");
-      const target =
-        cfg.inspect("experience")?.workspaceValue !== undefined
-          ? vscode.ConfigurationTarget.Workspace
-          : vscode.ConfigurationTarget.Global;
-      await cfg.update("experience", pick.label, target);
+      const resource =
+        vscode.window.activeTextEditor?.document.uri ??
+        vscode.workspace.workspaceFolders?.[0]?.uri;
+      const cfg = vscode.workspace.getConfiguration("ramify", resource);
+      await cfg.update("experience", pick.label, writeTarget("experience", resource));
       say(`experience set to ${pick.label}`);
     }),
   );
   context.subscriptions.push(
     context.secrets.onDidChange((e) => {
-      if (e.key === SECRET_KEY) void refreshAi();
+      if (e.key === SECRET_KEY)
+        refreshAi().catch((err) => say(`refreshAi: ${errText(err)}`));
     }),
   );
-  void refreshAi();
+  refreshAi().catch((e) => say(`refreshAi: ${errText(e)}`));
 
-  publishThemeColors();
   context.subscriptions.push(
     vscode.window.onDidChangeActiveColorTheme(() => publishThemeColors()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => publishThemeColors()),
   );
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
+      const themeChanged =
         e.affectsConfiguration("workbench.colorTheme") ||
         e.affectsConfiguration("editor.tokenColorCustomizations") ||
         e.affectsConfiguration("editor.semanticTokenColorCustomizations") ||
         e.affectsConfiguration("editor.bracketPairColorization.enabled") ||
-        e.affectsConfiguration("lean4.input")
-      )
-        publishThemeColors();
+        e.affectsConfiguration("lean4.input");
       // A `ramify` change can be one of the two AI gates, and those are
-      // published through `refreshAi` (which re-reads the key and then
-      // publishes), so it takes the whole namespace.
-      else if (e.affectsConfiguration("ramify")) void refreshAi();
+      // published through `refreshAi` (which re-reads the key and then calls
+      // `publishThemeColors` itself), so it takes the whole namespace. The two
+      // are independent: one event touching both refreshes both, and where
+      // `refreshAi` runs it is the publisher, so the file is written once.
+      const ramifyChanged = e.affectsConfiguration("ramify");
+      if (ramifyChanged)
+        refreshAi().catch((err) => say(`refreshAi: ${errText(err)}`));
+      else if (themeChanged) publishThemeColors();
     }),
   );
 
@@ -1222,7 +1679,7 @@ function activate(context) {
       say("lens closed; restoring editor chrome");
       lensColumn = null;
       lensWrapped = false;
-      void restoreEditorChrome(false);
+      restoreEditorChrome(false).catch((e) => say(`restore on close: ${errText(e)}`));
     }),
   );
 
@@ -1231,7 +1688,7 @@ function activate(context) {
       const ed = vscode.window.activeTextEditor;
       if (!ed) {
         void vscode.window.showErrorMessage(
-          "Ramify: no active editor to open in the lens.",
+          "Ramify: no active editor to open in the lens",
         );
         return;
       }
@@ -1245,170 +1702,103 @@ function activate(context) {
     }),
   );
 
-  let lastNonce = null;
-  const handleRequest = async () => {
-    let req;
+  // The watcher. `fs.watch` fires two or three events per write (and one per
+  // rename of the temp file a response lands through), and two DISTINCT writes
+  // can land inside a few ms (a `popout`, then the hover's `clear`), so there
+  // is no debounce: every event on a known file reads the file, and writes are
+  // atomic, so a read sees a whole write. Two things keep that cheap and
+  // harmless: every handler dedupes on nonce/id (a read of a write it has
+  // already handled is a no-op), and a `stat` signature — inode, mtime, size;
+  // a rename lands a new inode — skips the read when the file is the one the
+  // last event already read.
+  const handlers = new Map([
+    [REQUEST_FILE, handleRequest],
+    [RENAME_REQUEST, handleRename],
+    [SETTINGS_REQUEST, handleSettings],
+    [POLISH_REQUEST, handlePolish],
+    [PROPOSE_REQUEST, handlePropose],
+  ]);
+  const lastRead = new Map(); // filename -> stat signature of the last read
+  const dispatch = (filename) => {
+    const h = handlers.get(filename);
+    if (!h) return;
+    let sig;
     try {
-      req = JSON.parse(
-        fs.readFileSync(path.join(REQUEST_DIR, REQUEST_FILE), "utf8"),
-      );
+      const st = fs.statSync(path.join(REQUEST_DIR, filename));
+      sig = `${st.ino}:${st.mtimeMs}:${st.size}`;
     } catch {
+      lastRead.delete(filename);
       return;
     }
-    if (!req) return;
-    if (req.nonce === lastNonce) return;
-    const target = vscode.Uri.parse(req.uri, true);
+    if (lastRead.get(filename) === sig) return;
+    lastRead.set(filename, sig);
+    h().catch((e) => say(`${filename}: handler rejected: ${errText(e)}`));
+  };
 
-    const chatty =
-      req.action === "highlight" ||
-      req.action === "clear" ||
-      req.action === "preview" ||
-      req.action === "preview-clear" ||
-      req.action === "annotate";
-    if (!chatty)
-      say(`request ${req.nonce}: action=${req.action ?? "popout"} uri=${req.uri}`);
-
-    const owned =
-      !!vscode.workspace.getWorkspaceFolder(target) ||
-      vscode.workspace.textDocuments.some(
-        (d) => d.uri.toString() === target.toString(),
-      );
-    if (!owned) {
-      say("  skipped: this window neither owns the workspace nor has the doc open");
-      return;
+  // Re-arming: an `error` (the directory removed or its volume gone, EMFILE,
+  // a network home) closes the watcher for good, and without a new one the
+  // companion goes silently deaf. So: log, close, and try again after a
+  // backoff that doubles from 1 s to 30 s and resets only once an event has
+  // actually arrived — a watcher that errors at once every time is retried
+  // ever more slowly, never in a spin.
+  let watcher = null;
+  let disposed = false;
+  let retryTimer = null;
+  let backoffMs = 0;
+  let warned = false;
+  const rearm = (why) => {
+    if (watcher) {
+      try {
+        watcher.close();
+      } catch {}
+      watcher = null;
     }
-    lastNonce = req.nonce;
-    const range = new vscode.Range(
-      req.start.line,
-      req.start.character,
-      req.stop.line,
-      req.stop.character,
-    );
+    if (disposed || retryTimer) return;
+    backoffMs = backoffMs ? Math.min(backoffMs * 2, 30000) : 1000;
+    say(`watcher: ${why} — retrying in ${backoffMs}ms`);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      arm();
+    }, backoffMs);
+  };
+  const arm = () => {
     try {
-      if (req.action === "highlight") {
-        highlight(target, range);
-      } else if (req.action === "clear") {
-        highlight(null, null);
-      } else if (req.action === "preview") {
-        preview(target, range);
-      } else if (req.action === "preview-clear") {
-        preview(null, null);
-      } else if (req.action === "annotate") {
-        annotate(target, req.annotations ?? []);
-      } else if (req.action === "undo" || req.action === "redo") {
-        await runEditorCommand(target, req.action);
-      } else if (req.action === "reveal") {
-        await reveal(target, range);
-        annotate(target, req.annotations ?? []);
-      } else {
-        await popout(target, range);
-
-        annotate(target, req.annotations ?? []);
+      fs.mkdirSync(REQUEST_DIR, { recursive: true });
+      watcher = fs.watch(REQUEST_DIR, (event, filename) => {
+        backoffMs = 0;
+        // A rename with the directory gone is the directory being removed.
+        if (event === "rename" && !fs.existsSync(REQUEST_DIR)) {
+          rearm("the request directory disappeared");
+          return;
+        }
+        // Some platforms give no filename; every handler dedupes, so ask all.
+        if (typeof filename !== "string") for (const f of handlers.keys()) dispatch(f);
+        else dispatch(filename);
+      });
+      watcher.on("error", (e) => rearm(`error: ${errText(e)}`));
+      say("watcher started");
+    } catch (e) {
+      if (!warned) {
+        warned = true;
+        void vscode.window.showErrorMessage(
+          `Ramify: request watcher failed to start: ${errText(e)} — reload the window to retry`,
+        );
       }
-      if (!chatty) say("  done");
-    } catch (e) {
-      say(`  FAILED: ${e && e.stack ? e.stack : e}`);
-      void vscode.window.showErrorMessage(
-        `Ramify: ${req.action ?? "popout"} failed: ${e}`,
-      );
+      rearm(`failed to start: ${errText(e)}`);
     }
   };
-  let lastRenameNonce = null;
-  const handleRename = async () => {
-    let req;
-    try {
-      req = JSON.parse(
-        fs.readFileSync(path.join(REQUEST_DIR, RENAME_REQUEST), "utf8"),
-      );
-    } catch {
-      return;
-    }
-    if (!req || req.nonce === lastRenameNonce) return;
-    const target = vscode.Uri.parse(req.uri, true);
-    // A rename acts on a document this window has OPEN (it was just edited
-    // here); another window's companion sees the same file and must not act.
-    const open = vscode.workspace.textDocuments.some(
-      (d) => d.uri.toString() === target.toString(),
-    );
-    if (!open) return;
-    lastRenameNonce = req.nonce;
-    say(`request ${req.nonce}: action=rename uri=${req.uri} at ${req.start.line}:${req.start.character}`);
-    try {
-      await renameAfterHoist(req);
-    } catch (e) {
-      say(`  rename FAILED: ${e && e.stack ? e.stack : e}`);
-    }
-  };
-  // A `⋯`-menu pin: write the list where the value that wins already lives
-  // (a Workspace value would shadow a User-scope write), as the experience
-  // pick does. The config listener then republishes the theme file.
-  let lastSettingsNonce = null;
-  const handleSettings = async () => {
-    let req;
-    try {
-      req = JSON.parse(
-        fs.readFileSync(path.join(REQUEST_DIR, SETTINGS_REQUEST), "utf8"),
-      );
-    } catch {
-      return;
-    }
-    if (!req || req.nonce === lastSettingsNonce) return;
-    if (req.action !== "hoverbar") return;
-    if (req.setting !== "tactic" && req.setting !== "goal") return;
-    const target = vscode.Uri.parse(req.uri, true);
-    const owned =
-      !!vscode.workspace.getWorkspaceFolder(target) ||
-      vscode.workspace.textDocuments.some(
-        (d) => d.uri.toString() === target.toString(),
-      );
-    if (!owned) return;
-    lastSettingsNonce = req.nonce;
-    const ids = (req.values ?? []).filter((x) => MOVE_IDS.includes(x));
-    const key = `hoverBar.${req.setting}`;
-    const cfg = vscode.workspace.getConfiguration("ramify");
-    const scope =
-      cfg.inspect(key)?.workspaceValue !== undefined
-        ? vscode.ConfigurationTarget.Workspace
-        : vscode.ConfigurationTarget.Global;
-    try {
-      await cfg.update(key, ids, scope);
-      say(`request ${req.nonce}: ramify.${key} = [${ids.join(", ")}]`);
-    } catch (e) {
-      say(`  hoverbar FAILED: ${e && e.stack ? e.stack : e}`);
-    }
-  };
-  const handlePolish = makeAiHandler(
-    POLISH_REQUEST,
-    POLISH_RESPONSE,
-    "polish",
-    polish,
-  );
-  const handlePropose = makeAiHandler(
-    PROPOSE_REQUEST,
-    PROPOSE_RESPONSE,
-    "propose",
-    propose,
-  );
-  try {
-    fs.mkdirSync(REQUEST_DIR, { recursive: true });
-    const watcher = fs.watch(REQUEST_DIR, (_event, filename) => {
-      if (filename === REQUEST_FILE) void handleRequest();
-      else if (filename === RENAME_REQUEST) void handleRename();
-      else if (filename === SETTINGS_REQUEST) void handleSettings();
-      else if (filename === POLISH_REQUEST) void handlePolish();
-      else if (filename === PROPOSE_REQUEST) void handlePropose();
-    });
-    say("watcher started");
-    context.subscriptions.push({ dispose: () => watcher.close() });
-  } catch (e) {
-    void vscode.window.showErrorMessage(
-      `Ramify: request watcher failed to start: ${e}`,
-    );
-  }
-
+  arm();
+  context.subscriptions.push({
+    dispose: () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (watcher) watcher.close();
+    },
+  });
 }
 
 function deactivate() {
+  // restoreEditorChrome guards itself and never rejects.
   return restoreEditorChrome(false);
 }
 

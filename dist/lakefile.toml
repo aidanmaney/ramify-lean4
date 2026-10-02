@@ -8,7 +8,7 @@
 # minimal package rather than a flag on the first.
 #
 # The Lean sources are SHARED, not copied: `srcDir = "../lean"` points both
-# packages at the same four files, so there is exactly one copy of every module
+# packages at the same three files, so there is exactly one copy of every module
 # and this package cannot drift from the one being developed. The same is true
 # of the renderer bundle, which `Ramify.lean` reads with `include_str`
 # — see the input_file note below.
