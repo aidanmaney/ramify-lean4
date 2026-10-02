@@ -167,7 +167,9 @@ export default function SourcePane({
       const base = starts[t.start.line];
       if (base === undefined) continue;
       for (let k = t.start.character; k < t.stop.character; k++)
-        paint[base + k] = t.type === "const" ? "function" : t.type;
+        // As the type is: a `const` has no TOKEN_COLOR, so it stays in the
+        // foreground here exactly as it does in the tree's labels.
+        paint[base + k] = t.type;
     }
     return lines.map((l, i) =>
       segmentsOf(l, paint.slice(starts[i], starts[i] + l.length)),

@@ -118,6 +118,11 @@ export function storeTheme(kind: ThemeKind | null) {
   }
 }
 
+/** What the page starts in: the reader's pick, else the system's. */
+export function initialTheme(): ThemeKind {
+  return storedTheme() ?? systemTheme();
+}
+
 export function systemTheme(): ThemeKind {
   try {
     return window.matchMedia("(prefers-color-scheme: dark)").matches

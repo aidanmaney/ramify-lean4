@@ -561,7 +561,15 @@ structure BakedPopup where
   expr : Option String := none
   type : Option String := none
   doc  : Option String := none
-  deriving ToJson, BEq, Hashable
+  deriving BEq, Hashable
+
+/-- Absent fields are left out, not `null`: the table is most of a payload's
+popups, and the page reads a missing field and a null alike. -/
+instance : ToJson BakedPopup where
+  toJson p := Json.mkObj <|
+    (p.expr.toList.map fun v => ("expr", toJson v)) ++
+    (p.type.toList.map fun v => ("type", toJson v)) ++
+    (p.doc.toList.map fun v => ("doc", toJson v))
 
 /-- The interning table, threaded through one declaration's bake. -/
 structure BakeState where
@@ -570,15 +578,41 @@ structure BakeState where
 
 abbrev BakeM := StateT BakeState IO
 
-/-- `makePopup`'s three answers, printed plain. -/
+/-- The expression line of core's popup (`makePopup.ppExprForPopup`, a
+`where` helper and so not callable): explicit at the hovered application ONLY
+(`withOptionAtCurrPos`, not `pp.explicit` throughout), and an assigned
+metavariable shown by its value. Printed plain. -/
+def popupExprText (e : Expr) (explicit : Bool) : MetaM String := do
+  let aux (e : Expr) (explicit : Bool) : MetaM String := do
+    let code ← Widget.ppExprTagged e do
+      if explicit then
+        PrettyPrinter.Delaborator.withOptionAtCurrPos pp.tagAppFns.name true do
+        PrettyPrinter.Delaborator.withOptionAtCurrPos pp.explicit.name true do
+        PrettyPrinter.Delaborator.withOptionAtCurrPos pp.mvars.anonymous.name true do
+          PrettyPrinter.Delaborator.delabApp
+      else
+        PrettyPrinter.Delaborator.withOptionAtCurrPos pp.proofs.name true do
+        PrettyPrinter.Delaborator.withOptionAtCurrPos pp.sorrySource.name true do
+          PrettyPrinter.Delaborator.delab
+    return code.stripTags
+  if explicit then
+    if let .mvar mvarId := e then
+      if let some e' ← getExprMVarAssignment? mvarId then
+        return ← aux e' false
+  aux e explicit
+
+/-- `makePopup`'s three answers, asked now and printed plain: the type (as
+`ppExprTagged` prints it), the expression (`popupExprText`, by the same cases
+core uses) and the docstring. -/
 def bakePopup (i : Elab.InfoWithCtx) : IO BakedPopup :=
   tryCatch (i.ctx.runMetaM i.info.lctx do
       let type? ← match (← i.info.type?) with
-        | some ty => some <$> (toString <$> ppExpr ty)
+        | some ty => some <$> ((·.stripTags) <$> Widget.ppExprTagged ty)
         | none => pure none
       let expr? ← match i.info with
-        | .ofTermInfo ti =>
-          some <$> (toString <$> withOptions (pp.explicit.set · true) (ppExpr ti.expr))
+        | .ofTermInfo ti => some <$> popupExprText ti.expr true
+        | .ofDelabTermInfo { toTermInfo := ti, explicit, .. } =>
+          some <$> popupExprText ti.expr explicit
         | .ofFieldInfo fi => pure (some fi.fieldName.toString)
         | _ => pure none
       return ({ expr := expr?, type := type?, doc := ← i.info.docString? } : BakedPopup))

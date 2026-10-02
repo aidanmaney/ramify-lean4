@@ -16,7 +16,11 @@
 // the header and its cuts, diagnostics (the RPC's file-wide list cut to the
 // declaration, as the CLI's is), the token hovers (by start, doc and covered
 // text) and the tagged goals (by CONTENT: goal ids are mvar ids, which
-// renumber per elaboration). Any difference is a fork in the harvest.
+// renumber per elaboration). Then the POPUPS: every token hover's and every
+// goal tag's reference is resolved by the live server's own
+// `infoToInteractive` (what the infoview calls on hover) and compared with
+// the CLI's baked popup — expression, type and docstring. Any difference is a
+// fork in the harvest or in the baking.
 //
 // `--lint` is D4's live gate: it calls `ProofTree.lintDecl` (one re-elaboration
 // of the declaration with Mathlib's own linters on), prints every lint with
@@ -193,7 +197,7 @@ const editRows = (r) => {
 
 // `--wire`: the CLI's records for this file, compared group by group.
 const wirePayloads = [];
-function wireCompare(live) {
+async function wireCompare(live) {
   const out = execFileSync("lake", ["env", path.join(leanDir, ".lake/build/bin/ppharness"), abs, "--widget-data"], { cwd: leanDir, encoding: "utf8", maxBuffer: 1 << 30 });
   const cli = out.split("\n").filter(Boolean).map((l) => JSON.parse(l).data.proof);
   const flat = (t) => (!t ? "" : "text" in t ? t.text : "append" in t ? t.append.map(flat).join("") : flat(t.tag[1]));
@@ -201,6 +205,27 @@ function wireCompare(live) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const goalsOf = (r) => (r.taggedGoals ?? []).map((g) => JSON.stringify([flat(g.goal.type), g.goal.hyps.map((h) => [h.names, flat(h.type), flat(h.val)])])).sort();
   const hoversOf = (r) => (r.tokenInfos ?? []).map((t) => [t.start, t.doc ?? null, t.code ? flat(t.code) : null]);
+  // The live popup of one reference, flattened as the CLI bakes it.
+  const popupCache = new Map();
+  const livePopup = async (ref, at) => {
+    const key = JSON.stringify(ref);
+    if (!popupCache.has(key)) {
+      const r = await request("$/lean/rpc/call", { textDocument: { uri }, position: at, sessionId, method: "Lean.Widget.InteractiveDiagnostics.infoToInteractive", params: ref });
+      popupCache.set(key, { expr: r.exprExplicit ? flat(r.exprExplicit) : undefined, type: r.type ? flat(r.type) : undefined, doc: r.doc ?? undefined });
+    }
+    return popupCache.get(key);
+  };
+  const bakedOf = (c, tag) => { const p = c.hovers?.[tag.h] ?? {}; return { expr: p.expr ?? undefined, type: p.type ?? undefined, doc: p.doc ?? undefined }; };
+  // Pair the tags of two tagged texts in order (their shapes are the same
+  // wherever their contents are, which the goal check above has asked).
+  const tagPairs = (a, b, out = []) => {
+    if (!a || !b) return out;
+    if ("append" in a && "append" in b) a.append.forEach((x, i) => tagPairs(x, b.append[i], out));
+    else if ("tag" in a && "tag" in b) { out.push([a.tag[0], b.tag[0]]); tagPairs(a.tag[1], b.tag[1], out); }
+    return out;
+  };
+  let popupsChecked = 0;
+  const popupDiffs = [];
   const rows = [];
   let bad = 0;
   for (const r of live) {
@@ -215,11 +240,46 @@ function wireCompare(live) {
       hovers: same(hoversOf(r), hoversOf(c)),
       goals: same(goalsOf(r), goalsOf(c)),
     } : { record: false };
+    if (c) {
+      const at = r.declRange.start;
+      const pairs = [];
+      const cliTok = new Map((c.tokenInfos ?? []).map((t) => [JSON.stringify(t.start), t]));
+      for (const t of r.tokenInfos ?? []) {
+        const ct = cliTok.get(JSON.stringify(t.start));
+        if (t.code && ct?.code) pairs.push([t.code.tag[0], ct.code.tag[0], `token ${t.start.line}:${t.start.character}`]);
+      }
+      const byKey = new Map((c.taggedGoals ?? []).map((g) => [JSON.stringify([flat(g.goal.type), g.goal.hyps.map((h) => [h.names, flat(h.type), flat(h.val)])]), g]));
+      for (const g of r.taggedGoals ?? []) {
+        const cg = byKey.get(JSON.stringify([flat(g.goal.type), g.goal.hyps.map((h) => [h.names, flat(h.type), flat(h.val)])]));
+        if (!cg) continue;
+        for (const [a, b] of tagPairs(g.goal.type, cg.goal.type)) pairs.push([a, b, `goal ${flat(g.goal.type).slice(0, 30)}`]);
+        g.goal.hyps.forEach((h, i) => {
+          for (const [a, b] of tagPairs(h.type, cg.goal.hyps[i]?.type)) pairs.push([a, b, `hyp ${h.names.join(" ")}`]);
+        });
+      }
+      let same = true;
+      for (const [liveTag, cliTag, where] of pairs) {
+        popupsChecked++;
+        const lp = await livePopup(liveTag.info, at);
+        const bp = bakedOf(c, cliTag);
+        if (JSON.stringify(lp) !== JSON.stringify(bp)) {
+          same = false;
+          if (popupDiffs.length < 12) popupDiffs.push({ decl: r.proofId, where, live: JSON.stringify(lp).slice(0, 90), baked: JSON.stringify(bp).slice(0, 90) });
+        }
+        if ((liveTag.diffStatus ?? null) !== (cliTag.diffStatus ?? null)) {
+          same = false;
+          if (popupDiffs.length < 12) popupDiffs.push({ decl: r.proofId, where, live: `diff ${liveTag.diffStatus}`, baked: `diff ${cliTag.diffStatus}` });
+        }
+      }
+      checks.popups = same;
+    }
     const ok = Object.values(checks).every(Boolean);
     if (!ok) bad++;
     rows.push({ decl: r.proofId, ...Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, v ? "same" : "DIFF"])) });
   }
   console.table(rows);
+  if (popupDiffs.length) console.table(popupDiffs);
+  console.log(`${popupsChecked} popups resolved live and compared with the baked ones`);
   console.log(bad ? `${bad} declaration(s) DIFFER between the wires` : `${rows.length} declarations: both wires identical`);
   return bad;
 }
@@ -243,7 +303,7 @@ if (flags.all) {
   }
   console.table(rows);
   if (flags.wire) {
-    const bad = wireCompare(wirePayloads);
+    const bad = await wireCompare(wirePayloads);
     process.exitCode = bad ? 1 : 0;
   }
   if (flags.edits) {
