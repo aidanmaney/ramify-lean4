@@ -2,6 +2,7 @@ import Lean
 import Services.BetterParser
 import ProofTreeComments
 import ProofTreeRecover
+import ProofTreeHarvest
 
 open Lean Elab Paperproof.Services
 
@@ -106,8 +107,52 @@ def automationTracesFor (headerEnv finalEnv : Environment) (fileMap : FileMap)
       (← IO.getStderr).putStrLn s!"[msg] {p.line}:{p.character} {t.take 60}"
   ProofTree.collectTraces finalEnv sites msgs
 
+/-- The widget-only groups for one declaration, from the SAME harvest functions
+the RPC calls (ProofTreeHarvest.lean): `diagnostics`, `tacticEdits`, the
+`declHeader*` fields, and — baked, since a static page has no server to resolve
+a reference — `taggedGoals`, `tokenInfos` and the `hovers` table their tags
+index. `diags` is the whole file's; each record keeps those touching its own
+range, as the view would. -/
+def widgetDataFor (env : Environment) (fileMap : FileMap) (tree : InfoTree)
+    (r : Result) (slots : Array ProofTree.TacticSlot)
+    (calcChains : Array ProofTree.CalcChain)
+    (declRange : Option Lsp.Range) (diags : Array ProofTree.TreeDiag) :
+    IO (List (String × Json)) := do
+  let diags := match declRange with
+    | some dr => diags.filter fun (d : ProofTree.TreeDiag) =>
+        ProofTree.posLE d.range.start dr.end && ProofTree.posLE dr.start d.range.stop
+    | none => #[]
+  let some stx := ProofTree.Recover.commandStx? tree
+    | return [("diagnostics", toJson diags)]
+  let ed ← ProofTree.harvestEdits env fileMap stx tree r.steps slots calcChains
+  let hoverIdx := ProofTree.mkHoverIndex tree
+  let tagged ← ProofTree.collectTaggedGoals tree
+    (ProofTree.wantedGoalTypes r.allGoals.toList r.steps)
+  let bake : ProofTree.BakeM (Array Json × Array Json) := do
+    let goals ← tagged.mapM ProofTree.bakeGoal
+    let mut infos : Array Json := #[]
+    for t in ed.hoverTokens do
+      if let some h ← (ProofTree.tokenHoverAt env stx hoverIdx fileMap t : IO _) then
+        infos := infos.push (← ProofTree.bakeTokenHover fileMap t h)
+    return (goals, infos)
+  let ((goals, infos), st) ← bake.run {}
+  let opt (k : String) (p? : Option Lsp.Position) : List (String × Json) :=
+    match p? with | some p => [(k, toJson p)] | none => []
+  return [("diagnostics", toJson diags),
+          ("tacticEdits", toJson ed.tacticEdits),
+          ("taggedGoals", Json.arr goals),
+          ("tokenInfos", Json.arr infos),
+          ("hovers", toJson st.popups),
+          ("declHeader", toJson ed.declHeader),
+          ("declHeaderTokens", toJson ed.declHeaderTokens)]
+    ++ opt "declHeaderStart" ed.declHeaderStart
+    ++ opt "declHeaderNameStop" ed.declHeaderNameStop
+    ++ opt "declHeaderSigStop" ed.declHeaderSigStop
+    ++ opt "declHeaderBodyStop" ed.declHeaderBodyStop
+
 def parseSource (src : String) (fileName : String := "<ppharness>")
-    (traces : Bool := false) (lint : Bool := false) : IO (Array Json) := do
+    (traces : Bool := false) (lint : Bool := false)
+    (widgetData : Bool := false) : IO (Array Json) := do
 
   initSearchPath (← findSysroot)
   let inputCtx := Parser.mkInputContext src fileName
@@ -125,6 +170,13 @@ def parseSource (src : String) (fileName : String := "<ppharness>")
 
   let allLints ← if lint then
       ProofTree.lintsOf fileMap frontendState.commandState.messages.toList
+    else pure #[]
+  -- The file's diagnostics, through core's own message → interactive
+  -- diagnostic step and the widget's own `treeDiagOf`.
+  let allDiags : Array ProofTree.TreeDiag ← if widgetData then
+      frontendState.commandState.messages.toList.toArray.mapM fun m => do
+        return ProofTree.treeDiagOf
+          (← Widget.msgToInteractiveDiagnostic fileMap m (hasWidgets := true))
     else pure #[]
   let errorPositions := frontendState.commandState.messages.toList.foldl
     (init := #[]) fun acc m =>
@@ -208,13 +260,25 @@ def parseSource (src : String) (fileName : String := "<ppharness>")
                 | none => #[])
           allSteps := allSteps ++ r.steps
           starts := starts.push (r.steps.toArray.map (·.position.start))
-          out := out.push (Json.mkObj
-            [("index", toJson idx),
-             ("proof", resultToJson r comments holes calcChains calcRelations
+          let base := resultToJson r comments holes calcChains calcRelations
                           slots declRange recov.recovered recov.ledgers
                           (ProofTree.hypOrigins r.steps)
                           (ProofTree.haveUses r.steps) lemmaRefs branches
-                          openBlock (lints := lints))])
+                          openBlock (lints := lints)
+          let proof ← if widgetData then do
+              let extra ← widgetDataFor finalEnv fileMap tree r slots calcChains
+                declRange allDiags
+              pure (extra.foldl (fun j (k, v) => j.setObjVal! k v) base)
+            else pure base
+          -- The declaration's name, where it has one: what a page links to.
+          let name? := ProofTree.Recover.commandStx? tree >>= ProofTree.declName?
+          out := out.push (Json.mkObj
+            ([("index", toJson idx), ("proof", proof)] ++
+              (if widgetData then
+                [("name", match name? with
+                  | some n => toJson n.toString
+                  | none => Json.null)]
+              else [])))
     | none => pure ()
     idx := idx + 1
   unless traces do return out

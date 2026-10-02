@@ -42,6 +42,10 @@ srcDir = "../lean"
 name = "ProofTreeRecover"
 srcDir = "../lean"
 
+[[lean_lib]]
+name = "ProofTreeHarvest"
+srcDir = "../lean"
+
 # --- The renderer bundle -----------------------------------------------------
 # `include_str` is a bare file read at elaboration time, invisible to Lake's
 # dependency graph, so `needs` is what makes a rebuild actually pick up a new

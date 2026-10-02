@@ -44,6 +44,14 @@ name = "ProofTreeComments"
 [[lean_lib]]
 name = "ProofTreeRecover"
 
+# --- The widget-only harvests, shared (file: ProofTreeHarvest.lean) ---------
+# Diagnostics, tight tactic edits + tokens, the declaration header, the hover
+# choice and tagged goals: born in Ramify.lean's widget path, factored out so
+# the RPC and the CLI call the same function. Core-only (no ProofWidgets),
+# which is what lets Ppharness import it.
+[[lean_lib]]
+name = "ProofTreeHarvest"
+
 # --- Our reusable parsing library (file: Ppharness.lean) ---
 [[lean_lib]]
 name = "Ppharness"

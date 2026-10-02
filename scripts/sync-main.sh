@@ -86,6 +86,7 @@ manifest=(
   ext/ramify/package.json
   lean/ProofTreeComments.lean
   lean/ProofTreeRecover.lean
+  lean/ProofTreeHarvest.lean
   lean/Ramify.lean
   web/dist/proofTreeWidget.js
 )
