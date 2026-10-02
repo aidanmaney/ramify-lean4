@@ -241,15 +241,16 @@ export function NodeActionBar({
   });
   return (
     <g data-ptw-bar="" ref={gRef}>
-      {/* ONE pill; the buttons sit in it separated by hairlines (not five
-          bordered squares). Same `w`/`h` as before, so what is measured for
-          the frame clamp is what paints. */}
+      {/* ONE flat rectangle at `CHROME_RADIUS` (no pill, 2026-10-02); the
+          buttons sit in it separated by hairlines (not five bordered
+          squares). Same `w`/`h` as before, so what is measured for the
+          frame clamp is what paints. */}
       <rect
         x={x0}
         y={y0}
         width={w}
         height={h}
-        rx={h / 2}
+        rx={CHROME_RADIUS}
         fill={CHROME_UNDERLAY}
       />
       <rect
@@ -257,7 +258,7 @@ export function NodeActionBar({
         y={y0}
         width={w}
         height={h}
-        rx={h / 2}
+        rx={CHROME_RADIUS}
         fill={CHROME_BG}
         stroke={CHROME_BORDER}
       />

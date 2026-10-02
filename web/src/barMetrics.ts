@@ -335,6 +335,50 @@ export interface BarValueItem {
   after?: ReactNode;
 }
 
+/** The status READOUT's facts (statusBar.tsx / `StatusReadout`): the
+declaration's name (already clipped to `STATUS_NAME_MAX`, empty where the
+view has none), the proof's tactic count on the BASE tree, how many goals are
+still open (no step yet — what the frontier chips attach to), and how many
+tactics the drawn tree's cuts hide (the sum of every `+N`). The two handlers
+are the readout's only gestures; a zero count draws no part and no button. */
+export interface StatusInfo {
+  name: string;
+  steps: number;
+  open: number;
+  hidden: number;
+  onOpen: () => void;
+  onHidden: () => void;
+}
+
+/** The words of the status readout, each part where it is non-zero: `5 steps`,
+ `1 open`, `4 hidden` (the name, where there is one, leads). One coding for the
+ drawn readout, its tip and its ghost. */
+export function statusParts(i: Pick<StatusInfo, "steps" | "open" | "hidden">) {
+  return {
+    steps: `${i.steps} ${i.steps === 1 ? "step" : "steps"}`,
+    open: i.open > 0 ? `${i.open} open` : null,
+    hidden: i.hidden > 0 ? `${i.hidden} hidden` : null,
+  };
+}
+
+/** The tip's text: `Status: <the readout> — click open to …, hidden to …`,
+ naming only the gestures that are there. */
+export function statusTip(i: StatusInfo): string {
+  const p = statusParts(i);
+  const text = [i.name || null, p.steps, p.open, p.hidden]
+    .filter((x): x is string => x !== null)
+    .join(" · ");
+  const acts = [
+    p.open ? "open to go to the next open goal" : null,
+    p.hidden ? "hidden to expand all" : null,
+  ].filter((x): x is string => x !== null);
+  return `Status: ${text}${acts.length > 0 ? ` — click ${acts.join(", ")}` : ""}`;
+}
+
+/** The longest declaration name the readout shows, in characters
+ (`clipText`'s cap, `…` included) — and so what its ghost reserves. */
+export const STATUS_NAME_MAX = 24;
+
 /** The stroke every DRAWN hover-bar icon shares (skip, trash, inline/extract):
 the bar scales with the tree, so it keeps its own weight rather than the
 chrome's `BAR_GLYPH_SW`. */

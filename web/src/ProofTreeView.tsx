@@ -261,7 +261,6 @@ import {
   PREVIEW_OPACITY,
   STUB_OPACITY,
   WASH_OPACITY,
-  PILL_RADIUS,
   TREE_INK_SW_BOLD,
   CHROME_TEXT_SM,
   FOCUS_INK,
@@ -291,7 +290,12 @@ import {
   layoutArgs,
   type LayoutMode,
 } from "./viewModes";
-import { CORNER_HIT_H, CORNER_MINUS_SW, CORNER_MINUS_W } from "./barMetrics";
+import {
+  CORNER_HIT_H,
+  CORNER_MINUS_SW,
+  CORNER_MINUS_W,
+  STATUS_NAME_MAX,
+} from "./barMetrics";
 import { HeaderChevron } from "./barChrome";
 import { DiagGlyph } from "./diagBar";
 import { PillPlace } from "./selectionPill";
@@ -4538,6 +4542,79 @@ export default function ProofTreeView({
     setSeek({ id });
   };
 
+  // THE STATUS READOUT's facts (statusBar.tsx). All three counts are read off
+  // trees this component already holds, each memoised on its own tree:
+  //   steps   — tactic nodes of the BASE tree (a synthetic broken-chain
+  //             `calc` is the repair stub, not a step the author wrote);
+  //   open    — goals nothing has acted on yet: the frontier the chips attach
+  //             to (`addSpec`), in the base tree's preorder, so a cut never
+  //             changes what is open; a ledger node is a table, not a goal;
+  //   hidden  — the sum of every `+N` on the DRAWN tree: a fold's or a hop's
+  //             `folded.tactics` and a ghost's `elidedCut.tactics`. A ⇉
+  //             combined run is drawn in full, so it hides nothing.
+  const stepCount = useMemo(
+    () => baseNodes.filter((n) => n.type === "tactic" && !n.synthetic).length,
+    [baseNodes],
+  );
+  const baseRank = useMemo(
+    () => new Map(baseNodes.map((n, i) => [n.id, i])),
+    [baseNodes],
+  );
+  const openGoalIds = useMemo(
+    () =>
+      baseNodes
+        .filter((n) => n.type === "goal" && !!n.addSpec && !n.ledger)
+        .map((n) => n.id),
+    [baseNodes],
+  );
+  const hiddenCount = useMemo(
+    () =>
+      treeNodes.reduce(
+        (sum, n) =>
+          sum +
+          (n.folded?.tactics.length ?? 0) +
+          (n.elidedCut && !n.elidedCut.combined ? n.elidedCut.tactics.length : 0),
+        0,
+      ),
+    [treeNodes],
+  );
+  // The declaration's name as the author wrote it (the header's last word of
+  // `keyword name`), else the server's proof id unless that is a position.
+  const statusName = useMemo(() => {
+    const words = declHead.trim().split(/\s+/);
+    const raw =
+      words.length > 1
+        ? words[words.length - 1]
+        : proof.proofId && !proof.proofId.startsWith("@")
+          ? proof.proofId
+          : "";
+    return clipText(raw, STATUS_NAME_MAX);
+  }, [declHead, proof.proofId]);
+
+  // `N open`: the first open goal BELOW THE CURSOR in the base tree's order
+  // (the cursor being the node the view is accenting), wrapping to the first.
+  // The jump is `revealNode`'s where a cut hides the goal and the marks' where
+  // it is drawn — anchored, accented and sought, never a scroll of its own.
+  const goToOpenGoal = () => {
+    if (openGoalIds.length === 0) return;
+    const at = cursorNodeId ? (baseRank.get(cursorNodeId) ?? -1) : -1;
+    const k = Math.max(
+      0,
+      openGoalIds.findIndex((g) => (baseRank.get(g) ?? 0) > at),
+    );
+    const id = openGoalIds[k];
+    if (placed.has(id)) {
+      anchorOn(id);
+      accentNow(id);
+      pageTo(id);
+      setSeek({ id });
+    } else {
+      accentNow(id);
+      revealNode(id);
+    }
+    showToast(`Open goal ${k + 1}/${openGoalIds.length}`, true);
+  };
+
   // THE JUMP. A stop is a place to LOOK, so this is `revealNode` with the one
   // difference the tour asks for: a cut hiding the stop is PEEKED open (held
   // in `tourPeek`, folded out of the cut list for as long as this is the stop)
@@ -5929,7 +6006,7 @@ export default function ProofTreeView({
                     background: NODE_STYLES.goal.stroke,
                     border: "none",
                     padding: "1px 8px",
-                    borderRadius: PILL_RADIUS,
+                    borderRadius: CHROME_RADIUS,
                     cursor: "pointer",
                   }}
                 >
@@ -6091,6 +6168,18 @@ export default function ProofTreeView({
         onHelpOpenChange={setHelpOpen}
         caps={caps}
         fontFamily={codeFont}
+        status={
+          baseNodes.length === 0
+            ? null
+            : {
+                name: statusName,
+                steps: stepCount,
+                open: openGoalIds.length,
+                hidden: hiddenCount,
+                onOpen: goToOpenGoal,
+                onHidden: expandAll,
+              }
+        }
         diag={
           diagCur
             ? {

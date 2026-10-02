@@ -20,10 +20,12 @@ import {
   CHROME_TEXT_SM,
   DISABLED_OPACITY,
   DIM_OPACITY,
+  CHROME_RADIUS,
 } from "./theme";
 import { type CommentMode, type LayoutMode } from "./viewModes";
 import { focusFirstRow, panelKeys, useRestoreFocus } from "./panelKeys";
 import {
+  BARE_BTN,
   BAR_GLYPH_SW,
   BAR_ITEM,
   BAR_ITEM_H,
@@ -36,6 +38,10 @@ import {
   SLOT_GAP_PX,
   SLOT_OFF,
   SLOT_PX,
+  type StatusInfo,
+  STATUS_GAP,
+  statusParts,
+  statusTip,
 } from "./barMetrics";
 
 /** The one `<svg>` every drawn chrome mark is: `currentColor`, fill-less, the
@@ -292,6 +298,77 @@ export function BarButton({
       {label}
       <ExtraSlots slots={slots ?? []} />
     </button>
+  );
+}
+
+/** THE STATUS READOUT (2026-10-02): `tour_reading · 5 steps · 1 open · 4 hidden`
+ — a readout, not a setting, so no `Name:` and no slots. One `<span>` so the
+ ghost measures one unit; its two counts that can be acted on are real
+ `<button>`s styled as text (`BARE_BTN`) — `open` goes to the next open goal,
+ `hidden` expands everything — and the name and the step count are inert.
+ Drawn at `DIM_OPACITY`, like secondary text. */
+export function StatusReadout({ info }: { info: StatusInfo }) {
+  const { props } = useTip();
+  const p = statusParts(info);
+  const sep = <span style={{ whiteSpace: "pre" }}> · </span>;
+  const btn = (text: string, label: string, run: () => void) => (
+    <button
+      type="button"
+      data-ptw-baritem=""
+      aria-label={label}
+      onClick={run}
+      style={{
+        ...BARE_BTN,
+        font: "inherit",
+        height: BAR_ITEM_H - 4,
+        // The wash reaches 3px past the text on each side and the margin takes
+        // it back, so the readout's width is its text's.
+        padding: "0 3px",
+        margin: "0 -3px",
+        borderRadius: CHROME_RADIUS,
+        whiteSpace: "pre",
+        background: "var(--ptw-bar-item-bg, transparent)",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {text}
+    </button>
+  );
+  return (
+    <span
+      role="group"
+      {...props(statusTip(info))}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        height: BAR_ITEM_H,
+        padding: `0 ${STATUS_GAP}px`,
+        whiteSpace: "pre",
+        flexShrink: 0,
+        opacity: DIM_OPACITY,
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {info.name && (
+        <>
+          <span>{info.name}</span>
+          {sep}
+        </>
+      )}
+      <span>{p.steps}</span>
+      {p.open && (
+        <>
+          {sep}
+          {btn(p.open, "Go to the next open goal", info.onOpen)}
+        </>
+      )}
+      {p.hidden && (
+        <>
+          {sep}
+          {btn(p.hidden, "Expand all hidden steps", info.onHidden)}
+        </>
+      )}
+    </span>
   );
 }
 
@@ -768,6 +845,36 @@ export function LayoutGlyph({ mode }: { mode: LayoutMode }) {
       ) : (
         // `⑃`: one stem forking into two, the layered tree seen head-on.
         <path d="M6 1.3v2.9M6 4.2 2.2 8.7M6 4.2 9.8 8.7" />
+      )}
+    </BarSvg>
+  );
+}
+
+/** The Layout panel's two toggles and its width row wear drawn marks in the
+    layout glyphs' box (12×10, same ink band), so the icon column is full
+    down the panel. Their meaning is the old rail's: `⋮` columns for
+    side-by-side, one frame at a time for gallery, `¶` wrapped lines for
+    width. */
+export type LayoutExtraGlyphKind = "side-by-side" | "gallery" | "width";
+
+export function LayoutExtraGlyph({ kind }: { kind: LayoutExtraGlyphKind }) {
+  return (
+    <BarSvg w={12} h={10} glyph={`layout-${kind}`} block>
+      {kind === "side-by-side" ? (
+        // Two panes sharing one span: the split's subtrees as columns.
+        <>
+          <rect x={1.8} y={1.3} width={3.4} height={7.4} rx={0.6} />
+          <rect x={6.8} y={1.3} width={3.4} height={7.4} rx={0.6} />
+        </>
+      ) : kind === "gallery" ? (
+        // One frame shown, a chevron to each side: the pager's ‹ n/m ›.
+        <>
+          <rect x={3.6} y={1.3} width={4.8} height={7.4} rx={0.6} />
+          <path d="M1.9 3.6 0.8 5 1.9 6.4M10.1 3.6 11.2 5 10.1 6.4" />
+        </>
+      ) : (
+        // Lines wrapping at a budget: each shorter than the one above.
+        <path d="M1.5 2h9M1.5 5h6.4M1.5 8h3.4" />
       )}
     </BarSvg>
   );

@@ -408,8 +408,6 @@ export const CHROME_TEXT = 12;
 /** Tree-ink stroke weights: a chip/outline border and the emphasised one. */
 export const TREE_INK_SW = 1.2;
 export const TREE_INK_SW_BOLD = 1.5;
-/** A pill's corner radius when the height is not known (a full round). */
-export const PILL_RADIUS = 999;
 /** The drop-shadow behind a floating chip (the status strip is flat). */
 export const CHIP_SHADOW = "drop-shadow(0 1px 3px rgba(0,0,0,0.35))";
 /** The stacking table, by TIER. Effective order preserved from the scattered

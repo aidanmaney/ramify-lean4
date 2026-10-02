@@ -1,5 +1,5 @@
 // The status bar: the one-row strip across the host button's lane — settings (layout, context, comments)
-// and Reading on the left, marks, the diagnostics count and `?` on the right — its three-form compaction
+// and Reading on the left, the status readout, marks, the diagnostics count and `?` on the right — its three-form compaction
 // and its panels.
 import {
   Fragment,
@@ -50,6 +50,7 @@ import {
   STATUS_GAP,
   STATUS_PAD_X,
   STATUS_PAD_Y,
+  type StatusInfo,
   TEXT_GLYPH_BOX_W,
 } from "./barMetrics";
 import {
@@ -64,9 +65,11 @@ import {
   GlyphBox,
   ChevronGlyph,
   DisclosureGlyph,
+  LayoutExtraGlyph,
   LayoutGlyph,
   MenuDivider,
   ROW_ICON_W,
+  StatusReadout,
 } from "./barChrome";
 import { READING_OPTIONS, readingOn, type ReadingId, type ReadingState } from "./experience";
 import { type DiagBarProps, DiagCountItem, DiagStrip } from "./diagBar";
@@ -80,6 +83,17 @@ const GROUP_STYLE = {
   gap: STATUS_GAP,
   flex: "none",
 } as const;
+
+// The readout's widest form: each count as all nines of at least two digits,
+// so `1 open` and `12 open` reserve alike (and a hundred-odd steps reserve
+// three), and every part present whatever is zero.
+const nines = (n: number) => 10 ** Math.max(2, String(n).length) - 1;
+const statusGhost = (i: StatusInfo): StatusInfo => ({
+  ...i,
+  steps: nines(i.steps),
+  open: nines(i.open),
+  hidden: nines(i.hidden),
+});
 
 export function StatusBar({
   onPlace,
@@ -123,6 +137,7 @@ export function StatusBar({
   onTourClearMine,
   onTourStep,
   diag,
+  status,
   helpOpen,
   onHelpOpenChange,
   caps,
@@ -178,6 +193,9 @@ export function StatusBar({
   onTourClearMine: () => void;
   onTourStep: (d: number) => void;
   diag: DiagBarProps | null;
+  /** The status readout's facts, or null where there is no proof to read
+   (the readout is then not drawn and not measured). */
+  status: StatusInfo | null;
   helpOpen: boolean;
   onHelpOpenChange: (v: boolean) => void;
   caps: Caps;
@@ -441,6 +459,9 @@ export function StatusBar({
   const ghostRef = useRef<HTMLDivElement | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [diagCompact, setDiagCompact] = useState(false);
+  // Whether the status readout is drawn. Decided in `fit` from the ghost and
+  // the frame alone, like the stage.
+  const [statusOn, setStatusOn] = useState(false);
   const fit = useCallback(() => {
     const card = cardRef.current;
     const ghost = ghostRef.current;
@@ -484,6 +505,8 @@ export function StatusBar({
     // is measured is what is painted.
     const diagFull = wide(pick("d"));
     const diagShort = wide(pick("dc"));
+    // The status readout at its WIDEST (see the ghost); 0 where there is none.
+    const statusW = wide(pick("status"));
 
     setResv((prev) =>
       Object.keys(prev).length === n &&
@@ -513,7 +536,12 @@ export function StatusBar({
     the ladder (it sheds first) and the left end of the right group. The
     least room kept between the groups is `BAR_GROUP_GAP`. */
     const tIdx = ids.indexOf("tour");
-    const needWith = (names: number, words: number, dw: number) => {
+    const needWith = (
+      names: number,
+      words: number,
+      dw: number,
+      sw = 0,
+    ) => {
       const left: number[] = [];
       ids.forEach((id, i) => {
         if (i === tIdx) return;
@@ -521,6 +549,9 @@ export function StatusBar({
         left.push(itemW(i, names, words));
       });
       const right: number[] = [];
+      // The readout, where it is shown, is the LEFT END of the right group,
+      // with a divider after it.
+      if (sw > 0) right.push(sw, divW);
       if (tIdx >= 0) right.push(itemW(tIdx, names, words));
       if (tIdx >= 0 && dw > 0) right.push(divW);
       if (dw > 0) right.push(dw);
@@ -555,6 +586,13 @@ export function StatusBar({
     setStage((prev) =>
       prev.names === got.names && prev.words === got.words ? prev : got,
     );
+    /* THE STATUS READOUT IS THE FIRST ITEM TO GO, and it goes to NOTHING, not
+    to a glyph: it is drawn only at the first stage of the ladder (every item
+    still `Name: value`), and only where the row WITH it still fits. Short of
+    that it is dropped before any value item sheds its name. Its width is its
+    widest text (the ghost), so a count changing moves neither the decision
+    nor the stage. */
+    setStatusOn(statusW > 0 && st === 0 && needWith(n, n, diagCompact ? diagShort : diagFull, statusW) <= avail);
     setLifted(!dodge);
     /* The rail's climb. In the lane the strip and its message strip keep
     clear of the rail's column by the button's reserve, so the rail stays
@@ -762,6 +800,12 @@ export function StatusBar({
             arrival moves nothing), a divider where the count follows them,
             the count, `?`. */}
         <div style={{ ...GROUP_STYLE, marginLeft: "auto" }}>
+          {statusOn && status && (
+            <>
+              <StatusReadout info={status} />
+              <BarDivider />
+            </>
+          )}
           {drawItem("tour")}
           {hasMarks && diag && <BarDivider />}
           {diag && (
@@ -833,6 +877,14 @@ export function StatusBar({
         <span data-g="help" style={{ display: "inline-flex" }}>
           {helpBtn}
         </span>
+        {/* The status readout at its widest: every part present, each count
+            reserved at two digits (more where it has more), the name as it
+            will be shown — so a count changing never changes `fit`'s answer. */}
+        {status && (
+          <span data-g="status" style={{ display: "inline-flex" }}>
+            <StatusReadout info={statusGhost(status)} />
+          </span>
+        )}
         {/* The diagnostics count item, measured on its own: it is present
             only while the proof has problems. */}
         {diag && (
@@ -890,7 +942,7 @@ export function StatusBar({
                 : "Side-by-side needs a compact layout; the wide tree lays branches out itself"
             }
             on={sbsEnabled && sideBySide}
-            icon={null}
+            icon={<LayoutExtraGlyph kind="side-by-side" />}
             disabled={!sbsEnabled}
             onClick={() => onSideBySideChange(!sideBySide)}
           />
@@ -899,7 +951,7 @@ export function StatusBar({
             label="gallery"
             title="Show one subtree at a time, with a pager"
             on={gallery}
-            icon={null}
+            icon={<LayoutExtraGlyph kind="gallery" />}
             onClick={() => onGalleryChange(!gallery)}
           />
           <MenuDivider />
@@ -946,7 +998,17 @@ export function StatusBar({
             }}
           >
             <span aria-hidden style={{ flex: "0 0 12px" }} />
-            <span aria-hidden style={{ flex: `0 0 ${ROW_ICON_W}px` }} />
+            <span
+              aria-hidden
+              style={{
+                flex: `0 0 ${ROW_ICON_W}px`,
+                alignSelf: "center",
+                display: "inline-flex",
+                justifyContent: "center",
+              }}
+            >
+              <LayoutExtraGlyph kind="width" />
+            </span>
             <span>width</span>
             <input
               type="range"
