@@ -31,12 +31,46 @@ Two output directories, deliberately: `vite build` empties its `outDir`, so if
 itself with `include_str`. Hence `outDir: 'dist-app'`, and hence
 `dist/proofTreeWidget.js` being tracked in git despite being generated.
 
-There is **no test runner**. Verification here is: build, run one of the two
-entry points, and look at the tree — plus, for the pure modules (`calcEdit`,
-`deleteEdit`, `flagEdit`, `completion`, `diagnostics`, `layoutKey`, `elide`),
-one-off probes driven against the harness corpus, which is most of what that
-corpus is for.
+`npm test` is the gate: typecheck, lint, then the offline probes (`counts
+narrate overlap order hopgap rewrite fingerprint`), stopping at the first
+failure; CI runs the same. The probes drive the pure modules (`calcEdit`,
+`deleteEdit`, `flagEdit`, `completion`, `diagnostics`, `layoutKey`, `elide`,
+`layout`, `narrate`, `rewrite`) over the harness corpus and synthetic proofs,
+which is most of what the corpus is for; `npm run probe` lists the probes. What no probe can see is paint — for that, look at the tree in the
+harness, and at `/?matrix` (below).
 
 `npm run lint` is load-bearing beyond style: `eslint-plugin-react-hooks` runs
 the React Compiler's analysis, so a violation there is not a nit — it usually
 means a component silently stopped being memoizable.
+
+## Render matrix
+
+`npm run dev`, then `/?matrix`: every paint-only mark (ribbons, selection, the
+armed delete, the keyboard ring, mark tabs and the nub, seeded `§` cuts, the
+hover bar, comment / `∴` / `≈` strips) crossed with every node kind (root goal,
+goal with hypotheses, tactic, fold, hop, ghost, calc and ctor ledgers, a ledger
+row, trace leaf, cf stub), each cell a real `ProofTreeView`, so a visual
+regression is one screenshot review. A final column, *everything at once*, puts
+every mark a node can take on it together — that is where collisions show.
+Below the grid: the status bar's three forms at three container widths, and
+complete corpus proofs (all four layouts with *all four layouts*).
+
+Top controls: light / dark (sets `--vscode-editor-background` / `-foreground`
+the way the infoview does — the view reads those, not `color-scheme`), zoom
+1 / 1.25 / 1.5 (CSS, applied once every cell has been driven), and *show each
+view's bar and rail* (hidden per cell otherwise). Params: `&theme=dark`,
+`&zoom=1.25`, `&kinds=tactic,fold`, `&states=plain,error`, `&layouts`,
+`&chrome`, `&stack=mark,diag,kb,hover` (bisect the stack column).
+`window.__matrix.go(kind, state)` scrolls a cell under the sticky headers.
+
+States come only from what the harness already has — props (`diagnostics`,
+`cfStub`, `polishDefault`, `onTrace`, `hoverBar`), source comments the parser
+already reads (`.mark`, `.fold`, `.none`, prose) and DOM events dispatched
+after mount, scoped to the cell (`matrix.tsx`'s `driver`, a per-cell
+`window.__ptw`) — never a product flag. Scenes are tiny hand-built `Proof`s
+(`matrixScenes.ts`) or corpus records cut down to the part under one tactic.
+`matrixCells.ts` is the grid itself, with the reason each empty cell is empty;
+`npm run probe -- matrix` lists the cells (`--cells`, `--skipped`), checks that
+every scene's target node exists, and exits 0 (`--strict` fails on a missing
+target). It is not in `npm test`. Nothing here is imported by the widget
+bundle (`App.tsx` loads `matrix.tsx` lazily).

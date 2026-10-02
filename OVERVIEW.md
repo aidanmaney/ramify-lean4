@@ -709,16 +709,9 @@ don't control.
   the opposite (bottom-right) corner is down to zoom in, zoom out, and fit.
   Each bar item reads `Name: value` and ⌥-clicking one advances its setting
   instead of opening its list; a small drawn chevron says which items open a
-  list. Two names are an *icon* rather than a word even in the full row — a
-  speech bubble before `show` for comments, an outward double arrow before
-  `full` for width, and `↺` for reset — where the value already implies the
-  name and the row needs the width back; the tooltip always spells the word
-  out. The icons are drawn, not typed: a character has to be chosen for what
+  list. Each item has three forms — `Layout: outline`, `outline`, and a glyph — and as the pane narrows every item sheds its name before any item drops to its glyph, so the tooltip always spells the name out. The icons are drawn, not typed: a character has to be chosen for what
   every font stack happens to have, and the two that stood here read as
-  punctuation left in by accident rather than as controls. An item is highlighted only when it
-  names a feature that is *on* (width, and the reading options): a choice
-  among equals, like which layout is drawn, says which it is and leaves it
-  at that. While a mode is up (an
+  punctuation left in by accident rather than as controls. An item is accented only while its own panel is open; whether a feature is on is said by the small slots under the items, and a choice among equals, like which layout is drawn, says which it is and leaves it at that. While a mode is up (an
   armed delete, a staged `calc` fill) a banner says so at top-centre, so the
   bar never changes shape underneath the pointer.
 - **Interactive tooltips.** Goal labels get the infoview's own per-subterm
@@ -838,8 +831,7 @@ Lean widget reads the bundle with `include_str`, a fresh clone runs no npm
 step, and Lake has no hook for running one on behalf of a dependency. Without
 the artifact in the tree, an install simply cannot build.
 
-The companion extension ships the same way: a prebuilt `.vsix` (currently
-0.0.6) is built into `ext/` (ignored) and copied into `dist/` (tracked), with
+The companion extension ships the same way: a prebuilt `.vsix` (`ramify-<version>.vsix`) is built into `ext/` (ignored) and copied into `dist/` (tracked), with
 `INSTALL.md` kept in step by hand. A rebuild is needed whenever a new setting
 lands, or existing installs never see it.
 

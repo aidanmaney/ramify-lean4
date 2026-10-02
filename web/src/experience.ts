@@ -14,6 +14,7 @@
  * | comments              | narrate       | show          | show       |
  * | context               | all           | used          | used       |
  * | brief                 | off           | off           | on         |
+ * | hypothesis origins    | on            | off           | off        |
  *
  * The hover bar is ICONS ONLY at every level (2026-09-22: words on the bar
  * were "way too aggro", and the `⋯` menu is where a glyph is explained). Its
@@ -24,13 +25,15 @@
  * the reader chose, read with `inspect()`), and a pin in the `⋯` menu wins
  * over both for the session.
  *
- * The hypothesis → origin connector (hovering a context line) is OFF at every
- * level; it is a reading option, not a preset row.
+ * The hypothesis → origin connector (hovering a context line) is a preset
+ * row since 2026-09-28: ON for a beginner, who is asking where a hypothesis
+ * came from, OFF elsewhere; the reading option overrides it for the session.
  *
  * Pure: the widget (settings from the companion's theme file) and the harness
  * (`?experience=`) both read it. */
 import type { HypMode } from "./proofToTree";
-import { DEFAULT_BAR, type MoveId } from "./moves";
+import { DEFAULT_BAR, MOVE_MARK, type MoveId } from "./moves";
+import { COMMENT_MODES, HYP_MODES, type CommentMode } from "./viewModes";
 
 export type Experience = "beginner" | "intermediate" | "expert";
 
@@ -42,9 +45,6 @@ export const EXPERIENCES: readonly Experience[] = [
 
 export const DEFAULT_EXPERIENCE: Experience = "intermediate";
 
-/** The comment switch's stops, as the view names them. */
-export type PresetCommentMode = "shown" | "hidden" | "instead" | "narrate";
-
 export interface Preset {
   /** The hover bar's buttons, per node kind, where no setting names them. */
   hoverBar: { tactic: readonly MoveId[]; goal: readonly MoveId[] };
@@ -55,9 +55,11 @@ export interface Preset {
   offerCollapse: boolean;
   /** The `lints` reading option's default. */
   lints: boolean;
-  comments: PresetCommentMode;
+  comments: CommentMode;
   context: HypMode;
   brief: boolean;
+  /** The `hypothesis origins` reading option's default. */
+  hypOrigins: boolean;
 }
 
 export const PRESETS: Record<Experience, Preset> = {
@@ -72,6 +74,7 @@ export const PRESETS: Record<Experience, Preset> = {
     comments: "narrate",
     context: "full",
     brief: false,
+    hypOrigins: true,
   },
   intermediate: {
     hoverBar: { tactic: DEFAULT_BAR, goal: DEFAULT_BAR },
@@ -81,6 +84,7 @@ export const PRESETS: Record<Experience, Preset> = {
     comments: "shown",
     context: "used",
     brief: false,
+    hypOrigins: false,
   },
   expert: {
     hoverBar: { tactic: DEFAULT_BAR, goal: DEFAULT_BAR },
@@ -90,6 +94,7 @@ export const PRESETS: Record<Experience, Preset> = {
     comments: "shown",
     context: "used",
     brief: true,
+    hypOrigins: false,
   },
 };
 
@@ -99,4 +104,108 @@ export function parseExperience(v: unknown): Experience {
     (EXPERIENCES as readonly string[]).includes(v)
     ? (v as Experience)
     : DEFAULT_EXPERIENCE;
+}
+
+/** THE READING OPTIONS — the eye's panel rows, in the panel's order. One
+ table feeds the panel (label and tip), `readingOn` (the eye's dot and tip),
+ the view's appliers (the toast's `Name: on`) and `describePreset` (the rows a
+ preset fills: those with a `presetKey`). `polish`'s tip and `up to cursor`'s
+ when unusable are the view's to say (they depend on state). `suggest a
+ rewrite` is an action, not an option, and is not here. */
+export type ReadingId =
+  | "brief"
+  | "merge"
+  | "lints"
+  | "hypOrigins"
+  | "polish"
+  | "upToCursor";
+
+export interface ReadingOption {
+  id: ReadingId;
+  label: string;
+  title: string;
+  /** The `Preset` field that is this option's default, where a preset has one. */
+  presetKey?: "brief" | "lints" | "hypOrigins";
+}
+
+export const READING_OPTIONS: readonly ReadingOption[] = [
+  {
+    id: "brief",
+    label: "brief",
+    title: "Hide boilerplate inside each tactic's own text",
+    presetKey: "brief",
+  },
+  { id: "merge", label: "merge", title: "One node per straight run of tactics" },
+  {
+    id: "lints",
+    label: "lints",
+    title:
+      "Show Mathlib's own style linters on the steps they object to — the declaration is re-elaborated once to ask",
+    presetKey: "lints",
+  },
+  {
+    id: "hypOrigins",
+    label: "hypothesis origins",
+    title:
+      "Hovering a context line points at the step that introduced it, and lights that step",
+    presetKey: "hypOrigins",
+  },
+  { id: "polish", label: "polish", title: "" },
+  {
+    id: "upToCursor",
+    label: "up to cursor",
+    title: "Draw only down to the editor cursor",
+  },
+];
+
+const readingLabel = (id: ReadingId) =>
+  READING_OPTIONS.find((o) => o.id === id)!.label;
+
+/** A toast's `Name` for an option: its label, sentence case (`Up to cursor`). */
+export const readingName = (id: ReadingId): string => {
+  const l = readingLabel(id);
+  return l.charAt(0).toUpperCase() + l.slice(1);
+};
+
+/** The reading options as they stand, EFFECTIVE: `polish` is on only where its
+ row is drawn and answerable, `upToCursor` only where the cursor exists. */
+export type ReadingState = Record<ReadingId, boolean>;
+
+/** The options that are ON, in the panel's order — what the eye's tip lists,
+ * and the ONE dot under the eye is `readingOn(...).length > 0`: absolute
+ * meaning, like every other slot (lit = on), not "differs from the preset"
+ * (which read as a contradiction beside a "defaults (changed)" tip).
+ * `suggest a rewrite` is an action and never counts. */
+export const readingOn = (s: ReadingState): string[] =>
+  READING_OPTIONS.filter((o) => s[o.id]).map((o) => o.label);
+
+/** What a preset does, as `[name, value]` rows in one fixed order — the one
+ * source for the extension's `ramify.experience` descriptions, its quick pick
+ * and INSTALL.md's table (scripts/gen-experience.mjs). */
+export function describePreset(level: Experience): [string, string][] {
+  const p = PRESETS[level];
+  const extras = p.hoverBar.tactic
+    .filter((id) => !DEFAULT_BAR.includes(id))
+    .map((id) => MOVE_MARK[id]);
+  const onOff = (b: boolean) => (b ? "on" : "off");
+  const optionRow = (id: ReadingId): [string, string] => {
+    const key = READING_OPTIONS.find((o) => o.id === id)!.presetKey!;
+    return [readingName(id), onOff(p[key])];
+  };
+  return [
+    ["Comments", COMMENT_MODES[p.comments].name],
+    ["Context", HYP_MODES[p.context].name],
+    optionRow("brief"),
+    optionRow("lints"),
+    optionRow("hypOrigins"),
+    [
+      "Automation trace",
+      p.autoTrace ? "opens by itself for the step under the cursor" : "on click",
+    ],
+    [
+      "Tactic hover bar",
+      extras.length ? `default, plus ${extras.join(" ")}` : "default",
+    ],
+    ["Replace with automation (⇓)", p.offerCollapse ? "offered" : "not offered"],
+  ];
 }

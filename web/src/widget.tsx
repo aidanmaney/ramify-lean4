@@ -45,14 +45,28 @@ import {
 import { goalAnnotations, type GoalAnnotation } from "./lensGoals";
 import { posLE } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
+import { WidgetBoundary } from "./errorBoundary";
 import type { HypMarkStyle } from "./theme";
+import { useOverride } from "./useOverride";
+import { hashString } from "./hash";
 import {
   injectStyleOnce,
   makeTaggedRenderers,
   type TaggedGoalEntry,
 } from "./taggedRender";
 import { taggedSubterms } from "./taggedText";
-import { CHROME_FONT, CHROME_RADIUS, observeThemeChange } from "./theme";
+import {
+  CHROME_FONT,
+  CHROME_INK,
+  CHROME_RADIUS,
+  CHROME_TEXT,
+  CHROME_TEXT_SM,
+  DIAG_EDGE,
+  DIAG_WASH,
+  chromeScopeProps,
+  chromeSurface,
+  observeThemeChange,
+} from "./theme";
 import {
   makeTacticRenderer,
   renderTacticTokens,
@@ -73,6 +87,9 @@ const TYPING_HOLD_MAX_MS = 5000;
 const EXPECT_EDIT_WINDOW_MS = 3000;
 
 const ORIGIN = { line: 0, character: 0 };
+
+/** A short stable hash of a proof's JSON: the client cache version. */
+const sigHash = (s: string): string => `${s.length}:${hashString(s)}`;
 
 function cursorInDecl(
   decl: ProofStepPosition | undefined,
@@ -273,6 +290,13 @@ interface Settings {
   /** `ramify.hoverBar.{tactic,goal}` — `null` where the reader has not set
    it (the companion reads it with `inspect()`), so the preset's list stands. */
   hoverBar: { tactic: MoveId[] | null; goal: MoveId[] | null };
+  /** A LIVE companion stamped the theme file (`companion.version`). A file an
+   uninstalled extension left behind carries no stamp — or an older one, since
+   the stamp postdates 1.0 — so it reads as absent. Multiple windows share the
+   one file: a window that closes after being the last writer leaves its stamp
+   until another publishes, so a stale TRUE is possible, a stale FALSE is not
+   (reload the window). */
+  companion: boolean;
 }
 
 /** How often the companion's answer file is asked for, and how long before the
@@ -313,6 +337,7 @@ const DEFAULT_SETTINGS: Settings = {
   ai: DEFAULT_AI,
   experience: DEFAULT_EXPERIENCE,
   hoverBar: { tactic: null, goal: null },
+  companion: false,
 };
 
 interface ThemeColorsResponse {
@@ -332,6 +357,7 @@ interface ThemeColorsResponse {
   ai?: { polish?: boolean; propose?: boolean; ready?: boolean; why?: string };
   experience?: string;
   hoverBar?: { tactic?: unknown; goal?: unknown } | null;
+  companion?: { version?: unknown } | null;
   colors?: { type: string; color: string }[];
 }
 
@@ -371,17 +397,23 @@ function parseSettings(r: ThemeColorsResponse, prev: Settings): Settings {
       tactic: parseBarList(r.hoverBar?.tactic),
       goal: parseBarList(r.hoverBar?.goal),
     },
+    companion:
+      typeof r.companion?.version === "string" && r.companion.version !== "",
   };
 }
 
-// Settings ride the companion's theme file; refetched on theme change, focus and `tick`.
-function useSettings(rs: ReturnType<typeof useRpcSession>, tick: number): Settings {
+// Settings ride the extension's theme file; refetched on theme change, focus, `tick` and a change of document `uri` (the server answers per workspace folder).
+function useSettings(
+  rs: ReturnType<typeof useRpcSession>,
+  tick: number,
+  uri: string,
+): Settings {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   useEffect(() => {
     let live = true;
     const fetchOnce = () => {
       void rs
-        .call<Record<string, never>, ThemeColorsResponse>("ProofTree.themeColors", {})
+        .call<{ uri: string }, ThemeColorsResponse>("ProofTree.themeColors", { uri })
         .then((r) => {
           if (!live || !r) return;
           setSettings((prev) => {
@@ -402,7 +434,7 @@ function useSettings(rs: ReturnType<typeof useRpcSession>, tick: number): Settin
       stopObserving();
       window.removeEventListener("focus", fetchOnce);
     };
-  }, [rs, tick]);
+  }, [rs, tick, uri]);
   return settings;
 }
 
@@ -451,7 +483,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     ai,
     experience,
     hoverBar,
-  } = useSettings(rs, docRev);
+    companion,
+  } = useSettings(rs, docRev, pos.uri);
 
   const st = useAsyncPersistent<ProofTreeData>(
     () =>
@@ -471,7 +504,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   const incoming = useMemo(() => {
     if (!resolved) return null;
     const proof = stableProofOf(resolved);
-    return { proof, sig: JSON.stringify(proof) };
+    // Hashed ONCE here: the signature is only ever compared (for a change)
+    // and keyed on, never read, so the whole JSON is not kept or re-compared.
+    return { proof, sig: sigHash(JSON.stringify(proof)) };
   }, [resolved]);
   const [stable, setStable] = useState<{
     sig: string;
@@ -619,11 +654,17 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // render): a trace belongs to the proof it was read from, so navigating to
   // another one simply stops matching and the list falls away — no effect, no
   // reset, nothing to clear.
+  // `ver` is the stable proof's text signature (a hash) at the time of the
+  // ask: an edit inside the declaration changes it — `stable` swaps only after
+  // the typing hold — and the effects below re-ask, while the OLD list stays
+  // drawn until the new answer lands (matching is on `key` alone).
   const [traces, setTraces] = useState<{
     key: string;
+    ver: string;
     list: AutomationTrace[];
-  }>({ key: "", list: [] });
+  }>({ key: "", ver: "", list: [] });
   const proofKey = stable?.proof.proofId ?? "";
+  const proofVer = stable?.sig ?? "";
   const shownTraces = traces.key === proofKey ? traces.list : [];
   const requestTrace = useMemo(
     () => async (at: { start: { line: number; character: number } }) => {
@@ -633,7 +674,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       >("ProofTree.getAutomationTrace", { pos, stepStart: at.start });
       const list = res?.traces ?? [];
       if (list.length === 0) return false;
-      setTraces({ key: proofKey, list });
+      setTraces({ key: proofKey, ver: proofVer, list });
       return list.some(
         (t) =>
           t.stepStart.line === at.start.line &&
@@ -641,8 +682,18 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rs, pos.uri, pos.line, pos.character, proofKey],
+    [rs, pos.uri, pos.line, pos.character, proofKey, proofVer],
   );
+  // An edit makes the held list STALE (`traceStaleVer` = the text signature
+  // to re-ask at, else null). The widget does not re-ask by itself: a re-ask
+  // is a whole-declaration re-elaboration, and it is only worth paying while
+  // a trace is OPEN — a fact that lives in the view (`traceOpenNow`, the
+  // beginner preset's auto-open included). The view asks for it through
+  // `onTrace` (a request, not state), once per text version.
+  const traceStaleVer =
+    traces.key === proofKey && traces.list.length > 0 && traces.ver !== proofVer
+      ? proofVer
+      : null;
 
   // D4 — MATHLIB'S LINTERS, on demand. Same seam and same reason as B4's
   // traces: `ProofTree.lintDecl` re-elaborates the declaration with the style
@@ -653,8 +704,13 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // Held HERE and passed to the view as a SIBLING, keyed on the declaration
   // like the traces: navigating to another proof simply stops matching and
   // the list falls away.
-  const [lints, setLints] = useState<{ key: string; list: Lint[] }>({
+  const [lints, setLints] = useState<{
+    key: string;
+    ver: string;
+    list: Lint[];
+  }>({
     key: "",
+    ver: "",
     list: [],
   });
   const shownLints = lints.key === proofKey ? lints.list : [];
@@ -676,9 +732,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // nothing, which is the whole reason these are not on the payload.
   // The preset's `lints` row is the DEFAULT; the reader's toggle overrides it
   // (the view holds the same override, so the two agree without syncing).
-  const [lintsOverride, setLintsOverride] = useState<boolean | null>(null);
-  const lintsWanted = lintsOverride ?? PRESETS[experience].lints;
-  const wantLints = (on: boolean) => setLintsOverride(on);
+  const [lintsWanted, wantLints] = useOverride(PRESETS[experience].lints);
   // The requester is memoised on the cursor and so is a fresh closure on
   // every move; the effect must not be. A ref written in an effect is the
   // `toastRef` pattern — nothing reads it during render.
@@ -687,16 +741,30 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     lintReqRef.current = requestLints;
   }, [requestLints]);
   useEffect(() => {
-    if (!lintsWanted || !proofKey || lints.key === proofKey) return;
+    if (
+      !lintsWanted ||
+      !proofKey ||
+      (lints.key === proofKey && lints.ver === proofVer)
+    )
+      return;
     let live = true;
+    // The previous list (same declaration) stays drawn until the answer
+    // lands, and survives a failed re-ask; a different declaration's list
+    // never does (`shownLints` matches on `key`).
     void lintReqRef.current().then(
-      (list) => live && setLints({ key: proofKey, list }),
-      () => live && setLints({ key: proofKey, list: [] }),
+      (list) => live && setLints({ key: proofKey, ver: proofVer, list }),
+      () =>
+        live &&
+        setLints((l) => ({
+          key: proofKey,
+          ver: proofVer,
+          list: l.key === proofKey ? l.list : [],
+        })),
     );
     return () => {
       live = false;
     };
-  }, [lintsWanted, proofKey, lints.key]);
+  }, [lintsWanted, proofKey, proofVer, lints.key, lints.ver]);
 
   // C4 / D6 — THE COMPANION CHANNEL, and the only place in this client that
   // knows it is a round trip at all.
@@ -723,12 +791,12 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
             rs.call<{ id: string }, T>(poll, { id }).then((r) => {
               if (r && r.status && r.status !== "pending") {
                 if (r.status === "error")
-                  reject(new Error(r.note || "the companion reported an error"));
+                  reject(new Error(r.note || "The Ramify extension reported an error — check the Ramify output channel"));
                 else resolve(r);
                 return;
               }
               if (Date.now() - t0 > COMPANION_GIVE_UP_MS) {
-                reject(new Error("the companion did not answer in 20s"));
+                reject(new Error("The Ramify extension did not answer — check the Ramify output channel"));
                 return;
               }
               wait = Math.min(wait * COMPANION_POLL_GROWTH, COMPANION_POLL_MAX_MS);
@@ -794,6 +862,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     p: ProofStepPosition,
     annotations: GoalAnnotation[] = [],
   ) => {
+    // Every action here is answered by the companion's file watcher. Callers
+    // are gated at the prop boundary (`ifCompanion`) or by `companion` itself:
+    // with none installed the RPC would write a file nobody reads.
     rs.call("ProofTree.popoutEdit", {
       uri: pos.uri,
       start: p.start,
@@ -908,9 +979,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     newText: string,
   ) => {
     expectOwnEdit();
-    void ec.api.applyEdit({
-      changes: { [pos.uri]: [{ range: { start, end }, newText }] },
-    });
+    ec.api
+      .applyEdit({
+        changes: { [pos.uri]: [{ range: { start, end }, newText }] },
+      })
+      .catch((e: unknown) => {
+        console.error("[proof-tree] applyEdit failed:", e);
+        setRelayError(`edit failed: ${mapRpcError(e).message}`);
+      });
   };
 
   const editTactic = (p: ProofStepPosition, newText: string) =>
@@ -1066,13 +1142,16 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         // the write resolved, never a condition of it, and the companion
         // itself waits until the text and Lean's rename both answer for it.
         () => {
-          if (!renameAt) return;
+          if (!renameAt || !companion) return;
           callCompanion("rename", {
             start: renameAt,
             stop: { line: renameAt.line, character: renameAt.character + "this".length },
           });
         },
-        (e: unknown) => console.error("[proof-tree] rewrite applyEdit failed:", e),
+        (e: unknown) => {
+          console.error("[proof-tree] rewrite applyEdit failed:", e);
+          setRelayError(`edit failed: ${mapRpcError(e).message}`);
+        },
       );
   };
 
@@ -1168,9 +1247,19 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
 
   const lensOpened = useRef(false);
 
-  const reveal = (p: ProofStepPosition) =>
-
-    callCompanion("reveal", getTacticEdit(p)?.pos ?? p, lensGoals);
+  // With the companion: its reveal (which also feeds an open lens). Without:
+  // the infoview's own `revealPosition`, which the host editor answers — the
+  // caret at the step's start, as the companion's does.
+  const reveal = (p: ProofStepPosition) => {
+    const at = getTacticEdit(p)?.pos ?? p;
+    if (companion) callCompanion("reveal", at, lensGoals);
+    else
+      void ec
+        .revealPosition({ uri: pos.uri, ...at.start })
+        .catch((e: unknown) =>
+          console.error("[proof-tree] revealPosition failed:", e),
+        );
+  };
 
   // A `⋯`-menu PIN: the view has already applied it for the session; this
   // asks the companion to write `ramify.hoverBar.<kind>` so it persists. One
@@ -1201,17 +1290,33 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lensGoals]);
 
+  // THE ONE GATE on everything only the companion answers (the lens, the undo
+  // relay, the hover highlight, the range previews, the pin write-back): its
+  // handlers reach the view only where it is there, and the view omits each
+  // feature by the handler's absence.
+  const companionProps = companion
+    ? {
+        onPopoutEdit: popoutEdit,
+        onHoverTactic: hoverTactic,
+        onPreviewRange: previewRange,
+        onUndo: undo,
+        onHoverBarChange: setHoverBar,
+      }
+    : {};
+
   const body = !stable ? (
     <div
+      role="status"
       style={{
         fontFamily: CHROME_FONT,
-        fontSize: 12,
-        color: "var(--vscode-descriptionForeground, #888)",
+        fontSize: CHROME_TEXT,
+        color: CHROME_INK,
         padding: 4,
       }}
+      {...chromeScopeProps()}
     >
       {st.state === "rejected"
-        ? `Proof tree error: ${mapRpcError(st.error).message}`
+        ? `Proof tree error: ${mapRpcError(st.error).message} — try Restart File`
         : st.state === "resolved"
           ? "No proof tree here — place the cursor inside a tactic proof"
           : "Loading proof tree…"}
@@ -1223,24 +1328,25 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         <div
           onClick={() => setRelayError(null)}
           title="Click to dismiss"
+          {...chromeScopeProps()}
           style={{
             fontFamily: CHROME_FONT,
-            fontSize: 11,
+            fontSize: CHROME_TEXT_SM,
             padding: "2px 6px",
             cursor: "pointer",
             // Foreground ink, not errorForeground: on themes whose validation
             // background is an opaque pink the two were the same colour.
-            color: "var(--vscode-foreground)",
-            background: "var(--vscode-inputValidation-errorBackground, #fff5f5)",
+            color: CHROME_INK,
+            background: chromeSurface(DIAG_WASH[1]),
             overflowWrap: "anywhere",
-            border:
-              "1px solid var(--vscode-inputValidation-errorBorder, #fc8181)",
+            border: `1px solid ${DIAG_EDGE[1]}`,
             borderRadius: CHROME_RADIUS,
           }}
         >
           Ramify: {relayError}
         </div>
       )}
+      <WidgetBoundary resetKey={proofKey}>
       <ProofTreeView
         proof={stable.proof}
         onReveal={reveal}
@@ -1254,7 +1360,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         linkTint={linkTint}
         linkMarks={linkMarks}
         abbrev={abbrev}
-        onPopoutEdit={popoutEdit}
+        {...companionProps}
         highlightPos={{ line: pos.line, character: pos.character }}
         declHeader={declHeader}
         declHeaderStart={declHeaderStart}
@@ -1290,16 +1396,14 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         renderTaggedHyps={renderers?.renderTaggedHyps}
         renderTaggedTactic={renderTaggedTactic}
         onAddTactic={addTactic}
-        onHoverTactic={hoverTactic}
         deleteSlots={stable?.deleteSlots}
         automationTraces={shownTraces}
         onTrace={requestTrace}
+        automationTracesStaleVer={traceStaleVer}
         onDeleteTactic={deleteTactic}
         onCheckRewrite={checkRewrite}
         onTryClose={tryClose}
         onApplyRewrite={applyRewrite}
-        onPreviewRange={previewRange}
-        onUndo={undo}
         diagnostics={diagnostics}
         lints={shownLints}
         onLints={wantLints}
@@ -1310,8 +1414,8 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         proposeReady={ai.ready && ai.propose}
         experience={experience}
         hoverBar={hoverBar}
-        onHoverBarChange={setHoverBar}
       />
+      </WidgetBoundary>
     </div>
   );
 

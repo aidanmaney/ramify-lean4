@@ -29,8 +29,11 @@ which hypotheses. Everything Ramify adds sits beside that output, in extra data
 keyed by each step's position.
 
 - **Using it in your own project?** See [INSTALL.md](INSTALL.md).
-- **Working on it?** [CLAUDE.md](CLAUDE.md) is the engineering record —
-  constraints, measurements, and the reasons behind the non-obvious choices.
+- **Working on it?** Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
+  gate and the branch model; [CLAUDE.md](CLAUDE.md) is the engineering record —
+  constraints, measurements, and the reasons behind the non-obvious choices
+  (the full design record is `docs/design-record.md`).
+- **Release notes and security?** [CHANGELOG.md](CHANGELOG.md), [SECURITY.md](SECURITY.md).
 - **Reading it to understand the system?** [OVERVIEW.md](OVERVIEW.md) is a
   technical tour sitting between the two. It is an LLM-written secondary
   record — useful for orientation, not authoritative over the code.
@@ -54,7 +57,7 @@ that reason; only RPC-reference-carrying data (tagged goals, token hover info)
 is widget-only.
 
 ```
-diss/
+ramify-lean4/
 ├── lean/
 │   ├── Ramify.lean    # the infoview widget: getProofTree RPC + bundled renderer
 │   ├── ProofTreeComments.lean  # shared syntax/source walks (comments, slots, calc, holes)
@@ -70,6 +73,8 @@ diss/
 ├── ext/ramify/   # VS Code extension: the lens, theme/settings relay
 ├── dist/                       # the installable Lake package (see INSTALL.md)
 ├── proofs/                     # corpus for the CLI harness
+├── scripts/                    # sync-main.sh (dev → main), check-settings.mjs (docs gate)
+├── .github/workflows/ci.yml    # CI and the release job
 └── gen.sh                      # proofs/*.lean → web/public/sample.ndjson
 ```
 
@@ -110,8 +115,25 @@ cd web && npm run dev
 `web/public/sample.ndjson`; it is generated.
 
 Other useful targets: `npm run typecheck`, `npm run lint`, `npm run build`
-(standalone app → `dist-app/`). There is no test runner in either half —
-"verify" means build, run, and inspect the rendered tree.
+(standalone app → `dist-app/`).
+
+**The gate is `cd web && npm test`.** It runs the typecheck, the lint and the
+offline probes (`counts`, `narrate`, `overlap`, `order`, `hopgap`, `rewrite`) in
+order and stops at the first failure. Probes that need arguments, a Lean
+elaboration or a live server (`fold`, `eval`, `lsp`) are run by hand; the LSP
+probe is the only check for widget-only data. `./dev.sh` builds the bundle and
+the widget and says whether the running file worker has picked it up.
+
+**CI** (`.github/workflows/ci.yml`) runs `npm test`, checks that the tracked
+bundle equals a fresh build, builds the Mathlib-free `dist/` package, elaborates
+the tour and the demo, packages the `.vsix`, and runs
+`node scripts/check-settings.mjs` — every setting and command the extension
+contributes must be mentioned in `INSTALL.md`. A `v*` tag builds a GitHub
+release with the `.vsix` attached.
+
+**`scripts/sync-main.sh`** prepares the `main` install branch from `dev`: a dry
+run by default, `--apply` writes into a worktree of `main` and never commits or
+pushes. See [Distribution](#distribution).
 
 > Re-run `lake exe cache get` after any `lake clean`: it deletes Mathlib's
 > oleans, and without them an `import Mathlib` file makes the editor compile
@@ -143,8 +165,8 @@ none of it, which is why `dist/` is a separate, much lighter package.
 ## Distribution
 
 This is the `dev` branch of [aidanmaney/ramify-lean4](https://github.com/aidanmaney/ramify-lean4).
-Users install from the same repository's `main` branch, which is a hand-copied
-subset of this one: `dist/`, the three Lean sources the widget compiles, the
+Users install from the same repository's `main` branch, which is a subset of
+this one (`scripts/sync-main.sh` is that subset written down): `dist/`, the three Lean sources the widget compiles, the
 renderer bundle and the extension.
 
 `dist/` is the installable Lake package and `./package.sh` builds it. Sources are

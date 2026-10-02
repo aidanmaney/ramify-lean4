@@ -1,3 +1,4 @@
+// @probe
 // The run below a HOPPED goal must hold the axis break with line on both
 // sides, and the CAPTION beside that break — paint on a link, so nothing in the
 // layout reserves room for it — must not land on a node box, in all four
@@ -7,15 +8,14 @@
 // break (one kept child), a fold never does (no child left).
 //   npm run probe -- hopgap
 import * as lib from "./lib.mjs";
-import { records, tree, find, tally, readerCuts } from "./corpus.mjs";
-const { applyElisions, createLayoutEngine, bandTopH, TRUNK_GAP_HOP, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, sourceView, SEED_MARK } = lib;
+import { records, tree, tally, readerCuts, MODES, layoutOf } from "./corpus.mjs";
+const { applyElisions, bandTopH, TRUNK_GAP_HOP, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, sourceView, SEED_MARK } = lib;
 const t = tally();
 t.eq(TRUNK_GAP_HOP, 34, "TRUNK_GAP_HOP");
 // Wide (Sugiyama) reserves its own 42px between layers, more than the break
 // needs; measured 2026-09-17: min 43 over every hop in the corpus.
 const WIDE_MIN_GAP = 42;
 
-const MODES = { stacked: [true, false, false], spine: [true, false, true], tracks: [true, false, "track"], wide: [false, false, false] };
 const rectOf = (p) => { const half = (bandTopH(p.data) + p.data.h) / 2; return { x0: p.x - p.data.w / 2, x1: p.x + p.data.w / 2, y0: p.y + half - p.data.h, y1: p.y + half }; };
 const hit = (a, c) => a.x0 < c.x1 - 0.5 && c.x0 < a.x1 - 0.5 && a.y0 < c.y1 - 0.5 && c.y0 < a.y1 - 0.5;
 let swept = 0, seededSwept = 0, branchHops = 0, hops = 0, folds = 0;
@@ -51,8 +51,9 @@ for (const [i, rec] of records().entries()) {
       t.ok(cap.text.startsWith(SEED_MARK) && cap.italic, `#${i} ${cut.id}: seeded caption unmarked`);
     }
     const w = hopCaptionWidth(cap.text, cap.italic);
-    for (const [mode, [compact, sbs, aside]] of Object.entries(MODES)) {
-      const { nodes: ps } = createLayoutEngine(ns, { chips: true }).computeLayout(null, null, compact, sbs, null, aside);
+    for (const mode of MODES) {
+      const compact = mode !== "wide";
+      const { nodes: ps } = layoutOf(ns, mode);
       const src = ps.find((p) => p.data.id === cut.id);
       const dst = ps.find((p) => p.data.parents.some((q) => q.id === cut.id));
       if (!src || !dst) { t.ok(false, `#${i} ${mode} ${cut.id}: hop not placed`); continue; }
@@ -77,5 +78,4 @@ console.log(`hops ${hops} (inside branches ${branchHops}), folds ${folds}; capti
 console.log(`min gap below a hopped goal: ${Object.entries(minGap).map(([m, g]) => `${m} ${g}`).join(", ")}`);
 t.ok(seededSwept > 0, "no seeded caption in the sweep");
 t.ok(branchHops > 0, "no hop inside a branch in the sweep");
-void find;
 t.done();

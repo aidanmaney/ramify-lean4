@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   parseNdjson,
   stableProofOf,
@@ -12,6 +12,8 @@ import { parseBarList, type BarKind, type MoveId } from "./moves";
 import type { PolishLine } from "./narrate";
 import { proofTitle } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
+import { WidgetBoundary } from "./errorBoundary";
+import { DIM_OPACITY, FLOATER_CHROME, Z } from "./theme";
 
 function CfReplay({
   line,
@@ -53,6 +55,7 @@ function CfReplay({
 
   const proof = stableProofOf(p);
   return (
+    <WidgetBoundary resetKey={String(idx)}>
     <ProofTreeView
       hypMarkStyle={HYP_MARK_STUB}
       proof={proof}
@@ -70,12 +73,10 @@ function CfReplay({
       }
 
       onEditTactic={(pos, text) => {
-        const w = window as unknown as {
-          __edits?: { pos: unknown; text: string }[];
-        };
-        w.__edits = [...(w.__edits ?? []), { pos, text }];
+        record("__edits", { pos, text });
       }}
     />
+    </WidgetBoundary>
   );
 }
 
@@ -87,6 +88,19 @@ const REPLAY_AT = QUERY.get("cf-replay");
 const STUB_EDIT = QUERY.has("stub-edit");
 
 const NO_LEDGER = QUERY.has("no-ledger");
+
+/** `?no-extension` — draw the view as it is with no Ramify extension: the
+ lens, the undo relay and the hover highlight are absent (they are stubbed and
+ recorded in `window.__lens`/`__undos`/`__extension` otherwise, under
+ `?stub-edit`). */
+const NO_EXTENSION = QUERY.has("no-extension");
+
+/** Append `v` to the harness's record `window[name]` — what a stubbed hook was
+ asked, for a probe or a screenshot session to read back. */
+const record = (name: string, v: unknown) => {
+  const w = window as unknown as Record<string, unknown[] | undefined>;
+  w[name] = [...(w[name] ?? []), v];
+};
 
 /** `ramify.experience` without a companion: `?experience=beginner|intermediate|expert`
  (experience.ts). Absent or unknown, intermediate — the setting's default. */
@@ -101,12 +115,8 @@ const HOVER_BAR = {
   tactic: parseBarList(QUERY.get("hoverbar-tactic")),
   goal: parseBarList(QUERY.get("hoverbar-goal")),
 };
-const recordHoverBar = (kind: BarKind, ids: MoveId[]) => {
-  const w = window as unknown as {
-    __hoverBar?: { kind: BarKind; ids: MoveId[] }[];
-  };
-  (w.__hoverBar ??= []).push({ kind, ids });
-};
+const recordHoverBar = (kind: BarKind, ids: MoveId[]) =>
+  record("__hoverBar", { kind, ids });
 
 const CF_STUB = (() => {
   const v = QUERY.get("cf-stub");
@@ -208,7 +218,6 @@ function stubDiagnostics(proof: Proof, spec: string): TreeDiagnostic[] {
     const severity = ch === "e" ? 1 : ch === "w" ? 2 : 3;
     return [
       {
-        key: `stub:${i}:${ch}`,
         severity,
         range,
         fullRange: range,
@@ -335,7 +344,7 @@ function installDriver() {
   (window as unknown as { __ptw: typeof api }).__ptw = api;
 }
 
-export default function App() {
+function ProofHarness() {
   const [records, setRecords] = useState<ProofRecord[] | null>(null);
   const [selected, setSelected] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -390,7 +399,7 @@ export default function App() {
           position: "fixed",
           top: 48,
           left: 12,
-          zIndex: 10,
+          zIndex: Z.chrome,
           fontFamily: "monospace",
           fontSize: 13,
           color: error ? "#c53030" : "#666",
@@ -402,6 +411,7 @@ export default function App() {
   }
 
   return (
+    <WidgetBoundary resetKey={String(selected)}>
     <ProofTreeView
       hypMarkStyle={HYP_MARK_STUB}
       proof={proof!}
@@ -449,15 +459,11 @@ export default function App() {
               pos: unknown,
               text: string,
             ) => {
-              const w = window as unknown as {
-                __edits?: { pos: unknown; text: string }[];
-              };
-              w.__edits = [...(w.__edits ?? []), { pos, text }];
+              record("__edits", { pos, text });
             },
 
             onDeleteTactic: (spec: unknown) => {
-              const w = window as unknown as { __deletes?: unknown[] };
-              w.__deletes = [...(w.__deletes ?? []), spec];
+              record("__deletes", spec);
             },
 
             // D1 — the WRITE is stubbed; the CHECK is not wired at all, which
@@ -472,40 +478,36 @@ export default function App() {
             // collapse would splice: `__rewrites` is every proposal the
             // reader accepted, in order.
             onApplyRewrite: (edits: unknown, renameAt?: unknown) => {
-              const w = window as unknown as {
-                __rewrites?: unknown[];
-                __companion?: unknown[];
-              };
-              w.__rewrites = [...(w.__rewrites ?? []), edits];
+              record("__rewrites", edits);
               // The extract's rename follow-up: what widget.tsx hands the
-              // companion (`action: "rename"` at the written `this` binder).
-              if (renameAt)
-                w.__companion = [
-                  ...(w.__companion ?? []),
-                  { action: "rename", pos: renameAt },
-                ];
+              // extension (`action: "rename"` at the written `this` binder).
+              if (renameAt) record("__extension", { action: "rename", pos: renameAt });
             },
 
             onAddTactic: (spec: unknown, text: string) => {
-              const w = window as unknown as {
-                __adds?: { spec: unknown; text: string }[];
-              };
-              w.__adds = [...(w.__adds ?? []), { spec, text }];
+              record("__adds", { spec, text });
               return { fill: null };
             },
 
             onReveal: (pos: unknown) => {
-              const w = window as unknown as { __reveals?: unknown[] };
-              w.__reveals = [...(w.__reveals ?? []), pos];
+              record("__reveals", pos);
             },
+
+            // What only the extension answers: recorded, and absent under
+            // `?no-extension`, exactly as the widget omits them.
+            ...(NO_EXTENSION
+              ? {}
+              : {
+                  onPopoutEdit: (pos: unknown) => record("__lens", pos),
+                  onUndo: (redo: boolean) => record("__undos", redo),
+                }),
           }
         : {})}
 
       {...(TRACE_STUB
         ? {
             onTrace: async (pos: { start: { line: number; character: number } }) => {
-              const w = window as unknown as { __traces?: unknown[] };
-              w.__traces = [...(w.__traces ?? []), pos];
+              record("__traces", pos);
               return (proof!.automationTraces ?? []).some(
                 (t) =>
                   t.stepStart.line === pos.start.line &&
@@ -550,8 +552,7 @@ export default function App() {
               text: string;
               primitives: { nodeId: string; kind: string; title: string }[];
             }) => {
-              const w = window as unknown as { __proposals?: unknown[] };
-              w.__proposals = [...(w.__proposals ?? []), req];
+              record("__proposals", req);
               const first = req.primitives[0];
               return first
                 ? {
@@ -597,6 +598,7 @@ export default function App() {
         />
       }
     />
+    </WidgetBoundary>
   );
 }
 
@@ -617,9 +619,18 @@ function ProofPicker({
   const [showPath, setShowPath] = useState(false);
   return (
     <>
+      <span
+        style={{
+          ...FLOATER_CHROME,
+          padding: "3px 8px",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
       <label
         htmlFor="proof-picker"
-        style={{ color: "#4a5568", cursor: "help" }}
+        style={{ color: "inherit", opacity: DIM_OPACITY, cursor: "help" }}
         onMouseEnter={() => setShowPath(true)}
         onMouseLeave={() => setShowPath(false)}
       >
@@ -644,6 +655,7 @@ function ProofPicker({
           </option>
         ))}
       </select>
+      </span>
       <span
         style={{
           color: "#a0aec0",
@@ -657,5 +669,20 @@ function ProofPicker({
         {records.length === 1 ? "" : "s"}
       </span>
     </>
+  );
+}
+
+// `?matrix` — the RENDER MATRIX (matrix.tsx), a review surface drawn by many
+// real views at once. A separate component, loaded only when asked for, so the
+// ordinary harness neither installs its `window.__ptw` driver nor pays for it.
+const Matrix = lazy(() => import("./matrix"));
+
+export default function App() {
+  return QUERY.has("matrix") ? (
+    <Suspense fallback={null}>
+      <Matrix />
+    </Suspense>
+  ) : (
+    <ProofHarness />
   );
 }

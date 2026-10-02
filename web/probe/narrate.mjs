@@ -1,3 +1,4 @@
+// @probe
 // C2/C3 — TEMPLATE COVERAGE over the CLI corpus, and the residue, honestly.
 //   npm run probe -- narrate            coverage + residue table
 //   npm run probe -- narrate --print    …and odd_sums narrated as an outline

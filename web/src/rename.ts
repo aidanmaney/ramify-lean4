@@ -400,7 +400,7 @@ export function renamesFor(
   for (let j = 0; j < lines.length; j++) {
     const l = lines[j];
     if (!l.hypName || !l.hypType) continue;
-    const key = `${l.hypName} ${l.hypType}`;
+    const key = `${l.hypName}\u0000${l.hypType}`;
     let p = done.get(key);
     if (!p) {
       p = renameRewrite(goal, l, ctx);

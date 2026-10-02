@@ -61,6 +61,8 @@ const MIN_LABEL = 26;
 const MIN_ELIDE = 8;
 
 interface Scan {
+  /** The first top-level `:` that is not part of `:=` (a binder's type). */
+  colon: number;
   assign: number;
   withKw: number;
   lists: { open: number; close: number; commas: number[] }[];
@@ -70,6 +72,7 @@ function scan(s: string): Scan {
   let depth = 0;
   let assign = -1;
   let withKw = -1;
+  let firstColon = -1;
   const lists: Scan["lists"] = [];
 
   let listStart = -1;
@@ -77,6 +80,7 @@ function scan(s: string): Scan {
   const isWordChar = (c: string | undefined) => !!c && /[\w.]/.test(c);
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
+    if (depth === 0 && c === ":" && firstColon < 0) firstColon = i;
     if (OPENERS.includes(c)) {
       if (c === "[" && depth === 0) {
         listStart = i;
@@ -103,7 +107,12 @@ function scan(s: string): Scan {
       listCommas.push(i);
     }
   }
-  return { assign, withKw, lists };
+  return {
+    colon: firstColon >= 0 && s[firstColon + 1] !== "=" ? firstColon : -1,
+    assign,
+    withKw,
+    lists,
+  };
 }
 
 const BINDER_KW =
@@ -151,9 +160,10 @@ function elisionRanges(
     if (mark !== ELLIPSIS || b - a >= MIN_ELIDE) ranges.push([a, b, mark]);
   };
 
+  // A binder tactic keeps its HEAD WORD (2026-09-28: `… hp1 : …` read as
+  // nothing at all — the keyword says what the line does) and elides the
+  // TYPE after the binder's top-level `:`, which is the long part.
   const mE = BINDER_KW.exec(label);
-  if (mE && label.slice(mE[0].length).trim() !== "")
-    ranges.push([0, mE[0].length, ELLIPSIS]);
 
   const mF = /^(rw|rewrite|erw|nth_rewrite)\b/.exec(label);
   const open = mF ? label.indexOf("[", mF[0].length) : -1;
@@ -208,6 +218,17 @@ function elisionRanges(
     }
 
   if (short) return ranges;
+
+  if (mE) {
+    const colon = s.colon;
+    if (colon >= 0) {
+      let from = colon + 1;
+      while (label[from] === " ") from++;
+      let to = s.assign > colon ? s.assign : label.length;
+      while (to > from && label[to - 1] === " ") to--;
+      push(from, to);
+    }
+  }
 
   if (s.assign >= 0) {
     let rhs = s.assign + 2;
@@ -354,10 +375,6 @@ export function mapRange(
     };
   }
   return null;
-}
-
-export function elisionsOf(c: CollapsedLabel): Mark[] {
-  return c.marks;
 }
 
 /** The declaration header's RESTING text: the source from the header's start

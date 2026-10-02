@@ -1,3 +1,4 @@
+// @probe
 // Fixture invariants for the cut mechanism (fold and hop = goal-keyed cuts,
 // drawn as a `+N` on the goal itself and minting NO node; step and band mint
 // one ghost, and a step now only where no hop can be read).  Re-run after touching elide.ts,

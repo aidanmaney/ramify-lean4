@@ -1,3 +1,4 @@
+// @probe
 // The LIVE-SERVER probe: drive the real Lean language server the way
 // vscode-lean4 does and call the widget's own RPC, so widget-only data
 // (diagnostics, taggedGoals, tokenInfos, counterfactual, openBlock) and the

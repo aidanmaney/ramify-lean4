@@ -1,3 +1,4 @@
+// @probe
 // Draw a proof as an ASCII tree, optionally with cuts applied, to SEE a
 // transform:   npm run probe -- fold odd_sums [seed|outline|root|g<k>|succ|skip:<tactic> …]
 // Cut words: `seed` = the source's own view, `outline` = collapse-all,

@@ -1,6 +1,7 @@
 import type { Proof, ProofStepPosition } from "./paperproof";
 
 import { TURNSTILE } from "./proofToTree";
+import { clipText } from "./clipText";
 
 export interface GoalAnnotation {
   line: number;
@@ -13,8 +14,7 @@ const CLOSED = "∎";
 
 const flatten = (s: string) => s.replace(/\s+/g, " ").trim();
 
-const clip = (s: string) =>
-  s.length <= MAX_LEN ? s : s.slice(0, MAX_LEN - 1) + "…";
+const clip = (s: string) => clipText(s, MAX_LEN, { trim: false });
 
 export function goalAnnotations(
   proof: Proof,

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { proofToTree } from "./lib.mjs";
+import { proofToTree, createLayoutEngine, layoutArgs } from "./lib.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const SAMPLE = path.resolve(here, "..", "public", "sample.ndjson");
@@ -82,6 +82,32 @@ export function readerCuts(lib, nodes) {
   }
   return out;
 }
+
+/** The four layouts, by the name the view gives them (`LayoutMode`). */
+export const MODES = ["stacked", "spine", "tracks", "wide"];
+
+/** `computeLayout` exactly as the view calls it: `layoutArgs(mode)` is the one
+ mapping from a mode to `compact`/`aside`, so a probe tests what the app
+ passes.  `sbs` is the reader's side-by-side toggle (not a mode); `chips: false`
+ builds the engine without the frontier-chip lane. */
+export function layoutOf(nodes, mode, { sbs = false, chips = true } = {}) {
+  const { compact, aside } = layoutArgs(mode);
+  return createLayoutEngine(nodes, chips ? { chips: true } : undefined).computeLayout(null, null, compact, sbs, null, aside);
+}
+
+/** A reading state that keeps most of the tree: ◌ on every `n`th tactic (hops,
+ leaf folds, ghosts) — the shape a reader mid-proof has. */
+export function hopEvery(lib, nodes, n = 4) {
+  const byId = byIdOf(nodes), kids = kidsOf(nodes), cuts = [];
+  let k = 0;
+  for (const nd of nodes) if (nd.type === "tactic" && k++ % n === 0) { const c = lib.stepCut(byId, nd.id, kids); if (c) cuts.push(c); }
+  return cuts;
+}
+
+/** Command-line helpers: `flag("--quick")`, `opt("--runs", 5)` (the value after the flag). */
+export const argv = process.argv.slice(2);
+export const flag = (name) => argv.includes(name);
+export const opt = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : dflt; };
 
 /** A tiny assertion harness: `const t = tally(); t.ok(cond, msg); t.done()`. */
 export function tally() {

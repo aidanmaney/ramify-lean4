@@ -95,14 +95,14 @@ export const GESTURES: Gesture[] = [
   { target: "goal", input: "⋯", says: "to list every move on a box" },
   {
     target: "goal",
-    input: "click the corner",
+    input: "click the top-right corner",
     says: "to fold or unfold what is below",
     when: (g) => g.goalCut === "fold" || g.goalCut === "open",
   },
   {
     target: "goal",
     input: `${CMD}-click`,
-    says: "to reveal in source",
+    says: "to show in source",
     needs: "reveal",
     when: (g) => !g.revealable && g.goalRevealable,
   },
@@ -140,7 +140,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "tactic",
     input: "click",
-    says: "to reveal in source",
+    says: "to show in source",
     needs: "reveal",
     when: (g) => g.revealable,
   },
@@ -166,13 +166,13 @@ export const GESTURES: Gesture[] = [
   },
   {
     target: "marks",
-    input: "corner nub",
+    input: "click the top-left corner",
     says: "to drop a mark",
     when: (g) => !g.tourTab && !g.tourStop,
   },
   {
     target: "marks",
-    input: "⌥-click the nub",
+    input: "⌥-click the top-left corner",
     says: "to write `.mark` into the source (`.mark 3` ranks it)",
     needs: "flags",
     when: (g) => g.tourMarkable,
@@ -201,9 +201,49 @@ export const GESTURES: Gesture[] = [
     input: "∴",
     says: "= written by Ramify (Comments: narrate), not the author",
   },
-  { target: "background", input: "drag", says: "to select a region" },
+  {
+    target: "strip",
+    input: "≈",
+    says: "= a model reworded the generated line",
+  },
+  {
+    target: "background",
+    input: "drag",
+    says: "to select a region, then fold, skip or write a flag from the pill",
+  },
+  { target: "background", input: `${CMD}-scroll`, says: "to zoom" },
+  {
+    target: "background",
+    input: "chips on an open goal",
+    says: "to add a tactic there (`+`), stub it with `sorry` or start a `calc`",
+    needs: "add",
+  },
 
-  { target: "keys", input: "Esc", says: "to back out one step, most recent first" },
+  { target: "keys", input: "? / F1", says: "to open or close this panel" },
+  { target: "keys", input: "Esc", says: "to close one thing at a time" },
+  { target: "keys", input: "Tab, then ↑ ↓", says: "to move through the boxes" },
+  {
+    target: "keys",
+    input: "→ / ←",
+    says: "to open or fold a goal, else step in or out",
+  },
+  {
+    target: "keys",
+    input: "Enter",
+    says: "to show in source",
+    needs: "reveal",
+  },
+  { target: "keys", input: "F2", says: "to edit a tactic", needs: "edit" },
+  {
+    target: "keys",
+    input: "⇧↑ / ⇧↓",
+    says: "to select a run of boxes (Tab reaches the pill's buttons, Enter runs one, Esc clears)",
+  },
+  {
+    target: "keys",
+    input: "⇧F10",
+    says: "to open the moves menu (on an open goal it has the chips' moves, on a calc its every-row toggle)",
+  },
   {
     target: "keys",
     input: "< / >",
@@ -215,7 +255,6 @@ export const GESTURES: Gesture[] = [
     says: "to undo / redo",
     needs: "undo",
   },
-  { target: "keys", input: `${CMD}-scroll`, says: "to zoom" },
 ];
 
 export const GESTURE_SECTIONS: { target: GestureTarget; title: string }[] = [
@@ -308,7 +347,7 @@ export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   },
   hUsed: {
     label: ".h#used",
-    title: `Pin each selected goal's context to its ${HYP_MARK}-used hypotheses — writes one \`.h#name\` per used line (${UNDO})`,
+    title: `Pin each selected goal's context to the hypotheses the proof below uses — writes one \`.h#name\` per used line (${UNDO})`,
   },
   unflag: {
     label: "unflag",
@@ -321,5 +360,5 @@ export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
 // VERB_DOC entry nothing dispatches.
 export const FLAG_GROUP = {
   label: "flag ▾",
-  title: "Source flags: write .fold / .none / .no-hyps / .h# into the source — what they hide is drawn in the author's voice (`§`, italics, comment ink)",
+  title: "Source flags: write .fold / .none / .no-hyps / .h# into the source — what they hide is drawn in the author's voice (`§`, italics, the comment colour)",
 };

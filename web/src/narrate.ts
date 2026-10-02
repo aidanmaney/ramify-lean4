@@ -20,6 +20,9 @@
 import type { TreeNode, HypLine } from "./types";
 import { tacticHead, tacticKeyword, childIndex } from "./elide";
 import { posKey } from "./proofToTree";
+import { postOrder } from "./treeWalk";
+import { clipText } from "./clipText";
+import { hashString } from "./hash";
 
 /** The glyph a GENERATED strip wears, written INTO the text so `commentSize`
  measures exactly what is painted (the `SEED_MARK` idiom). `∴` — "therefore",
@@ -41,12 +44,8 @@ const CLAUSE_CAP = 46;
 
 const flat = (s: string) => s.replace(/\s+/g, " ").trim();
 
-function clip(s: string, cap: number): string {
-  const t = flat(s);
-  if (t.length <= cap) return t;
-  const sp = t.lastIndexOf(" ", cap - 1);
-  return `${(sp > cap / 2 ? t.slice(0, sp) : t.slice(0, cap - 1)).trimEnd()}…`;
-}
+const clip = (s: string, cap: number): string =>
+  clipText(flat(s), cap, { words: true });
 
 /** A goal's statement, without the `⊢ ` the tree's labels carry. */
 const goalText = (n: TreeNode | undefined): string =>
@@ -586,22 +585,22 @@ function narrateStepLine(
  shape of what is under it, not its transcript. */
 const SUMMARY_DEPTH = 1;
 
+/** How many tactic nodes hang below `id`: each tactic in a node's kid list adds
+ one, plus what hangs below that kid. The nodes are a DFS-preorder tree, so
+ `below(u) = tactic kids of u + Σ below(kid)` is plain subtree arithmetic,
+ filled in bottom-up ONCE per node into `ctx.below` (`postOrder`). */
 function tacticsBelow(id: string, ctx: NarrateCtx): number {
-  const hit = ctx.below.get(id);
-  if (hit !== undefined) return hit;
-  let n = 0;
-  const seen = new Set<string>();
-  const walk = (at: string) => {
-    if (seen.has(at)) return;
-    seen.add(at);
-    for (const k of ctx.kids.get(at) ?? []) {
-      if (k.type === "tactic") n++;
-      walk(k.id);
-    }
-  };
-  walk(id);
-  ctx.below.set(id, n);
-  return n;
+  return postOrder(
+    id,
+    (at) => (ctx.kids.get(at) ?? []).map((k) => k.id),
+    (at, _kids, get) => {
+      let n = 0;
+      for (const k of ctx.kids.get(at) ?? [])
+        n += (k.type === "tactic" ? 1 : 0) + (get(k.id) ?? 0);
+      return n;
+    },
+    ctx.below,
+  )!;
 }
 
 /** A clause joined on after `; then ` continues ONE sentence, so its opening
@@ -815,8 +814,8 @@ export function applyNarrationLines(
     // place (see `TreeNode.commentBelow`). A hop keeps its child and its axis
     // break below the box, so its summary stays above.
     return n.type === "goal" && n.folded?.kind === "fold"
-      ? { ...n, comment, commentBelow: true }
-      : { ...n, comment };
+      ? { ...n, comment, commentBelow: true, commentGenerated: true }
+      : { ...n, comment, commentGenerated: true };
   });
 }
 
@@ -843,18 +842,10 @@ export interface PolishLine {
   tactic: string;
 }
 
-/** The lines a proof would send. Exactly the strips `narrationFor` generated —
- the author's own comments are absent from that map, so they are absent here —
- with `NARRATE_MARK` stripped back off, since the mark is ours and not part of
- the sentence. */
-export function polishLines(
-  base: TreeNode[],
-  drawn: TreeNode[],
-): PolishLine[] {
-  return polishLinesOf(drawn, narrationOf(base, drawn));
-}
-
-/** The same request, built from a narration already computed. */
+/** The lines a proof would send, built from a narration already computed.
+ Exactly the strips `narrationFor` generated — the author's own comments are
+ absent from that map, so they are absent here — with `NARRATE_MARK` stripped
+ back off, since the mark is ours and not part of the sentence. */
 export function polishLinesOf(
   drawn: TreeNode[],
   { text, ctx }: Narration,
@@ -882,7 +873,7 @@ export function polishLinesOf(
  answers per sentence is what stops a fold from re-asking for lines already in
  hand. */
 export const polishCacheKey = (l: PolishLine): string =>
-  `${l.nodeId} ${l.template}`;
+  `${l.nodeId}\u0000${l.template}`;
 
 /** What a polish result is keyed by on THIS side: the templated text itself,
  in order. A re-parse that changes nothing about the sentences re-uses the
@@ -890,13 +881,5 @@ export const polishCacheKey = (l: PolishLine): string =>
  `(proofKey, hash)` for the same reason and computes its own hash — this one
  never crosses the wire.) */
 export function polishKey(lines: PolishLine[]): string {
-  let h = 0x811c9dc5;
-  for (const l of lines) {
-    const s = `${l.nodeId} ${l.template} `;
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
-    }
-  }
-  return `${lines.length}:${(h >>> 0).toString(36)}`;
+  return `${lines.length}:${hashString(lines.map((l) => `${l.nodeId} ${l.template} `).join(""))}`;
 }

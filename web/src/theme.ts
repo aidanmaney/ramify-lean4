@@ -51,6 +51,10 @@ const PALETTE_CSS = `
   --ptw-hue-goal: #2563eb;
   --ptw-hue-tactic: #15803d;
   --ptw-hue-accent: #b45309;
+  /* Warning amber: its own hue (40°), a clear step from the accent orange
+     (26°), so a warning ribbon and a temporary mark cannot be mistaken.
+     4.9:1 on white; the dark block lifts it. A host colour wins (below). */
+  --ptw-hue-warn: #9a6700;
   /* Raw syntax hues (VS Code Light+). Muted into --ptw-fg by the recipes. */
   --ptw-raw-keyword: #af00db;
   --ptw-raw-function: #795e26;
@@ -71,12 +75,12 @@ const PALETTE_CSS = `
   --ptw-node-tactic-fill: color-mix(in srgb, var(--ptw-surface) 90%, var(--ptw-hue-tactic));
   --ptw-node-default-fill: var(--ptw-surface);
   /* Borders carry most of the identifying colour, softened toward the page. */
-  --ptw-node-goal-stroke: #6691f1;
-  --ptw-node-goal-stroke: color-mix(in srgb, var(--ptw-hue-goal) 68%, var(--ptw-bg));
-  --ptw-node-tactic-stroke: #5da572;
-  --ptw-node-tactic-stroke: color-mix(in srgb, var(--ptw-hue-tactic) 68%, var(--ptw-bg));
-  --ptw-node-default-stroke: #9aa0a6;
-  --ptw-node-default-stroke: color-mix(in srgb, var(--ptw-fg) 38%, var(--ptw-bg));
+  --ptw-node-goal-stroke: #6692f1;
+  --ptw-node-goal-stroke: color-mix(in srgb, var(--ptw-hue-goal) 70%, var(--ptw-bg));
+  --ptw-node-tactic-stroke: #57a473;
+  --ptw-node-tactic-stroke: color-mix(in srgb, var(--ptw-hue-tactic) 72%, var(--ptw-bg));
+  --ptw-node-default-stroke: #939393;
+  --ptw-node-default-stroke: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
   --ptw-node-text: var(--ptw-fg);
 
   /* The cursor/endpoint accent is the one place that should still pop. */
@@ -95,19 +99,20 @@ const PALETTE_CSS = `
      The editor's own warning colour, for the same reason --ptw-danger takes its
      error one: a diagnostic drawn in the tree should read the way the squiggle
      for it reads in the buffer. editorWarning.foreground is the registry entry
-     behind that squiggle; the fallback is the accent hue, this palette's only
-     warm colour that isn't the error red.
+     behind that squiggle; the fallback is its own amber (--ptw-hue-warn), distinct from the accent.
      (No backticks in here — this block is a template literal.) */
-  --ptw-warn: var(--vscode-editorWarning-foreground, var(--ptw-hue-accent));
+  --ptw-warn: var(--vscode-editorWarning-foreground, var(--ptw-hue-warn));
 
   /* Context lines are the densest text in the tree, so they are plain
-     foreground with the unused ones dimmed — no hue at all. The dim is 62%,
-     not lower: it is real content, and on an already-low-contrast theme
-     (Solarized Light, whose own foreground is a soft grey-blue) dimming
-     compounds with the theme's own softness and pushes it past legible. */
+     foreground with the unused ones dimmed — no hue at all. The dim is 74%
+     (2026-09-28: the smallest mix that reaches 4.5:1 on a goal box in Light
+     and Dark Modern), not lower: it is real content, and on an
+     already-low-contrast theme (Solarized Light, whose own foreground is a
+     soft grey-blue) dimming compounds with the theme's own softness and
+     pushes it past legible. */
   --ptw-hyp-used: var(--ptw-fg);
-  --ptw-hyp-unused: #7a8288;
-  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 62%, var(--ptw-surface));
+  --ptw-hyp-unused: #6e6e6e;
+  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 74%, var(--ptw-surface));
   --ptw-hyp-mark: #b4763a;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
 
@@ -141,22 +146,22 @@ const PALETTE_CSS = `
   --ptw-diff-del: #f6dede;
   --ptw-diff-del: color-mix(in srgb, var(--ptw-danger) 22%, var(--ptw-surface));
 
-  --ptw-comment: #8b949e;
+  --ptw-comment: #767676;
   --ptw-case: #6b7f99;
-  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
+  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
   /* Narration mode's prose, drawn INSIDE a node box rather than on the page.
      Same words, different ground: --ptw-comment is mixed against --ptw-bg,
      which is right for a strip riding on the background, but a box sits on
      --ptw-surface (lifted 10% toward the foreground), so the identical ink
      lands with visibly less contrast there — reported as exactly that. Mixed
      against the SURFACE for the same reason --ptw-hyp-unused is, and at 75%
-     rather than 55%: a strip is an aside beside the content, while in
+     rather than 70%: a strip is an aside beside the content, while in
      narration the prose IS the box's content and only the italic and the
      hueless grey need to say it is not code. */
   --ptw-prose: #b6bdc6;
   --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
-  --ptw-link: #9aa0a6;
-  --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
+  --ptw-link: #939393;
+  --ptw-link: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
   /* Opt-in link tint (ramify.linkTint): the neutral link ink pulled toward
      the TARGET node's hue, so an edge hints at what it runs into. Written as
      recipes over the hue inputs, so the dark block's overrides flow through. */
@@ -164,8 +169,8 @@ const PALETTE_CSS = `
   --ptw-link-goal: color-mix(in srgb, var(--ptw-hue-goal) 45%, var(--ptw-link));
   --ptw-link-tactic: #6d9a78;
   --ptw-link-tactic: color-mix(in srgb, var(--ptw-hue-tactic) 45%, var(--ptw-link));
-  --ptw-muted: #6e7681;
-  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 62%, var(--ptw-bg));
+  --ptw-muted: #767676;
+  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
   --ptw-rail-pressed: #4a5568;
   --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
   /* THE CHROME'S INK (2026-09-22 taste pass). Every floater — status bar,
@@ -221,6 +226,7 @@ const PALETTE_CSS = `
   --ptw-hue-goal: #7aa2f7;
   --ptw-hue-tactic: #94d3a2;
   --ptw-hue-accent: #e0a06a;
+  --ptw-hue-warn: #d9b53f;
   /* Raw syntax hues (VS Code Dark+), muted into --ptw-fg by the recipes. */
   --ptw-raw-keyword: #c586c0;
   --ptw-raw-function: #dcdcaa;
@@ -236,29 +242,40 @@ const PALETTE_CSS = `
   --ptw-node-goal-fill: color-mix(in srgb, var(--ptw-surface) 92%, var(--ptw-hue-goal));
   --ptw-node-tactic-fill: #2f3a34;
   --ptw-node-tactic-fill: color-mix(in srgb, var(--ptw-surface) 90%, var(--ptw-hue-tactic));
-  --ptw-node-goal-stroke: #5e7abb;
-  --ptw-node-goal-stroke: color-mix(in srgb, var(--ptw-hue-goal) 68%, var(--ptw-bg));
-  --ptw-node-tactic-stroke: #6d9c7a;
-  --ptw-node-tactic-stroke: color-mix(in srgb, var(--ptw-hue-tactic) 68%, var(--ptw-bg));
-  --ptw-node-default-stroke: #6b7280;
-  --ptw-node-default-stroke: color-mix(in srgb, var(--ptw-fg) 38%, var(--ptw-bg));
-  --ptw-hyp-unused: #8b9198;
-  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 62%, var(--ptw-surface));
+  --ptw-node-goal-stroke: #5f7bb6;
+  --ptw-node-goal-stroke: color-mix(in srgb, var(--ptw-hue-goal) 70%, var(--ptw-bg));
+  --ptw-node-tactic-stroke: #73a17d;
+  --ptw-node-tactic-stroke: color-mix(in srgb, var(--ptw-hue-tactic) 72%, var(--ptw-bg));
+  --ptw-node-default-stroke: #696969;
+  --ptw-node-default-stroke: color-mix(in srgb, var(--ptw-fg) 43%, var(--ptw-bg));
+  --ptw-hyp-unused: #a4a4a4;
+  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 74%, var(--ptw-surface));
   --ptw-hyp-mark: #d9a271;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
   --ptw-hyp-lit: #4a3f37;
   --ptw-hyp-lit: color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface));
-  --ptw-comment: #7d8590;
+  --ptw-comment: #989898;
   --ptw-case: #8fa3bf;
-  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
+  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
   --ptw-prose: #aeb6c0;
   --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
-  --ptw-link: #6e7681;
-  --ptw-link: color-mix(in srgb, var(--ptw-fg) 42%, var(--ptw-bg));
-  --ptw-muted: #9ca3af;
-  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 62%, var(--ptw-bg));
+  --ptw-link: #696969;
+  --ptw-link: color-mix(in srgb, var(--ptw-fg) 43%, var(--ptw-bg));
+  --ptw-muted: #989898;
+  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
   --ptw-rail-pressed: #9ca3af;
   --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
+  /* The comment green, lifted for AA (4.5:1) on a dark surface: at the shared
+     72% the dark palette's raw green (#6a9955) mixed to 3.9:1. */
+  --ptw-tok-comment: color-mix(in srgb, var(--ptw-raw-comment) 53%, var(--ptw-fg));
+}
+
+/* Keyboard focus, one ring for every chrome button (the browser's own default
+   is invisible on the bar's filled pills). --ptw-focus is the editor's
+   focusBorder. Only :focus-visible, so a mouse click draws nothing. */
+[data-ptw-theme] button:focus-visible {
+  outline: 2px solid var(--ptw-focus);
+  outline-offset: 1px;
 }
 
 /* Outline mode (the rail's □): drop the fills, keep the borders. Last in the
@@ -296,6 +313,8 @@ export const NODE_STYLES = {
 export const NODE_TEXT = "var(--ptw-node-text)";
 
 export const SEQ_STROKE = "var(--ptw-accent)";
+/** The neutral ring: the editor overlay border and the like (not the accent). */
+export const FOCUS_INK = "var(--ptw-focus)";
 export const ACCENT_TEXT = "var(--ptw-accent-text)";
 export const HYP_USED_FILL = "var(--ptw-hyp-used)";
 export const HYP_UNUSED_FILL = "var(--ptw-hyp-unused)";
@@ -343,7 +362,6 @@ export const CHROME_INK = "var(--ptw-chrome-ink)";
 export const CHROME_BTN = "var(--ptw-chrome-btn)";
 /** The keyed row of a menu. */
 export const CHROME_LIT = "var(--ptw-chrome-lit)";
-export const FOCUS_RING = "var(--ptw-focus)";
 /** The message strip's tint per severity (1 error, 2 warning, 3 lint): the
  left edge in the severity's ink and a wash of it over the chrome. */
 export const DIAG_EDGE = {
@@ -366,7 +384,40 @@ export const CHROME_RADIUS = 3;
 /** The two opacities chrome dims with: a control that cannot be used now,
  and a value or hint that reads as secondary/off. */
 export const DISABLED_OPACITY = 0.35;
-export const DIM_OPACITY = 0.6;
+export const DIM_OPACITY = 0.76;
+/** Tree-paint opacities (not chrome), named so each has its one reason. */
+/** A ghost / unused mark that must recede behind the real content. */
+export const FAINT_OPACITY = 0.45;
+/** A dashed stub or preview stroke: present, but clearly not yet real. */
+export const STUB_OPACITY = 0.6;
+/** A hover-preview dim: the node stays legible while the verb is shown. */
+export const PREVIEW_OPACITY = 0.9;
+/** The faint wash over a marquee / band rectangle (fill only). */
+export const WASH_OPACITY = 0.08;
+/** A diagnostic box's wash: the severity ink over the box fill. */
+export const DIAG_BOX_WASH_OPACITY = 0.07;
+/** Two floating chrome type sizes (px): a secondary line and the body. */
+export const CHROME_TEXT_SM = 11;
+export const CHROME_TEXT = 12;
+/** Tree-ink stroke weights: a chip/outline border and the emphasised one. */
+export const TREE_INK_SW = 1.2;
+export const TREE_INK_SW_BOLD = 1.5;
+/** A pill's corner radius when the height is not known (a full round). */
+export const PILL_RADIUS = 999;
+/** The drop-shadow behind a floating chip (the status strip is flat). */
+export const CHIP_SHADOW = "drop-shadow(0 1px 3px rgba(0,0,0,0.35))";
+/** The stacking table, by TIER. Effective order preserved from the scattered
+ literals: header band < `chrome` (the status card, the zoom rail and the
+ banner, strip included) < signature < `popup` (bar panels, the toast, the
+ header button) < node menu < tip < the page-level doc tip (body portal). */
+export const Z = {
+  header: 9,
+  chrome: 10,
+  signature: 11,
+  popup: 12,
+  nodeMenu: 25,
+  tip: 30,
+} as const;
 
 export const POPUP_CHROME = {
   padding: "6px 9px",
@@ -382,6 +433,14 @@ export const FLOATER_CHROME = {
   color: CHROME_INK,
   fontFamily: CHROME_FONT,
 } as const;
+
+/** Props for chrome that renders OUTSIDE the view's `[data-ptw-theme]` scope
+ (the relay banner, the error boundary's fallback, the empty state): they get
+ the same tokens, so they need no raw host variables of their own. */
+export function chromeScopeProps(): { "data-ptw-theme": ThemeKind } {
+  ensurePaletteStyle();
+  return { "data-ptw-theme": resolveThemeKind() };
+}
 
 export const TOKEN_COLOR: Record<string, string> = {
   keyword: "var(--ptw-tok-keyword)",

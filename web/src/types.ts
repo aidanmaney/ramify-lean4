@@ -122,6 +122,16 @@ export interface TreeNode {
    `bandTopH`/`inkExtent`/`commentStripTop`/`commentIndentOf` — one coding. */
   commentBelow?: boolean;
 
+  /** `comment` is a GENERATED strip (`∴` narration or its `≈` polish), written
+   by `applyNarrationLines`. Layout wraps it at no more than
+   `GENERATED_COMMENT_CHARS` columns where an author's comment may take the
+   whole width: up to 260 characters of templated prose are not the author's
+   own line to run as long as they like, and unclamped it ran several box
+   widths past its box (2026-10-02). Everything else about the strip — the
+   Width budget when that is narrower, the 2-line clamp and `⋯ more` — is the
+   author comment's own code path. */
+  commentGenerated?: boolean;
+
   addSpec?: AddSpec;
 
   addLink?: AddSpec;

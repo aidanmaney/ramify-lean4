@@ -24,7 +24,6 @@ export const SEVERITY_ERROR = 1;
 export const SEVERITY_WARNING = 2;
 
 export interface TreeDiagnostic {
-  key: string;
   /** 1 error, 2 warning — LSP's own numbering — and 3 a LINT (D4). A lint is
    neither: the proof is correct and a style rule is speaking, so it rides the
    SAME pipeline at LSP's `hint` severity and the ribbon draws a third ink for
@@ -85,7 +84,6 @@ export function lintDiagnostics(
   const nodeOf = new Map<Lint, string>();
   for (const [id, ls] of byNode) for (const l of ls) nodeOf.set(l, id);
   return lints.map((l) => ({
-    key: `${SEVERITY_LINT}:${l.start.line}:${l.start.character}:${l.linter}`,
     severity: SEVERITY_LINT as 3,
     range: { start: l.start, stop: l.stop },
     fullRange: { start: l.start, stop: l.stop },
@@ -135,7 +133,6 @@ export function filterDiagnostics(
     }
     counts.kept++;
     kept.push({
-      key: `${severity}:${d.range.start.line}:${d.range.start.character}:${d.message.length}:${d.message.slice(0, 32)}`,
       severity,
       range: d.range,
       fullRange,
@@ -177,7 +174,12 @@ export interface AttachedDiagnostics {
 
   worst: Map<string, 1 | 2 | 3>;
 
-  ordered: { diag: TreeDiagnostic; nodeId: string | null }[];
+  /** `ident` is the diagnostic's ONE stable identity — severity, the node's
+   TREE PATH, and the message — for everything that must recognise "the same
+   problem" across re-parses and edits elsewhere: the pager's pick and the
+   strip's per-error dismissal. (A line:col key moved with every edit above
+   it.) */
+  ordered: { diag: TreeDiagnostic; nodeId: string | null; ident: string }[];
 
   unattached: TreeDiagnostic[];
 }
@@ -192,6 +194,8 @@ export function attachDiagnostics(
   goals: GoalContext = { open: [], chipped: new Set() },
 
   unsolved: (d: TreeDiagnostic) => boolean = (d) => !!d.unsolved,
+  /** A node's tree path (`pathKeys`), for `ident`; "-" where it has none. */
+  pathOf: (id: string) => string | undefined = () => undefined,
 ): AttachedDiagnostics & { chipCovered: number } {
   const anyChip = goals.chipped.size > 0;
   let chipCovered = 0;
@@ -202,7 +206,11 @@ export function attachDiagnostics(
       chipCovered++;
       return false;
     })
-    .map((diag) => ({ diag, nodeId: diagnosticNodeAt(targets, diag, goals.open) }));
+    .map((diag) => {
+      const nodeId = diagnosticNodeAt(targets, diag, goals.open);
+      const path = (nodeId && pathOf(nodeId)) ?? "-";
+      return { diag, nodeId, ident: `${diag.severity}|${path}|${diag.message}` };
+    });
   const byNode = new Map<string, TreeDiagnostic[]>();
   const worst = new Map<string, 1 | 2 | 3>();
   for (const { diag, nodeId } of ordered) {

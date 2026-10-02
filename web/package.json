@@ -1,7 +1,7 @@
 {
   "name": "ramify-renderer",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "license": "MIT",
   "description": "Ramify's React/d3-dag proof-tree renderer: the standalone dev harness and the infoview widget bundle, from one source-agnostic view.",
   "type": "module",
@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "typecheck": "tsc -b",
     "preview": "vite preview",
-    "probe": "node probe/run.mjs"
+    "probe": "node probe/run.mjs",
+    "test": "node probe/test.mjs"
   },
   "dependencies": {
     "@leanprover/unicode-input": "^0.1.11",

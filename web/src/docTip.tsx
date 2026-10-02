@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { cleanMarkdown } from "./proofToTree";
-import { POPUP_CHROME } from "./theme";
+import { CHROME_TEXT_SM, FLOATER_CHROME, Z, chromeScopeProps } from "./theme";
 
 const cleanDoc = (doc: string): string =>
   cleanMarkdown(doc, { breakableCode: true }).trim();
@@ -29,22 +29,20 @@ export function DocTokenSpan({
       {tip &&
         createPortal(
           <div
+            {...chromeScopeProps()}
             style={{
-              ...POPUP_CHROME,
+              ...FLOATER_CHROME,
               position: "fixed",
               left: tip.x,
               top: tip.y,
-              zIndex: 100,
+              zIndex: Z.tip,
               maxWidth: 440,
               maxHeight: 280,
               overflow: "hidden",
-              border: "1px solid var(--vscode-editorWidget-border, #c4c8cf)",
               pointerEvents: "none",
-              fontFamily: "var(--vscode-font-family, sans-serif)",
-              fontSize: 11,
+              fontSize: CHROME_TEXT_SM,
               lineHeight: "15px",
               whiteSpace: "pre-wrap",
-              color: "var(--vscode-icon-foreground, #2d3748)",
             }}
           >
             {cleanDoc(doc)}

@@ -1,0 +1,213 @@
+# CI and release for Ramify.
+#
+#   web        typecheck + lint + offline probes (`npm test`), and the tracked
+#              widget bundle must equal a fresh build of the sources; the
+#              experience descriptions match experience.ts (gen-experience --check)
+#   lean       the installable, Mathlib-free package (dist/) builds; the manifest
+#              is unchanged; the tour elaborates
+#   extension  the .vsix packages, carries its licence, matches the tracked
+#              dist/ramify-<version>.vsix; every setting and command is in INSTALL.md;
+#              the lists that live in two files agree (scripts/check-sync.mjs)
+#   release    on a `v*` tag: attach the tracked dist/ramify-<version>.vsix (the one the
+#              extension job verified carries the current extension.js and package.json)
+#              to a GitHub release
+#
+# `main` is the install branch (see scripts/sync-main.sh) and carries no
+# workflows and no web/ sources, so this file lives on dev and release tags are
+# pushed on a dev commit. The `main` trigger exists for pull requests into it.
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+    tags: ["v*"]
+  pull_request:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # One pinned packager for every job (an unpinned `npx vsce` follows whatever
+  # is newest). Keep in step with the version package.sh was last run with.
+  VSCE_VERSION: "4.0.0"
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Typecheck, lint, offline probes
+        run: npm test
+      - name: Experience descriptions match web/src/experience.ts
+        working-directory: .
+        run: node scripts/gen-experience.mjs --check
+      - name: Rebuild the widget bundle
+        run: npm run build:widget
+      - name: Tracked widget bundle is current
+        working-directory: .
+        run: |
+          if ! git diff --exit-code --stat web/dist/proofTreeWidget.js; then
+            echo "::error file=web/dist/proofTreeWidget.js::the tracked widget bundle is stale — run npm run build:widget and commit it"
+            exit 1
+          fi
+
+  lean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Cache the toolchain and dist/.lake
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan/toolchains
+            dist/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('dist/lake-manifest.json', 'dist/lean-toolchain') }}
+      - name: Build the installable package (Ramify + Demo)
+        working-directory: dist
+        run: lake build
+      - name: Manifest is unchanged by the build
+        run: |
+          if ! git diff --exit-code dist/lake-manifest.json; then
+            echo "::error file=dist/lake-manifest.json::lake rewrote the manifest — run lake update in dist/ and commit it"
+            exit 1
+          fi
+      - name: dist/ProofTreeTour.lean is the tour
+        run: |
+          if ! cmp lean/ProofTreeTour.lean dist/ProofTreeTour.lean; then
+            echo "::error file=dist/ProofTreeTour.lean::dist/ProofTreeTour.lean differs from lean/ProofTreeTour.lean — run package.sh (or cp) and commit it"
+            exit 1
+          fi
+      - name: The tour and the demo elaborate
+        working-directory: dist
+        # Demo.lean must elaborate cleanly (a failure fails the job here).
+        #
+        # The tour imports only Ramify and Init. Its last two theorems
+        # (tour_frontier, tour_errors) are BROKEN ON PURPOSE, to show
+        # unfinished proofs and errors in the tree, so `lean` exits 1 by
+        # design. The check is that every error sits at or after
+        # `theorem tour_frontier`: an import failure or an error in the working
+        # proofs above it fails the job. At least one error must appear, or the
+        # file was not really elaborated.
+        run: |
+          lake env lean Demo.lean
+          set +e
+          lake env lean ProofTreeTour.lean > tour.out 2>&1
+          set -e
+          cat tour.out
+          first=$(grep -n '^theorem tour_frontier' ProofTreeTour.lean | head -1 | cut -d: -f1)
+          [ -n "$first" ] || { echo "::error::no 'theorem tour_frontier' in the tour — update this check"; exit 1; }
+          errs=$(sed -n 's/^ProofTreeTour\.lean:\([0-9][0-9]*\):[0-9][0-9]*: error.*/\1/p' tour.out)
+          [ -n "$errs" ] || { echo "::error::the tour produced no errors; its deliberate ones are missing, so it was probably not elaborated"; exit 1; }
+          bad=0
+          for l in $errs; do
+            if [ "$l" -lt "$first" ]; then
+              echo "::error file=lean/ProofTreeTour.lean,line=$l::unexpected error above the deliberately broken theorems"
+              bad=1
+            fi
+          done
+          exit $bad
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: node --check ext/ramify/extension.js
+      - name: Package the .vsix
+        working-directory: ext/ramify
+        run: npx --yes @vscode/vsce@${{ env.VSCE_VERSION }} package --out ramify-ci.vsix
+      - name: The .vsix carries its licence
+        working-directory: ext/ramify
+        run: |
+          unzip -l ramify-ci.vsix
+          unzip -l ramify-ci.vsix | grep -q 'extension/LICENSE.txt' \
+            || { echo "::error::extension/LICENSE.txt is missing from the .vsix"; exit 1; }
+      - name: package.json version matches the tracked dist/ramify-<version>.vsix
+        run: |
+          v=$(node -p "require('./ext/ramify/package.json').version")
+          tracked=$(git ls-files 'dist/ramify-*.vsix')
+          echo "package.json version: $v"
+          echo "tracked vsix:         $tracked"
+          [ "$tracked" = "dist/ramify-$v.vsix" ] \
+            || { echo "::error::ext/ramify/package.json is $v but the tracked .vsix is '$tracked' (exactly one dist/ramify-<version>.vsix must be tracked) — run package.sh"; exit 1; }
+      - name: The tracked .vsix carries the current extension.js and package.json
+        run: |
+          v=$(node -p "require('./ext/ramify/package.json').version")
+          vsix="dist/ramify-$v.vsix"
+          [ -f "$vsix" ] || { echo "::error::$vsix is not in the tree — run package.sh"; exit 1; }
+          for f in extension.js package.json; do
+            unzip -p "$vsix" "extension/$f" | cmp - "ext/ramify/$f" \
+              || { echo "::error::extension/$f inside $vsix differs from ext/ramify/$f — the .vsix is stale, run package.sh and commit it"; exit 1; }
+          done
+      - name: Every setting and command is documented in INSTALL.md
+        run: node scripts/check-settings.mjs
+      - name: Move ids, automation candidates and trace heads agree across files
+        run: node scripts/check-sync.mjs
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [web, lean, extension]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The tag names the extension's version
+        run: |
+          v=$(node -p "require('./ext/ramify/package.json').version")
+          [ "$GITHUB_REF_NAME" = "v$v" ] \
+            || { echo "::error::tag $GITHUB_REF_NAME does not match ext/ramify/package.json version $v"; exit 1; }
+      - name: Write the release note
+        run: |
+          {
+            echo "Ramify $GITHUB_REF_NAME — an interactive proof tree for Lean 4, in the VS Code infoview."
+            echo
+            echo "Install the Lean package and, optionally, the attached .vsix; see INSTALL.md on the install branch:"
+            echo "https://github.com/$GITHUB_REPOSITORY/blob/main/INSTALL.md"
+            echo
+            echo "Source: commit $GITHUB_SHA. The Lean package is consumed from git, not from this release:"
+            echo
+            echo '```toml'
+            echo '[[require]]'
+            echo 'name = "ramify"'
+            echo "git = \"https://github.com/$GITHUB_REPOSITORY.git\""
+            echo 'subDir = "dist"'
+            echo "rev = \"$GITHUB_REF_NAME\""
+            echo '```'
+          } > release-note.md
+          cat release-note.md
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Exactly one dist/ramify-<version>.vsix is tracked (the extension job
+          # checks it), and the tag check above ties it to the version.
+          gh release create "$GITHUB_REF_NAME" "dist/ramify-$(node -p "require('./ext/ramify/package.json').version").vsix" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Ramify $GITHUB_REF_NAME" \
+            --notes-file release-note.md \
+            --verify-tag

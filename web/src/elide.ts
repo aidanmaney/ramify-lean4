@@ -355,6 +355,56 @@ export function childIndex(
   return kids;
 }
 
+/** Per-`byId` caches for the cut algebra. A `byId` map is built once per tree
+ and never mutated afterwards, but the resolvers below are called in loops
+ over CUTS (`disjointCuts`, `pruneCuts`, `coalesceCuts`, `applyElisions`, the
+ view's per-cut filters, `stepElidable`'s per-tactic ask) — each call used to
+ rebuild the child index and re-scan every key of `byId` to restore preorder,
+ O(cuts × N). The two structures are built lazily, once per map, and dropped
+ with it; a size change (a map that was added to or deleted from) discards
+ them, so a stale entry can only ever be a same-size rewrite, which nothing
+ here does. */
+interface CutCache {
+  size: number;
+  idx?: Map<string, TreeNode[]>;
+  rank?: Map<string, number>;
+}
+const cutCaches = new WeakMap<Map<string, TreeNode>, CutCache>();
+function cutCache(byId: Map<string, TreeNode>): CutCache {
+  let c = cutCaches.get(byId);
+  if (!c || c.size !== byId.size) {
+    c = { size: byId.size };
+    cutCaches.set(byId, c);
+  }
+  return c;
+}
+const cachedChildIndex = (byId: Map<string, TreeNode>) =>
+  (cutCache(byId).idx ??= childIndex(byId));
+
+/** `want` in `byId`'s INSERTION order — the tree's DFS preorder — restricted
+ to ids `byId` holds. A small set is sorted by the map's cached id → rank
+ table (O(k log k)); a big one is cheaper to filter out of a scan of the
+ keys, and both answer identically. */
+function inPreorder(byId: Map<string, TreeNode>, want: Set<string>): string[] {
+  if (want.size * Math.log2(want.size + 2) >= byId.size) {
+    const out: string[] = [];
+    for (const key of byId.keys()) if (want.has(key)) out.push(key);
+    return out;
+  }
+  const cache = cutCache(byId);
+  let rank = cache.rank;
+  if (!rank) {
+    rank = new Map();
+    let i = 0;
+    for (const key of byId.keys()) rank.set(key, i++);
+    cache.rank = rank;
+  }
+  const r = rank;
+  const out: string[] = [];
+  for (const id of want) if (r.has(id)) out.push(id);
+  return out.sort((a, b) => r.get(a)! - r.get(b)!);
+}
+
 export function continuationOf(
   byId: Map<string, TreeNode>,
   tacticId: string,
@@ -389,9 +439,7 @@ function subtreeBelow(
     want.add(cur);
     for (const c of idx.get(cur) ?? []) q.push(c.id);
   }
-  const out: string[] = [];
-  for (const key of byId.keys()) if (want.has(key)) out.push(key);
-  return out;
+  return inPreorder(byId, want);
 }
 
 /** The ONE gate a goal's `−` reads — the glyph, the click, the hint row and
@@ -454,17 +502,14 @@ function stepIds(
   if (kids.length === 0) return allowLeaf ? [tacticId] : [];
 
   const cont = continuationOf(byId, tacticId, idx);
-  const keep = new Set<string>();
-  for (const q = cont ? [cont.id] : []; q.length > 0; ) {
-    const id = q.pop()!;
-    if (keep.has(id)) continue;
-    keep.add(id);
-    for (const c of idx.get(id) ?? []) q.push(c.id);
-  }
+  // What survives is the continuation's whole subtree. The nodes are a tree,
+  // so no other kid's subtree shares a node with it: "do not enter the
+  // continuation" is enough, and the rest of the proof is never walked just to
+  // list it (that was O(N) per step, O(N²) over a chain's hops).
   const ids = new Set<string>([tacticId]);
   for (const q = kids.map((c) => c.id); q.length > 0; ) {
     const id = q.pop()!;
-    if (ids.has(id) || keep.has(id)) continue;
+    if (ids.has(id) || id === cont?.id) continue;
     ids.add(id);
     for (const c of idx.get(id) ?? []) q.push(c.id);
   }
@@ -472,9 +517,7 @@ function stepIds(
   // first and its side work follows in SOURCE order: `parts[0]` is the step
   // the reader clicked, and the break's caption names the rest in the order
   // they are written. (The walk above is a stack, which reverses siblings.)
-  const out: string[] = [];
-  for (const key of byId.keys()) if (ids.has(key)) out.push(key);
-  return out;
+  return inPreorder(byId, ids);
 }
 
 /** Every tactic ◌ is OFFERED on — exactly the steps `stepCut` answers for,
@@ -496,9 +539,9 @@ export function resolveCut(
   byId: Map<string, TreeNode>,
 ): string[] {
   if (cut.kind === "step")
-    return stepIds(byId, cut.id, childIndex(byId), !!cut.note);
+    return stepIds(byId, cut.id, cachedChildIndex(byId), !!cut.note);
   if (cut.kind === "fold")
-    return subtreeBelow(byId, cut.id, childIndex(byId));
+    return subtreeBelow(byId, cut.id, cachedChildIndex(byId));
   if (cut.kind === "hop") {
     // `steps` linear hops down the spine from the goal: each takes the
     // consuming step, what it opened beside its continuation, and the
@@ -507,7 +550,7 @@ export function resolveCut(
     // The LAST continuation goal survives — the next spine tactic keeps the
     // goal it is solving (a tactic without its goal has no context; user
     // direction) — and only the goals BETWEEN chained hops go.
-    const idx = childIndex(byId);
+    const idx = cachedChildIndex(byId);
     const out: string[] = [];
     let g = cut.id;
     for (let k = 0; k < (cut.steps ?? 1); k++) {
@@ -892,7 +935,13 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
           cut.note
         : ((cut.kind === "step" || cut.kind === "fold" ? cut.note : undefined) ??
           (about?.flags?.elide ? about.flags.note : undefined));
-    const seeded = isSeededCut(cut) ? (true as const) : undefined;
+    // `§` says the AUTHOR asked; a residue seed (an `rw`'s `x = x`) is
+    // Ramify's own doing, so it DRAWS as a plain reader cut — the seed itself
+    // (peeking, reset, `sourceView`) is unchanged.
+    const seeded =
+      isSeededCut(cut) && seedKindOf(cut) !== "residue"
+        ? (true as const)
+        : undefined;
     const seededBy = seeded ? seedKindOf(cut) : undefined;
     if (cut.kind === "fold" || cut.kind === "hop") {
       for (const id of ids) gone.add(id);

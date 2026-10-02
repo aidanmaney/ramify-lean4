@@ -1,3 +1,4 @@
+// @probe
 // D6 — THE READABILITY EVAL.
 //
 //   npm run probe -- eval             the table, the pair and the five moves

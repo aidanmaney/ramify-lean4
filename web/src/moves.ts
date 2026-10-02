@@ -5,7 +5,8 @@
  * tactic", "the `?` form's `Try this`" — which a reader who has never met the
  * design record cannot parse. Each one is named here after what it does to
  * THIS step, with the concrete tactic or hypothesis where one is known: `⁇` on
- * a `simp` reads "What did `simp` use?", not "show the trace".
+ * a `simp` reads "Show what `simp` used", not "show the trace". Every row is
+ * an imperative about this step.
  *
  * One module, so the hover bar's tooltip, the `⋯` menu's row, the proposal
  * pill and the toasts say one thing. Pure: no React, no layout. */
@@ -15,8 +16,8 @@
  the menu-only rows), and the bar carries the ones the reader's list names, in
  the list's order, each only where the move is available — `⋯` is always last
  and is not in the list. Two lists, one per node kind: `ramify.hoverBar.tactic`
- and `ramify.hoverBar.goal` (package.json's enum is this array — keep them in
- step), with `?hoverbar-tactic=`/`?hoverbar-goal=` in the harness. The order
+ and `ramify.hoverBar.goal` (package.json's enums are this array, per kind by
+ moveSlots.ts `appliesToKind`; scripts/check-sync.mjs asserts it), with `?hoverbar-tactic=`/`?hoverbar-goal=` in the harness. The order
  here is the `⋯` menu's. */
 export const MOVE_IDS = [
   "source",
@@ -37,6 +38,25 @@ export const MOVE_IDS = [
 export type MoveId = (typeof MOVE_IDS)[number];
 
 export type BarKind = "tactic" | "goal";
+
+/** The character each move is known by — on the bar where it has no drawn
+ icon, and in prose (`describePreset`, INSTALL.md) everywhere. `skip` is `◌`
+ here; the bar draws a `SkipIcon` and keys the button `skip` (moveSlots.ts). */
+export const MOVE_MARK: Record<MoveId, string> = {
+  source: "»",
+  focus: "◎",
+  skip: "◌",
+  path: "⊹",
+  delete: "delete",
+  trace: "⁇",
+  collapse: "⇓",
+  expand: "⇑",
+  inline: "⤵",
+  extract: "⤴",
+  lint: "✎",
+  lens: "⧉",
+  goal: "+",
+};
 
 /** The bar a reader meets with no setting and no preset opinion (user
  direction, 2026-09-22: "source focus skip path delete more … by default as
@@ -83,7 +103,7 @@ export const pinLabel = (on: boolean, kind: BarKind) =>
     : `Show on the bar for ${kind === "goal" ? "goals" : "tactics"}`;
 
 /** First letter up, for a line that starts a pill or a toast. */
-export const capitalise = (s: string) =>
+const capitalise = (s: string) =>
   s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
 
 const tick = (s: string) => `\`${s}\``;
@@ -98,7 +118,7 @@ export function traceMoveLabel(
     ? `Asking Lean what ${h} used…`
     : state === "open"
       ? `Hide what ${h} used`
-      : `What did ${h} use?`;
+      : `Show what ${h} used`;
 }
 
 /** D2a's `⇓`, before the server has named the tactic that closes the run. */
@@ -146,4 +166,78 @@ export const CHECKED_FIRST = "Lean checks it first; nothing is written until you
  sentence and gain the move's name here. */
 export function pillMove(kind: string, said: string): string {
   return capitalise(kind === "lint" ? lintMoveLabel(said) : said);
+}
+
+/** WHY A BAR SLOT IS GREY (2026-09-28). The hover bar keeps every move in the
+ node kind's list in its slot, so the bar does not change width or shuffle
+ buttons from box to box; a move that cannot be used on THIS node is drawn
+ disabled with a tip that says why. `⋯` still omits it. The reasons are the
+ few the gates already know; anything else is `generic`. */
+export type Unavailable =
+  | "generic"
+  | "marker" // a skipped/ghost box stands for steps rather than being one
+  | "noPosition"
+  | "leaf"
+  | "split"
+  | "ledger"
+  | "arming"
+  | "pending"
+  | "noExtent"
+  | "notAutomation";
+
+const SLOT_NAME: Record<MoveId, string> = {
+  source: "Show in source",
+  focus: "Focus",
+  skip: "Skip this step",
+  path: "Show only the path to here",
+  delete: "Delete this step",
+  trace: "Show what the step used",
+  collapse: "Replace with automation",
+  expand: "Write out what it used",
+  inline: "Move into its one use",
+  extract: "Pull out as a `have`",
+  lint: "Apply the linter's fix",
+  lens: "Open in the lens",
+  goal: "Show the goal this step proves",
+};
+
+/** The moves that open a proposal: each is greyed while another proposal on the
+ node is waiting for an answer. */
+export const RESTRUCTURE: readonly MoveId[] = ["collapse", "expand", "inline", "extract", "lint"];
+const PENDING_WHY = { pending: "answer the open proposal first" };
+
+const SLOT_WHY: Partial<Record<MoveId, Partial<Record<Unavailable, string>>>> = {
+  source: {
+    marker: "a skipped box has no source position of its own",
+    noPosition: "this box has no source position",
+  },
+  focus: { leaf: "this goal has nothing below it" },
+  skip: {
+    marker: "this box is already skipped",
+    split: "not offered on a step that splits the goal",
+    ledger: "not offered on a calc or constructor row",
+  },
+  path: { marker: "not offered on a skipped box" },
+  delete: {
+    marker: "restore the skipped box first",
+    arming: "confirm or cancel the pending delete first",
+    noExtent: "this box has no source extent of its own",
+  },
+  trace: { notAutomation: "offered on simp, grind, aesop and the like" },
+  ...Object.fromEntries(RESTRUCTURE.map((id) => [id, PENDING_WHY])),
+};
+
+/** Where a bar slot stands (`availability` in the view): live, absent for the
+ whole KIND (`appliesToKind`) or SESSION (no companion, no edit hooks) — no
+ slot is drawn in either case — or kept and greyed for a reason. */
+export type Availability =
+  | "yes"
+  | "never-kind"
+  | "never-session"
+  | { no: Unavailable };
+
+/** A disabled slot's tip, in the house voice: `Name — reason`, sentence case,
+ no trailing period. */
+export function unavailableTip(id: MoveId, why: Unavailable): string {
+  return `${SLOT_NAME[id]} — ${SLOT_WHY[id]?.[why] ?? "not available for this step"}`;
 }

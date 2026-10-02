@@ -26,6 +26,7 @@ import type {
 } from "./types";
 import { collapseLabel } from "./briefLabel";
 import { tacticHead } from "./elide";
+import { postOrder } from "./treeWalk";
 
 /** Where a hypothesis line came from, resolved to something the view can draw:
     the id of the introducing TACTIC NODE, that tactic's head word, and the
@@ -260,7 +261,11 @@ export function tacticTargets(
   nodes: TreeNode[],
 ): { id: string; position: ProofStepPosition }[] {
   return nodes.flatMap((d) => {
-    const parts = d.elidedCut?.parts;
+    // A ghost's members and a folded goal's (a FOLD's or a HOP's) are the same
+    // thing for the reader: steps the drawing swallowed. The node standing in
+    // for them answers for their positions — so an error, a cursor or a
+    // highlight inside a hidden step lands on the box wearing `+N`.
+    const parts = d.elidedCut?.parts ?? d.folded?.parts;
     if (parts)
       return parts
         .filter((p) => p.position)
@@ -701,33 +706,41 @@ export function proofToTree(
     else usesEachAt.set(k, [one]);
   }
 
-  function subtreeLastStep(goalId: string): ProofStep | undefined {
-    const s = stepByGoal.get(goalId);
-    if (!s) return undefined;
-    let best = s;
-    for (const g of stepGoalsAfter(s)) {
-      const b = subtreeLastStep(g.id);
-      if (b && cmpPos(b.position.stop, best.position.stop) > 0) best = b;
-    }
-    return best;
-  }
+  // Both subtree walks are memoised post-orders over the goal graph
+  // (`postOrder`, iterative: a trunk's depth is its length), so a step's
+  // `deleteSpec`/`addSpec` asks cost O(1) after the first walk instead of
+  // re-walking the subtree.
+  const afterIds = (goalId: string): string[] => {
+    const st = stepByGoal.get(goalId);
+    return st ? stepGoalsAfter(st).map((g) => g.id) : [];
+  };
+  const subtreeLastMemo = new Map<string, ProofStep | undefined>();
+  const subtreeLastStep = (goalId: string): ProofStep | undefined =>
+    postOrder(goalId, afterIds, (id, kids, get) => {
+      const st = stepByGoal.get(id);
+      if (!st) return undefined;
+      let best = st;
+      for (const g of kids) {
+        const b = get(g);
+        if (b && cmpPos(b.position.stop, best.position.stop) > 0) best = b;
+      }
+      return best;
+    }, subtreeLastMemo);
 
   const subtreeUsedMemo = new Map<string, Map<string, string>>();
-  function subtreeUsed(goalId: string): Map<string, string> {
-    const memo = subtreeUsedMemo.get(goalId);
-    if (memo) return memo;
-    const out = new Map<string, string>();
-    const s = stepByGoal.get(goalId);
-    if (s) {
-      const nameById = new Map(s.goalBefore.hyps.map((h) => [h.id, h.username]));
-      for (const id of s.tacticDependsOn) out.set(id, nameById.get(id) ?? "");
-      for (const g of stepGoalsAfter(s))
-        for (const [id, name] of subtreeUsed(g.id))
-          if (!out.has(id)) out.set(id, name);
-    }
-    subtreeUsedMemo.set(goalId, out);
-    return out;
-  }
+  const subtreeUsed = (goalId: string): Map<string, string> =>
+    postOrder(goalId, afterIds, (id, kids, get) => {
+      const out = new Map<string, string>();
+      const st = stepByGoal.get(id);
+      if (st) {
+        const nameById = new Map(st.goalBefore.hyps.map((h) => [h.id, h.username]));
+        for (const dep of st.tacticDependsOn) out.set(dep, nameById.get(dep) ?? "");
+        for (const g of kids)
+          for (const [hid, name] of get(g) ?? [])
+            if (!out.has(hid)) out.set(hid, name);
+      }
+      return out;
+    }, subtreeUsedMemo)!;
 
   const holeByGoal = new Map<string, Hole>(
     (proof.holes ?? []).filter((h) => !h.dup).map((h) => [h.goalId, h]),
@@ -1149,6 +1162,29 @@ export function proofToTree(
   const nodes: TreeNode[] = [];
   const emittedGoals = new Set<string>();
 
+  // `visitGoal` used to call itself once per child, so recursion depth was the
+  // proof's trunk length (a ~2500-step chain overflowed the stack). Nothing
+  // follows the children loop, and each child's arguments depend only on the
+  // parent's own state, so the calls are QUEUED here instead and drained
+  // depth-first by `walkGoals`: a goal's children are pushed in reverse, so
+  // they pop — and emit their nodes — in exactly the recursive order.
+  type GoalVisit = [
+    goalId: string,
+    parents: TreeNode["parents"],
+    producedBy?: ProofStep,
+    parentCase?: string,
+    lhsElide?: string,
+    side?: boolean,
+    spawned?: boolean,
+    ledgerParent?: string,
+    chainCtx?: ReadonlySet<string>,
+  ];
+  const visitQueue: GoalVisit[] = [];
+  function walkGoals(root: GoalVisit): void {
+    visitQueue.push(root);
+    while (visitQueue.length > 0) visitGoal(...visitQueue.pop()!);
+  }
+
   function visitGoal(
     goalId: string,
     parents: TreeNode["parents"],
@@ -1454,12 +1490,13 @@ export function proofToTree(
     const ledgerId = `ledger:${step.position.start.line}:${step.position.start.character}`;
 
     let settledIdx = 0;
+    const calls: GoalVisit[] = [];
     for (const child of order) {
       const ledgered = led?.settled.has(child.id) ?? false;
       const open =
         ledgered && (openLinks?.has(`${ledgerId}#${settledIdx}`) ?? false);
       if (ledgered) settledIdx++;
-      visitGoal(
+      calls.push([
         child.id,
 
         [{ id: ledgered ? ledgerId : tId }],
@@ -1470,10 +1507,11 @@ export function proofToTree(
         spawnedIds.has(child.id),
         ledgered && !open ? ledgerId : undefined,
         chainCtxNext,
-      );
+      ]);
     }
+    for (let i = calls.length - 1; i >= 0; i--) visitQueue.push(calls[i]);
   }
 
-  for (const rootId of roots) visitGoal(rootId, []);
+  for (const rootId of roots) walkGoals([rootId, []]);
   return nodes;
 }

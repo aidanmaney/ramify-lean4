@@ -1,3 +1,4 @@
+// @probe
 // D1/D2/D3/D5 — what the restructuring moves offer over the CLI corpus.
 //
 // `npm run probe -- rewrite            ` the tables plus the assertions

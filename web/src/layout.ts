@@ -1,4 +1,4 @@
-import { coordSimplex, graphStratify, sugiyama } from "d3-dag";
+import { coordGreedy, coordSimplex, graphStratify, sugiyama } from "d3-dag";
 import type { GraphNode, SugiNode } from "d3-dag";
 import type {
   HypLine,
@@ -10,6 +10,7 @@ import type {
   WrappedLine,
 } from "./types";
 import { isLedgerHead } from "./types";
+import { postOrder } from "./treeWalk";
 import type { ProofStepPosition } from "./paperproof";
 
 type LinkDatum = undefined;
@@ -292,11 +293,20 @@ function trunkLayout(
     a.y0 < b.y1 + 1 && b.y0 < a.y1 + 1;
 
   // global cursor precisely so a column can restart at its sibling's top.
-  function place(
+  //
+  // `place` recurses once per tree level, and a proof's trunk is one level per
+  // tactic — a linear chain of ~650 steps overflowed the stack here. It is
+  // therefore a GENERATOR driven by `runPlace`'s explicit stack: each
+  // `yield [child, x, y]` is exactly the recursive call it replaced (the
+  // parent is suspended, the child runs to completion, its result comes
+  // back), so visit order, the shared cursors and every result are unchanged.
+  type PlaceResult = { pn: PlacedNode; bottom: number; right: number };
+  type PlaceRequest = readonly [LayoutNode, number, number];
+  function* place(
     n: LayoutNode,
     x0: number,
     y0: number,
-  ): { pn: PlacedNode; bottom: number; right: number } {
+  ): Generator<PlaceRequest, PlaceResult, PlaceResult> {
     const already = placed.get(n.id);
     if (already)
 
@@ -356,7 +366,7 @@ function trunkLayout(
 
         const nodeMark = nodes.length;
         const linkMark = links.length;
-        const r = place(c, colX, top);
+        const r = yield [c, colX, top] as const;
         const colNodes = nodes.slice(nodeMark);
         const colLinks = links.slice(linkMark);
         const spans = [
@@ -436,11 +446,11 @@ function trunkLayout(
               Math.max(0, spawnCol - n.position.start.character),
             ) * CHAR_W
           : 0;
-      const r = place(
+      const r = yield [
         c,
         c === trunk ? x0 : x0 + TRUNK_INDENT + spawnExtra,
         bottom + gap,
-      );
+      ] as const;
 
       links.push(
         isAside
@@ -478,10 +488,26 @@ function trunkLayout(
     return { pn, bottom, right };
   }
 
+  function runPlace(n: LayoutNode, x0: number, y0: number): PlaceResult {
+    const stack = [place(n, x0, y0)];
+    let sent: PlaceResult | undefined;
+    for (;;) {
+      const step = stack[stack.length - 1].next(sent as PlaceResult);
+      if (step.done) {
+        stack.pop();
+        if (stack.length === 0) return step.value;
+        sent = step.value;
+      } else {
+        stack.push(place(...step.value));
+        sent = undefined;
+      }
+    }
+  }
+
   let cursor = 0;
   for (const r of visible.filter((n) => n.parents.length === 0)) {
     if (nodes.length > 0) cursor += TRUNK_GAP_BRANCH;
-    cursor = place(r, 0, cursor).bottom;
+    cursor = runPlace(r, 0, cursor).bottom;
   }
 
   // The one shared column the aligned pass slides every aside tactic to. It is
@@ -714,10 +740,19 @@ export const COMMENT_CLAMP_SHOWN = 2;
 export const COMMENT_RULE_INDENT = 9;
 
 export const COMMENT_MORE_PAD = 4;
+/** The widest a GENERATED strip (`∴`/`≈`, `TreeNode.commentGenerated`) wraps,
+ in columns: what a ~300px infoview panel holds beside the trunk (36 ×
+ `CHAR_W`, the same unit as every wrap budget, plus the strip's indent). An author's comment at the
+ full width runs to `MAX_CHARS`; a templated sentence up to 260 characters
+ long must not, or a narrated proof grows a strip several box widths wide
+ beside every step. The Width setting still applies where it is narrower. */
+export const GENERATED_COMMENT_CHARS = 36;
+
 function commentSize(
   text: string | undefined,
   reflow: ReflowMode = "off",
   expanded = false,
+  generated = false,
 ): Pick<
   LayoutNode,
   "commentLines" | "commentBlockH" | "commentW" | "commentMore"
@@ -727,7 +762,9 @@ function commentSize(
 
   const wrapped = wrapText(
     text,
-    budgetFor(reflow),
+    generated
+      ? Math.min(budgetFor(reflow), GENERATED_COMMENT_CHARS * CHAR_W)
+      : budgetFor(reflow),
     COMMENT_FONT_PX,
     true,
     "none",
@@ -891,8 +928,6 @@ function hypBlockSize(
   return { hypLines, hypW, hypH };
 }
 
-export type LayoutEngine = ReturnType<typeof createLayoutEngine>;
-
 export interface LayoutEngineOptions {
   reflow?: ReflowMode;
 
@@ -1028,6 +1063,17 @@ type SizeRec = ReturnType<typeof sizeOf> &
   ReturnType<typeof caseSize> &
   Pick<LayoutNode, "chipH" | "proseLabel">;
 
+/** Wide layout's x-coordinates come from d3-dag's `coordSimplex` (an LP): the
+ best packing, and at scale ALL of `computeLayout`'s cost — measured offline
+ (`probe perf`, `_thr` sweep, ms per layout): mixed proofs 200 nodes 18 ·
+ 300 32 · 400 57 · 600 157 · 800 355 · 1200 700 (= 2 s at 1000 tactics, 28 s
+ at 3000), a balanced split tree 510 nodes 130. `coordGreedy` is 10-20× faster
+ (400 nodes 14 ms · 1200 42 ms, linear) at a slightly looser packing. Above
+ this many VISIBLE nodes (~200 tactics, so simplex stays under ~60 ms) the
+ layout takes the greedy one; at or below it the output is unchanged — the
+ whole corpus is ≤ 85 nodes. The compact layouts never call either. */
+export const WIDE_SIMPLEX_MAX_NODES = 400;
+
 export function createLayoutEngine(
   data: TreeNode[],
   {
@@ -1059,20 +1105,18 @@ export function createLayoutEngine(
 
   const subtreeMin = (own: (n: TreeNode) => number): Map<string, number> => {
     const memo = new Map<string, number>();
-    const visiting = new Set<string>();
-    const walk = (id: string): number => {
-      const m = memo.get(id);
-      if (m !== undefined) return m;
-      if (visiting.has(id)) return Infinity;
-      visiting.add(id);
-      const n = NODE.get(id);
-      let r = n ? own(n) : Infinity;
-      for (const c of CHILDREN.get(id) ?? []) r = Math.min(r, walk(c));
-      visiting.delete(id);
-      memo.set(id, r);
-      return r;
-    };
-    for (const n of data) walk(n.id);
+    for (const n of data)
+      postOrder(
+        n.id,
+        (id) => CHILDREN.get(id) ?? [],
+        (id, kids, get) => {
+          const node = NODE.get(id);
+          let r = node ? own(node) : Infinity;
+          for (const k of kids) r = Math.min(r, get(k) ?? Infinity);
+          return r;
+        },
+        memo,
+      );
     return memo;
   };
 
@@ -1154,6 +1198,7 @@ export function createLayoutEngine(
               hideComment ? undefined : n.comment,
               reflow,
               commentsExpanded?.has(n.id) ?? false,
+              !!n.commentGenerated,
             ),
             ...caseSize(n.caseLabel),
             chipH: 0,
@@ -1219,6 +1264,7 @@ export function createLayoutEngine(
               hideComment ? undefined : n.comment,
               reflow,
               commentsExpanded?.has(n.id) ?? false,
+              !!n.commentGenerated,
             ),
             ...caseSize(n.caseLabel),
             chipH:
@@ -1380,7 +1426,11 @@ export function createLayoutEngine(
         ] as const;
       })
       .decross(stableDecross)
-      .coord(coordSimplex());
+      .coord(
+        visible.length <= WIDE_SIMPLEX_MAX_NODES
+          ? coordSimplex()
+          : coordGreedy(),
+      );
     const extent = layout(graph);
 
     // Sugiyama centres the node's WHOLE reserved height on `n.y`; a strip

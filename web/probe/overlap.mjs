@@ -1,12 +1,14 @@
+// @probe
 // Ink-overlap sweep for the PAINT THAT RESERVES NOTHING: the ghost markers
 // (combined and marquee/`.none` boxes), the caption beside a hop's axis break,
 // and a tour stop's numbered tab hung off a box's left edge.  Every seeded / outline / per-goal
 // cut, combine on and off, in the five placements.  npm run probe -- overlap
 import * as lib from "./lib.mjs";
-import { applyNarration, sourceView, outlineCuts, goalCut, applyElisions, stepElidable, combineRuns, resolveCut, createLayoutEngine, bandTopH, commentStripTop, commentIndentOf, COMMENT_GAP, isGhostNode, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, tourTabWidth, authorStops } from "./lib.mjs";
-import { records, tree, byIdOf, kidsOf, readerCuts } from "./corpus.mjs";
+import { applyNarration, sourceView, outlineCuts, applyElisions, combineRuns, resolveCut, bandTopH, commentStripTop, commentIndentOf, COMMENT_GAP, isGhostNode, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, tourTabWidth, authorStops } from "./lib.mjs";
+import { records, tree, byIdOf, kidsOf, readerCuts, MODES, layoutOf } from "./corpus.mjs";
 
-const MODES = { stacked: [true, false, false], spine: [true, false, true], tracks: [true, false, "track"], sbs: [true, true, false], wide: [false, false, false] };
+// The four layouts, plus stacked with the reader's side-by-side toggle on.
+const PLACEMENTS = [...MODES.map((m) => [m, m, false]), ["sbs", "stacked", true]];
 const rects = (pn, wide) => {
   const d = pn.data; const top = bandTopH(d); const half = (top + d.h) / 2; const bandTop = pn.y - half; const boxTop = pn.y + half - d.h; const boxBot = pn.y + half; const out = [];
   out.push({ k: "box", x0: pn.x - d.w / 2, x1: pn.x + d.w / 2, y0: boxTop, y1: boxBot });
@@ -21,11 +23,11 @@ const hit = (a, b) => a.x0 < b.x1 - 0.5 && b.x0 < a.x1 - 0.5 && a.y0 < b.y1 - 0.
 let total = 0, checked = 0, belowSeen = 0;
 for (const [i, rec] of records().entries()) {
   const base = tree(rec); if (base.length < 2) continue;
-  const byId = byIdOf(base), kids = kidsOf(base), se = stepElidable(base);
+  const byId = byIdOf(base), kids = kidsOf(base);
   // Every cut a reader can mint, one at a time: each goal's `−` (a fold) and
   // each step's ◌ (a hop — inside branches too — or a leaf's fold). Only the
   // ones that draw a ghost or a break survive the filter below.
-  const goalSets = readerCuts(lib, base).map((c) => [c]); void goalCut; void se;
+  const goalSets = readerCuts(lib, base).map((c) => [c]);
   for (const cuts of [sourceView(base), outlineCuts(byId, kids), ...goalSets]) for (const combine of [false, true]) {
     const manual = new Set(cuts.flatMap((c) => resolveCut(c, byId)));
     const drawn = applyElisions(base, combine ? [...cuts, ...combineRuns(base, manual)] : cuts);
@@ -41,8 +43,9 @@ for (const [i, rec] of records().entries()) {
     for (const narrate of [false, true]) {
     if (!narrate && !marks) continue;
     const nodes = narrate ? applyNarration(drawn, base) : drawn;
-    for (const [mode, [compact, sbs, aside]] of Object.entries(MODES)) {
-      const { nodes: placed } = createLayoutEngine(nodes, { chips: true }).computeLayout(null, null, compact, sbs, null, aside);
+    for (const [name, mode, sbs] of PLACEMENTS) {
+      const compact = mode !== "wide";
+      const { nodes: placed } = layoutOf(nodes, mode, { sbs });
       const rs = placed.flatMap((pn) => rects(pn, !compact).map((r) => ({ ...r, id: pn.data.id, brk: r.brk || isGhostNode(pn.data) })));
       // The hop caption, placed exactly as the renderer places it: the trunk
       // lane (the node's own x in wide) offset by HOP_CAPTION_GAP, at the
@@ -77,7 +80,7 @@ for (const [i, rec] of records().entries()) {
       checked++; belowSeen += placed.filter((p) => p.data.commentBelow && p.data.commentBlockH > 0).length;
       for (let a = 0; a < rs.length; a++) for (let b = a + 1; b < rs.length; b++) {
         if (rs[a].id === rs[b].id || !(rs[a].brk || rs[b].brk)) continue;
-        if (hit(rs[a], rs[b])) { total++; if (total <= 20) console.log(`overlap #${i} ${mode} combine=${combine} narrate=${narrate} ${rs[a].k}:${rs[a].id} × ${rs[b].k}:${rs[b].id}`); }
+        if (hit(rs[a], rs[b])) { total++; if (total <= 20) console.log(`overlap #${i} ${name} combine=${combine} narrate=${narrate} ${rs[a].k}:${rs[a].id} × ${rs[b].k}:${rs[b].id}`); }
       }
     }
     }

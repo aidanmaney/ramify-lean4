@@ -18,4 +18,8 @@ export * from "../src/diagnostics";
 export * from "../src/completion";
 export * from "../src/trace";
 export * from "../src/paperproof";
+export { layoutArgs } from "../src/viewModes";
+export { describePreset, EXPERIENCES } from "../src/experience";
 export type * from "../src/types";
+export * from "../src/matrixScenes";
+export * from "../src/matrixCells";

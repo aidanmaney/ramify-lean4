@@ -17,6 +17,7 @@
 // hides anything: a stop is a place to LOOK, so the jump peeks a cut open
 // rather than dropping it, and the tab beside a stop's box reserves no room.
 import type { TreeNode } from "./types";
+import { clipText } from "./clipText";
 
 export interface TourStop {
   /** The node the stop sits on — a step's tactic node for an author stop, any
@@ -51,7 +52,7 @@ export function firstSentence(text: string, cap = CAPTION_MAX): string {
   const flat = text.replace(/\s+/g, " ").trim();
   const m = /[.!?](?=\s|$)/.exec(flat);
   const one = m ? flat.slice(0, m.index + 1) : flat;
-  return one.length > cap ? `${one.slice(0, cap - 1).trimEnd()}…` : one;
+  return clipText(one, cap);
 }
 
 /** What a stop says in the toast and on its `<title>`: the node's comment,

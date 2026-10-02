@@ -1,4 +1,4 @@
-import { Fragment, type CSSProperties } from "react";
+import { Fragment, useRef, type CSSProperties } from "react";
 
 import {
   GESTURES,
@@ -6,11 +6,36 @@ import {
   type Caps,
   type Gesture,
 } from "./gestures";
-import { CHROME_BORDER, CHROME_INK, POPUP_CHROME } from "./theme";
+import {
+  CHROME_INK,
+  FLOATER_CHROME,
+  CHROME_TEXT,
+  DIM_OPACITY,
+} from "./theme";
+import { injectStyleOnce } from "./taggedRender";
 import { useTip } from "./tipController";
 import { CodeText } from "./codeSpans";
+import { focusBox, useRestoreFocus } from "./panelKeys";
+import { BARE_BTN } from "./barMetrics";
 
 const INK = CHROME_INK;
+
+// Sentence case, told from the rows by weight (not capitals) and a dim.
+const SECTION_HEAD = {
+  fontWeight: 600,
+  opacity: DIM_OPACITY,
+  marginTop: 8,
+} as const;
+
+// Under ~360px of frame the panel is ~285px of content: too narrow for an
+// input column beside its explanation, so each row STACKS (input above says).
+// A container query on the grid's wrapper (the panel's own width decides).
+const HELP_CSS = `
+[data-ptw-help-wrap]{container-type:inline-size}
+@container (max-width: 289px){
+  [data-ptw-help-grid]{grid-template-columns:minmax(0,1fr)!important}
+  [data-ptw-help-input]{text-align:left!important;opacity:${DIM_OPACITY};margin-top:4px}
+}`;
 
 export function HelpPanel({
   caps,
@@ -31,23 +56,34 @@ export function HelpPanel({
 }) {
   const shown = GESTURES.filter((g) => !g.needs || caps[g.needs]);
   const tip = useTip();
+  const ref = useRef<HTMLDivElement | null>(null);
+  // Opened from the keyboard (`?`, F1, Enter on the button), focus moves into
+  // the panel so its text can be read and scrolled at once; opened with the
+  // mouse, nothing moves. Closing hands focus back to whatever had it if it
+  // was inside the panel.
+  useRestoreFocus(ref, focusBox);
+  injectStyleOnce("ptw-help", HELP_CSS);
   return (
     <div
+      ref={ref}
+      role="dialog"
+      aria-label="Help"
+      tabIndex={-1}
       data-ptw-panel=""
       onClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
         ...(anchor ?? { left: 0, bottom: "100%", marginBottom: 4 }),
-        width: 500,
-        maxWidth: "min(500px, 86vw)",
+        width: 320,
+        maxWidth: "min(320px, 86vw)",
         maxHeight: "min(70vh, 520px)",
         overflowY: "auto",
         boxSizing: "border-box",
-        ...POPUP_CHROME,
+        ...FLOATER_CHROME,
+        // A document, not a list: the one floater with a roomier inset.
         padding: "10px 12px",
-        border: `1px solid ${CHROME_BORDER}`,
         color: INK,
-        fontSize: 12,
+        fontSize: CHROME_TEXT,
         lineHeight: 1.5,
         textAlign: "left",
         // The panel now hangs off the status bar, whose card sets
@@ -55,6 +91,7 @@ export function HelpPanel({
         // ran every hint line straight off the panel's right edge.
         whiteSpace: "normal",
         cursor: "default",
+        outline: "none",
       }}
     >
       <div
@@ -72,24 +109,40 @@ export function HelpPanel({
           {...tip.props("Close (Esc, or ?)")}
           onClick={onClose}
           style={{
-            border: "none",
-            background: "transparent",
-            color: "inherit",
-            cursor: "pointer",
-            fontSize: 12,
-            padding: 0,
-            opacity: 0.8,
+            ...BARE_BTN,
+            fontSize: CHROME_TEXT,
+            opacity: DIM_OPACITY,
           }}
         >
           ✕
         </button>
       </div>
-      {/* ONE grid for every section, so the input column is as wide as the
-          longest input anywhere (max-content) and no input is cut with `…`. */}
+      {/* What the picture is, before what can be done to it. Colours are the
+          theme's, so none is named: goals and tactics are told apart by what
+          is written in them. */}
+      <div style={{ display: "grid", rowGap: 2 }}>
+        <div style={SECTION_HEAD}>Reading this</div>
+        <div>
+          A <b>goal</b> is a statement still to prove, with what you may assume
+          (its hypotheses) listed above the ⊢ line.
+        </div>
+        <div>
+          A <b>tactic</b> is the step that turns a goal into what remains.
+        </div>
+        <div>
+          Read from the top down. Where a step splits a goal, the branches are
+          its cases or subgoals.
+        </div>
+      </div>
+      {/* ONE grid for every section, so the input column is shared: as wide as
+          the longest input up to 46% of the panel, wrapping beyond that, so no
+          input is cut with `…` and the explanation keeps most of the width. */}
+      <div data-ptw-help-wrap="">
       <div
+        data-ptw-help-grid=""
         style={{
           display: "grid",
-          gridTemplateColumns: "max-content minmax(0, 1fr)",
+          gridTemplateColumns: "fit-content(46%) minmax(0, 1fr)",
           columnGap: 8,
           rowGap: 2,
         }}
@@ -102,11 +155,7 @@ export function HelpPanel({
               <div
                 style={{
                   gridColumn: "1 / -1",
-                  fontSize: 11,
-                  letterSpacing: 0.3,
-                  textTransform: "uppercase",
-                  opacity: 0.65,
-                  marginTop: 8,
+                  ...SECTION_HEAD,
                 }}
               >
                 <CodeText text={s.title} />
@@ -118,6 +167,7 @@ export function HelpPanel({
           );
         })}
       </div>
+      </div>
     </div>
   );
 }
@@ -126,11 +176,11 @@ function Row({ g, fontFamily }: { g: Gesture; fontFamily: string }) {
   return (
     <>
       <span
+        data-ptw-help-input=""
         style={{
           fontFamily,
           textAlign: "right",
-          opacity: 0.95,
-          whiteSpace: "nowrap",
+          overflowWrap: "anywhere",
         }}
       >
         {g.input}

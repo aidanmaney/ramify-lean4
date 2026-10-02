@@ -1,5 +1,9 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
-import { FLOATER_CHROME } from "./theme";
+import {
+  FLOATER_CHROME,
+  CHROME_TEXT_SM,
+  Z,
+} from "./theme";
 import { TipContext } from "./tipController";
 import { plainTicks } from "./ticks";
 
@@ -73,14 +77,13 @@ export function TipLayer() {
       style={{
         position: "absolute",
         visibility: "hidden",
-        zIndex: 30,
+        zIndex: Z.tip,
         pointerEvents: "none",
         boxSizing: "border-box",
         width: "max-content",
         maxWidth: TIP_MAX_W,
         ...FLOATER_CHROME,
-        padding: "4px 8px",
-        fontSize: 11,
+        fontSize: CHROME_TEXT_SM,
         lineHeight: "15px",
         textAlign: "left",
         whiteSpace: "pre-line",
