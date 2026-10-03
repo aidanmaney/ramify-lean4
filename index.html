@@ -22,7 +22,8 @@ html, body { background: var(--page-bg); color: var(--page-fg); }
 body { margin: 0; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
-h2 { font-size: 15px; margin: 28px 0 2px; }
+h2.group { font-size: 18px; margin: 44px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+h3 { font-size: 15px; margin: 26px 0 2px; }
 code { font-family: "JuliaMono", "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 13px; }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -38,134 +39,124 @@ li { padding: 3px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhe
 <h1>Ramify</h1>
 <p class="intro">Lean 4 proofs drawn as trees: goals and the tactics between them, with hovers, comments and diagnostics. Pick a proof to read it beside its source.</p>
 <p class="dim">These pages are for reading. The <a href="https://github.com/aidanmaney/ramify-lean4/releases/latest">VS Code extension</a> draws the same tree live in the infoview, where you can edit in the tree, see diagnostics as you type, and restructure a proof with Lean checking each change (<a href="https://github.com/aidanmaney/ramify-lean4/blob/main/INSTALL.md">install guide</a>).</p>
+<h2 class="group">Start here</h2>
 <section>
-<h2><code>lean/ProofTreeTour.lean</code></h2>
-<p class="dim">6 proofs · <a href="export/ProofTreeTour.html" download>one-file copy</a> <span class="dim">(813 KB)</span></p>
+<h3>How to read a Ramify tree</h3>
+<p>A short tour of the reading controls, one theorem per idea. Blue boxes are goals — what is left to prove, with what you may assume listed above the <code>⊢</code> line. Green boxes are tactics — the steps that turn one goal into the next. Read from the top down.</p>
+<p class="dim"><code>demos/ReadingTour.lean</code> · 4 proofs · <a href="export/ReadingTour.html" download>one-file copy</a> <span class="dim">(768 KB)</span></p>
 <ul>
-<li><a href="view.html#file=ProofTreeTour&amp;proof=tour_reading"><code>theorem tour_reading (n m : Nat) : n ≤ m ∨ m ≤ n</code></a></li>
-<li><a href="view.html#file=ProofTreeTour&amp;proof=tour_reshaping"><code>theorem tour_reshaping (n : Nat) : n + 0 = 0 + n</code></a></li>
-<li><a href="view.html#file=ProofTreeTour&amp;proof=tour_editing"><code>theorem tour_editing (a b : Nat) (h : a ∣ b) (hb : b ≠ 0) : a ∣ b * b ∧ 0 &lt; b</code></a></li>
-<li><a href="view.html#file=ProofTreeTour&amp;proof=tour_calc"><code>theorem tour_calc (a b c : Nat) : (a + b) + c = c + (b + a)</code></a></li>
-<li><a href="view.html#file=ProofTreeTour&amp;proof=tour_frontier"><code>theorem tour_frontier (n : Nat) : 0 &lt; n + 1 ∧ n + 0 = n</code></a> <span class="err">1 error</span></li>
-<li><a href="view.html#file=ProofTreeTour&amp;proof=tour_errors"><code>theorem tour_errors (a b : Nat) : a + b = b + a</code></a> <span class="err">2 errors</span></li>
+<li><a href="view.html#file=ReadingTour&amp;proof=tour_reading"><code>theorem tour_reading (n m : ℕ) : n ≤ m ∨ m ≤ n</code></a></li>
+<li><a href="view.html#file=ReadingTour&amp;proof=tour_reshaping"><code>theorem tour_reshaping (n : ℕ) : n + 0 = 0 + n</code></a></li>
+<li><a href="view.html#file=ReadingTour&amp;proof=tour_calc"><code>theorem tour_calc (a b c : ℕ) : (a + b) + c = c + (b + a)</code></a></li>
+<li><a href="view.html#file=ReadingTour&amp;proof=tour_errors"><code>theorem tour_errors (a b : ℕ) : a + b = b + a</code></a> <span class="err">1 error</span></li>
+</ul>
+</section>
+<h2 class="group">Classic proofs, written to be read</h2>
+<section>
+<h3>Irrational numbers</h3>
+<p>Two classics. First the proof most mathematicians meet early: √2 is irrational, by contradiction and parity. Then a famous non-constructive argument: there are irrational numbers <code>a</code> and <code>b</code> with <code>a ^ b</code> rational — and the proof never says which pair works.</p>
+<p class="dim"><code>demos/Irrationality.lean</code> · 3 proofs · <a href="export/Irrationality.html" download>one-file copy</a> <span class="dim">(878 KB)</span></p>
+<ul>
+<li><a href="view.html#file=Irrationality&amp;proof=even_of_even_sq"><code>theorem even_of_even_sq {n : ℕ} (h : Even (n ^ 2)) : Even n</code></a></li>
+<li><a href="view.html#file=Irrationality&amp;proof=sqrt_two_irrational"><code>theorem sqrt_two_irrational : ¬ ∃ p q : ℕ, 0 &lt; q ∧ Nat.Coprime p q ∧ p ^ 2 = 2 * q ^ 2</code></a></li>
+<li><a href="view.html#file=Irrationality&amp;proof=exists_irrational_pow_rational"><code>theorem exists_irrational_pow_rational : ∃ a b : ℝ, Irrational a ∧ Irrational b ∧ ¬ Irrational (a ^ b)</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/calc.lean</code></h2>
-<p class="dim">1 proof · <a href="export/calc.html" download>one-file copy</a> <span class="dim">(796 KB)</span></p>
+<h3>Cantor&#39;s diagonal argument</h3>
+<p>No set can be mapped ONTO its own power set: there are strictly more sets of points than points. The proof builds the one set the map must miss — the points that are not in their own image — and asks whether its preimage belongs to it.</p>
+<p class="dim"><code>demos/Cantor.lean</code> · 1 proof · <a href="export/Cantor.html" download>one-file copy</a> <span class="dim">(724 KB)</span></p>
 <ul>
-<li><a href="view.html#file=calc&amp;proof=calc_workout"><code>theorem calc_workout (a b : ℝ) (n : ℕ) : (a + b) ^ 2 ≤ 2 * (a ^ 2 + b ^ 2) ∧ (∑ i ∈ Finset.range (n + 1), (2 * i + 1)) = (n + 1) ^ 2 ∧ (0 : ℝ) &lt; (a - b) ^ 2 + 1</code></a></li>
+<li><a href="view.html#file=Cantor&amp;proof=cantor"><code>theorem cantor {α : Type*} (f : α → Set α) : ¬ Function.Surjective f</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/commented.lean</code></h2>
-<p class="dim">3 proofs · <a href="export/commented.html" download>one-file copy</a> <span class="dim">(742 KB)</span></p>
+<h3>Euclid: there are infinitely many primes</h3>
+<p>A single, self-contained proof that for every <code>N</code> there is a prime exceeding <code>N</code>. It inlines two ideas as nested sub-proofs, so the whole argument renders as one large proof tree.</p>
+<p class="dim"><code>demos/Euclid.lean</code> · 1 proof · <a href="export/Euclid.html" download>one-file copy</a> <span class="dim">(813 KB)</span></p>
 <ul>
-<li><a href="view.html#file=commented&amp;proof=even_or_odd"><code>theorem even_or_odd (n : ℕ) : ∃ k, n = 2 * k ∨ n = 2 * k + 1</code></a></li>
-<li><a href="view.html#file=commented&amp;proof=rw_leading"><code>theorem rw_leading (a b : ℕ) (hab : a = b) (h : b + 0 = 2) : a = 2</code></a></li>
-<li><a href="view.html#file=commented&amp;proof=nested_narration"><code>theorem nested_narration (n : ℕ) : 0 &lt; n + 1</code></a></li>
+<li><a href="view.html#file=Euclid&amp;proof=infinitude_of_primes"><code>theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N &lt; p</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/euclid.lean</code></h2>
-<p class="dim">1 proof · <a href="export/euclid.html" download>one-file copy</a> <span class="dim">(812 KB)</span></p>
+<h3>Three kinds of induction</h3>
+<p>Ordinary induction twice — Gauss&#39;s sum and Bernoulli&#39;s inequality — and then strong induction, where the step may use ANY smaller case: every positive number is a power of two times an odd number.</p>
+<p class="dim"><code>demos/Induction.lean</code> · 3 proofs · <a href="export/Induction.html" download>one-file copy</a> <span class="dim">(894 KB)</span></p>
 <ul>
-<li><a href="view.html#file=euclid&amp;proof=infinitude_of_primes"><code>theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N &lt; p</code></a></li>
+<li><a href="view.html#file=Induction&amp;proof=gauss_sum"><code>theorem gauss_sum (n : ℕ) : 2 * ∑ i ∈ Finset.range (n + 1), i = n * (n + 1)</code></a></li>
+<li><a href="view.html#file=Induction&amp;proof=bernoulli_inequality"><code>theorem bernoulli_inequality {x : ℝ} (hx : -1 ≤ x) (n : ℕ) : 1 + n * x ≤ (1 + x) ^ n</code></a></li>
+<li><a href="view.html#file=Induction&amp;proof=two_pow_mul_odd"><code>theorem two_pow_mul_odd (n : ℕ) (hn : 0 &lt; n) : ∃ k m, Odd m ∧ n = 2 ^ k * m</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/factorization.lean</code></h2>
-<p class="dim">1 proof · <a href="export/factorization.html" download>one-file copy</a> <span class="dim">(1012 KB)</span></p>
+<h3>Limits, ε by ε</h3>
+<p>Sequences and limits from first principles: the ε–N definition written out, then the two facts every analysis course proves first. Watch how each proof is shaped by its quantifiers — an ε is handed in, an N is handed back.</p>
+<p class="dim"><code>demos/Limits.lean</code> · 2 proofs · <a href="export/Limits.html" download>one-file copy</a> <span class="dim">(1176 KB)</span></p>
 <ul>
-<li><a href="view.html#file=factorization&amp;proof=prime_factorization"><code>theorem prime_factorization : ∀ n : ℕ, 2 ≤ n → ∃ l : List ℕ, (∀ p ∈ l, Nat.Prime p) ∧ l.prod = n</code></a></li>
+<li><a href="view.html#file=Limits&amp;proof=convergesTo_add"><code>theorem convergesTo_add {a b : ℕ → ℝ} {L M : ℝ} (ha : ConvergesTo a L) (hb : ConvergesTo b M) : ConvergesTo (fun n =&gt; a n + b n) (L + M)</code></a></li>
+<li><a href="view.html#file=Limits&amp;proof=convergesTo_unique"><code>theorem convergesTo_unique {a : ℕ → ℝ} {L M : ℝ} (hL : ConvergesTo a L) (hM : ConvergesTo a M) : L = M</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/flags.lean</code></h2>
-<p class="dim">3 proofs · <a href="export/flags.html" download>one-file copy</a> <span class="dim">(743 KB)</span></p>
+<h3>A first taste of group theory</h3>
+<p>Two short computations from the axioms of a group, each a single chain of equalities — the shape most algebra proofs take. In the tree a <code>calc</code> draws as a ledger: one row per step, each with the fact that justifies it.</p>
+<p class="dim"><code>demos/Groups.lean</code> · 2 proofs · <a href="export/Groups.html" download>one-file copy</a> <span class="dim">(751 KB)</span></p>
 <ul>
-<li><a href="view.html#file=flags&amp;proof=flag_demo"><code>theorem flag_demo (n : ℕ) (hn : 2 ≤ n) : 0 &lt; n ∧ n ≠ 1 ∧ n + 0 = n ∧ (Even n ∨ Odd n)</code></a></li>
-<li><a href="view.html#file=flags&amp;proof=flag_closing"><code>theorem flag_closing (n : ℕ) : n + 0 = n ∧ 0 ≤ n</code></a></li>
-<li><a href="view.html#file=flags&amp;proof=flag_nested"><code>theorem flag_nested (n : ℕ) : n + 0 = n</code></a></li>
+<li><a href="view.html#file=Groups&amp;proof=inverse_unique"><code>theorem inverse_unique {a b c : G} (hb : a * b = 1) (hc : c * a = 1) : b = c</code></a></li>
+<li><a href="view.html#file=Groups&amp;proof=mul_comm_of_sq_eq_one"><code>theorem mul_comm_of_sq_eq_one (h : ∀ x : G, x * x = 1) (a b : G) : a * b = b * a</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/hyp_used.lean</code></h2>
-<p class="dim">2 proofs · <a href="export/hyp_used.html" download>one-file copy</a> <span class="dim">(688 KB)</span></p>
+<h3>The Schröder–Bernstein theorem</h3>
+<p>If <code>A</code> injects into <code>B</code> and <code>B</code> injects into <code>A</code>, then <code>A</code> and <code>B</code> are in bijection — &quot;the same size&quot;, even for infinite sets. Cantor conjectured it; Dedekind, Bernstein and Schröder proved it.</p>
+<p class="dim"><code>demos/SchroederBernstein.lean</code> · 1 proof · <a href="export/SchroederBernstein.html" download>one-file copy</a> <span class="dim">(1297 KB)</span></p>
 <ul>
-<li><a href="view.html#file=hyp_used&amp;proof=some_marked"><code>theorem some_marked (m : ℕ) : Even m → Even (m ^ 2)</code></a></li>
-<li><a href="view.html#file=hyp_used&amp;proof=all_marked"><code>theorem all_marked (a b : ℕ) (hab : a = b) : a + a = b + b</code></a></li>
+<li><a href="view.html#file=SchroederBernstein&amp;proof=schroeder_bernstein'"><code>theorem schroeder_bernstein&#39; {α β : Type*} {f : α → β} {g : β → α} (hf : Injective f) (hg : Injective g) : ∃ h : α → β, Bijective h</code></a></li>
+</ul>
+</section>
+<h2 class="group">From Mathlib&#39;s Archive — real community proofs, unedited</h2>
+<section>
+<h3>The Königsberg bridges problem</h3>
+<p>We show that a graph that represents the islands and mainlands of Königsberg and seven bridges between them has no Eulerian trail.</p>
+<p class="dim"><code>demos/mathlib-archive/Konigsberg.lean</code> · 5 proofs · <a href="export/Konigsberg.html" download>one-file copy</a> <span class="dim">(884 KB)</span></p>
+<ul>
+<li><a href="view.html#file=Konigsberg&amp;proof=graph"><code>def graph : SimpleGraph Verts where Adj v w := adj v w symm.symm</code></a></li>
+<li><a href="view.html#file=Konigsberg&amp;proof=degree_eq_degree"><code>@[simp] lemma degree_eq_degree (v : Verts) : graph.degree v = degree v</code></a></li>
+<li><a href="view.html#file=Konigsberg&amp;proof=not_even_degree_iff"><code>lemma not_even_degree_iff (w : Verts) : ¬Even (degree w) ↔ w = V1 ∨ w = V2 ∨ w = V3 ∨ w = V4</code></a></li>
+<li><a href="view.html#file=Konigsberg&amp;proof=setOf_odd_degree_eq"><code>lemma setOf_odd_degree_eq : {v | Odd (graph.degree v)} = {Verts.V1, Verts.V2, Verts.V3, Verts.V4}</code></a></li>
+<li><a href="view.html#file=Konigsberg&amp;proof=not_isEulerian"><code>theorem not_isEulerian {u v : Verts} (p : graph.Walk u v) (h : p.IsEulerian) : False</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/multiline.lean</code></h2>
-<p class="dim">5 proofs · <a href="export/multiline.html" download>one-file copy</a> <span class="dim">(801 KB)</span></p>
+<h3>Sum of the Reciprocals of the Triangular Numbers</h3>
+<p>This file proves Theorem 42 from the <a href="https://www.cs.ru.nl/~freek/100/">100 Theorems List</a>.</p>
+<p class="dim"><code>demos/mathlib-archive/InverseTriangleSum.lean</code> · 1 proof · <a href="export/InverseTriangleSum.html" download>one-file copy</a> <span class="dim">(732 KB)</span></p>
 <ul>
-<li><a href="view.html#file=multiline&amp;proof=tail_after_nested_by"><code>theorem tail_after_nested_by (N : ℕ) : ∃ p, Nat.Prime p ∧ 1 ≤ p</code></a></li>
-<li><a href="view.html#file=multiline&amp;proof=multiline_term_argument"><code>theorem multiline_term_argument (a b : ℕ) (h : a = b) : a = b ∧ b = a</code></a></li>
-<li><a href="view.html#file=multiline&amp;proof=tail_noops"><code>theorem tail_noops (n : ℕ) : 0 + n = n</code></a></li>
-<li><a href="view.html#file=multiline&amp;proof=head_continuation_before_nested_by"><code>theorem head_continuation_before_nested_by (N : ℕ) : (∑ i ∈ Finset.range (N + 1), (2 * i + 1)) = (∑ i ∈ Finset.range N, (2 * i + 1)) + (2 * N + 1)</code></a></li>
-<li><a href="view.html#file=multiline&amp;proof=alt_markers_stay_out"><code>theorem alt_markers_stay_out (n : ℕ) (h : 0 + 0 = 0) : 0 + n = n</code></a></li>
+<li><a href="view.html#file=InverseTriangleSum&amp;proof=Theorems100.inverse_triangle_sum"><code>theorem Theorems100.inverse_triangle_sum (n : ℕ) : ∑ k ∈ range n, (2 : ℚ) / (k * (k + 1)) = if n = 0 then 0 else 2 - (2 : ℚ) / n</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/mvars.lean</code></h2>
-<p class="dim">3 proofs · <a href="export/mvars.html" download>one-file copy</a> <span class="dim">(695 KB)</span></p>
+<h3>Birthday Problem</h3>
+<p>This file proves Theorem 93 from the <a href="https://www.cs.ru.nl/~freek/100/">100 Theorems List</a>.</p>
+<p class="dim"><code>demos/mathlib-archive/BirthdayProblem.lean</code> · 3 proofs · <a href="export/BirthdayProblem.html" download>one-file copy</a> <span class="dim">(866 KB)</span></p>
 <ul>
-<li><a href="view.html#file=mvars&amp;proof=resolved_later"><code>theorem resolved_later (a c : Nat) (h1 : a ≤ 5) (h2 : 5 ≤ c) : a ≤ c</code></a></li>
-<li><a href="view.html#file=mvars&amp;proof=plain_holes"><code>theorem plain_holes (n : Nat) (h : 0 &lt; n) : 0 &lt; n ∧ n + 0 = n</code></a></li>
-<li><a href="view.html#file=mvars&amp;proof=named_hole_twice"><code>theorem named_hole_twice (n : Nat) (h : 0 &lt; n) : 0 &lt; n ∧ 0 &lt; n</code></a></li>
+<li><a href="view.html#file=BirthdayProblem&amp;proof=birthday"><code>theorem birthday : 2 * ‖Fin 23 ↪ Fin 365‖ &lt; ‖Fin 23 → Fin 365‖ ∧ 2 * ‖Fin 22 ↪ Fin 365‖ &gt; ‖Fin 22 → Fin 365‖</code></a></li>
+<li><a href="view.html#file=BirthdayProblem&amp;proof=Fin.measure_apply"><code>theorem Fin.measure_apply {s : Set &lt;| Fin n → Fin m} : ℙ s = |s.toFinite.toFinset| / ‖Fin n → Fin m‖</code></a></li>
+<li><a href="view.html#file=BirthdayProblem&amp;proof=birthday_measure"><code>theorem birthday_measure : ℙ ({f | f.Injective} : Set (Fin 23 → Fin 365)) &lt; 1 / 2</code></a></li>
 </ul>
 </section>
 <section>
-<h2><code>proofs/odd_sums.lean</code></h2>
-<p class="dim">1 proof · <a href="export/odd_sums.html" download>one-file copy</a> <span class="dim">(1014 KB)</span></p>
+<h3>Perfect Numbers</h3>
+<p>This file proves Theorem 70 from the <a href="https://www.cs.ru.nl/~freek/100/">100 Theorems List</a>.</p>
+<p class="dim"><code>demos/mathlib-archive/PerfectNumbers.lean</code> · 7 proofs · <a href="export/PerfectNumbers.html" download>one-file copy</a> <span class="dim">(1641 KB)</span></p>
 <ul>
-<li><a href="view.html#file=odd_sums&amp;proof=sum_range_odd"><code>theorem sum_range_odd (n : ℕ) : (∑ i ∈ Finset.range n, (2 * i + 1)) = n ^ 2 ∧ (Even n ↔ Even (n ^ 2)) ∧ (∑ i ∈ Finset.range (n + 1), (2 * i + 1)) = (∑ i ∈ Finset.range n, (2 * i + 1)) + (2 * n + 1) ∧ (n % 2 = 0 ∨ n % 2 = 1)</code></a></li>
-</ul>
-</section>
-<section>
-<h2><code>proofs/openblock.lean</code></h2>
-<p class="dim">3 proofs · <a href="export/openblock.html" download>one-file copy</a> <span class="dim">(666 KB)</span></p>
-<ul>
-<li><a href="view.html#file=openblock&amp;proof=open_top"><code>theorem open_top (n : Nat) : 0 &lt; n + 1 ∧ n + 0 = n</code></a> <span class="err">1 error</span></li>
-<li><a href="view.html#file=openblock&amp;proof=open_comment"><code>theorem open_comment (n : Nat) : n + 0 = n</code></a> <span class="err">1 error</span></li>
-<li><a href="view.html#file=openblock&amp;proof=open_split"><code>theorem open_split (a b : Nat) : a + b = b + a</code></a> <span class="err">1 error</span></li>
-</ul>
-</section>
-<section>
-<h2><code>proofs/rename.lean</code></h2>
-<p class="dim">3 proofs · <a href="export/rename.html" download>one-file copy</a> <span class="dim">(685 KB)</span></p>
-<ul>
-<li><a href="view.html#file=rename&amp;proof=dvd_le_of_generic"><code>theorem dvd_le_of_generic (p n : ℕ) : p ∣ n → 0 &lt; n → p ≤ n</code></a></li>
-<li><a href="view.html#file=rename&amp;proof=lt_succ_of_generic"><code>theorem lt_succ_of_generic (a b : ℕ) : a &lt; b → a &lt; b + 1</code></a></li>
-<li><a href="view.html#file=rename&amp;proof=sub_pos_of_generic"><code>theorem sub_pos_of_generic (a b : ℕ) : b &lt; a → 0 &lt; a - b</code></a></li>
-</ul>
-</section>
-<section>
-<h2><code>proofs/sample.lean</code></h2>
-<p class="dim">3 proofs · <a href="export/sample.html" download>one-file copy</a> <span class="dim">(762 KB)</span></p>
-<ul>
-<li><a href="view.html#file=sample&amp;proof=demo_main"><code>theorem demo_main (P : ℕ → Prop) (h0 : P 0) (hstep : ∀ k, P k → P (k + 1)) : ∀ n, P n ∧ (0 + n = n)</code></a></li>
-<li><a href="view.html#file=sample&amp;proof=demo_cases"><code>theorem demo_cases (p q : Prop) (h : p ∨ q) (hpq : p → q) : q</code></a></li>
-<li><a href="view.html#file=sample&amp;proof=demo_rw"><code>theorem demo_rw (a b c : ℕ) (h1 : a = b) (h2 : b = c) : a + 0 = c</code></a></li>
-</ul>
-</section>
-<section>
-<h2><code>proofs/side_goals.lean</code></h2>
-<p class="dim">4 proofs · <a href="export/side_goals.html" download>one-file copy</a> <span class="dim">(720 KB)</span></p>
-<ul>
-<li><a href="view.html#file=side_goals&amp;proof=side_bulleted"><code>theorem side_bulleted (a b : ℕ) (h : b ≤ a) : a - b + b = a + 0</code></a></li>
-<li><a href="view.html#file=side_goals&amp;proof=side_linear"><code>theorem side_linear (a b : ℕ) (h : b ≤ a) : a - b + b + 0 = a</code></a></li>
-<li><a href="view.html#file=side_goals&amp;proof=side_multi_rule"><code>theorem side_multi_rule (a b c : ℕ) (h : b ≤ a) (hc : c = 0) : a - b + b + c = a</code></a></li>
-<li><a href="view.html#file=side_goals&amp;proof=control_apply"><code>theorem control_apply (n m : ℕ) (hn : 0 &lt; n) (hm : 0 &lt; m) : 0 &lt; n * m</code></a></li>
-</ul>
-</section>
-<section>
-<h2><code>proofs/wrap.lean</code></h2>
-<p class="dim">1 proof · <a href="export/wrap.html" download>one-file copy</a> <span class="dim">(721 KB)</span></p>
-<ul>
-<li><a href="view.html#file=wrap&amp;proof=long_statement_wraps"><code>theorem long_statement_wraps (α : Type) (f : α → ℕ) (g : ℕ → ℕ) (xs : List α) (n m k : ℕ) (hn : 2 ≤ n) (hm : m ∣ n) (hk : k &lt; n) : n = n ∧ (m ∣ n → 2 ≤ n) ∧ (k &lt; n ∨ n ≤ k) ∧ (∀ x ∈ xs, f x = f x) ∧ g (n + m + k) = g (n + m + k) ∧ (2 ≤ n → n = n ∧ m ∣ n)</code></a></li>
+<li><a href="view.html#file=PerfectNumbers&amp;proof=sigma_two_pow_eq_mersenne_succ"><code>theorem sigma_two_pow_eq_mersenne_succ (k : ℕ) : σ 1 (2 ^ k) = mersenne (k + 1)</code></a></li>
+<li><a href="view.html#file=PerfectNumbers&amp;proof=perfect_two_pow_mul_mersenne_of_prime"><code>theorem perfect_two_pow_mul_mersenne_of_prime (k : ℕ) (pr : (mersenne (k + 1)).Prime) : Nat.Perfect (2 ^ k * mersenne (k + 1))</code></a></li>
+<li><a href="view.html#file=PerfectNumbers&amp;proof=ne_zero_of_prime_mersenne"><code>theorem ne_zero_of_prime_mersenne (k : ℕ) (pr : (mersenne (k + 1)).Prime) : k ≠ 0</code></a></li>
+<li><a href="view.html#file=PerfectNumbers&amp;proof=even_two_pow_mul_mersenne_of_prime"><code>theorem even_two_pow_mul_mersenne_of_prime (k : ℕ) (pr : (mersenne (k + 1)).Prime) : Even (2 ^ k * mersenne (k + 1))</code></a></li>
+<li><a href="view.html#file=PerfectNumbers&amp;proof=eq_two_pow_mul_odd"><code>theorem eq_two_pow_mul_odd {n : ℕ} (hpos : 0 &lt; n) : ∃ k m : ℕ, n = 2 ^ k * m ∧ ¬Even m</code></a></li>
+<li><a href="view.html#file=PerfectNumbers&amp;proof=eq_two_pow_mul_prime_mersenne_of_even_perfect"><code>theorem eq_two_pow_mul_prime_mersenne_of_even_perfect {n : ℕ} (ev : Even n) (perf : Nat.Perfect n) : ∃ k : ℕ, Nat.Prime (mersenne (k + 1)) ∧ n = 2 ^ k * mersenne (k + 1)</code></a></li>
+<li><a href="view.html#file=PerfectNumbers&amp;proof=even_and_perfect_iff"><code>theorem even_and_perfect_iff {n : ℕ} : Even n ∧ Nat.Perfect n ↔ ∃ k : ℕ, Nat.Prime (mersenne (k + 1)) ∧ n = 2 ^ k * mersenne (k + 1)</code></a></li>
 </ul>
 </section>
 </main>
