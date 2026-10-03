@@ -19,7 +19,11 @@ follows it, and click a tactic box to find it in the source.
 * Comments in the source ride the step they annotate.
 * Hover any identifier or subterm — `Nat.le_total`, `h`, `≤` — for its type
   and documentation.
-* The `▸` gutter marks the hypotheses the next step actually uses. -/
+* The `▸` gutter marks the hypotheses the next step actually uses.
+* A numbered tab on a box is a MARK: a stop on a guided reading the author
+  wrote into the source. Press `>` and `<` to step through the marks; the
+  status bar counts them. This proof has one; the Schröder–Bernstein showcase
+  has six, taken in the order you would explain the argument. -/
 theorem tour_reading (n m : ℕ) : n ≤ m ∨ m ≤ n := by
   -- .mark The split is the whole proof: `Nat.le_total` hands back one of two
   -- cases, and each branch closes with the hypothesis it was given.
