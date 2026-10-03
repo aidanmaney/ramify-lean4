@@ -102,15 +102,19 @@ body {
 .ptw-viewer-head select { min-width: 0; max-width: 240px; flex: 0 1 auto; }
 .ptw-viewer-main { flex: 1 1 auto; display: flex; min-height: 0; }
 .ptw-viewer-tree { flex: 1 1 60%; min-width: 0; min-height: 0; position: relative; }
+/* The source on the LEFT and the tree on the right, where the infoview sits
+   beside the editor in VS Code. Narrow, the tree stacks first (order reset). */
 .ptw-viewer-src {
+  order: -1;
   flex: 0 1 40%; min-width: 280px; max-width: 720px; min-height: 0;
-  border-left: 1px solid ${CHROME_BORDER}; display: flex; flex-direction: column;
+  border-right: 1px solid ${CHROME_BORDER}; display: flex; flex-direction: column;
 }
 .ptw-viewer[data-narrow] .ptw-viewer-main { flex-direction: column; }
 .ptw-viewer[data-narrow] .ptw-viewer-tree { flex: 1 1 58%; }
 .ptw-viewer[data-narrow] .ptw-viewer-src {
+  order: 0;
   flex: 1 1 42%; max-width: none; min-width: 0;
-  border-left: 0; border-top: 1px solid ${CHROME_BORDER};
+  border-right: 0; border-top: 1px solid ${CHROME_BORDER};
 }
 .ptw-viewer[data-narrow] .ptw-viewer-head { flex-wrap: wrap; row-gap: 6px; }
 .ptw-viewer[data-narrow] .ptw-viewer-head select { flex: 1 1 140px; max-width: none; }
