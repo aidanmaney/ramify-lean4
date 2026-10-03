@@ -22,6 +22,9 @@
 //   --no-exports      skip <out>/export/
 //   --no-traces       skip B4's automation traces (one extra elaboration/file)
 //   --no-lint         skip D4's Mathlib linters
+//   --list FILE       publish the sources FILE names, one per line, in that
+//                     order (paths relative to FILE; `#` comments) — the
+//                     site's own list is demos/site.txt
 //   --cache DIR       keep each file's ppharness output in DIR/<name>.ndjson and
 //                     reuse it while it is newer than the source (iteration)
 //   --ndjson F=SRC    use an existing ppharness --widget-data output F for the
@@ -56,6 +59,8 @@ function parseArgs(argv) {
     cache: null,
     ndjson: new Map(),
     files: [],
+    /** Index-page group headings, keyed by the index of the first file. */
+    groups: new Map(),
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -70,6 +75,20 @@ function parseArgs(argv) {
     else if (a === "--no-traces") o.traces = false;
     else if (a === "--no-lint") o.lint = false;
     else if (a === "--cache") o.cache = path.resolve(val());
+    else if (a === "--list") {
+      // One source per line, relative to the list; `#` starts a comment.
+      const list = path.resolve(val());
+      for (const line of fs.readFileSync(list, "utf8").split("\n")) {
+        // `## Heading` starts a group on the index page.
+        const g = /^##\s+(.+)$/.exec(line.trim());
+        if (g) {
+          o.groups.set(o.files.length, g[1].trim());
+          continue;
+        }
+        const f = line.replace(/#.*/, "").trim();
+        if (f) o.files.push(path.resolve(path.dirname(list), f));
+      }
+    }
     else if (a === "--ndjson") {
       const [f, src] = val().split("=");
       if (!src) throw new Error("--ndjson takes OUTPUT=SOURCE");
@@ -211,6 +230,29 @@ ${payload ? `<script type="application/json" id="ramify-payload">${jsonInScript(
 `;
 }
 
+/** A file's own introduction: the `# Title` and first paragraph of its
+ leading `/-! … -/` module doc, if it has one. */
+export function fileDoc(source) {
+  // Leading whitespace, imports and ordinary `/- … -/` comments (a copyright
+  // header) may come first; the module doc is the first `/-! … -/`.
+  const m = /^(?:\s|import[^\n]*\n|\/-(?!!)[\s\S]*?-\/)*\/-!([\s\S]*?)-\//.exec(source);
+  if (!m) return null;
+  const body = m[1].trim();
+  const t = /^#\s+(.+)$/m.exec(body);
+  if (!t) return null;
+  const rest = body.slice(t.index + t[0].length).trim();
+  const blurb = rest.split(/\n\s*\n/)[0].replace(/\s+/g, " ").trim();
+  return { title: t[1].trim(), blurb };
+}
+
+/** The little Markdown a blurb uses: `code`, **bold** and [links](https://…),
+ escaped first. */
+const inlineMd = (s) =>
+  esc(s)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
 function indexPage(entries) {
   const files = entries
     .map((e) => {
@@ -229,9 +271,11 @@ function indexPage(entries) {
       const exp = e.exportBytes
         ? ` · <a href="export/${encodeURIComponent(e.name)}.html" download>one-file copy</a> <span class="dim">(${kb(e.exportBytes)})</span>`
         : "";
-      return `<section>
-<h2><code>${esc(e.payload.file)}</code></h2>
-<p class="dim">${e.payload.proofs.length} proof${e.payload.proofs.length === 1 ? "" : "s"}${exp}</p>
+      const doc = fileDoc(e.payload.source);
+      const count = `${e.payload.proofs.length} proof${e.payload.proofs.length === 1 ? "" : "s"}`;
+      return `${e.group ? `<h2 class="group">${inlineMd(e.group)}</h2>\n` : ""}<section>
+<h3>${doc ? inlineMd(doc.title) : `<code>${esc(e.payload.file)}</code>`}</h3>
+${doc?.blurb ? `<p>${inlineMd(doc.blurb)}</p>\n` : ""}<p class="dim"><code>${esc(e.payload.file)}</code> · ${count}${exp}</p>
 <ul>
 ${rows}
 </ul>
@@ -256,7 +300,8 @@ ${THEME_BOOT}
 body { margin: 0; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
-h2 { font-size: 15px; margin: 28px 0 2px; }
+h2.group { font-size: 18px; margin: 44px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+h3 { font-size: 15px; margin: 26px 0 2px; }
 code { font-family: "JuliaMono", "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 13px; }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -322,7 +367,10 @@ export async function publish(o) {
 
   const names = new Set();
   const entries = [];
-  for (const file of o.files) {
+  // A heading whose first file publishes nothing still shows, on the next one.
+  let pendingGroup = null;
+  for (const [fi, file] of o.files.entries()) {
+    if (o.groups.has(fi)) pendingGroup = o.groups.get(fi);
     let name = path.basename(file, ".lean");
     if (names.has(name)) name = `${path.basename(path.dirname(file))}-${name}`;
     names.add(name);
@@ -352,6 +400,8 @@ export async function publish(o) {
       fs.writeFileSync(o.single, single);
       entry.exportBytes = Buffer.byteLength(single);
     }
+    if (pendingGroup) entry.group = pendingGroup;
+    pendingGroup = null;
     entries.push(entry);
   }
   fs.writeFileSync(path.join(o.out, "index.html"), indexPage(entries));
@@ -366,7 +416,7 @@ export async function publish(o) {
   return entries;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     await publish(parseArgs(process.argv.slice(2)));
   } catch (e) {

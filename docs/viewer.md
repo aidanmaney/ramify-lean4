@@ -28,7 +28,20 @@ python3 -m http.server -d ../site 8000     # then open http://localhost:8000/
 | `site/data/<name>.json` | one payload per source file |
 | `site/export/<name>.html` | the same file as **one self-contained page** (JS and payload inline), for email or a paper's supplement; opens from disk |
 
-Options: `--out DIR`, `--single FILE` (also write the first file's export to `FILE`), `--no-exports`, `--no-traces`, `--no-lint`, `--cache DIR` (keep each file's `ppharness` output and reuse it while it is newer than the source) and `--ndjson OUT=SRC` (use an existing `--widget-data` output instead of running Lean).
+Options: `--out DIR`, `--list FILE` (the sources a list names, in order, `## Heading` lines grouping them on the index), `--single FILE` (also write the first file's export to `FILE`), `--no-exports`, `--no-traces`, `--no-lint`, `--cache DIR` (keep each file's `ppharness` output and reuse it while it is newer than the source) and `--ndjson OUT=SRC` (use an existing `--widget-data` output instead of running Lean).
+
+### The demo set
+
+The website's own proofs live in `demos/` (see `demos/README.md`), listed in
+index order by `demos/site.txt`, where `## Heading` lines group them:
+
+```bash
+cd web && npm run publish:site    # = node scripts/publish.mjs --list ../demos/site.txt
+```
+
+Each file's leading `/-! # Title … -/` block becomes its heading and blurb on the
+index (a copyright header before it is skipped; `` `code` ``, `**bold**` and
+`[links](https://…)` render).
 
 ### Deploying to GitHub Pages
 

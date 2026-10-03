@@ -81,6 +81,24 @@ The full licence text is reproduced at the end of this file.
 
 ---
 
+## Mathlib — demo proofs from its `Archive/`
+
+Apache Licence 2.0. Copyright (c) the Mathlib contributors; each file names
+its own authors in its header.
+<https://github.com/leanprover-community/mathlib4>
+
+`demos/mathlib-archive/` holds unmodified copies of four files from Mathlib's
+`Archive/Wiedijk100Theorems/` (`Konigsberg.lean`, `PerfectNumbers.lean`,
+`BirthdayProblem.lean`, `InverseTriangleSum.lean`), taken at the Mathlib
+v4.32.2 commit `905b95818eb32af7874a58b427f50c1711a5e96c`, with their
+copyright headers intact. They are published on Ramify's demo website as
+examples of real, community-written Lean proofs; they are not part of the
+installable package.
+
+The full licence text is reproduced at the end of this file.
+
+---
+
 ## Apache Licence 2.0
 
 Applies to ProofWidgets4 and to @leanprover/unicode-input, both above. Neither
