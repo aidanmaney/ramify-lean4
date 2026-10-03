@@ -4876,19 +4876,56 @@ export default function ProofTreeView({
     let py = 0;
     let raf: number | null = null;
 
+    // THE AXIS LOCK: a gesture that STARTS vertical stays vertical until the
+    // wheel has been idle LOCK_IDLE ms (trackpad momentum keeps it alive). It
+    // used to be done by cancelling every wheel event and setting `scrollTop`
+    // by hand, which put the whole pan on the main thread — the browser had
+    // to wait for this handler on every event, so a busy page stalled the pan
+    // and momentum (reported 2026-10-03 as the widget panning slowly). Now
+    // the browser scrolls natively, off the main thread, and the lock is
+    // enforced on the OTHER axis instead: horizontal overflow is hidden for
+    // the gesture where that moves no layout (overlay scrollbars, the macOS
+    // default), else any drift is snapped back from the passive scroll
+    // listener below. Pinch / ⌘-wheel zoom is the only path that cancels.
     const LOCK_IDLE = 180;
-    let lockVertical = false;
     let lastWheelT = 0;
+    let lockLeft: number | null = null;
+    let lockHidden = false;
+    let unlockTimer: number | null = null;
+    const unlock = () => {
+      unlockTimer = null;
+      lockLeft = null;
+      if (lockHidden) el.style.overflowX = "";
+      lockHidden = false;
+    };
+    const lock = () => {
+      lockLeft = el.scrollLeft;
+      // A horizontal scrollbar that takes room would vanish and resize the
+      // frame; there, the scroll listener alone holds the axis.
+      if (el.offsetHeight - el.clientHeight === 0) {
+        el.style.overflowX = "hidden";
+        lockHidden = true;
+      }
+    };
+    // Hidden overflow stops drift from the second event on; the gesture's
+    // FIRST event is already scrolling when the lock is taken, so its own
+    // sideways part is snapped back here too (one correction, at the start).
+    const onScroll = () => {
+      if (lockLeft !== null && el.scrollLeft !== lockLeft)
+        el.scrollLeft = lockLeft;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
     const onWheel = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) {
         const now = performance.now();
-        if (now - lastWheelT > LOCK_IDLE)
-          lockVertical = Math.abs(e.deltaY) > Math.abs(e.deltaX);
+        if (now - lastWheelT > LOCK_IDLE) {
+          unlock();
+          if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) lock();
+        }
         lastWheelT = now;
-        if (lockVertical) {
-          e.preventDefault();
-
-          el.scrollTop += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+        if (lockLeft !== null) {
+          if (unlockTimer !== null) window.clearTimeout(unlockTimer);
+          unlockTimer = window.setTimeout(unlock, LOCK_IDLE);
         }
         return;
       }
@@ -4909,6 +4946,9 @@ export default function ProofTreeView({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("scroll", onScroll);
+      if (unlockTimer !== null) window.clearTimeout(unlockTimer);
+      unlock();
       if (raf !== null) cancelAnimationFrame(raf);
     };
   }, []);
@@ -6289,6 +6329,10 @@ export default function ProofTreeView({
           height: `calc(100% - ${hdrH}px)`,
           marginTop: hdrH,
           overflow: "auto",
+          // A pan that reaches the tree's edge stops there rather than
+          // scrolling the infoview page under it — what the wheel handler's
+          // cancel used to do implicitly, before scrolling went native.
+          overscrollBehavior: "contain",
           outline: "none",
 
           userSelect: "none",

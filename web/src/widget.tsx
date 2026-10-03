@@ -216,12 +216,19 @@ function useFrameOffset(): {
     if (el.parentElement) ro.observe(el.parentElement);
     window.addEventListener("resize", measure);
     // Capture: an ancestor's scroll never reaches `window` in the bubble
-    // phase, and the infoview's own scroller is one.
-    window.addEventListener("scroll", measure, true);
+    // phase, and the infoview's own scroller is one. A scroll INSIDE the
+    // widget (the tree's own frame, a panel) cannot move the widget's top, and
+    // the tree's frame fires on every frame of a pan: measuring there forced a
+    // layout of the whole tree per frame, so those are skipped unread.
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      measure();
+    };
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [measure]);
   useLayoutEffect(measure);
