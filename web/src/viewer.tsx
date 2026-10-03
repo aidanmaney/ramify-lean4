@@ -21,6 +21,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import ProofTreeView from "./ProofTreeView";
@@ -69,6 +70,98 @@ const RELEASE_URL = "https://github.com/aidanmaney/ramify-lean4/releases/latest"
 const INSTALL_URL =
   "https://github.com/aidanmaney/ramify-lean4/blob/main/INSTALL.md";
 
+/** The split's limits: the source keeps room for a line of code, the tree
+ room for its status strip. */
+const SPLIT_MIN_PX = 240;
+const TREE_MIN_PX = 360;
+const SPLIT_KEY = "ramify-viewer-split";
+
+/** The reader's split, as the SOURCE's fraction of the row (a fraction, so it
+ survives a different window), or null for the default. */
+function storedSplit(): number | null {
+  try {
+    const v = Number(window.localStorage.getItem(SPLIT_KEY));
+    return v > 0 && v < 1 ? v : null;
+  } catch {
+    return null;
+  }
+}
+function storeSplit(f: number | null) {
+  try {
+    if (f === null) window.localStorage.removeItem(SPLIT_KEY);
+    else window.localStorage.setItem(SPLIT_KEY, String(f));
+  } catch {
+    // No storage: the split lasts for this page only.
+  }
+}
+
+/** The handle between the source and the tree. While dragging it writes the
+ width straight onto the row (`--ptw-src-w`), so the tree view is not
+ re-rendered per pointer move; the fraction is committed on release. */
+function SplitHandle({
+  split,
+  setSplit,
+}: {
+  split: number | null;
+  setSplit: (f: number | null) => void;
+}) {
+  const clampPx = (row: DOMRect, px: number) =>
+    Math.max(SPLIT_MIN_PX, Math.min(row.width - TREE_MIN_PX, px));
+  const nudge = (el: HTMLElement, by: number) => {
+    const row = el.parentElement!.getBoundingClientRect();
+    const src = el.parentElement!.querySelector(".ptw-viewer-src");
+    const cur = src ? src.getBoundingClientRect().width : row.width * 0.4;
+    setSplit(clampPx(row, cur + by) / row.width);
+  };
+  return (
+    <div
+      className="ptw-viewer-split"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the source and the tree — drag, ← / →, double-click to reset"
+      title="Drag to resize · double-click to reset"
+      aria-valuenow={split === null ? 40 : Math.round(split * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      tabIndex={0}
+      onDoubleClick={() => setSplit(null)}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+          nudge(e.currentTarget, e.key === "ArrowLeft" ? -32 : 32);
+        }
+      }}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const handle = e.currentTarget;
+        const rowEl = handle.parentElement!;
+        const page = rowEl.closest<HTMLElement>(".ptw-viewer");
+        const row = rowEl.getBoundingClientRect();
+        handle.setPointerCapture(e.pointerId);
+        handle.dataset.drag = "";
+        if (page) page.dataset.dragging = "";
+        let px: number | null = null;
+        const move = (ev: PointerEvent) => {
+          px = clampPx(row, ev.clientX - row.left);
+          rowEl.style.setProperty("--ptw-src-w", `${px}px`);
+        };
+        const up = () => {
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", up);
+          handle.removeEventListener("pointercancel", up);
+          delete handle.dataset.drag;
+          if (page) delete page.dataset.dragging;
+          if (px !== null) setSplit(px / row.width);
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", up);
+        handle.addEventListener("pointercancel", up);
+      }}
+    />
+  );
+}
+
 /** Under this width the source pane stacks under the tree. */
 const NARROW_PX = 860;
 
@@ -106,15 +199,28 @@ body {
    beside the editor in VS Code. Narrow, the tree stacks first (order reset). */
 .ptw-viewer-src {
   order: -1;
-  flex: 0 1 40%; min-width: 280px; max-width: 720px; min-height: 0;
-  border-right: 1px solid ${CHROME_BORDER}; display: flex; flex-direction: column;
+  flex: 0 0 var(--ptw-src-w, 40%); min-width: ${SPLIT_MIN_PX}px; min-height: 0;
+  display: flex; flex-direction: column;
 }
+/* The split's handle: a hairline in a wider hit strip, between the source
+   (order -1, first) and the tree. Drag to resize, double-click to reset,
+   ← / → when focused. */
+.ptw-viewer-split {
+  order: -1; flex: 0 0 7px; margin: 0 -3px; z-index: 1;
+  cursor: col-resize; touch-action: none; outline: none;
+  background: linear-gradient(${CHROME_BORDER}, ${CHROME_BORDER}) center / 1px 100% no-repeat;
+}
+.ptw-viewer-split:hover, .ptw-viewer-split[data-drag], .ptw-viewer-split:focus-visible {
+  background: linear-gradient(var(--ptw-focus), var(--ptw-focus)) center / 3px 100% no-repeat;
+}
+.ptw-viewer[data-dragging], .ptw-viewer[data-dragging] * { cursor: col-resize !important; user-select: none; }
+.ptw-viewer[data-narrow] .ptw-viewer-split { display: none; }
 .ptw-viewer[data-narrow] .ptw-viewer-main { flex-direction: column; }
 .ptw-viewer[data-narrow] .ptw-viewer-tree { flex: 1 1 58%; }
 .ptw-viewer[data-narrow] .ptw-viewer-src {
   order: 0;
-  flex: 1 1 42%; max-width: none; min-width: 0;
-  border-right: 0; border-top: 1px solid ${CHROME_BORDER};
+  flex: 1 1 42%; min-width: 0;
+  border-top: 1px solid ${CHROME_BORDER};
 }
 .ptw-viewer[data-narrow] .ptw-viewer-head { flex-wrap: wrap; row-gap: 6px; }
 .ptw-viewer[data-narrow] .ptw-viewer-head select { flex: 1 1 140px; max-width: none; }
@@ -222,6 +328,11 @@ function ViewerBody({
     payload.proofs.find((r) => proofSlug(r) === link.proof) ?? payload.proofs[0];
   const slug = proofSlug(record);
   const [cursor, setCursor] = useState<LspPos | null>(null);
+  const [split, setSplitState] = useState<number | null>(storedSplit);
+  const setSplit = (f: number | null) => {
+    storeSplit(f);
+    setSplitState(f);
+  };
   const [highlight, setHighlight] = useState<SourceRange | null>(null);
 
   const proof = useMemo(
@@ -335,7 +446,14 @@ function ViewerBody({
   return (
     <>
       {head(picker)}
-      <div className="ptw-viewer-main">
+      <div
+        className="ptw-viewer-main"
+        style={
+          split === null
+            ? undefined
+            : ({ "--ptw-src-w": `${(split * 100).toFixed(2)}%` } as CSSProperties)
+        }
+      >
         <div className="ptw-viewer-tree">
           <WidgetBoundary resetKey={slug}>
             <ProofTreeView
@@ -382,6 +500,9 @@ function ViewerBody({
             />
           </div>
         )}
+        {/* After the source in the DOM: both are order -1, so this is what
+            puts the handle between the source and the tree. */}
+        {paneOpen && <SplitHandle split={split} setSplit={setSplit} />}
       </div>
     </>
   );
