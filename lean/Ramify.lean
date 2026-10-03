@@ -633,6 +633,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
 
     let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
 
+    let parsed := Recover.closeHiddenFinishers fileMap snap.infoTree parsed
     let fixup := labelFixup fileMap snap.infoTree (extra := some snap.stx)
     let remapped := { parsed with
       steps := parsed.steps.map fun (s : Paperproof.Services.ProofStep) =>

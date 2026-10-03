@@ -37,7 +37,10 @@ t.eq(N(nested, sourceView(tree(recs[nested]))), 3, "flag_nested seeded");
   }
   const cs = goalCut(byId, succ.id, kids); t.eq(cs?.kind, "fold", "succ cut kind"); t.eq(N(odd, [...seeds, cs]), 68, "succ fold");
   const d = drawn(b, outlineCuts(byId, kids)); t.eq(d.length, 19, "collapse-all odd_sums"); t.eq(d.filter((n) => n.folded).length, 4, "collapse-all folded goals");
-  { const f = tree(recs[fac]); t.eq(drawn(f, outlineCuts(byIdOf(f), kidsOf(f))).length, 7, "collapse-all factorization"); }
+  // 7→5 (2026-10-03): the two `⊢ p ∈ … → Nat.Prime p` boxes were `intro p hpm`'s
+  // lost intermediate goal leaking out as spawned goals of the `induction`;
+  // closeHiddenFinishers drops goals the elaborator closed (design record).
+  { const f = tree(recs[fac]); t.eq(drawn(f, outlineCuts(byIdOf(f), kidsOf(f))).length, 5, "collapse-all factorization"); }
 }
 // every goal × goalCut: a fold that resolves, mints no node, stays sound
 for (const [i, rec] of recs.entries()) {
@@ -481,7 +484,11 @@ for (const [i, rec] of recs.entries()) {
   // `proofs/rename.lean` (D5's specimen, 3 short proofs / 7 tactic nodes).
   // 390→395 origins, 244→251 steps, 61→64 / 70→73 lemma refs, 36→37 traces,
   // 212→219 undecided shapes. Nothing else in the corpus changed.
-  t.eq(withOrigin, 409, "context lines carrying provenance, corpus-wide");
+  // 2026-10-03: 409→384 is exactly the 25 hyp lines on factorization's two
+  // leaked `intro` goals (see "collapse-all factorization"); the same fix moved
+  // ~150 of that proof's lines off `induction` (line 22) onto their real
+  // introducers.
+  t.eq(withOrigin, 384, "context lines carrying provenance, corpus-wide");
 }
 
 // PART B3 — LEMMA REFERENCES (`lemmaRefs` on both wires, `lemmasAt` in
@@ -715,8 +722,10 @@ for (const [i, rec] of recs.entries()) {
       if (n.type === "tactic" && n.shapeSource)
         shape[n.shapeSource] = (shape[n.shapeSource] ?? 0) + 1;
   t.eq(shape.regex, undefined, "no drawn tactic node still shaped by a regex");
-  t.eq(shape.branch, 32, "multi-goal tactic nodes shaped by the sidecar");
-  t.eq(shape.none, 219, "…and single-goal ones with nothing to decide");
+  // 32/219 → 31/220 (2026-10-03): factorization's `induction … with | _ n ih`
+  // makes ONE goal; two leaked `intro` goals had made it look like three.
+  t.eq(shape.branch, 31, "multi-goal tactic nodes shaped by the sidecar");
+  t.eq(shape.none, 220, "…and single-goal ones with nothing to decide");
 
   // Child ORDER is the harvest's on every corpus record: the arms' source
   // order and Lean's own goal order agree everywhere here, so B5 moved nothing.
