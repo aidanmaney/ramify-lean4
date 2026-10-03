@@ -101,13 +101,16 @@ The renderers are shared too: `taggedCore.tsx` and `tacticCore.tsx` hold the tag
 
 ## Sizes
 
-Measured 2026-10-02 (core-only fixtures; minified, before compression):
+Measured 2026-10-03 over the whole corpus (`proofs/*.lean`, Mathlib) and the Tour — 15 files, 40 proofs, published in 2m11s; minified:
 
 | | raw | gzip |
 | --- | --- | --- |
-| `viewer-<hash>.js` | 644 KB | 215 KB |
-| `data/ProofTreeTour.json` (6 proofs, 97 hovers) | 171 KB | — |
-| `export/ProofTreeTour.html` (single file) | 816 KB | 234 KB |
-| `export/openblock.html` (3 proofs) | 663 KB | — |
+| `viewer-<hash>.js` (shared by every page) | 645 KB | 215 KB |
+| largest payload, `data/odd_sums.json` (1 proof, 44 steps, 153 popups) | 365 KB | 27 KB |
+| typical payload, `data/euclid.json` (1 proof, 26 steps) | 162 KB | — |
+| smallest payload, `data/openblock.json` (3 proofs) | 17 KB | — |
+| largest single-file export, `export/odd_sums.html` | 1010 KB | 244 KB |
+| `export/euclid.html` | 808 KB | 234 KB |
+| smallest single-file export, `export/openblock.html` | 663 KB | — |
 
-A single-file export is the bundle plus one payload; the bundle is most of it.
+A single-file export is the bundle plus one payload, so it never falls below ~650 KB; payloads compress about 13:1 (repeated goal text), and a host serving gzip delivers a page for the bundle's 215 KB plus a few tens of KB per file.
