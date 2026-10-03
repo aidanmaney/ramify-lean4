@@ -38,7 +38,7 @@ theorem infinitude_of_primes (N : ℕ) : ∃ p, Nat.Prime p ∧ N < p := by
   refine ⟨p, hp, ?_⟩
   -- Step 3: show N < p by contradiction.
   by_contra hle
-  push_neg at hle
+  push Not at hle
   -- If p ≤ N then p divides N!, and it already divides N! + 1.
   have hpfac : p ∣ Nat.factorial N := Nat.dvd_factorial hp.pos hle
   -- p ∣ N! and p ∣ N! + 1, so p ∣ 1.
