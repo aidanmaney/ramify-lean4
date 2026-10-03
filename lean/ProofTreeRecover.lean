@@ -703,6 +703,50 @@ def recoverCalcLinks (fileMap : FileMap) (tree : InfoTree)
         recovered := out.recovered.push { start := jStart, kind := "term" } }
   return out
 
+/-- Drop the goals the harvest leaves OPEN that the elaborator CLOSED.
+
+A closing macro (`rwa`, `simpa … using`, `conv => …`) elaborates its inner
+tactic under the author's syntax and its finisher (`assumption`, the `using`
+term, the conv exit) under synthetic syntax `BetterParser_Tree` skips; the
+macro's own edge is dropped too, because the inner step already claims its
+`goalBefore`.  So the goal the inner step leaves has a producer and no consumer
+and draws as open in a proof Lean accepts.
+
+Decided from the elaborator, never from tactic names: such a goal is dropped
+when a tactic node ENCLOSING its producer assigns it, in its `mctxAfter`, a
+complete term with no synthetic sorry.  A goal error recovery admitted is a
+synthetic sorry, and a goal still open is unassigned, so both stay open.  Runs
+on the raw harvest, before every recovery pass, on both wires. -/
+def closeHiddenFinishers (fileMap : FileMap) (tree : InfoTree) (r : Result) :
+    Result := Id.run do
+  let consumed : Std.HashSet Name :=
+    r.steps.foldl (fun a s => a.insert s.goalBefore.id.name) {}
+  let pending := r.steps.flatMap fun s =>
+    (stepGoalsAfter s).filterMap fun g =>
+      if consumed.contains g.id.name then none else some (s.position, g.id)
+  if pending.isEmpty then return r
+  let nodes := tree.foldInfo (init := (#[] : Array (Lsp.Position × Lsp.Position × TacticInfo)))
+    fun _ info acc => match info with
+      | .ofTacticInfo ti => match ti.stx.getRange? (canonicalOnly := true) with
+        | some rg => acc.push (fileMap.utf8PosToLspPos rg.start,
+                               fileMap.utf8PosToLspPos rg.stop, ti)
+        | none => acc
+      | _ => acc
+  let closedIn (ti : TacticInfo) (g : MVarId) : Bool :=
+    (ti.mctxAfter.eAssignment.contains g || ti.mctxAfter.dAssignment.contains g) &&
+      let (e, _) := instantiateMVarsCore ti.mctxAfter (.mvar g)
+      !e.hasExprMVar && !e.hasSyntheticSorry
+  let mut closed : Std.HashSet Name := {}
+  for (at_, g) in pending do
+    if nodes.any fun (s, e, ti) =>
+        posLE s at_.start && posLE at_.stop e && closedIn ti g then
+      closed := closed.insert g.name
+  if closed.isEmpty then return r
+  let keep (g : GoalInfo) := !closed.contains g.id.name
+  return { r with steps := r.steps.map fun s =>
+    { s with goalsAfter := s.goalsAfter.filter keep
+             spawnedGoals := s.spawnedGoals.filter keep } }
+
 end ProofTree.Recover
 
 /-! ## Hypothesis provenance (B2)

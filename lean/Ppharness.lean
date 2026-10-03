@@ -192,6 +192,7 @@ def parseSource (src : String) (fileName : String := "<ppharness>")
   for tree in trees do
     match ← runParser finalEnv fileMap tree with
     | some r0 =>
+        let r0 := ProofTree.Recover.closeHiddenFinishers fileMap tree r0
 
         let fixup := ProofTree.labelFixup fileMap tree
         let r1 := { r0 with steps := r0.steps.map fun s =>
