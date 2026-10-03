@@ -87,13 +87,33 @@ Apache Licence 2.0. Copyright (c) the Mathlib contributors; each file names
 its own authors in its header.
 <https://github.com/leanprover-community/mathlib4>
 
-`demos/mathlib-archive/` holds unmodified copies of four files from Mathlib's
-`Archive/Wiedijk100Theorems/` (`Konigsberg.lean`, `PerfectNumbers.lean`,
-`BirthdayProblem.lean`, `InverseTriangleSum.lean`), taken at the Mathlib
+`demos/mathlib-archive/` holds unmodified copies of files from Mathlib's
+`Archive/`: from `Wiedijk100Theorems/`, `Konigsberg.lean`, `PerfectNumbers.lean`,
+`BirthdayProblem.lean`, `InverseTriangleSum.lean`, `HeronsFormula.lean`,
+`AscendingDescendingSequences.lean` and `SumOfPrimeReciprocalsDiverges.lean`;
+and `ZagierTwoSquares.lean`. Taken at the Mathlib
 v4.32.2 commit `905b95818eb32af7874a58b427f50c1711a5e96c`, with their
 copyright headers intact. They are published on Ramify's demo website as
 examples of real, community-written Lean proofs; they are not part of the
 installable package.
+
+The full licence text is reproduced at the end of this file.
+
+---
+
+## Mathematics in Lean — the Schröder–Bernstein construction
+
+Apache Licence 2.0. Copyright (c) Jeremy Avigad, Patrick Massot and the
+*Mathematics in Lean* contributors.
+<https://github.com/leanprover-community/mathematics_in_lean>
+
+`demos/SchroederBernstein.lean` §1–3 adapt the solutions of chapter 4 ("Sets and
+Functions", §4.2–4.3): the image/preimage and inverse-function lemmas (given
+names, where the book has anonymous examples) and the classical construction
+(`sbAux`, `sbSet`, `sbFun`, `sb_right_inv`, `sb_injective`, `sb_surjective`,
+`schroeder_bernstein`), with explanatory comments and guided-reading marks
+added, one lemma renamed for the Mathlib it builds against (`Set.mem_sdiff`), and
+`push_neg` written `push Not`. The proofs themselves are the book's.
 
 The full licence text is reproduced at the end of this file.
 

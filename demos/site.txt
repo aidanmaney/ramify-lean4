@@ -20,3 +20,7 @@ mathlib-archive/Konigsberg.lean           # Euler's bridges
 mathlib-archive/InverseTriangleSum.lean
 mathlib-archive/BirthdayProblem.lean
 mathlib-archive/PerfectNumbers.lean       # Euclid–Euler
+mathlib-archive/HeronsFormula.lean
+mathlib-archive/AscendingDescendingSequences.lean   # Erdős–Szekeres
+mathlib-archive/SumOfPrimeReciprocalsDiverges.lean  # Erdős
+mathlib-archive/ZagierTwoSquares.lean     # Fermat's two squares, Zagier's proof

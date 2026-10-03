@@ -155,14 +155,25 @@ def commentsInRange (src : String) (fileMap : FileMap) (range : Lean.Syntax.Rang
     Array SourceComment :=
   extractComments src fileMap range.start (lineEnd src range.stop)
 
+/-- The declaration's own source range: its command's syntax, as the widget
+takes it (`snap.stx`). Not the extent of everything in the info tree: a
+declaration that uses section `variable`s re-elaborates the `variable`
+binders inside its own tree, which stretched the range back to the `variable`
+line and so swallowed every declaration (and comment, and `.mark`) between. The
+fold over the tree is the fallback where no command node is found. -/
 def commandRange (tree : Elab.InfoTree) : Option Lean.Syntax.Range :=
-  tree.foldInfo (init := none) fun _ info acc =>
-    match info.stx.getRange? with
-    | some r =>
-      match acc with
-      | some a => some ⟨min a.start r.start, max a.stop r.stop⟩
-      | none   => some r
-    | none => acc
+  let own := tree.foldInfo (init := none) fun _ info acc =>
+    match acc, info with
+    | none, .ofCommandInfo ci => ci.stx.getRange?
+    | acc, _ => acc
+  own.orElse fun _ =>
+    tree.foldInfo (init := none) fun _ info acc =>
+      match info.stx.getRange? with
+      | some r =>
+        match acc with
+        | some a => some ⟨min a.start r.start, max a.stop r.stop⟩
+        | none   => some r
+      | none => acc
 
 def posLE (a b : Lsp.Position) : Bool := (compare a b).isLE
 

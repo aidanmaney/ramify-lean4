@@ -16,10 +16,9 @@ cd web && npm run publish:site      # → ../site/, then deploy it to gh-pages
   tree it rides the step it explains.
 - **`mathlib-archive/`** — unedited copies of real community proofs from
   Mathlib's `Archive/` (Freek Wiedijk's 100 theorems), Apache-2.0, headers
-  intact; see `NOTICE`. More of the Archive (Erdős's prime reciprocals,
-  Erdős–Szekeres, Heron's formula, Zagier's two squares) elaborates fine but
-  is held back for now: `rwa`, `simpa … using` and `conv` leave goals the tree
-  wrongly counts as open.
+  intact; see `NOTICE`. Before adding one, check it draws with no goal
+  counted open: a closing macro (`rwa`, `simpa … using`, `conv`) used to leave
+  such goals, fixed on `dev` ("Goals the elaborator closed are not open").
 
 Every file elaborates against the dev package's Mathlib (`cd lean && lake env
 lean ../demos/<file>.lean`); `ReadingTour.lean` has one error, on purpose.
