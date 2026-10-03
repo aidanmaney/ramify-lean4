@@ -365,6 +365,14 @@ const CHIP_W_STEP = 30;
 const CLOSE_RHS = "_";
 
 /** The empty editor's placeholder (what Enter will do): italic comment ink. */
+// While the frame scrolls, the tree takes no pointer events: boxes slide
+// under a resting pointer during a pan, and each one entered ran the node's
+// hover (a re-render for its bar) — Firefox also sends a synthetic mousemove
+// per scroll step, whose handler reads two rects (a forced layout of the tree).
+// Hit testing returns ~150ms after the last scroll, with one hover update.
+const SCROLLING_CSS = `[data-ptw-scrolling] > svg{pointer-events:none}`;
+const SCROLL_SETTLE_MS = 150;
+
 const HINT_CSS = `textarea[data-ptw-hint]::placeholder{color:${COMMENT_FILL};font-style:italic;opacity:1}`;
 
 const PILL_FONT_PX = 11;
@@ -4910,9 +4918,18 @@ export default function ProofTreeView({
     // Hidden overflow stops drift from the second event on; the gesture's
     // FIRST event is already scrolling when the lock is taken, so its own
     // sideways part is snapped back here too (one correction, at the start).
+    injectStyleOnce("ptw-scrolling", SCROLLING_CSS);
+    let settleTimer: number | null = null;
+    const settle = () => {
+      settleTimer = null;
+      delete el.dataset.ptwScrolling;
+    };
     const onScroll = () => {
       if (lockLeft !== null && el.scrollLeft !== lockLeft)
         el.scrollLeft = lockLeft;
+      if (settleTimer === null) el.dataset.ptwScrolling = "";
+      else window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(settle, SCROLL_SETTLE_MS);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     const onWheel = (e: WheelEvent) => {
@@ -4949,6 +4966,8 @@ export default function ProofTreeView({
       el.removeEventListener("scroll", onScroll);
       if (unlockTimer !== null) window.clearTimeout(unlockTimer);
       unlock();
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settle();
       if (raf !== null) cancelAnimationFrame(raf);
     };
   }, []);
