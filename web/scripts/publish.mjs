@@ -335,7 +335,6 @@ body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, s
 a { color: var(--link); text-decoration: none; }
 .top { display: flex; align-items: center; gap: 16px; max-width: 1120px; margin: 0 auto; padding: 14px 16px; }
 .brand { color: inherit; font-weight: 600; font-size: 17px; display: flex; align-items: center; gap: 8px; margin-right: auto; }
-.brand img { width: 20px; height: 20px; }
 .cta { border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; }
 .cta:hover { background: var(--card); }
 #theme { background: none; border: 1px solid var(--line); border-radius: 6px; color: inherit; width: 30px; height: 30px; cursor: pointer; display: grid; place-items: center; }
@@ -371,13 +370,13 @@ footer a { color: inherit; text-decoration: underline; text-underline-offset: 2p
 </head>
 <body>
 <header class="top">
-<a class="brand" href="./"><img src="favicon.svg" alt="">Ramify</a>
-<a class="cta" href="${RELEASE_URL}" title="The same tree, live in the infoview: edit it, see diagnostics as you type, restructure with Lean checking each change">Get it for VS Code</a>
+<a class="brand" href="./">Ramify</a>
+<a class="cta" href="${RELEASE_URL}" title="The same tree, live in the infoview: edit it, see diagnostics as you type, restructure with Lean checking each change">Get Ramify for VS Code</a>
 <button id="theme" type="button" aria-label="Switch theme" title="Switch theme"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 1.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg></button>
 </header>
 <main>
 <h1>Lean proofs, drawn as trees.</h1>
-<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured}, read beside its source`)}<span class="open">Open it →</span></a>
+<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured} as a Ramify tree in VS Code`)}<span class="open">Preview</span></a>
 ${body}
 </main>
 <footer><a href="${INSTALL_URL}">Install guide</a> · <a href="${REPO_URL}">Source</a></footer>

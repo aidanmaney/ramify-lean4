@@ -54,6 +54,12 @@ install), shoots each featured tree in the wide layout (stacked where wide is
 wider than 1300px), cropped to its ink, light and dark, as ≤640px WebP (about
 2 MB for the demo set). On hover a card pans down through its whole tree.
 
+The hero advertises the EXTENSION, so its picture is a VS Code screenshot:
+drop `demos/hero-light.png` (and optionally `hero-dark.png`; dark falls back
+to light) — a window with the hero file open and Ramify in the infoview,
+about 16:9. Until one exists the hero is the viewer's own rendering. Its
+`Preview` button opens the same proof here, in the browser.
+
 ### Deploying to GitHub Pages
 
 The site is generated, so it lives on its own branch rather than in `dev`:

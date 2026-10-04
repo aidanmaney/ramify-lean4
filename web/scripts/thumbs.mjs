@@ -10,7 +10,10 @@
 //                                      wide layout (stacked where wide is wider
 //                                      than WIDE_MAX), cropped to its ink, at most
 //                                      CARD_W pixels wide (2× a card)
-//   <site>/thumbs/hero-<theme>.webp    the hero file's viewer, source and tree
+//   <site>/thumbs/hero-<theme>.webp    the hero: demos/hero-<theme>.png where it
+//                                      exists (a VS Code screenshot — the
+//                                      extension is the product; dark falls back
+//                                      to light), else the hero file's viewer
 //
 // Needs Playwright (`npm i -D playwright`, or NODE_PATH pointing at an install);
 // the index works without the pictures — each card falls back to its title.
@@ -146,7 +149,22 @@ async function treeShot(page, url, out) {
   await webp(page, await page.screenshot({ clip }), CARD_W, out);
 }
 
-async function heroShot(page, url, out) {
+/** The author's own hero picture for `theme`, if there is one. */
+const HERO_DIR = path.join(web, "../demos");
+function heroFile(theme) {
+  for (const t of [theme, "light"]) {
+    const f = path.join(HERO_DIR, `hero-${t}.png`);
+    if (fs.existsSync(f)) return f;
+  }
+  return null;
+}
+
+async function heroShot(page, url, out, theme) {
+  const own = heroFile(theme);
+  if (own) {
+    await webp(page, fs.readFileSync(own), HERO_W, out);
+    return;
+  }
   await page.setViewportSize({ width: 1200, height: 680 });
   await page.goto(url);
   await page.waitForSelector("[data-ptw-scroll] svg");
@@ -171,7 +189,7 @@ try {
     const shoot = async (fn, url, out) => {
       const page = await ctx.newPage();
       try {
-        await fn(page, url, out);
+        await fn(page, url, out, theme);
       } finally {
         await page.close();
       }

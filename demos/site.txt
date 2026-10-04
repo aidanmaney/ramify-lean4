@@ -19,7 +19,7 @@ Limits.lean                               convergesTo_unique      # ε–N: sums
 Groups.lean                               mul_comm_of_sq_eq_one   # calc chains from the group axioms
 SchroederBernstein.lean                   sb_injective            # the showcase
 
-## From Mathlib's Archive
+## From Mathlib
 mathlib-archive/Konigsberg.lean           not_even_degree_iff     # Euler's bridges
 mathlib-archive/InverseTriangleSum.lean
 mathlib-archive/BirthdayProblem.lean      birthday_measure
