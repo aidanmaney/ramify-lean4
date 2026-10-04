@@ -5,7 +5,7 @@
 // proofToTree.ts or layout.ts:   npm run probe -- counts
 // Every number here was measured, not derived; a change is a finding to
 // record in CLAUDE.md, not a baseline to bump silently.
-import { applyTraces, isAutomationNode, traceIndex, traceKey, tacticHeadWord, sourceView, outlineCuts, goalCut, resolveCut, cutId, applyElisions, stepElidable, continuationOf, remapCut, pruneCuts, linearStep, coalesceCuts, stepCut, hopForStep, hopForBand, foldForBand, cutForBand, hopCaption, isSeededCut, SEED_MARK, foldSeedCuts, noneSeedCut, authorStops, tourList, firstSentence, remapIds } from "./lib.mjs";
+import { applyTraces, isAutomationNode, traceIndex, traceKey, tacticHeadWord, sourceView, outlineCuts, goalCut, resolveCut, cutId, applyElisions, stepElidable, continuationOf, remapCut, pruneCuts, linearStep, coalesceCuts, stepCut, hopForStep, hopForBand, foldForBand, cutForBand, hopCaption, isSeededCut, foldSeedCuts, noneSeedCut, authorStops, tourList, firstSentence, remapIds } from "./lib.mjs";
 import { records, tree, byIdOf, kidsOf, find, goalWithHyp, structural, tally } from "./corpus.mjs";
 
 const t = tally();
@@ -217,7 +217,7 @@ for (const [i, rec] of recs.entries()) {
   const g = applyElisions(b, seeded).find((n) => n.id === seeded[0].id);
   const cap = hopCaption(g.folded);
   t.ok(cap.italic, "a note captions in italics");
-  t.eq(cap.text, "§ the algebra: m = 2j + 1 squares to 2 * (2j² + 2j) + 1", "the note is the caption, in the author's voice");
+  t.eq(cap.text, "the algebra: m = 2j + 1 squares to 2 * (2j² + 2j) + 1", "the note is the caption, in the author's voice");
   t.eq(g.folded.tactics.length, 4, "the `.none` hop's tally");
   // A `.none` on a LEAF is ◌'s answer there: the fold of the goal above,
   // the author's sentence riding the goal (its title), no ghost (2026-09-17).
@@ -257,7 +257,7 @@ for (const [i, rec] of recs.entries()) {
   const g = applyElisions(b, [seed]).find((n) => n.id === seed.id);
   t.eq(g.folded.seeded, true, "the `.none` seed stamps its goal seeded");
   t.eq(g.folded.seededBy, "none", "…with its origin");
-  t.ok(hopCaption(g.folded).text.startsWith(SEED_MARK), "…and captions with the mark");
+  t.ok(!hopCaption(g.folded).text.startsWith("§"), "…and captions with no `§` (dropped 2026-10-04)");
   t.ok(hopCaption(g.folded).italic, "…in italics");
   // A READER's hop off the same tree is unmarked and draws plainly.
   const parity = b.find((n) => n.type === "tactic" && n.label.startsWith("have parity"));
@@ -265,12 +265,12 @@ for (const [i, rec] of recs.entries()) {
   t.ok(!isSeededCut(mine), "a reader's ◌ mints no seed");
   const gm = applyElisions(b, [mine]).find((n) => n.id === mine.id);
   t.eq(gm.folded.seeded, undefined, "…and stamps none on the goal");
-  t.ok(!hopCaption(gm.folded).text.startsWith(SEED_MARK), "…and its caption bears no mark");
-  // A seeded GHOST (a `.none` on a closing step) carries the mark IN ITS
-  // LABEL, which is what `ghostSize` measures.
+  t.ok(!hopCaption(gm.folded).italic, "…and its caption is upright");
+  // A seeded GHOST (a `.none` on a closing step) is stamped seeded (its label
+  // draws italic) and wears no `§`.
   const dmo = tree(recs[demo]); const ghost = applyElisions(dmo, sourceView(dmo)).find((n) => n.elidedCut && !n.elidedCut.combined);
   t.eq(ghost.elidedCut.seeded, true, "a seeded ghost is stamped");
-  t.ok(ghost.label.startsWith(SEED_MARK), "…and wears the mark in its label");
+  t.ok(!ghost.label.startsWith("§"), "…and wears no `§` in its label");
 }
 
 // COALESCE keeps the voice: all-seeded pieces make a seeded fold, a mixed set
@@ -309,8 +309,8 @@ for (const [i, rec] of recs.entries()) {
   t.eq(nc.seededBy, "none", "…in the .none voice");
   t.eq(cutId(nc), cutId(stepCut(byId, parity.id, kids)), "…at the position ◌ reaches");
   const drawnNode = applyElisions(b, [nc]).find((n) => n.id === (nc.kind === "hop" ? nc.id : cutId(nc)));
-  const cap = drawnNode.folded ? hopCaption(drawnNode.folded).text : drawnNode.label;
-  t.ok(cap.startsWith(SEED_MARK), "…and reads in the author's voice at once");
+  const voiced = drawnNode.folded ? hopCaption(drawnNode.folded).italic : !!drawnNode.elidedCut?.seeded;
+  t.ok(voiced, "…and reads in the author's voice at once");
 }
 
 // THE TOUR (tour.ts). odd_sums carries three `.mark`s: two bare and one with

@@ -118,6 +118,11 @@ function scan(s: string): Scan {
 const BINDER_KW =
   /^(have|let|obtain|set|suffices|refine|by_cases|by_contra|specialize)\b/;
 
+/** The binders whose STATEMENT is the point of the line (2026-10-04, the
+    expert's report: `have hsq : … := …` said nothing). Brief keeps their
+    `name : type` and elides only the justification after `:=`. */
+const KEEPS_STATEMENT = /^(have|obtain|let|suffices)\b/;
+
 const VERB_KW =
   /^(exact\??|apply|rw|rewrite|erw|nth_rewrite|simp\w*|simpa|dsimp|norm_num|norm_cast|push_cast|push_neg|field_simp|ring_nf|linarith|nlinarith|polyrith|positivity|gcongr|omega|decide|aesop|tauto|itauto|trivial|assumption|contradiction|constructor|left|right|rfl|ring|abel|group|module|linear_combination|revert|subst|substs|convert|congr|ext|change|unfold|delta|conv|bound|hint|first|repeat|try|all_goals|any_goals|focus)(\s+only)?\b/;
 
@@ -161,9 +166,11 @@ function elisionRanges(
   };
 
   // A binder tactic keeps its HEAD WORD (2026-09-28: `… hp1 : …` read as
-  // nothing at all — the keyword says what the line does) and elides the
-  // TYPE after the binder's top-level `:`, which is the long part.
-  const mE = BINDER_KW.exec(label);
+  // nothing at all — the keyword says what the line does). `have`/`obtain`/
+  // `let`/`suffices` keep their TYPE too and lose only the justification
+  // (the `:=` rule below); the other binders elide the type after the
+  // top-level `:`, which is the long part.
+  const mE = KEEPS_STATEMENT.test(label) ? null : BINDER_KW.exec(label);
 
   const mF = /^(rw|rewrite|erw|nth_rewrite)\b/.exec(label);
   const open = mF ? label.indexOf("[", mF[0].length) : -1;

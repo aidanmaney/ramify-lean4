@@ -1,4 +1,4 @@
-// The floating chrome over the tree: the hop's axis break and link marks, the mark tabs (with the ⌥-held
+// The floating chrome over the tree: the hop chip and link marks, the mark tabs (with the ⌥-held
 // store that turns a temporary tab into an ×), the top-centre toast, and the zoom rail.
 import { useSyncExternalStore, type ReactNode } from "react";
 import {
@@ -6,6 +6,8 @@ import {
   BADGE_FONT_PX,
   BADGE_H,
   HOP_CAPTION_GAP,
+  HOP_CHIP_H,
+  HOP_CHIP_W,
   tourTabWidth,
 } from "./layout";
 import { type SeedOrigin, hopCaption, seedTitle } from "./elide";
@@ -21,7 +23,6 @@ import {
   CHROME_TEXT,
   Z,
   DIM_OPACITY,
-  TREE_INK_SW_BOLD,
   NOTIF_BG,
   NOTIF_BORDER,
   NOTIF_FG,
@@ -44,28 +45,27 @@ import {
  counter keeps its x across a run of marks; capped by the column's 80%. */
 const TOAST_ANCHORED_W = 420;
 
-/** The AXIS BREAK on a link leaving a HOPPED goal: the graph convention for
- a shortened axis — two parallel slanted strokes across the line with the
- line cut between them — saying "steps were skipped between these two"
- without standing in the tree as a node. Paint only, like `LinkMark`: a
- background-coloured cut plus two strokes; `linkSpans` needs no mirror. It is
- not gated on `linkMarks` — it is the one mark that carries state.
+/** The HOP CHIP on a link leaving a HOPPED goal (2026-10-04; it replaced a
+ graph-style axis break of two slants that no reader recognised): the editor's
+ FOLDED-LINE placeholder — a `⋯` codicon in `--ptw-fold-ph` on a `--ptw-bg`
+ underlay that cuts the line (`HOP_CHIP_W` × `HOP_CHIP_H`, layout.ts), with
+ line left on both sides of it — saying "steps were skipped between these
+ two" without standing in the tree as a node. Paint only, like `LinkMark`;
+ `linkSpans` needs no mirror. It is not gated on `linkMarks` — it is the one
+ mark that carries state.
 
  Beside it, to the right, the CAPTION: the head word of each hidden tactic
- (or the `.none` note in italics), the axis-break label idiom. It is what the
- dashed ghost of a skipped step used to say, now said on the line, and it is
- clickable exactly like the goal's `+N` — the same restore, so the reader can
- undo the hop from either end of it. */
-export function HopBreak({
+ (or the `.none` note in italics), so the run reads `⋯ have · intro` as the
+ editor's folded line does. It is clickable exactly like the goal's `+N` —
+ the same restore, so the reader can undo the hop from either end of it. */
+export function HopChip({
   x,
   y,
-  stroke,
   folded,
   onRestore,
 }: {
   x: number;
   y: number;
-  stroke: string;
   folded: {
     tactics: string[];
     note?: string;
@@ -76,8 +76,7 @@ export function HopBreak({
 }) {
   const caption = hopCaption(folded);
   // A SEEDED break says WHOSE hand it is before it says how much went — the
-  // caption already wears `§` and italics, and this is where that mark is
-  // spelled out.
+  // caption is already italic, and this is where that is spelled out.
   const tip = folded.seeded
     ? `${seedTitle(folded.seededBy, folded.tactics.length)}\n\n${folded.tactics.join("\n")}`
     : `${folded.tactics.length} ${
@@ -92,36 +91,20 @@ export function HopBreak({
       }}
     >
       <title>{tip}</title>
-      {/* JOINED: the link ends at the centre of the upper slant and resumes
-          at the centre of the lower one, so the line runs INTO the break and
-          out of it — one stroke of chrome, not a line with two ticks laid
-          over it. The mask between the two slant centres is what the eye
-          reads as the gap (6px, against 3.5 when the ticks floated). */}
-      <line
-        x1={x}
-        y1={y - 3}
-        x2={x}
-        y2={y + 3}
-        stroke="var(--ptw-bg)"
-        strokeWidth={4}
+      <rect
+        x={x - HOP_CHIP_W / 2}
+        y={y - HOP_CHIP_H / 2}
+        width={HOP_CHIP_W}
+        height={HOP_CHIP_H}
+        rx={CHROME_RADIUS}
+        fill="var(--ptw-bg)"
       />
-      <line
-        x1={x - 4.5}
-        y1={y - 1}
-        x2={x + 4.5}
-        y2={y - 5}
-        stroke={stroke}
-        strokeWidth={TREE_INK_SW_BOLD}
-        strokeLinecap="round"
-      />
-      <line
-        x1={x - 4.5}
-        y1={y + 5}
-        x2={x + 4.5}
-        y2={y + 1}
-        stroke={stroke}
-        strokeWidth={TREE_INK_SW_BOLD}
-        strokeLinecap="round"
+      <Codicon
+        name="ellipsis"
+        size={HOP_CHIP_W}
+        x={x - HOP_CHIP_W / 2}
+        y={y - HOP_CHIP_W / 2}
+        color="var(--ptw-fold-ph)"
       />
       {caption && (
         <text

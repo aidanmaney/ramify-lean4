@@ -185,10 +185,10 @@ export const CHIP_TOP_GAP = 8;
 export const CHIP_LANE_H = 15;
 const TRUNK_GAP_STEP = 14;
 export const TRUNK_GAP_BRANCH = 24;
-/** The run below a HOPPED goal: room for the axis break with line on BOTH
- sides of it, so the reader sees the spine pick up again after the cut
- (14px left the break hugging the box — reported as not obviously
- continuing). The break is drawn at the run's midpoint. */
+/** The run below a HOPPED goal: room for the hop chip (`HOP_CHIP_H`) with
+ line on BOTH sides of it, so the reader sees the spine pick up again after
+ the cut (14px left the old break hugging the box — reported as not
+ obviously continuing). The chip is drawn at the run's midpoint. */
 export const TRUNK_GAP_HOP = 34;
 const BRANCH_COL_GAP = 18;
 
@@ -725,13 +725,18 @@ export const COMMENT_INDENT = TRUNK_INSET + 8;
 export const CASE_FONT_PX = 10;
 export const CASE_LINE_H = 14;
 export const CASE_GAP = 4;
+/** The dim word ahead of every case badge — the infoview's and Lean's own
+ `case pos h` wording (2026-10-04). Drawn as a tspan at `DIM_OPACITY` before
+ the label; `caseSize` measures the two together, so the paint and the
+ reserve are one string. */
+export const CASE_PREFIX = "case ";
 function caseSize(
   label: string | undefined,
 ): Pick<LayoutNode, "caseH" | "caseW"> {
   if (!label) return { caseH: 0, caseW: 0 };
   return {
     caseH: CASE_LINE_H + CASE_GAP,
-    caseW: measureText(label, CASE_FONT_PX),
+    caseW: measureText(CASE_PREFIX + label, CASE_FONT_PX),
   };
 }
 
@@ -811,13 +816,26 @@ function commentSize(
   };
 }
 
-/** Room reserved at a goal box's TOP-RIGHT for the corner glyph (`−`, or
- `+N` once folded): `+40` inks ~13px at `BADGE_FONT_PX + 1`, plus its 6px
- inset and a little air. Only a goal that CAN wear the glyph reserves it (one
- with children, or one already folded), and only the TOP line — the line the
- glyph shares — is widened; measured without it, `+2` overprinted a full-width
- first line by 7px on `sum_range_odd` while the bare `−` cleared it by 0.5. */
-export const CORNER_W = 22;
+/** Room reserved at a goal box's TOP-RIGHT for the fold control (2026-10-04,
+ VS Code's): a `FOLD_ICON` codicon box at the reserve's left edge
+ (`chevron-down` open, `chevron-right` folded) and, folded, `+N` starting
+ `FOLD_PH_X` in — 15, four past the `chevron-right`'s ink — at
+ `BADGE_FONT_PX + 1`, where `+99` inks ~20px, plus 3px of air before the
+ border. Constant whatever the state, so folding never changes a box's width.
+ Only a goal that CAN wear the control reserves it (one with children, or one
+ already folded), and only the TOP line — the line the control shares — is
+ widened. One coding with the renderer's paint and the `[data-ptw-corner]`
+ hit rect (`CORNER_W` × `CORNER_HIT_H`). */
+export const CORNER_W = 38;
+export const FOLD_ICON = 16;
+export const FOLD_PH_X = 15;
+/** The middle of a box's TOP line from its top edge — the first context
+ line's when there is a context block, else the label's. The chevron is
+ centred on it and `+N` sits on it (baseline `+ FOLD_PH_DROP`); the chevron's
+ ink then starts below the goal hover bar's `BAR_OVERLAP`. */
+export const topLineMid = (hasHyps: boolean): number =>
+  NODE_PAD_Y + (hasHyps ? HYP_LINE_H : LINE_H) / 2;
+export const FOLD_PH_DROP = 3.5;
 
 /** The ink width of a box's TOP line — the first hyp line (gutter included)
  when there is a context block, else the label's first line. The corner
@@ -994,11 +1012,21 @@ export function badgeWidth(more: number): number {
   return 2 * BADGE_PAD + measureText(`+${more}`, BADGE_FONT_PX);
 }
 
-/** The gap between the trunk lane and the CAPTION beside a hop's axis break
- (`hopCaption`), and that caption's ink. The break is paint on a link, not a
- node, so nothing reserves room for it: these two are what the renderer places
- it with and what the probes measure it as, and they must stay one coding. */
-export const HOP_CAPTION_GAP = 8;
+/** The HOP CHIP on a link leaving a hopped goal (2026-10-04, replacing the
+ axis break's two slants): the editor's fold placeholder — a `⋯` codicon in
+ `--ptw-fold-ph` on a `--ptw-bg` underlay that cuts the line — centred on the
+ lane at the run's midpoint. `HOP_CHIP_W` × `HOP_CHIP_H` is the underlay's
+ rect (the codicon's 16px box; the dots ink 2px tall at its middle), short
+ enough that `TRUNK_GAP_HOP` leaves line on both sides of it. */
+export const HOP_CHIP_W = 16;
+export const HOP_CHIP_H = 10;
+
+/** The gap between the trunk lane and the CAPTION beside the hop chip
+ (`hopCaption`): the chip's right half plus a 3px space, and that caption's
+ ink. The chip is paint on a link, not a node, so nothing reserves room for
+ either: these are what the renderer places them with and what the probes
+ measure them as, and they must stay one coding. */
+export const HOP_CAPTION_GAP = HOP_CHIP_W / 2 + 3;
 
 export function hopCaptionWidth(text: string, italic: boolean): number {
   return measureText(text, BADGE_FONT_PX, italic);
@@ -1181,8 +1209,7 @@ export function createLayoutEngine(
                 n.label,
                 n.elidedCut?.tactics.length ?? 1,
                 // Italic for a `.none` note (the author's sentence) and for
-                // any SEEDED cut (the author's hand). The `§` mark is already
-                // in `n.label`, so this measures exactly what is painted.
+                // any SEEDED cut (the author's hand) — measured as painted.
                 !!n.elidedCut?.note || !!n.elidedCut?.seeded,
               ),
               ...commentSize(undefined, reflow),

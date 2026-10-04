@@ -265,15 +265,8 @@ chrome stroke (and, before that, Unicode in the code font at a per-mark
 own codicon at 16px, levelled by design, so the levelling code went with the
 drawn copies. See codiconView.tsx. */
 
-/** The goal corner's drawn `−`: its length and stroke, and the corner's hit
- height (the hit width is `CORNER_W`, the top line's reserve). The mark is
- in-tree ink, a quiet sign at about the weight of the `+N` it becomes — the
- chrome's 1.4 stroke at 8px read as the loudest thing on the box
- (2026-09-24); the hit rect, not the ink, is the target. */
-export const CORNER_MINUS_W = 6;
-
-export const CORNER_MINUS_SW = 1.15;
-
+/** The goal corner's hit height (the hit width is `CORNER_W`, the top
+ line's reserve): the fold chevron's target is the rect, not the ink. */
 export const CORNER_HIT_H = 18;
 
 /** One of the bar's VALUE items (Layout, Context, Comments and — only where

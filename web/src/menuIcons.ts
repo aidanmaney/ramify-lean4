@@ -7,6 +7,9 @@ import { type CodiconName } from "./codicon";
 export const MENU_ICON = {
   plus: "add",
   minus: "remove",
+  // A goal's fold rows wear the corner control's own chevrons.
+  fold: "chevron-down",
+  unfold: "chevron-right",
   edit: "edit",
   comment: "comment",
   mark: "bookmark",

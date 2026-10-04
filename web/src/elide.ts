@@ -5,17 +5,17 @@ import type { CombinedPart, ParentEdge, TreeNode } from "./types";
 
  THE VERB DECIDES THE IDIOM, NOT THE GOAL'S POSITION (user direction,
  2026-09-17: "while reading to the end I go for skip; while taking a
- high-level look I go for hide"). `−` on a goal HIDES — always a `fold`, in
+ high-level look I go for hide"). The chevron on a goal HIDES — always a `fold`, in
  every layout, trunk goals included. ◌ on a step SKIPS — always a `hop`,
  wherever the step has exactly one continuation, inside branches as on the
- trunk. So the look names the verb: `+N` with a break on the line was
- skipped, `+N` without one was hidden.
+ trunk. So the look names the verb: a `⋯` chip on the line was skipped, a
+ `chevron-right` and `+N` on a washed box was hidden.
 
  - `hop` and `fold` are GOAL-keyed and leave NO node at all: the goal itself
    is the reduced node, wearing `+N` in its corner (the outliner idiom). A
    `fold` takes the subtree strictly BELOW the goal; a `hop` takes its
    consuming step and what that step opened, and keeps the continuation goal,
-   re-parented — the link out of the goal then carries the axis break,
+   re-parented — the link out of the goal then carries the hop chip,
    captioned with what went (`hopCaption`).
  - `step` is a SKIP of one tactic and everything it opened beside its
    continuation, drawn as a GHOST — the tactic reduced in place to a dashed
@@ -36,9 +36,9 @@ export type SeedOrigin = "none" | "fold" | "residue";
 
 /** What every cut the SOURCE asked for carries, and no cut the reader made
  does. It is what lets the author's hand be read off the drawing: the caption,
- the ghost label and the goal corner all say `§` and lean into italics when it
- is set. Deliberately NOT part of `cutId` — a reader's `−` on a seeded goal
- mints the very same id, and `addCut` dedupes by id, so the standing seeded
+ the ghost label and the goal corner lean into italics when it is set (the
+ `§` they wore went 2026-10-04: a private mark that read as "section").
+ Deliberately NOT part of `cutId` — a reader's fold on a seeded goal mints the very same id, and `addCut` dedupes by id, so the standing seeded
  cut simply survives the reader's gesture rather than being replaced by a
  plain one that draws differently. */
 export interface Seeded {
@@ -65,11 +65,6 @@ export const isSeededCut = (c: ElideCut): boolean =>
   c.kind !== "combine" && !!c.seeded;
 export const seedKindOf = (c: ElideCut): SeedOrigin | undefined =>
   c.kind === "combine" ? undefined : c.seededBy;
-
-/** The mark a seeded cut wears wherever it is drawn — caption, ghost label —
- ahead of the text, in the same italic. The section sign is the printer's
- "this is the author speaking" and is not a glyph any tactic starts with. */
-export const SEED_MARK = "\u00a7 ";
 
 /** The hover title's first paragraph for a seeded cut: which flag wrote it,
  and how much it took. Callers append the list of hidden tactics. */
@@ -703,7 +698,7 @@ export function tacticHead(label: string): string {
   return cut ? `${text}…` : text;
 }
 
-/** The first WORD of a tactic — what the axis break under a hopped goal is
+/** The first WORD of a tactic — what the hop chip under a hopped goal is
  captioned with, since the reader wants to know which moves went, not their
  arguments. Leading identifier/keyword characters; a bullet (`·`) or any other
  punctuation head is its own first character. */
@@ -718,11 +713,10 @@ export function tacticKeyword(label: string): string {
  `intro · simp · …`. */
 const HOP_CAPTION_MAX = 3;
 
-/** The caption beside a hop's axis break: the author's sentence when the cut
+/** The caption beside a hop chip: the author's sentence when the cut
  carries a `.none` note (italic, as the ghost said it), otherwise the head
- word of each hidden tactic in source order. It is the chart convention — an
- axis break is labelled with what the break skipped — and it is what lets the
- ghost go: the goal's `+N` says HOW MUCH went, the caption says WHAT. */
+ word of each hidden tactic in source order — the editor's folded line, `⋯`
+ then what it hides — and it is what lets the ghost go: the goal's `+N` says HOW MUCH went, the caption says WHAT. */
 export function hopCaption(folded: {
   tactics: string[];
   note?: string;
@@ -738,9 +732,9 @@ export function hopCaption(folded: {
           : words.join(" · ");
       })();
   if (body === null) return null;
-  // SEEDED: the author's hand, not the reader's. `§` and italics say so —
-  // the ONE string, so `hopCaptionWidth` measures exactly what is painted.
-  if (folded.seeded) return { text: SEED_MARK + body, italic: true };
+  // SEEDED: the author's hand, not the reader's. Italics say so (and the
+  // `<title>`'s `seedTitle`); `hopCaptionWidth` measures this same string.
+  if (folded.seeded) return { text: body, italic: true };
   return { text: body, italic: !!folded.note };
 }
 
@@ -935,7 +929,7 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
           cut.note
         : ((cut.kind === "step" || cut.kind === "fold" ? cut.note : undefined) ??
           (about?.flags?.elide ? about.flags.note : undefined));
-    // `§` says the AUTHOR asked; a residue seed (an `rw`'s `x = x`) is
+    // Seeded italics say the AUTHOR asked; a residue seed (an `rw`'s `x = x`) is
     // Ramify's own doing, so it DRAWS as a plain reader cut — the seed itself
     // (peeking, reset, `sourceView`) is unchanged.
     const seeded =
@@ -1014,13 +1008,12 @@ export function applyElisions(nodes: TreeNode[], cuts: ElideCut[]): TreeNode[] {
           // words; the `+N` badge (drawn from `tactics.length - 1`) carries
           // whatever else the cut swallowed. A marquee BAND reads the same
           // way — its first member is still the step the reader swept from.
-          // A SEEDED ghost wears the `§` mark ahead of its text, and wears it
-          // IN THE LABEL rather than in the paint: `ghostSize` measures the
-          // label, so measurer and renderer cannot disagree about its width.
+          // A SEEDED ghost says so in italics (`ghostSize` measures it so).
           label: combine
             ? tactics.join("\n")
-            : (seeded ? SEED_MARK : "") +
-              (note ? notePreview(note) : tacticHead(tactics[0] ?? "")),
+            : note
+              ? notePreview(note)
+              : tacticHead(tactics[0] ?? ""),
           parents,
           chain,
 

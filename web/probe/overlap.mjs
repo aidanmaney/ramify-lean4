@@ -1,10 +1,10 @@
 // @probe
 // Ink-overlap sweep for the PAINT THAT RESERVES NOTHING: the ghost markers
-// (combined and marquee/`.none` boxes), the caption beside a hop's axis break,
+// (combined and marquee/`.none` boxes), the hop chip and the caption beside it,
 // and a tour stop's numbered tab hung off a box's left edge.  Every seeded / outline / per-goal
 // cut, combine on and off, in the five placements.  npm run probe -- overlap
 import * as lib from "./lib.mjs";
-import { applyNarration, sourceView, outlineCuts, applyElisions, combineRuns, resolveCut, bandTopH, commentStripTop, commentIndentOf, COMMENT_GAP, isGhostNode, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, tourTabWidth, authorStops } from "./lib.mjs";
+import { applyNarration, sourceView, outlineCuts, applyElisions, combineRuns, resolveCut, bandTopH, commentStripTop, commentIndentOf, COMMENT_GAP, isGhostNode, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, HOP_CHIP_W, HOP_CHIP_H, BADGE_H, TRUNK_INSET, tourTabWidth, authorStops } from "./lib.mjs";
 import { records, tree, byIdOf, kidsOf, readerCuts, MODES, layoutOf } from "./corpus.mjs";
 
 // The four layouts, plus stacked with the reader's side-by-side toggle on.
@@ -47,16 +47,19 @@ for (const [i, rec] of records().entries()) {
       const compact = mode !== "wide";
       const { nodes: placed } = layoutOf(nodes, mode, { sbs });
       const rs = placed.flatMap((pn) => rects(pn, !compact).map((r) => ({ ...r, id: pn.data.id, brk: r.brk || isGhostNode(pn.data) })));
-      // The hop caption, placed exactly as the renderer places it: the trunk
-      // lane (the node's own x in wide) offset by HOP_CAPTION_GAP, at the
-      // midpoint of the run below the hopped goal.
+      // The hop CHIP and its caption, placed exactly as the renderer places
+      // them: the `⋯` chip centred on the trunk lane (the node's own x in
+      // wide) at the midpoint of the run below the hopped goal, the caption
+      // HOP_CAPTION_GAP right of the lane — one rect from the chip's left
+      // edge to the caption's end.
       for (const src of placed) {
         if (src.data.folded?.kind !== "hop") continue;
-        const cap = hopCaption(src.data.folded); if (!cap) continue;
+        const cap = hopCaption(src.data.folded);
         const dst = placed.find((p) => p.data.parents.some((q) => q.id === src.data.id)); if (!dst) continue;
         const y = ((src.y + (bandTopH(src.data) + src.data.h) / 2) + (dst.y - (bandTopH(dst.data) + dst.data.h) / 2)) / 2;
         const lane = compact ? src.x - src.data.w / 2 + TRUNK_INSET : src.x;
-        rs.push({ k: "caption", id: `${src.data.id}#cap`, brk: true, x0: lane + HOP_CAPTION_GAP, x1: lane + HOP_CAPTION_GAP + hopCaptionWidth(cap.text, cap.italic), y0: y - BADGE_H / 2, y1: y + BADGE_H / 2 });
+        const half = Math.max(BADGE_H, HOP_CHIP_H) / 2;
+        rs.push({ k: "caption", id: `${src.data.id}#cap`, brk: true, x0: lane - HOP_CHIP_W / 2, x1: cap ? lane + HOP_CAPTION_GAP + hopCaptionWidth(cap.text, cap.italic) : lane + HOP_CHIP_W / 2, y0: y - half, y1: y + half });
       }
       // A TOUR STOP's tab, placed exactly as the renderer places it: a
       // BADGE_H pill outside the box's LEFT edge, centred on the box. Every

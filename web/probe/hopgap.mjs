@@ -1,6 +1,6 @@
 // @probe
-// The run below a HOPPED goal must hold the axis break with line on both
-// sides, and the CAPTION beside that break — paint on a link, so nothing in the
+// The run below a HOPPED goal must hold the `⋯` hop chip with line on both
+// sides, and the chip and the CAPTION beside it — paint on a link, so nothing in the
 // layout reserves room for it — must not land on a node box, in all four
 // layouts.  Since 2026-09-17 ◌ hops inside BRANCHES as well as on the trunk, so
 // the sweep is every hop a reader can mint (each step's ◌) plus the source's
@@ -9,7 +9,7 @@
 //   npm run probe -- hopgap
 import * as lib from "./lib.mjs";
 import { records, tree, tally, readerCuts, MODES, layoutOf } from "./corpus.mjs";
-const { applyElisions, bandTopH, TRUNK_GAP_HOP, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, BADGE_H, TRUNK_INSET, sourceView, SEED_MARK } = lib;
+const { applyElisions, bandTopH, TRUNK_GAP_HOP, hopCaption, hopCaptionWidth, HOP_CAPTION_GAP, HOP_CHIP_W, HOP_CHIP_H, BADGE_H, TRUNK_INSET, sourceView } = lib;
 const t = tally();
 t.eq(TRUNK_GAP_HOP, 34, "TRUNK_GAP_HOP");
 // Wide (Sugiyama) reserves its own 42px between layers, more than the break
@@ -18,6 +18,8 @@ const WIDE_MIN_GAP = 42;
 
 const rectOf = (p) => { const half = (bandTopH(p.data) + p.data.h) / 2; return { x0: p.x - p.data.w / 2, x1: p.x + p.data.w / 2, y0: p.y + half - p.data.h, y1: p.y + half }; };
 const hit = (a, c) => a.x0 < c.x1 - 0.5 && c.x0 < a.x1 - 0.5 && a.y0 < c.y1 - 0.5 && c.y0 < a.y1 - 0.5;
+const MIN_LINE = 8;
+let minLine = Infinity;
 let swept = 0, seededSwept = 0, branchHops = 0, hops = 0, folds = 0;
 const minGap = {};
 for (const [i, rec] of records().entries()) {
@@ -48,7 +50,7 @@ for (const [i, rec] of records().entries()) {
     const cap = hopCaption(hopped.folded); if (!cap) { t.ok(false, `#${i} ${cut.id}: no caption on a hop`); continue; }
     if (hopped.folded.seeded) {
       seededSwept++;
-      t.ok(cap.text.startsWith(SEED_MARK) && cap.italic, `#${i} ${cut.id}: seeded caption unmarked`);
+      t.ok(cap.italic && !cap.text.startsWith("§"), `#${i} ${cut.id}: seeded caption unmarked`);
     }
     const w = hopCaptionWidth(cap.text, cap.italic);
     for (const mode of MODES) {
@@ -68,13 +70,24 @@ for (const [i, rec] of records().entries()) {
       const lane = compact ? src.x - src.data.w / 2 + TRUNK_INSET : src.x;
       const y = (sBottom + dTop) / 2;
       const cr = { x0: lane + HOP_CAPTION_GAP, x1: lane + HOP_CAPTION_GAP + w, y0: y - BADGE_H / 2, y1: y + BADGE_H / 2 };
+      const chip = { x0: lane - HOP_CHIP_W / 2, x1: lane + HOP_CHIP_W / 2, y0: y - HOP_CHIP_H / 2, y1: y + HOP_CHIP_H / 2 };
+      // Line on both sides: the chip's underlay cuts the link, so at least
+      // MIN_LINE px of it must show above and below.
+      const line = +(gap / 2 - HOP_CHIP_H / 2).toFixed(1);
+      minLine = Math.min(minLine, line);
+      if (line < MIN_LINE) t.ok(false, `#${i} ${mode} ${cut.id}: ${line}px of line beside the chip`);
       swept++;
-      for (const p of ps) if (hit(rectOf(p), cr))
-        t.ok(false, `#${i} ${mode} caption "${cap.text.slice(0, 20)}" over ${p.data.type} ${p.data.label.slice(0, 24)}`);
+      for (const p of ps) {
+        if (hit(rectOf(p), cr))
+          t.ok(false, `#${i} ${mode} caption "${cap.text.slice(0, 20)}" over ${p.data.type} ${p.data.label.slice(0, 24)}`);
+        if (hit(rectOf(p), chip))
+          t.ok(false, `#${i} ${mode} hop chip over ${p.data.type} ${p.data.label.slice(0, 24)}`);
+      }
     }
   }
 }
 console.log(`hops ${hops} (inside branches ${branchHops}), folds ${folds}; caption placements swept ${swept} (seeded captions ${seededSwept})`);
+console.log(`least line beside a hop chip: ${minLine}px (floor ${MIN_LINE})`);
 console.log(`min gap below a hopped goal: ${Object.entries(minGap).map(([m, g]) => `${m} ${g}`).join(", ")}`);
 t.ok(seededSwept > 0, "no seeded caption in the sweep");
 t.ok(branchHops > 0, "no hop inside a branch in the sweep");

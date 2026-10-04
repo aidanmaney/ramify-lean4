@@ -17,7 +17,7 @@
  * each canonical move a SYMBOL beside its own source text; narration replaces
  * the source text with an English sentence. Two different readings, one tree.
  */
-import type { TreeNode, HypLine } from "./types";
+import { isLedgerHead, type TreeNode, type HypLine } from "./types";
 import { tacticHead, tacticKeyword, childIndex } from "./elide";
 import { posKey } from "./proofToTree";
 import { postOrder } from "./treeWalk";
@@ -25,7 +25,7 @@ import { clipText } from "./clipText";
 import { hashString } from "./hash";
 
 /** The glyph a GENERATED strip wears, written INTO the text so `commentSize`
- measures exactly what is painted (the `SEED_MARK` idiom). `∴` — "therefore",
+ measures exactly what is painted (the mark lives in the string). `∴` — "therefore",
  the mark a reader already knows for a line that FOLLOWS from what is above
  rather than one a person wrote. Strips are italic comment ink either way, so
  the glyph, not the styling, is what tells the two voices apart. */
@@ -515,7 +515,18 @@ function template(n: TreeNode, ctx: NarrateCtx): string {
       const ledger =
         n.ledger ?? childrenOf(n, ctx).find((c) => c.ledger)?.ledger ?? [];
       const rows = ledger.map((r) => flat(r.text)).filter((t) => t);
-      return rows.length > 0 ? clip(lead + rows.join(sep), LINE_CAP) : bare;
+      if (rows.length === 0) return bare;
+      if (fam === "calc") {
+        // The chain is already drawn as the ledger beside this line, so the
+        // line echoes its START and says how long it is (2026-10-04: the
+        // whole chain clipped at LINE_CAP read as a garbled formula).
+        const links = ledger.filter((r) => !isLedgerHead(r)).length;
+        return clip(
+          `${lead}${clipText(rows.join(sep), 60, { words: true })} (${links} ${links === 1 ? "link" : "links"})`,
+          LINE_CAP,
+        );
+      }
+      return clip(lead + rows.join(sep), LINE_CAP);
     }
 
     case "term": {

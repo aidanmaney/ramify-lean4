@@ -45,6 +45,11 @@ import {
   isGhostNode,
   BADGE_FONT_PX,
   CORNER_W,
+  FOLD_ICON,
+  FOLD_PH_DROP,
+  FOLD_PH_X,
+  topLineMid,
+  CASE_PREFIX,
   BADGE_H,
   badgeWidth,
   tourTabWidth,
@@ -300,8 +305,6 @@ import {
 } from "./viewModes";
 import {
   CORNER_HIT_H,
-  CORNER_MINUS_SW,
-  CORNER_MINUS_W,
   STATUS_NAME_MAX,
 } from "./barMetrics";
 import { Codicon } from "./codiconView";
@@ -311,7 +314,7 @@ import { pillCandidates } from "./pillPlace";
 import { Squiggle, SquigglePatterns } from "./squiggle";
 import { ringPath } from "./ringPath";
 import { SQUIGGLE_H, diagGlyphOf, diagWordOf, squiggleHitW } from "./diagInk";
-import { HopBreak, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
+import { HopChip, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
 import { StatusBar } from "./statusBar";
 import {
   CHIP_FONT_PX,
@@ -6683,10 +6686,9 @@ export default function ProofTreeView({
                     <LinkMark {...endMark} goal={goalBound} stroke={stroke} />
                   )}
                   {link.source.data.folded?.kind === "hop" && (
-                    <HopBreak
+                    <HopChip
                       x={hopX}
                       y={(hopY + hopEnd) / 2}
-                      stroke={stroke}
                       folded={link.source.data.folded}
                       onRestore={() => onNodeClick(link.source.data.id)}
                     />
@@ -6737,7 +6739,7 @@ export default function ProofTreeView({
                 ? node.data.elidedCut!.tactics.length
                 : 0;
 
-              // The goal's own `−`/`+N`. `folded` is what a fold cut hanging
+              // The goal's own chevron/`+N`. `folded` is what a fold cut hanging
               // off this goal took (the `+N` counts it and restores it);
               // otherwise `goalCuts` says whether there is anything honest to
               // take from here.
@@ -7334,7 +7336,7 @@ export default function ProofTreeView({
                       folded
                         ? {
                             glyph: `+${nFold}`,
-                            codicon: MENU_ICON.plus,
+                            codicon: MENU_ICON.unfold,
                             label: `Bring back the ${nFold} hidden step${nFold === 1 ? "" : "s"}`,
                             title: "Bring back the hidden steps",
                             shortcut: `click +${nFold}`,
@@ -7344,10 +7346,10 @@ export default function ProofTreeView({
                           }
                         : {
                             glyph: "−",
-                            codicon: MENU_ICON.minus,
+                            codicon: MENU_ICON.fold,
                             label: "Hide everything below this goal",
                             title: "Hide everything below this goal",
-                            shortcut: "click −",
+                            shortcut: "click the chevron",
                             keys: "Space",
                             slot: "fold" as const,
                             onClick: () => onNodeClick(id),
@@ -7542,7 +7544,7 @@ export default function ProofTreeView({
                             title: isCombined
                               ? "Skip this run (⌥-click) — the whole run collapses to one dashed box (click it to restore)"
                               : hasChildren
-                                ? "Skip this step (⌥-click) — the goal above hops over it and wears +N; the break on the line names what went (click either to restore)"
+                                ? "Skip this step (⌥-click) — the goal above hops over it and wears +N; the ⋯ on the line names what went (click either to restore)"
                                 : "Skip this closing step (⌥-click) — the goal above folds and wears +N (click it to restore)",
                             onClick: () =>
                               isCombined ? elideCombined(id) : elideStep(id),
@@ -8078,6 +8080,7 @@ export default function ProofTreeView({
                       y={boxTop - topH + CASE_LINE_H / 2}
                       dy="0.32em"
                     >
+                      <tspan opacity={DIM_OPACITY}>{CASE_PREFIX}</tspan>
                       {node.data.caseLabel}
                     </text>
                   )}
@@ -8305,6 +8308,20 @@ export default function ProofTreeView({
                     )}
                   </rect>
 
+                  {/* A FOLDED goal's box wears the editor's folded-range wash
+                      (`--ptw-fold-bg`) over its own fill, under its text. */}
+                  {folded?.kind === "fold" && !hideForEdit && (
+                    <rect
+                      x={-w / 2}
+                      y={boxTop}
+                      width={w}
+                      height={h}
+                      rx={boxRx}
+                      fill="var(--ptw-fold-bg)"
+                      pointerEvents="none"
+                    />
+                  )}
+
                   {/* The KEYBOARD RING: the box grown by 3 (5 on a GHOST,
                       whose dashed border a ring 1px off read as one mixed
                       dotted line), in the focus ink, drawn only while the
@@ -8460,50 +8477,65 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {/* The goal's corner control, top-right (user direction).
-                      `sizeOf` reserves `CORNER_W` on the top line. Folded, it is
-                      `+N` over the tactics the fold took; unfolded the `−`, and
-                      only that face has a preview — hovering `+N` would fade
-                      nothing, since nothing it stands for is drawn. */}
+                  {/* The goal's corner control, top-right (user direction),
+                      VS Code's fold control (2026-10-04). OPEN: a
+                      `chevron-down` in the gutter's folding ink, faded in
+                      while the box is hovered (theme.ts, the editor's
+                      `showFoldingControls: mouseover` with its 0.5s fade —
+                      no dwell: it is the control itself, not a preview of
+                      what it would take) or keyboard-active. FOLDED: a
+                      `chevron-right`, always, then `+N` in the fold
+                      placeholder's ink and the box washed in the folded
+                      range's — the editor's folded line. Both sit on the
+                      top line's middle (`topLineMid`). A HOP's goal is not
+                      folded (its continuation is still drawn; the `⋯` chip on
+                      the line says what went), so it wears `+N` alone, in the
+                      same place, and no chevron. Seeded: italic `+N`.
+                      `sizeOf` reserves `CORNER_W` on the top line for all of
+                      it; `FOLD_ICON`/`FOLD_PH_X`/`topLineMid` place it. */}
                   {cuttable &&
                     !hideForEdit && (
                     <>
-                      {folded ? (
-                        // SEEDED: the corner leans and takes COMMENT ink, the
-                        // same ink the caption beside the break is written in,
-                        // so "the author put this away" reads at a glance from
-                        // either end of the cut. The glyph itself is unchanged
-                        // — no `§` here, so `CORNER_W`'s reserve still holds.
+                      {folded?.kind !== "hop" && (
+                        <g
+                          data-ptw-foldctl={folded ? "folded" : "open"}
+                          style={
+                            treeFocus === "kb" && id === activeNow
+                              ? { opacity: 1 }
+                              : undefined
+                          }
+                          pointerEvents="none"
+                        >
+                          <Codicon
+                            name={folded ? "chevron-right" : "chevron-down"}
+                            size={FOLD_ICON}
+                            x={w / 2 - CORNER_W}
+                            y={
+                              boxTop +
+                              topLineMid(!!hyps && hyps.length > 0) -
+                              FOLD_ICON / 2
+                            }
+                            color="var(--ptw-fold-ctl)"
+                          />
+                        </g>
+                      )}
+                      {folded && (
                         <text
-                          x={w / 2 - 6}
-                          y={boxTop + 12}
-                          textAnchor="end"
+                          x={w / 2 - CORNER_W + FOLD_PH_X}
+                          y={
+                            boxTop +
+                            topLineMid(!!hyps && hyps.length > 0) +
+                            FOLD_PH_DROP
+                          }
                           fontSize={BADGE_FONT_PX + 1}
                           fontFamily={getCodeFontFamily()}
                           fontStyle={folded.seeded ? "italic" : undefined}
-                          fill={
-                            folded.seeded ? "var(--ptw-comment)" : NODE_TEXT
-                          }
-                          opacity={folded.seeded ? undefined : DIM_OPACITY}
+                          fill="var(--ptw-fold-ph)"
                           pointerEvents="none"
                           style={{ letterSpacing: 0 }}
                         >
                           {`+${folded.tactics.length}`}
                         </text>
-                      ) : (
-                        // DRAWN, not a text dash (2026-09-22): the 12px `−`
-                        // inked ~7 × 1px, the faintest mark on the box. A
-                        // CORNER_MINUS_W stroke at `CORNER_MINUS_SW` in the
-                        // node's stroke ink, centred where the dash's ink
-                        // was (x − 8, the x-height middle of the top line),
-                        // so its right end stays clear of `CORNER_W`'s edge.
-                        <path
-                          d={`M${w / 2 - 8 - CORNER_MINUS_W / 2} ${boxTop + 8}h${CORNER_MINUS_W}`}
-                          stroke={style.stroke}
-                          strokeWidth={CORNER_MINUS_SW}
-                          strokeLinecap="round"
-                          pointerEvents="none"
-                        />
                       )}
                       {/* THE HIT AREA: an invisible rect over the corner the
                           top line leaves free (`CORNER_W` wide, the reserve
@@ -8512,7 +8544,8 @@ export default function ProofTreeView({
                           before — a 7 × 1 dash. Paint only, like the nub's
                           region: the click is the node's own (a goal's click
                           folds or opens), the rect adds the pointer cursor and
-                          carries the `−` face's fade preview. */}
+                          carries the open face's fade preview (after the
+                          dwell, as before). */}
                       <rect
                         data-ptw-corner=""
                         x={w / 2 - CORNER_W}
@@ -8522,7 +8555,7 @@ export default function ProofTreeView({
                         fill="transparent"
                         pointerEvents="all"
                         style={{ cursor: "pointer" }}
-                        // Hovering the `−` fades exactly what the click would
+                        // Hovering the open chevron fades exactly what the click would
                         // take — the skip button's preview, by the same rule
                         // and sparing the anchor (this node) for the same
                         // reason: the control under the pointer must not read
@@ -8546,7 +8579,7 @@ export default function ProofTreeView({
                         // Leaving and pressing are wired on BOTH faces: the
                         // press folds the goal, and a `+N` face with no
                         // leave handler would strand a preview (or a pending
-                        // dwell) that the `−` face started.
+                        // dwell) that the open face started.
                         onPointerLeave={dropCornerPreview}
                         onPointerDown={dropCornerPreview}
                       />

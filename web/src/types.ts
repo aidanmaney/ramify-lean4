@@ -238,7 +238,7 @@ export interface TreeNode {
     kind: "fold" | "hop";
     /** The SOURCE asked for this cut (a `.fold` / `.none` flag, or an `rw`'s
      `x = x` residue), not the reader. The caption and the corner `+N` then
-     draw in the author's voice — `§` and italics, comment ink. */
+     draw in the author's voice — italics (the `<title>` says which flag). */
     seeded?: true;
     seededBy?: SeedOrigin;
   };
@@ -254,9 +254,8 @@ export interface TreeNode {
     note?: string;
 
     /** As `folded.seeded`: this ghost stands for something the SOURCE put
-     away. Its label already carries the `§` mark (`applyElisions` writes it
-     in, so `ghostSize` measures it); this is what makes it italic and what
-     the `<title>` names. */
+     away: it is what makes the label italic (`ghostSize` measures it so)
+     and what the `<title>` names. */
     seeded?: true;
     seededBy?: SeedOrigin;
   };

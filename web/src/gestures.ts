@@ -120,7 +120,7 @@ export const GESTURES: Gesture[] = [
   },
   {
     target: "goal",
-    input: "click the top-right corner",
+    input: "click the chevron (top-right)",
     says: "to fold or unfold what is below",
     when: (g) => g.goalCut === "fold" || g.goalCut === "open",
   },
@@ -186,7 +186,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "tactic",
     input: "⌥-click",
-    says: "to skip this step (the break on the line names it)",
+    says: "to skip this step (the ⋯ on the line names it)",
     when: (g) => g.elidable,
   },
   {
@@ -211,7 +211,7 @@ export const GESTURES: Gesture[] = [
   { target: "ghost", input: "click", says: "to bring it back" },
   {
     target: "ghost",
-    input: "§, italics",
+    input: "italics",
     says: "= hidden because the source asked (`.none`, `.fold`)",
   },
 
@@ -392,7 +392,7 @@ export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
   },
   flagNone: {
     label: ".none…",
-    title: `Replace this step and whatever it opened with a sentence — writes \`-- .none <your prose>\` in the source; your words caption the break it leaves, marked \`§\` and italic once the source is read back (${UNDO})`,
+    title: `Replace this step and whatever it opened with a sentence — writes \`-- .none <your prose>\` in the source; your words caption the break it leaves, in italics once the source is read back (${UNDO})`,
   },
   noHyps: {
     label: ".no-hyps",
@@ -413,5 +413,5 @@ export const VERB_DOC: Record<SelVerbDocKey, SelVerbDoc> = {
 // VERB_DOC entry nothing dispatches.
 export const FLAG_GROUP = {
   label: "flag ▾",
-  title: "Source flags: write .fold / .none / .no-hyps / .h# into the source — what they hide is drawn in the author's voice (`§`, italics, the comment colour)",
+  title: "Source flags: write .fold / .none / .no-hyps / .h# into the source — what they hide is drawn in the author's voice (italics)",
 };

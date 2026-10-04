@@ -362,6 +362,19 @@ const PALETTE_CSS = `
   fill: var(--ptw-toolbar-active);
 }
 
+/* The goal's fold chevron (2026-10-04): VS Code's folding control with
+   \`editor.showFoldingControls: mouseover\` — hidden on an OPEN goal until the
+   box is hovered, faded over 0.5s both ways as the editor's gutter does; a
+   FOLDED goal's chevron always shows. Paint only (opacity), so nothing moves;
+   keyboard-active is an inline \`opacity: 1\` on the element. */
+[data-ptw-theme] [data-ptw-foldctl="open"] {
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+[data-ptw-theme] [role="treeitem"]:hover [data-ptw-foldctl="open"] {
+  opacity: 1;
+}
+
 /* The status bar's items wash on hover, as VS Code's status-bar items do. */
 [data-ptw-theme] [data-ptw-baritem]:not(:disabled):hover {
   --ptw-bar-item-bg: var(--ptw-chrome-btn);

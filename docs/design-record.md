@@ -4431,3 +4431,54 @@ Not verified live: whether VS Code consumes ⌘. or F8 before the webview
 fingerprint` identical (1189), `check-sync`, `check-settings`,
 `gen-codicons --check` (no new names), `gen-experience --check`.
 Screenshots: /tmp/claude-0/batch2/.
+
+## 2026-10-04 — Fold chevrons, hop chip, brief keeps the statement (batch 3)
+
+Batch 3 of `docs/vscode-idioms/verdict.md` §3, with the owner's binding
+decisions: the fold control stays at the goal box's TOP-RIGHT (Q2 left as is).
+
+- **Fold control** = VS Code's. OPEN goal: codicon `chevron-down` in
+  `--ptw-fold-ctl` (`editorGutter-foldingControlForeground`), opacity 0, faded
+  in over 0.5s by a CSS rule while the node's `treeitem` is hovered (the
+  editor's `showFoldingControls: mouseover`), inline `opacity: 1` while
+  keyboard-active. It does NOT wait `TIP_DWELL_MS`: it is the control itself,
+  not a preview of what it would do; the fade-what-it-takes preview on the
+  `[data-ptw-corner]` rect still dwells as before. FOLDED: `chevron-right`
+  always, then `+N` in `--ptw-fold-ph` (`editor-foldPlaceholderForeground`), the
+  box washed `--ptw-fold-bg` (`editor-foldBackground`) over its fill. Seeded
+  `+N` stays italic (no longer comment ink — the placeholder ink is the
+  regular one). A HOP's goal is not folded and wears `+N` alone in the same
+  place: no chevron, no wash — the `⋯` on the line says it was skipped.
+  Measurer/renderer: `CORNER_W` 22 → 38 (`FOLD_ICON` 16 + `+99` at
+  `FOLD_PH_X` 15 + air), constant in every state so folding never changes a
+  width; both marks centre on `topLineMid` (layout.ts). The hit rect is
+  unchanged in kind (`CORNER_W` × `CORNER_HIT_H`), wider with the reserve.
+  `CORNER_MINUS_W/SW` and the drawn minus are deleted. The `⋯` menu's fold rows
+  wear `chevron-down`/`chevron-right` (`MENU_ICON.fold/unfold`) and say
+  "click the chevron"; Help's start-here and the gesture row say chevron.
+- **Case badge**: `case ` prefix at `DIM_OPACITY` (`CASE_PREFIX`), measured by
+  `caseSize` with the label.
+- **Hop**: `HopBreak` → `HopChip`: a `⋯` codicon in `--ptw-fold-ph` on a
+  `--ptw-bg` underlay (`HOP_CHIP_W` 16 × `HOP_CHIP_H` 10, `CHROME_RADIUS`) at
+  the run's midpoint; the caption starts `HOP_CAPTION_GAP` = chip half + 3
+  right of the lane. Click and `<title>` unchanged; `TRUNK_GAP_HOP` stays 34.
+  `probe hopgap` now asserts ≥ 8px of line on both sides of the chip
+  (measured 12) and checks the chip rect against every box; `probe overlap`
+  models chip + caption as one rect. Both 0.
+- **`§` removed** (`SEED_MARK` deleted, not set to ""): caption and ghost
+  label are the bare text; seeded italics and `seedTitle` stay. `probe counts`
+  now asserts the voice by `italic`/`seeded`, not by the mark.
+- **Brief**: `have/obtain/let/suffices` keep `name : type` and elide only the
+  justification after `:=` (`KEEPS_STATEMENT`, briefLabel.ts); the other
+  binders (`set`, `refine`, `by_cases`, …) still elide the type. Expert now
+  reads `have hsq : (0 : ℝ) ≤ (a - b) ^ 2 := …`.
+- **Calc narration**: `Chain: ` + `clipText(chain, 60, {words: true})` +
+  ` (N links)` (links = non-head ledger rows). `probe narrate` 251/251,
+  residue 0.
+
+Fingerprint (`--update`, intended): `layout-*` (all four modes, 28 of the
+corpus+synth records) — `CORNER_W` and the case prefix widen boxes/badges;
+verified by reverting just those two constants, which left only calc.lean#1's
+`narrate-*` and `layout-*+narrated(-full)` changed — the calc narration line.
+Brief labels are not a fingerprinted stage. Counts, order, hopgap, overlap
+unchanged in substance (0 regressions). Screenshots: /tmp/claude-0/batch3/.

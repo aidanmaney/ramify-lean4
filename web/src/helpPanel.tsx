@@ -149,7 +149,7 @@ export function HelpPanel({
       <div style={{ display: "grid", rowGap: 2 }}>
         <div style={{ ...SECTION_HEAD, marginTop: 0 }}>Start here</div>
         <div>Click a tactic to show it in the source.</div>
-        <div>Click a goal's top-right corner to fold what is below it.</div>
+        <div>Click the chevron at a goal's top-right to fold what is below it.</div>
         <div>Right-click a box for every move on it.</div>
       </div>
       {/* What the picture is, before what can be done to it. Colours are the
