@@ -2,7 +2,17 @@
 // about (error, warning) and its hint dots (a lint), the editor's idiom for
 // the same three severities — the tiles are copied from the workbench's
 // `.squiggly-*` decorations so the two read as one mark.
-import { SQUIGGLE_H, SQUIGGLE_TILE_W as TILE_W, diagInkOf, type Severity } from "./diagInk";
+import { useId } from "react";
+import {
+  SQUIGGLE_H,
+  SQUIGGLE_TILE_W as TILE_W,
+  diagInkOf,
+  ribbonRunOf,
+  ribbonWidth,
+  squiggleHitW,
+  type Severity,
+} from "./diagInk";
+import { useClassic } from "./appearance";
 
 const patternId = (sev: Severity) => `ptw-squiggle-${sev}`;
 
@@ -59,5 +69,111 @@ export function Squiggle({
       fill={`url(#${patternId(sev)})`}
       style={{ pointerEvents: "none" }}
     />
+  );
+}
+
+/** A diagnostic box's wash under the CLASSIC ribbon: the severity's ink over
+ the box fill (`DIAG_BOX_WASH_OPACITY` before cffa2be). */
+const CLASSIC_WASH_OPACITY = 0.07;
+
+/** THE DIAGNOSTIC MARK SEAM (appearance.ts): one node's mark for its worst
+ severity, and the hover target that shows its messages. VS Code: the
+ squiggle under the box's last line (`squiggle` geometry). CLASSIC: the left
+ RIBBON inside the box's inner edge, a faint wash of the ink over the fill
+ (not for a lint), and a hit strip down the left padding (`box` geometry;
+ the border tint is the box's own stroke, `classicDiagStroke`). Either way it
+ reserves and measures nothing. */
+export function DiagMark({
+  sev,
+  selected,
+  squiggle,
+  box,
+  onEnter,
+  onLeave,
+}: {
+  sev: Severity;
+  /** The node the message strip is showing (the classic ribbon thickens). */
+  selected: boolean;
+  squiggle: { x: number; y: number; width: number };
+  box: {
+    x: number;
+    top: number;
+    w: number;
+    h: number;
+    rx: number;
+    /** The border's stroke width (the ribbon sits inside it). */
+    sw: number;
+    /** How far down the left edge a mark tab reaches (0 without one). */
+    tabInset: number;
+    /** The left padding: the classic hover strip's width. */
+    padW: number;
+  };
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
+  const classic = useClassic();
+  const clipId = useId();
+  if (classic) {
+    const { x, top, w, h, rx, sw, tabInset, padW } = box;
+    const inner = {
+      x: x + sw / 2,
+      y: top + sw / 2,
+      width: w - sw,
+      height: h - sw,
+      rx: Math.max(0, rx - sw / 2),
+    };
+    const rw = ribbonWidth(sev, selected);
+    const run = ribbonRunOf(sev, inner.y + tabInset, inner.height - tabInset, inner.rx);
+    const lx = inner.x + rw / 2;
+    return (
+      <>
+        <clipPath id={clipId}>
+          <rect {...inner} />
+        </clipPath>
+        {sev !== 3 && (
+          <rect
+            {...inner}
+            fill={diagInkOf(sev)}
+            fillOpacity={CLASSIC_WASH_OPACITY}
+            style={{ pointerEvents: "none" }}
+          />
+        )}
+        <line
+          x1={lx}
+          x2={lx}
+          y1={run.y1}
+          y2={run.y2}
+          stroke={diagInkOf(sev)}
+          strokeWidth={rw}
+          clipPath={`url(#${clipId})`}
+          style={{ pointerEvents: "none" }}
+        />
+        <rect
+          x={x}
+          y={top}
+          width={padW}
+          height={h}
+          fill="transparent"
+          style={{ cursor: "help" }}
+          onMouseEnter={onEnter}
+          onMouseLeave={onLeave}
+        />
+      </>
+    );
+  }
+  return (
+    <>
+      <Squiggle sev={sev} x={squiggle.x} y={squiggle.y} width={squiggle.width} />
+      <rect
+        x={squiggle.x}
+        y={squiggle.y - 4}
+        width={squiggleHitW(sev, squiggle.width)}
+        height={SQUIGGLE_H + 6}
+        fill="transparent"
+        style={{ cursor: "help" }}
+        onMouseEnter={onEnter}
+        onMouseLeave={onLeave}
+      />
+    </>
   );
 }

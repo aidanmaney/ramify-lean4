@@ -8,6 +8,7 @@ import {
 import type { Lint } from "./lints";
 import type { TreeDiagnostic } from "./diagnostics";
 import { parseExperience } from "./experience";
+import { parseAppearance } from "./appearance";
 import { parseBarList, type BarKind, type MoveId } from "./moves";
 import type { PolishLine } from "./narrate";
 import { proofTitle } from "./proofToTree";
@@ -105,6 +106,9 @@ const record = (name: string, v: unknown) => {
 /** `ramify.experience` without a companion: `?experience=beginner|intermediate|expert`
  (experience.ts). Absent or unknown, intermediate — the setting's default. */
 const EXPERIENCE = parseExperience(QUERY.get("experience"));
+/** `ramify.appearance` without a companion: `?appearance=classic` (appearance.ts).
+ Absent or anything else, the VS Code look — the setting's default. */
+const APPEARANCE = parseAppearance(QUERY.get("appearance"));
 
 /** `ramify.hoverBar.tactic` / `.goal` without a companion:
  `?hoverbar-tactic=source,trace,delete` (moves.ts ids, comma-separated; an
@@ -417,6 +421,7 @@ function ProofHarness() {
       proof={proof!}
       ledger={!NO_LEDGER}
       experience={EXPERIENCE}
+      appearance={APPEARANCE}
       hoverBar={HOVER_BAR}
       onHoverBarChange={recordHoverBar}
 

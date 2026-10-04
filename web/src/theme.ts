@@ -347,6 +347,54 @@ const PALETTE_CSS = `
   --ptw-tok-comment: color-mix(in srgb, var(--ptw-raw-comment) 53%, var(--ptw-fg));
 }
 
+/* THE CLASSIC APPEARANCE (appearance.ts, \`ramify.appearance: classic\`): the
+   token layer of the skin before 2026-10-04 — the host's hover, menu,
+   notification, marker-navigation, sticky-scroll, word-highlight and
+   infoview inks are NOT read, and every token goes back to the recipe it had.
+   Two attribute selectors, so it outranks both theme blocks above whatever
+   the order. Paint only: no token here is measured. */
+[data-ptw-theme][data-ptw-appearance="classic"] {
+  --ptw-hyp-lit: color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface));
+  --ptw-hyp-lit-strong: var(--ptw-hyp-lit);
+  --ptw-hypname: var(--ptw-hyp-used);
+  --ptw-inaccessible: var(--ptw-hyp-used);
+  --ptw-turnstile: var(--ptw-node-text);
+  --ptw-case-ink: var(--ptw-case);
+  --ptw-comment-text: var(--ptw-comment);
+  --ptw-ghost-text: var(--ptw-comment);
+  --ptw-chrome-btn: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--ptw-fg) 5%, var(--ptw-chrome-bg)));
+  --ptw-toolbar-hover: var(--ptw-chrome-btn);
+  --ptw-toolbar-active: var(--ptw-chrome-btn);
+  --ptw-hover-bg: var(--ptw-chrome-bg);
+  --ptw-hover-border: var(--ptw-chrome-border);
+  --ptw-hover-fg: var(--ptw-chrome-ink);
+  --ptw-menu-bg: var(--ptw-chrome-bg);
+  --ptw-menu-fg: var(--ptw-chrome-ink);
+  --ptw-menu-border: var(--ptw-chrome-border);
+  --ptw-menu-sep: color-mix(in srgb, var(--ptw-chrome-border) 76%, transparent);
+  --ptw-menu-sel-bg: var(--ptw-chrome-lit);
+  --ptw-menu-sel-fg: var(--ptw-chrome-ink);
+  --ptw-sticky-bg: var(--ptw-bg);
+  --ptw-sticky-border: var(--ptw-chrome-border);
+  --ptw-sticky-shadow: transparent;
+  --ptw-notif-bg: var(--ptw-chrome-bg);
+  --ptw-notif-fg: var(--ptw-chrome-ink);
+  --ptw-notif-border: var(--ptw-chrome-border);
+  --ptw-marker-bg: var(--ptw-chrome-bg);
+  --ptw-diag-error-edge: var(--ptw-danger);
+  --ptw-diag-warn-edge: var(--ptw-warn);
+  --ptw-diag-lint-edge: var(--ptw-comment);
+  --ptw-diag-error-wash: color-mix(in srgb, var(--ptw-danger) 13%, var(--ptw-chrome-bg));
+  --ptw-diag-warn-wash: color-mix(in srgb, var(--ptw-warn) 13%, var(--ptw-chrome-bg));
+  --ptw-diag-lint-wash: color-mix(in srgb, var(--ptw-comment) 11%, var(--ptw-chrome-bg));
+}
+/* An inaccessible name drew like any other before the infoview's inks; the
+   rule outranks the plain path's presentation attributes too. */
+[data-ptw-appearance="classic"] .ptw-inaccessible {
+  font-style: normal;
+  opacity: 1;
+}
+
 /* Keyboard focus, one ring for every chrome button: 1px and INSET, VS Code's
    own idiom, so it follows each control's own radius and never grows outside
    the strip it sits in. --ptw-focus is the editor's focusBorder. Only

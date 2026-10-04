@@ -1,5 +1,6 @@
 // The status bar's diagnostics count item and the message strip above the strip: severity glyphs and
 // ink, the per-severity counts, and the strip with its pager.
+import { Fragment } from "react";
 import { type TreeDiagnostic } from "./diagnostics";
 import { useTip } from "./tipController";
 import {
@@ -15,17 +16,23 @@ import {
   MARKER_BG,
   CHROME_TEXT,
   CHROME_TEXT_SM,
+  DIM_OPACITY,
 } from "./theme";
 import { BARE_BTN, DIAG_STRIP_GAP, PILL_BTN } from "./barMetrics";
 import { BarButton } from "./barChrome";
 import { Codicon } from "./codiconView";
-import { DIAG_ICON, type Severity } from "./diagInk";
+import { DIAG_ICON, diagInkOf, type Severity } from "./diagInk";
+import { useClassic } from "./appearance";
 
 /** A severity's codicon in its ink (`DIAG_ICON`): the problems count, the
  message strip and a node's popover. The text glyphs stay for native
  `<title>`s, which cannot hold an SVG. */
 export function DiagIcon({ sev, size = 16 }: { sev: Severity; size?: number }) {
   const i = DIAG_ICON[sev];
+  // CLASSIC (appearance.ts): the drawn `DiagGlyph` in the tree's severity
+  // ink (a lint in comment ink, undimmed), via `Codicon`'s classic set.
+  if (useClassic())
+    return <Codicon name={i.name} size={size} color={diagInkOf(sev)} />;
   return <Codicon name={i.name} size={size} color={i.ink} opacity={i.opacity} />;
 }
 
@@ -78,6 +85,33 @@ function DiagCounts({
   const present = ([1, 2, 3] as const).filter((s) => counts[s - 1] > 0);
   const sevs = compact ? present.slice(0, 1) : present;
   const total = counts[0] + counts[1] + counts[2];
+  const classic = useClassic();
+  if (classic)
+    // CLASSIC: `✕ 2 · ◇ 1` — the drawn glyphs, a dim `·` between severities,
+    // two reserved tabular digits per count. Measured by the same ghost.
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          fontSize: CHROME_TEXT_SM,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {sevs.map((s, i) => (
+          <Fragment key={s}>
+            {i > 0 && <span style={{ opacity: DIM_OPACITY }}>·</span>}
+            <DiagIcon sev={s} size={12} />
+            <span
+              style={{ display: "inline-block", minWidth: "2ch", textAlign: "left" }}
+            >
+              {compact ? total : counts[s - 1]}
+            </span>
+          </Fragment>
+        ))}
+      </span>
+    );
   return (
     <span
       style={{
@@ -112,9 +146,13 @@ export function DiagCountItem({
   compact,
 }: DiagBarProps & { compact?: boolean }) {
   const words = diagCountWords(counts);
+  // CLASSIC: lit while its strip is up, as every bar item is while its panel
+  // is (the inverted block, `BarButton`'s classic accent).
+  const classic = useClassic();
   return (
     <BarButton
       label={<DiagCounts counts={counts} compact={compact} />}
+      accent={classic && open}
       title={
         open
           ? `Problems: ${words} — click to close the messages (Esc)`
@@ -161,6 +199,7 @@ export function DiagStrip({
 }: DiagBarProps & {
   stripRef: React.Ref<HTMLDivElement>;
 }) {
+  const classic = useClassic();
   const tip = useTip();
   const sev = diag.severity;
   return (
@@ -249,7 +288,33 @@ export function DiagStrip({
       >
         {/* The marker-navigation widget's own order: where you are, then
             Next (`arrow-down`) and Previous (`arrow-up`), then close. */}
-        {count > 1 && (
+        {count > 1 && classic && (
+          // CLASSIC: the pager it was — `‹ 1/3 ›`.
+          <>
+            <button
+              type="button"
+              data-ptw-baritem=""
+              style={PILL_BTN}
+              {...tip.props("Previous problem")}
+              onClick={() => onStep(-1)}
+            >
+              <Codicon name="arrow-up" />
+            </button>
+            <span style={{ color: MUTED_FILL, fontSize: CHROME_TEXT_SM }}>
+              {index + 1}/{count}
+            </span>
+            <button
+              type="button"
+              data-ptw-baritem=""
+              style={PILL_BTN}
+              {...tip.props("Next problem")}
+              onClick={() => onStep(1)}
+            >
+              <Codicon name="arrow-down" />
+            </button>
+          </>
+        )}
+        {count > 1 && !classic && (
           <>
             <span
               style={{

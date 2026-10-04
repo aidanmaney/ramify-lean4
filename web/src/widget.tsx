@@ -34,6 +34,7 @@ import {
   parseExperience,
   type Experience,
 } from "./experience";
+import { DEFAULT_APPEARANCE, parseAppearance, type Appearance } from "./appearance";
 import { parseBarList, type BarKind, type MoveId } from "./moves";
 import type { PolishLine } from "./narrate";
 import {
@@ -289,6 +290,9 @@ interface Settings {
   ai: { polish: boolean; propose: boolean; ready: boolean; why: string };
   /** `ramify.experience` (experience.ts) — the preset the defaults come from. */
   experience: Experience;
+  /** `ramify.appearance` (appearance.ts) — the VS Code look or the classic
+   skin; paint only. */
+  appearance: Appearance;
   /** `ramify.hoverBar.{tactic,goal}` — `null` where the reader has not set
    it (the companion reads it with `inspect()`), so the preset's list stands. */
   hoverBar: { tactic: MoveId[] | null; goal: MoveId[] | null };
@@ -338,6 +342,7 @@ const DEFAULT_SETTINGS: Settings = {
   abbrev: DEFAULT_ABBREV,
   ai: DEFAULT_AI,
   experience: DEFAULT_EXPERIENCE,
+  appearance: DEFAULT_APPEARANCE,
   hoverBar: { tactic: null, goal: null },
   companion: false,
 };
@@ -358,6 +363,7 @@ interface ThemeColorsResponse {
   };
   ai?: { polish?: boolean; propose?: boolean; ready?: boolean; why?: string };
   experience?: string;
+  appearance?: string | null;
   hoverBar?: { tactic?: unknown; goal?: unknown } | null;
   companion?: { version?: unknown } | null;
   colors?: { type: string; color: string }[];
@@ -395,6 +401,7 @@ function parseSettings(r: ThemeColorsResponse, prev: Settings): Settings {
       why: r.ai?.why ?? "",
     },
     experience: parseExperience(r.experience),
+    appearance: parseAppearance(r.appearance),
     hoverBar: {
       tactic: parseBarList(r.hoverBar?.tactic),
       goal: parseBarList(r.hoverBar?.goal),
@@ -484,6 +491,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     hypMarkStyle,
     ai,
     experience,
+    appearance,
     hoverBar,
     companion,
   } = useSettings(rs, docRev, pos.uri);
@@ -1415,6 +1423,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onPropose={askPropose}
         proposeReady={ai.ready && ai.propose}
         experience={experience}
+        appearance={appearance}
         hoverBar={hoverBar}
       />
       </WidgetBoundary>

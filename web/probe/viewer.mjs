@@ -132,6 +132,11 @@ for (const layout of Object.keys(LAYOUT_MODES))
       t.eq(JSON.stringify(parseLink(formatLink(l))), JSON.stringify(l), `link ${layout}/${context}/${comments}`);
     }
 t.eq(JSON.stringify(parseLink("#file=a&layout=nonsense")), JSON.stringify({ file: "a" }), "unknown view word dropped");
+{
+  const l = { file: "euclid", layout: "spine", appearance: "classic" };
+  t.eq(JSON.stringify(parseLink(formatLink(l))), JSON.stringify(l), "link appearance=classic");
+  t.eq(JSON.stringify(parseLink("#file=a&appearance=vscode")), JSON.stringify({ file: "a" }), "the default appearance is never named");
+}
 
 // The lexer.
 {

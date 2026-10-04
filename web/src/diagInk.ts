@@ -43,3 +43,32 @@ const HINT_W = 11;
 /** The width the mark takes under a span `width` wide (its hover target). */
 export const squiggleHitW = (sev: Severity, width: number): number =>
   sev === 3 ? HINT_W : Math.max(SQUIGGLE_TILE_W, width);
+
+// THE CLASSIC RIBBON (appearance.ts; restored from cffa2be^): a vertical
+// stroke down the box's inner left edge, the diag strip's own 3px edge, 4 for
+// the node the message strip is showing, a lint's thin 1.5. A warning is
+// SOLID (2026-10-04): its old dashes on a one-line box read as "lumps" (the
+// report that retired the ribbon), so the pattern no longer carries severity —
+// the ink does, and an error alone runs the whole edge.
+const RIBBON_W = 3;
+const RIBBON_W_SEL = 4;
+const RIBBON_W_LINT = 1.5;
+/** Clear air between a mark tab's bottom edge and the ribbon that starts below it. */
+export const RIBBON_TAB_GAP = 2;
+
+export const ribbonWidth = (sev: Severity, selected: boolean): number =>
+  sev === 3 ? RIBBON_W_LINT : selected ? RIBBON_W_SEL : RIBBON_W;
+
+/** The ribbon's run on the straight part `[top, top + h]` of the box's inner
+ left edge (`r` = the corner radius): an error over the whole run (the box
+ clip rounds its ends); a warning and a lint over the straight run only,
+ inset by `r`, so neither reads as sitting on the border. */
+export const ribbonRunOf = (
+  sev: Severity,
+  top: number,
+  h: number,
+  r: number,
+): { y1: number; y2: number } =>
+  sev === 1
+    ? { y1: top, y2: top + h }
+    : { y1: top + r, y2: top + r + Math.max(0, h - 2 * r) };

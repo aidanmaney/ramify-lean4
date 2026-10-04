@@ -46,6 +46,7 @@ function hypLineText(line: HypLine, dimmed: boolean): ReactNode {
         return (
           <tspan
             key={i}
+            className={gone ? "ptw-inaccessible" : undefined}
             fill={dimmed ? undefined : gone ? INACCESSIBLE_FILL : HYP_NAME_FILL}
             fontStyle={gone ? "italic" : undefined}
             opacity={gone ? 0.7 : undefined}

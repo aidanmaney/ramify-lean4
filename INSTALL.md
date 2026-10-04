@@ -169,6 +169,7 @@ All settings live under `ramify.` in VS Code's settings UI; the extension's own 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `ramify.experience` | `intermediate` | `beginner`, `intermediate` or `expert`: how much the tree explains itself. A preset that only fills defaults (the hover bar's buttons, the automation trace, comments, context, lints, brief mode, and whether hovering a context line shows where the hypothesis came from — on for beginner); anything you switch in the tree keeps your choice for the session. Also **Ramify: Set experience level**. |
+| `ramify.appearance` | `vscode` | `vscode` or `classic`: how the tree and its chrome are drawn. `vscode` wears VS Code's own icons and colours (a squiggle under a line with a problem, fold chevrons, a `⋯` chip on a skipped run); `classic` is Ramify's earlier skin (drawn glyphs, a coloured ribbon down a box with a problem, the corner `−` and `+N`, a slanted break on a skipped run). Paint only — the layout is the same. The Layout panel's **classic look** row switches it for the session. |
 | `ramify.hoverBar.tactic`, `ramify.hoverBar.goal` | source, focus, skip, path, delete | Which icons each hover bar carries, in order. `⋯` is always last. The `⋯` menu's pins write these; unset, the experience preset decides. |
 | `ramify.outlineOnly` | off | Draw node boxes as borders with no fill. Cosmetic. |
 | `ramify.linkMarks` | off | Draw a dot near either end of a connector for goals, a dash for tactics. |

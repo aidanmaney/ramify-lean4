@@ -311,9 +311,14 @@ import { Codicon } from "./codiconView";
 import { DiagIcon } from "./diagBar";
 import { PillPlace } from "./selectionPill";
 import { pillCandidates } from "./pillPlace";
-import { Squiggle, SquigglePatterns } from "./squiggle";
+import { DiagMark, SquigglePatterns } from "./squiggle";
 import { ringPath } from "./ringPath";
-import { SQUIGGLE_H, diagGlyphOf, diagWordOf, squiggleHitW } from "./diagInk";
+import { RIBBON_TAB_GAP, diagGlyphOf, diagInkOf, diagWordOf } from "./diagInk";
+import {
+  AppearanceContext,
+  DEFAULT_APPEARANCE,
+  type Appearance,
+} from "./appearance";
 import { HopChip, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
 import { StatusBar } from "./statusBar";
 import {
@@ -433,6 +438,11 @@ const HDR_REST_H = LINE_H + 13;
 // hit target — and the mark inside it the codicon `chevron-down`/`-up`
 // (2026-10-04; it was a drawn 8×5 chevron). The lane reserves the BOX, so the
 // ink can change without touching the measure.
+/** CLASSIC (appearance.ts; 5a504e7^): the goal corner's drawn `−` — its
+ length and stroke, about the weight of the `+N` it becomes. */
+const CLASSIC_MINUS_W = 6;
+const CLASSIC_MINUS_SW = 1.15;
+
 const HDR_BTN_W = 20;
 const HDR_BTN_RIGHT = 6;
 const HDR_BTN_LANE = HDR_BTN_W + HDR_BTN_RIGHT + 8;
@@ -624,6 +634,11 @@ export interface ProofTreeViewProps {
       session OVERRIDE and wins. Absent: intermediate. */
   experience?: Experience;
 
+  /** `ramify.appearance` (appearance.ts): the VS Code look (default) or the
+      classic skin. PAINT ONLY — the layout never reads it. The Layout
+      panel's `classic look` row is a session override on top. */
+  appearance?: Appearance;
+
   /** `ramify.hoverBar.tactic` / `.goal` — the hover bar's buttons per node
       kind, in order, where the reader SET them (the companion sends a list
       only when `inspect()` finds one; the harness takes `?hoverbar-tactic=`).
@@ -741,12 +756,20 @@ export default function ProofTreeView({
   lints,
   onLints,
   experience = DEFAULT_EXPERIENCE,
+  appearance: appearanceDefault = DEFAULT_APPEARANCE,
   hoverBar,
   onHoverBarChange,
   initialView,
   onViewState,
 }: ProofTreeViewProps) {
   const preset = PRESETS[experience];
+
+  // THE APPEARANCE (appearance.ts): the setting, with the Layout panel's
+  // `classic look` row as a session override. One value, handed to every
+  // seam through `AppearanceContext` and to the token layer through
+  // `data-ptw-appearance`; nothing that measures reads it.
+  const [appearance, setAppearance] = useOverride<Appearance>(appearanceDefault);
+  const classic = appearance === "classic";
 
   // THE HOVER BAR'S BUTTONS, per node kind: the session's pins (`⋯` menu),
   // else the reader's setting, else the preset — the override idiom again,
@@ -6028,9 +6051,11 @@ export default function ProofTreeView({
 
   return (
     <TipContext.Provider value={tipCtl}>
+    <AppearanceContext.Provider value={appearance}>
     <div
       ref={setFrameEl}
       data-ptw-theme={themeKind}
+      data-ptw-appearance={appearance}
       data-ptw-fill={outline ? "none" : undefined}
 
       data-ptw-hypmark={hypMarkStyle === "underline" ? "underline" : undefined}
@@ -6309,6 +6334,11 @@ export default function ProofTreeView({
         sbsEnabled={compact}
         gallery={gallery}
         onGalleryChange={applyGallery}
+        classic={classic}
+        onClassicChange={(v) => {
+          setAppearance(v ? "classic" : "vscode");
+          showToast(`Classic look: ${v ? "on" : "off"}`);
+        }}
         onReset={resetToSource}
         onSideBySideChange={applySideBySide}
         reflow={reflow}
@@ -6689,6 +6719,7 @@ export default function ProofTreeView({
                     <HopChip
                       x={hopX}
                       y={(hopY + hopEnd) / 2}
+                      stroke={stroke}
                       folded={link.source.data.folded}
                       onRestore={() => onNodeClick(link.source.data.id)}
                     />
@@ -6797,6 +6828,17 @@ export default function ProofTreeView({
               const nodeDiags = diag?.byNode.get(id);
               const diagSev = diag?.worst.get(id) ?? null;
               const recovered = node.data.recovered;
+              // CLASSIC (appearance.ts; cffa2be^): an error or a warning tints
+              // the BORDER in its ink (an error at 2px); a lint never does —
+              // the proof is correct. The ribbon is `DiagMark`'s.
+              const classicDiagStroke =
+                classic && (diagSev === 1 || diagSev === 2)
+                  ? diagInkOf(diagSev)
+                  : null;
+              const boxSw =
+                accent || recovered === "failed" || (classic && diagSev === 1)
+                  ? 2
+                  : 1.5;
               const recoveredStroke =
                 recovered === "failed"
                   ? DANGER_FILL
@@ -8267,11 +8309,10 @@ export default function ProofTreeView({
                       accent
                         ? SEQ_STROKE
                         : (recoveredStroke ??
+                          classicDiagStroke ??
                           (node.data.proseLabel ? PROSE_FILL : style.stroke))
                     }
-                    strokeWidth={
-                      accent || recovered === "failed" ? 2 : 1.5
-                    }
+                    strokeWidth={boxSw}
 
                     // A GHOST is the tactic reduced in place, so it keeps the
                     // tactic's own stroke and corner radius and says it is a
@@ -8310,7 +8351,7 @@ export default function ProofTreeView({
 
                   {/* A FOLDED goal's box wears the editor's folded-range wash
                       (`--ptw-fold-bg`) over its own fill, under its text. */}
-                  {folded?.kind === "fold" && !hideForEdit && (
+                  {folded?.kind === "fold" && !hideForEdit && !classic && (
                     <rect
                       x={-w / 2}
                       y={boxTop}
@@ -8419,22 +8460,29 @@ export default function ProofTreeView({
                         measureText(last?.text ?? "", NODE_FONT_PX),
                       );
                       const sy = boxTop + h - NODE_PAD_Y - 1;
+                      // The appearance seam (`DiagMark`): the squiggle, or
+                      // the classic ribbon down the inner left edge (below a
+                      // mark tab, which stands on the top-left corner).
                       return (
-                        <>
-                          <Squiggle sev={diagSev} x={sx} y={sy} width={sw} />
-                          <rect
-                            x={sx}
-                            y={sy - 4}
-                            width={squiggleHitW(diagSev, sw)}
-                            height={SQUIGGLE_H + 6}
-                            fill="transparent"
-                            style={{ cursor: "help" }}
-                            onMouseEnter={() => setHoverDiag(id)}
-                            onMouseLeave={() =>
-                              setHoverDiag((cur) => (cur === id ? null : cur))
-                            }
-                          />
-                        </>
+                        <DiagMark
+                          sev={diagSev}
+                          selected={!!diagCur && diagCur.nodeId === id}
+                          squiggle={{ x: sx, y: sy, width: sw }}
+                          box={{
+                            x: -w / 2,
+                            top: boxTop,
+                            w,
+                            h,
+                            rx: boxRx,
+                            sw: boxSw,
+                            tabInset: tab ? BADGE_H / 2 + RIBBON_TAB_GAP : 0,
+                            padW: NODE_PAD,
+                          }}
+                          onEnter={() => setHoverDiag(id)}
+                          onLeave={() =>
+                            setHoverDiag((cur) => (cur === id ? null : cur))
+                          }
+                        />
                       );
                     })()}
 
@@ -8496,7 +8544,37 @@ export default function ProofTreeView({
                   {cuttable &&
                     !hideForEdit && (
                     <>
-                      {folded?.kind !== "hop" && (
+                      {classic &&
+                        (folded ? (
+                          // CLASSIC (appearance.ts; 5a504e7^): `+N` at the
+                          // corner's right end in the node's ink (seeded:
+                          // italic comment ink), on a fold and a hop alike…
+                          <text
+                            x={w / 2 - 6}
+                            y={boxTop + 12}
+                            textAnchor="end"
+                            fontSize={BADGE_FONT_PX + 1}
+                            fontFamily={getCodeFontFamily()}
+                            fontStyle={folded.seeded ? "italic" : undefined}
+                            fill={folded.seeded ? "var(--ptw-comment)" : NODE_TEXT}
+                            opacity={folded.seeded ? undefined : DIM_OPACITY}
+                            pointerEvents="none"
+                            style={{ letterSpacing: 0 }}
+                          >
+                            {`+${folded.tactics.length}`}
+                          </text>
+                        ) : (
+                          // …and open, the drawn `−`, always shown, in the
+                          // node's stroke ink. Inside `CORNER_W`'s reserve.
+                          <path
+                            d={`M${w / 2 - 8 - CLASSIC_MINUS_W / 2} ${boxTop + 8}h${CLASSIC_MINUS_W}`}
+                            stroke={style.stroke}
+                            strokeWidth={CLASSIC_MINUS_SW}
+                            strokeLinecap="round"
+                            pointerEvents="none"
+                          />
+                        ))}
+                      {!classic && folded?.kind !== "hop" && (
                         <g
                           data-ptw-foldctl={folded ? "folded" : "open"}
                           style={
@@ -8519,7 +8597,7 @@ export default function ProofTreeView({
                           />
                         </g>
                       )}
-                      {folded && (
+                      {!classic && folded && (
                         <text
                           x={w / 2 - CORNER_W + FOLD_PH_X}
                           y={
@@ -9360,7 +9438,10 @@ export default function ProofTreeView({
                         gap: 6,
                         borderWidth: 1,
                         borderStyle: "solid",
-                        borderColor: HOVER_BORDER,
+                        // Classic: the worst severity's ink, as it was.
+                        borderColor: classic
+                          ? diagInkOf(list[0].severity)
+                          : HOVER_BORDER,
                       }}
                     >
                       {list.map((d, i) => (
@@ -9921,6 +10002,7 @@ export default function ProofTreeView({
       {/* THE IN-PAGE TOOLTIP, above every floater (tip.tsx). */}
       <TipLayer />
     </div>
+    </AppearanceContext.Provider>
     </TipContext.Provider>
   );
 }

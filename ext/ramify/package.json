@@ -73,6 +73,17 @@
           "default": "intermediate",
           "markdownDescription": "How much the proof tree explains itself. A preset: it only fills the defaults of the tree's reading options (the hover bar's buttons where `ramify.hoverBar.*` is not set, the automation trace, `Comments`, `Context`, `lints`, `brief`, `hypothesis origins`) — anything you switch in the tree itself keeps your choice for the session. Also: `Ramify: Set experience level`."
         },
+        "ramify.appearance": {
+          "type": "string",
+          "scope": "resource",
+          "enum": ["vscode", "classic"],
+          "enumDescriptions": [
+            "VS Code's own look: codicons, the editor's hover, menu and notification colours, a squiggle under a line with a problem, fold chevrons, a ⋯ chip on a skipped run",
+            "Ramify's classic skin: drawn glyphs, a coloured ribbon down a box with a problem, the corner − and +N, the slanted break on a skipped run, § on the author's own cuts"
+          ],
+          "default": "vscode",
+          "markdownDescription": "How the proof tree and its chrome are drawn. Paint only: the tree's layout is the same in both. The Layout panel's `classic look` row switches it for the session."
+        },
         "ramify.hoverBar.tactic": {
           "type": "array",
           "scope": "resource",

@@ -89,6 +89,8 @@ export function StatusBar({
   onSideBySideChange,
   gallery,
   onGalleryChange,
+  classic,
+  onClassicChange,
   onReset,
   reflow,
   forcedReflow,
@@ -138,6 +140,10 @@ export function StatusBar({
   onSideBySideChange: (v: boolean) => void;
   gallery: boolean;
   onGalleryChange: (v: boolean) => void;
+  /** `ramify.appearance` (appearance.ts), with the session's override: the
+   Layout panel's `classic look` row. Paint only. */
+  classic: boolean;
+  onClassicChange: (v: boolean) => void;
   /** The Layout panel's one action row, Reset tree. */
   onReset: () => void;
   reflow: ReflowMode;
@@ -946,6 +952,14 @@ export function StatusBar({
             on={gallery}
             icon={<Codicon name="window" />}
             onClick={() => onGalleryChange(!gallery)}
+          />
+          <BarRow
+            kind="toggle"
+            label="classic look"
+            title="Draw the tree and its chrome in Ramify's classic skin (the ramify.appearance setting is the default; this row overrides it for the session)"
+            on={classic}
+            icon={null}
+            onClick={() => onClassicChange(!classic)}
           />
           <MenuDivider />
           {/* RESET TREE, a lone action (it leaves the panel up; the

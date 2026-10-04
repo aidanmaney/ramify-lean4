@@ -7,7 +7,8 @@
 // payload inline and ignores it), `proof` a declaration by name (`@<index>`
 // for an `example`). The three view words are the ones the status bar prints
 // (`LAYOUT_MODES[…].name` and its siblings), so a link reads the way the
-// control it sets is labelled.
+// control it sets is labelled. `appearance=classic` asks for the classic skin
+// (appearance.ts); the VS Code look is the default and is never written.
 import type { HypMode } from "./proofToTree";
 import {
   COMMENT_MODES,
@@ -23,6 +24,8 @@ export interface ViewerLink {
   layout?: LayoutMode;
   context?: HypMode;
   comments?: CommentMode;
+  /** Only the non-default skin is ever named. */
+  appearance?: "classic";
 }
 
 function byName<K extends string>(
@@ -46,6 +49,7 @@ export function parseLink(hash: string): ViewerLink {
   if (layout) out.layout = layout;
   if (context) out.context = context;
   if (comments) out.comments = comments;
+  if (q.get("appearance") === "classic") out.appearance = "classic";
   return out;
 }
 
@@ -58,6 +62,7 @@ export function formatLink(link: ViewerLink): string {
   if (link.layout) q.set("layout", LAYOUT_MODES[link.layout].name);
   if (link.context) q.set("context", HYP_MODES[link.context].name);
   if (link.comments) q.set("comments", COMMENT_MODES[link.comments].name);
+  if (link.appearance === "classic") q.set("appearance", "classic");
   const s = q.toString();
   return s ? `#${s}` : "";
 }

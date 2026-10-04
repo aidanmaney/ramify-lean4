@@ -1,6 +1,7 @@
 // The floating chrome over the tree: the hop chip and link marks, the mark tabs (with the ⌥-held
 // store that turns a temporary tab into an ×), the top-centre toast, and the zoom rail.
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useClassic } from "./appearance";
 import {
   getCodeFontFamily,
   BADGE_FONT_PX,
@@ -23,6 +24,7 @@ import {
   CHROME_TEXT,
   Z,
   DIM_OPACITY,
+  TREE_INK_SW_BOLD,
   NOTIF_BG,
   NOTIF_BORDER,
   NOTIF_FG,
@@ -32,6 +34,7 @@ import {
 } from "./theme";
 import { Codicon } from "./codiconView";
 import {
+  BARE_BTN,
   LANE_BTN_H,
   LANE_INSET,
   RAIL_BTN,
@@ -44,6 +47,12 @@ import {
 /** Width of an ANCHORED toast (a mark jump's `n/N · caption`): fixed, so the
  counter keeps its x across a run of marks; capped by the column's 80%. */
 const TOAST_ANCHORED_W = 420;
+
+/** CLASSIC: where the caption started beside the axis break (the lane plus
+ 8), and the section sign a seeded caption led with (`SEED_MARK`, removed from
+ the label 2026-10-04 and kept here as paint only). */
+const HOP_CAPTION_GAP_CLASSIC = 8;
+const SEED_MARK = "\u00a7 ";
 
 /** The HOP CHIP on a link leaving a HOPPED goal (2026-10-04; it replaced a
  graph-style axis break of two slants that no reader recognised): the editor's
@@ -61,11 +70,14 @@ const TOAST_ANCHORED_W = 420;
 export function HopChip({
   x,
   y,
+  stroke,
   folded,
   onRestore,
 }: {
   x: number;
   y: number;
+  /** The link's own stroke: the CLASSIC break's slants are drawn in it. */
+  stroke: string;
   folded: {
     tactics: string[];
     note?: string;
@@ -82,6 +94,55 @@ export function HopChip({
     : `${folded.tactics.length} ${
         folded.tactics.length === 1 ? "step" : "steps"
       } skipped — click to restore\n\n${folded.tactics.join("\n")}`;
+  const classic = useClassic();
+  if (classic)
+    // CLASSIC (appearance.ts): the AXIS BREAK it replaced — two slanted
+    // strokes in the link's ink, the line JOINED into the centre of the upper
+    // one and out of the centre of the lower, the gap masked in the page
+    // colour; the caption `HOP_CAPTION_GAP_CLASSIC` right of the lane, a
+    // seeded one led by `§ `. Paint only: nothing reserves room for either.
+    return (
+      <g
+        style={{ cursor: "pointer" }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRestore();
+        }}
+      >
+        <title>{tip}</title>
+        <line x1={x} y1={y - 3} x2={x} y2={y + 3} stroke="var(--ptw-bg)" strokeWidth={4} />
+        <line
+          x1={x - 4.5}
+          y1={y - 1}
+          x2={x + 4.5}
+          y2={y - 5}
+          stroke={stroke}
+          strokeWidth={TREE_INK_SW_BOLD}
+          strokeLinecap="round"
+        />
+        <line
+          x1={x - 4.5}
+          y1={y + 5}
+          x2={x + 4.5}
+          y2={y + 1}
+          stroke={stroke}
+          strokeWidth={TREE_INK_SW_BOLD}
+          strokeLinecap="round"
+        />
+        {caption && (
+          <text
+            x={x + HOP_CAPTION_GAP_CLASSIC}
+            y={y + BADGE_FONT_PX / 2 - 1}
+            fontSize={BADGE_FONT_PX}
+            fontFamily={getCodeFontFamily()}
+            fontStyle={caption.italic ? "italic" : undefined}
+            fill="var(--ptw-comment)"
+          >
+            {(folded.seeded ? SEED_MARK : "") + caption.text}
+          </text>
+        )}
+      </g>
+    );
   return (
     <g
       style={{ cursor: "pointer" }}
@@ -178,6 +239,16 @@ export function LinkMark({
 /** One button of the rail: VS Code's action-bar item — a `RAIL_BTN` square,
  a 16px codicon, no border of its own, the toolbar's hover and pressed
  washes. The rail's GROUP is what wears the widget surface (`RailGroup`). */
+/** The classic rail button (`RAIL_BTN` before batch 2): a 26px square on
+ the chrome surface with its own border, the hover wash over it. */
+const RAIL_BTN_CLASSIC: CSSProperties = {
+  ...RAIL_BTN,
+  width: 26,
+  height: 26,
+  background: `linear-gradient(var(--ptw-bar-item-bg, transparent), var(--ptw-bar-item-bg, transparent)), ${CHROME_SURFACE}`,
+  border: `1px solid ${CHROME_BORDER}`,
+};
+
 function RailButton({
   glyph,
   title,
@@ -188,13 +259,14 @@ function RailButton({
   onClick: () => void;
 }) {
   const tip = useTip();
+  const classic = useClassic();
   return (
     <button
       type="button"
       {...tip.props(title)}
       onClick={onClick}
       data-ptw-baritem=""
-      style={RAIL_BTN}
+      style={classic ? RAIL_BTN_CLASSIC : RAIL_BTN}
     >
       {glyph}
     </button>
@@ -204,6 +276,18 @@ function RailButton({
 /** A column of rail buttons on one widget surface: the editor widget's
  background, border and shadow, as the hover bar wears them. */
 function RailGroup({ children }: { children: ReactNode }) {
+  // CLASSIC: no shared surface — each button is its own bordered square.
+  const classic = useClassic();
+  if (classic)
+    return (
+      <div
+        role="toolbar"
+        aria-orientation="vertical"
+        style={{ display: "flex", flexDirection: "column", gap: 4 }}
+      >
+        {children}
+      </div>
+    );
   return (
     <div
       role="toolbar"
@@ -413,6 +497,7 @@ export function TopCentre({
     action?: { label: string; run: () => void };
   } | null;
 }) {
+  const classic = useClassic();
   // The column is ALWAYS mounted, and so is the status region inside it: a
   // live region has to exist before its text does for a screen reader to
   // announce the text. Idle, both are empty boxes with no paint, no size to
@@ -527,18 +612,30 @@ export function TopCentre({
                     notification's is (`data-ptw-btn`: its ink and hover). */}
                 <button
                   type="button"
-                  data-ptw-btn=""
+                  data-ptw-btn={classic ? undefined : ""}
                   onClick={toast.action.run}
-                  style={{
-                    pointerEvents: "auto",
-                    margin: 0,
-                    border: "none",
-                    padding: "1px 8px",
-                    borderRadius: CHROME_RADIUS,
-                    font: "inherit",
-                    lineHeight: "18px",
-                    cursor: "pointer",
-                  }}
+                  style={
+                    classic
+                      ? // CLASSIC: the bold underlined link it was.
+                        {
+                          ...BARE_BTN,
+                          pointerEvents: "auto",
+                          padding: "0 4px",
+                          font: "inherit",
+                          fontWeight: 600,
+                          textDecoration: "underline",
+                        }
+                      : {
+                          pointerEvents: "auto",
+                          margin: 0,
+                          border: "none",
+                          padding: "1px 8px",
+                          borderRadius: CHROME_RADIUS,
+                          font: "inherit",
+                          lineHeight: "18px",
+                          cursor: "pointer",
+                        }
+                  }
                 >
                   {toast.action.label}
                 </button>

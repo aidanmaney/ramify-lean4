@@ -4482,3 +4482,49 @@ verified by reverting just those two constants, which left only calc.lean#1's
 `narrate-*` and `layout-*+narrated(-full)` changed — the calc narration line.
 Brief labels are not a fingerprinted stage. Counts, order, hopgap, overlap
 unchanged in substance (0 regressions). Screenshots: /tmp/claude-0/batch3/.
+
+## 2026-10-04 — Classic appearance
+
+The owner likes the VS Code look but asked for the whole old skin back as an
+option, with VS Code the default. `ramify.appearance`: `vscode` | `classic`
+(resource scope; theme file; `ThemeColors.appearance : Option String`;
+harness `?appearance=classic`; viewer link `appearance=classic`; the Layout
+panel's `classic look` toggle is a session override).
+
+**Rule: paint only.** The layout engine never reads the appearance, and
+`probe fingerprint` is identical (1189 outputs). Behaviour is shared — the
+right-click menu, keys, menu groups and keycaps, brief keeping statements, the
+`case ` prefix and the nameless readout stay in both, because each of those is
+either structure or measured.
+
+**Seams** (appearance.ts names them; one context, `AppearanceContext`):
+`Codicon` (a name → the classic glyph per set, `chrome` or `node`, inside the
+codicon's own box, so nothing measured around it moves — the restored
+`LayoutGlyph`/`LayoutExtraGlyph`/`CommentGlyph`/`EyeGlyph`/`HeaderChevron`/
+`ChevronGlyph`/`DiagGlyph`, the rail's and the bar's text glyphs, `SkipIcon`/
+`TrashIcon`/`InlineIcon`/`PinIcon` and menuIcons.ts's stroked rows, all from
+c709a11^); `DiagMark` (squiggle vs ribbon + wash; the border tint from cffa2be^);
+the goal corner and `HopChip` (from 5a504e7^); a handful of chrome branches
+(hover-bar dividers/no shadow, `●/○` rows and the drawn check, the inverted lit
+item, the old count and pager, the rail's separate squares, the toast's link
+Undo); and the token layer (`data-ptw-appearance="classic"` resets every
+host token batch 1 and 2 introduced to its old recipe).
+
+**Deviations.** (1) A warning's ribbon is SOLID, inset by the corner radius
+like a lint's (the dashes were the "lumps" report that retired the ribbon);
+only an error runs the whole edge. (2) `§` returns on a seeded hop CAPTION
+only: the caption reserves nothing, but a ghost's label is measured by
+`ghostSize`, so a `§` there would move the tree. (3) Classic glyphs sit in
+today's boxes — `GLYPH_BOX_W`/`ROW_ICON_W` 16 (was 14), the hover bar's
+`BAR_BTN` 22 (was 20) — so one measurer serves both skins. (4) Batch 2's
+structure stays: the strip's 22px height, its two groups without
+`BarDivider`, the context menu's groups and keycaps, the rail's two groups
+(as bordered squares), the fold chord keys. (5) The goal corner keeps
+`CORNER_W` 38; the old `+N` at the right end fits inside it, the box is as wide
+as in the VS Code look. (6) `writeMark` and `mark` rows share the dashed tab
+(both are codicon `bookmark` now).
+
+Gates: `npm test` green, fingerprint identical; `check-sync`,
+`check-settings`, `gen-codicons --check`, `gen-experience --check`;
+`lake build Ramify`. Screenshots: /tmp/claude-0/classic/ (both skins, light
+and dark: tree with a fold, hover bar, `⋯` menu, Layout panel, a hop).
