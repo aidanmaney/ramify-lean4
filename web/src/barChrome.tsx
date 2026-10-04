@@ -95,6 +95,9 @@ correction converge in one pass instead of chasing itself.
 
 A transform on an absolutely-positioned span reaches no layout, so both
 standing promises hold untouched: ONE HEIGHT and STABLE WIDTH. */
+/** How many state writes in a row `ExtraSlots` may make before it stops chasing a sub-pixel. */
+const SNAP_BUDGET = 4;
+
 function ExtraSlots({ on }: { on: boolean }) {
   const dpr = useDevicePixelRatio();
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -121,6 +124,13 @@ function ExtraSlots({ on }: { on: boolean }) {
   const size = Math.max(1, Math.round(SLOT_PX * ratio)) / ratio;
   const gap = Math.max(1, Math.round(SLOT_GAP_PX * ratio)) / ratio;
 
+  // A BUDGET of consecutive state writes (2026-10-04). Snapping is meant to
+  // converge in one pass, but at a 3× device-pixel ratio (iPhone 13/15 Pro)
+  // the layout's rounding sent the nudge back and forth between two values
+  // forever — React error #185, the whole view replaced by the boundary. A
+  // pass that writes nothing refills the budget; once it runs out the dot
+  // stays where it is, at worst a fraction of a device pixel off.
+  const budget = useRef(SNAP_BUDGET);
   const snap = useCallback(() => {
     const el = ref.current;
     const first = el?.firstElementChild as HTMLElement | null;
@@ -132,6 +142,8 @@ function ExtraSlots({ on }: { on: boolean }) {
     const host = el.parentElement?.getBoundingClientRect();
     const s = host && host.height > 0 ? host.height / BAR_ITEM_H : 1;
     if (Math.abs(s - scale) > 1e-3) {
+      if (budget.current <= 0) return;
+      budget.current--;
       setScale(s);
       return;
     }
@@ -145,9 +157,11 @@ function ExtraSlots({ on }: { on: boolean }) {
     const dx = (Math.round(rawL) - rawL) / ratio;
     const dy = (Math.round(rawT) - rawT) / ratio;
     if (Math.abs(dx - cur.dx) > 1e-4 || Math.abs(dy - cur.dy) > 1e-4) {
+      if (budget.current <= 0) return;
+      budget.current--;
       applied.current = { dx, dy };
       setNudge({ dx, dy });
-    }
+    } else budget.current = SNAP_BUDGET;
   }, [dpr, ratio, scale]);
   useLayoutEffect(snap);
 
