@@ -19,45 +19,12 @@ export const diagInkOf = (sev: Severity): string => DIAG[sev].ink;
 export const diagGlyphOf = (sev: Severity): string => DIAG[sev].glyph;
 export const diagWordOf = (sev: Severity): string => DIAG[sev].word;
 
-// The ribbon is the diag strip's own 3px edge (2026-09-28: at 4/8 it was the
-// loudest thing on screen); the severity PATTERN carries the rest. A lint is a
-// THIN solid line, half the error ribbon (dots read as list bullets beside
-// the hypothesis lines).
-const RIBBON_W = 3;
-const RIBBON_W_SEL = 4;
-const RIBBON_W_LINT = 1.5;
-/** Clear air between a mark tab's bottom edge and the ribbon that starts below it. */
-export const RIBBON_TAB_GAP = 2;
+/** A diagnostic's squiggle (squiggle.tsx): VS Code's 6×3 tile, in the box's
+ bottom padding; a lint's hint dots span `HINT_W`. */
+export const SQUIGGLE_H = 3;
+export const SQUIGGLE_TILE_W = 6;
+const HINT_W = 11;
 
-/** The ribbon's width: a lint's thin line whatever is picked, else 3px, 4 for
- the node the message strip is showing. */
-export const ribbonWidth = (sev: Severity, selected: boolean): number =>
-  sev === 3 ? RIBBON_W_LINT : selected ? RIBBON_W_SEL : RIBBON_W;
-
-/** The ribbon's stroke geometry, given its width `rw` and the straight run
- `[top, top + h]` of the box's inner left edge (`r` = the corner radius).
- Severity without colour: an error is a THICK solid line over the whole run
- (the box clip rounds its ends); a warning is DASHES (6:3 at the 4px scale),
- centred and inset by the corner radius so the pattern starts and ends with a
- whole dash on the straight edge; a lint is a THIN solid line (`RIBBON_W_LINT`
- wide, chosen by the caller) over the straight run only, inset by `r` so it
- does not read as sitting on the border. No dots: they read as list bullets
- beside the hypothesis lines. */
-export const ribbonStrokeOf = (
-  sev: Severity,
-  rw: number,
-  top: number,
-  h: number,
-  r: number,
-): { y1: number; y2: number; dash?: string } => {
-  if (sev === 1) return { y1: top, y2: top + h };
-  const run = Math.max(0, h - 2 * r);
-  if (sev === 3) return { y1: top + r, y2: top + r + run };
-  const mid = top + h / 2;
-  const dash = (6 * rw) / 4;
-  const gap = (3 * rw) / 4;
-  const n = Math.max(1, Math.floor((run + gap) / (dash + gap)));
-  const span = n * dash + (n - 1) * gap;
-  const y0 = mid - span / 2;
-  return { y1: y0, y2: y0 + span, dash: `${dash} ${gap}` };
-};
+/** The width the mark takes under a span `width` wide (its hover target). */
+export const squiggleHitW = (sev: Severity, width: number): number =>
+  sev === 3 ? HINT_W : Math.max(SQUIGGLE_TILE_W, width);

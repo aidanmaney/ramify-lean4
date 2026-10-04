@@ -264,7 +264,6 @@ import {
   TREE_INK_SW_BOLD,
   CHROME_TEXT_SM,
   FOCUS_INK,
-  DIAG_BOX_WASH_OPACITY,
 } from "./theme";
 import { HypBlock } from "./hypBlock";
 import {
@@ -300,9 +299,9 @@ import { HeaderChevron } from "./barChrome";
 import { DiagGlyph } from "./diagBar";
 import { PillPlace } from "./selectionPill";
 import { pillCandidates } from "./pillPlace";
-import { RIBBON_TAB_GAP } from "./diagInk";
+import { Squiggle, SquigglePatterns } from "./squiggle";
 import { ringPath } from "./ringPath";
-import { diagGlyphOf, diagInkOf, diagWordOf, ribbonStrokeOf, ribbonWidth } from "./diagInk";
+import { SQUIGGLE_H, diagGlyphOf, diagInkOf, diagWordOf, squiggleHitW } from "./diagInk";
 import { HopBreak, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
 import { StatusBar } from "./statusBar";
 import {
@@ -6432,6 +6431,7 @@ export default function ProofTreeView({
           height={svgH * zoom}
           viewBox={`0 0 ${svgW} ${svgH}`}
         >
+          <SquigglePatterns />
           <g
             transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}
           >
@@ -6598,7 +6598,7 @@ export default function ProofTreeView({
               );
             })}
 
-            {nodes.map((node, ni) => {
+            {nodes.map((node) => {
               const {
                 w,
                 h,
@@ -6697,16 +6697,7 @@ export default function ProofTreeView({
               const ringGrow = isGhostNode(node.data) ? 5 : 3;
               const nodeDiags = diag?.byNode.get(id);
               const diagSev = diag?.worst.get(id) ?? null;
-              // A LINT does not restyle the box: the proof is correct, and a
-              // node whose border changed colour would say otherwise. Only an
-              // error or a warning reaches the stroke; the RIBBON is where a
-              // lint speaks.
-              const diagStroke =
-                diagSev === 1 || diagSev === 2 ? diagInkOf(diagSev) : null;
-              const diagSelected = !!diagCur && diagCur.nodeId === id;
               const recovered = node.data.recovered;
-              const boxSw =
-                accent || recovered === "failed" || diagSev === 1 ? 2 : 1.5;
               const recoveredStroke =
                 recovered === "failed"
                   ? DANGER_FILL
@@ -8148,13 +8139,10 @@ export default function ProofTreeView({
                       accent
                         ? SEQ_STROKE
                         : (recoveredStroke ??
-                          diagStroke ??
                           (node.data.proseLabel ? PROSE_FILL : style.stroke))
                     }
                     strokeWidth={
-                      accent || recovered === "failed" || diagSev === 1
-                        ? 2
-                        : 1.5
+                      accent || recovered === "failed" ? 2 : 1.5
                     }
 
                     // A GHOST is the tactic reduced in place, so it keeps the
@@ -8273,82 +8261,40 @@ export default function ProofTreeView({
                     </g>
                   )}
 
-                  {diagSev !== null && !hideForEdit && (
-                    <>
-                      {/* The clip is the box's INNER edge (the rounded rect
-                          inset by half the border stroke), so the ribbon sits
-                          inside the border and never over it. */}
-                      <clipPath id={`ptw-box-${ni}`}>
-                        <rect
-                          x={-w / 2 + boxSw / 2}
-                          y={boxTop + boxSw / 2}
-                          width={w - boxSw}
-                          height={h - boxSw}
-                          rx={Math.max(0, boxRx - boxSw / 2)}
-                        />
-                      </clipPath>
-                      {/* A faint wash of the severity's ink over the box fill, inside
-                          the same clip: the ribbon says which, the wash says
-                          "this box" without shouting. */}
-                      {diagSev !== 3 && (
-                        <rect
-                          x={-w / 2 + boxSw / 2}
-                          y={boxTop + boxSw / 2}
-                          width={w - boxSw}
-                          height={h - boxSw}
-                          rx={Math.max(0, boxRx - boxSw / 2)}
-                          fill={diagInkOf(diagSev)}
-                          fillOpacity={DIAG_BOX_WASH_OPACITY}
-                          style={{ pointerEvents: "none" }}
-                        />
-                      )}
-                      {/* The ribbon's PATTERN names the severity too — error
-                          thick solid, warning dashed, lint thin solid — as a
-                          vertical stroke of the ribbon's own width, so it
-                          reserves and measures nothing. */}
-                      {(() => {
-                        const rw = ribbonWidth(diagSev, diagSelected);
-                        // A mark tab stands on the box's top-left corner,
-                        // `BADGE_H / 2` down the left edge: the ribbon starts
-                        // below it (and a little clear), never under it.
-                        const tabInset = tab ? BADGE_H / 2 + RIBBON_TAB_GAP : 0;
-                        const rs = ribbonStrokeOf(
-                          diagSev,
-                          rw,
-                          boxTop + boxSw / 2 + tabInset,
-                          h - boxSw - tabInset,
-                          boxRx - boxSw / 2,
-                        );
-                        const x = -w / 2 + boxSw / 2 + rw / 2;
-                        return (
-                          <line
-                            x1={x}
-                            x2={x}
-                            y1={rs.y1}
-                            y2={rs.y2}
-                            stroke={diagInkOf(diagSev)}
-                            strokeWidth={rw}
-                            strokeDasharray={rs.dash}
-                            clipPath={`url(#ptw-box-${ni})`}
-                            style={{ pointerEvents: "none" }}
+                  {diagSev !== null && !hideForEdit &&
+                    (() => {
+                      // VS Code's own mark: a squiggle (error, warning) or the
+                      // hint's dots (a lint) under the text the message is
+                      // about — the box's LAST line (a tactic's label, a
+                      // goal's target), in its bottom padding, so it reserves
+                      // and measures nothing. Hovering it shows the messages,
+                      // as the editor's hover does.
+                      const last = lines[lines.length - 1];
+                      const indent = last?.indent ?? 0;
+                      const sx = -w / 2 + NODE_PAD + indent;
+                      const sw = Math.min(
+                        w - 2 * NODE_PAD - indent,
+                        measureText(last?.text ?? "", NODE_FONT_PX),
+                      );
+                      const sy = boxTop + h - NODE_PAD_Y - 1;
+                      return (
+                        <>
+                          <Squiggle sev={diagSev} x={sx} y={sy} width={sw} />
+                          <rect
+                            x={sx}
+                            y={sy - 4}
+                            width={squiggleHitW(diagSev, sw)}
+                            height={SQUIGGLE_H + 6}
+                            fill="transparent"
+                            style={{ cursor: "help" }}
+                            onMouseEnter={() => setHoverDiag(id)}
+                            onMouseLeave={() =>
+                              setHoverDiag((cur) => (cur === id ? null : cur))
+                            }
                           />
-                        );
-                      })()}
-                      <rect
-                        x={-w / 2}
-                        y={boxTop}
-                        width={NODE_PAD}
-                        height={h}
-                        fill="transparent"
-                        style={{ cursor: "help" }}
-
-                        onMouseEnter={() => setHoverDiag(id)}
-                        onMouseLeave={() =>
-                          setHoverDiag((cur) => (cur === id ? null : cur))
-                        }
-                      />
-                    </>
-                  )}
+                        </>
+                      );
+                    })()}
 
                   {hyps && hyps.length > 0 && !hideForEdit && (
                     <HypBlock

@@ -400,8 +400,6 @@ export const STUB_OPACITY = 0.6;
 export const PREVIEW_OPACITY = 0.9;
 /** The faint wash over a marquee / band rectangle (fill only). */
 export const WASH_OPACITY = 0.08;
-/** A diagnostic box's wash: the severity ink over the box fill. */
-export const DIAG_BOX_WASH_OPACITY = 0.07;
 /** Two floating chrome type sizes (px): a secondary line and the body. */
 export const CHROME_TEXT_SM = 11;
 export const CHROME_TEXT = 12;

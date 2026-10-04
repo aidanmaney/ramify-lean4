@@ -4244,3 +4244,24 @@ Measured against the old build with a trackpad-like swipe (20 events of `(dx 6, 
 **The fix.** The range is the `CommandInfo`'s own syntax range, i.e. the command as written, read off the first `.ofCommandInfo` in the tree. The old hull is kept only as a fallback for a tree with no command info. Both wires go through it.
 
 **Measured.** Republishing the demo set leaves marks only in `tour_reading`, `sb_injective` and `schroeder_bernstein'`. `probe lsp --all --wire` on a section-variables fixture (`import Mathlib`, 2 declarations, 253 popups) shows the two wires identical. The Tour (6) and Diagnostics (8) are unchanged, and `npm test` passes with the fingerprint identical: `proofs/` has no section variables.
+
+## 2026-10-04 — Diagnostics wear VS Code's squiggle, not a ribbon
+
+Reported: a warning on a one-line tactic (`simp [sbAux]`) drew two or three
+yellow dashes down the box's left edge — "lumps" — beside a yellow border and
+a wash. The ribbon's severity-by-PATTERN (solid / dashed / thin) had no
+counterpart anywhere a VS Code user has looked: the editor marks a problem with
+a squiggle under the text, and a hint with three dots under its start.
+
+Now: the node draws the workbench's own tiles (copied from `.squiggly-error`
+/ `.squiggly-hint` — a 6×3 wave, the 12×3 dots) under its LAST line, in the
+bottom padding, measured to that line's text, in `--ptw-danger` / `--ptw-warn`
+(the editor's error/warning foregrounds) and comment ink for a lint. The
+border no longer turns the severity's colour and the box wash is gone (one
+mark per meaning: the squiggle says "this text has a problem"; the status
+bar's count and message strip say how many and what). Hovering the squiggle
+shows the messages under the box — the editor's hover. Gone:
+`ribbonStrokeOf`/`ribbonWidth`/`RIBBON_*`, `DIAG_BOX_WASH_OPACITY`. The prior-
+art pass (Paperproof, the infoview, notebooks, xyflow, Alectryon) found no peer
+that encodes severity by dash pattern; the left edge, where peers use it, means
+"changed" or "focused".
