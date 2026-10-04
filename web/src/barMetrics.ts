@@ -8,32 +8,34 @@ import {
   MENU_BG,
   MENU_BORDER,
   MENU_FG,
-  CHROME_SURFACE,
-  CHROME_BORDER,
   CHROME_INK,
   CHROME_RADIUS,
   CHROME_TEXT,
   Z,
 } from "./theme";
 
+/** A rail button: VS Code's action-bar item, a 22px square around a 16px
+ codicon, borderless — its `RailGroup` wears the surface — with the toolbar's
+ hover wash (`data-ptw-baritem`) and pressed wash (theme.ts). */
 export const RAIL_BTN: CSSProperties = {
-  width: 26,
-  height: 26,
+  width: 22,
+  height: 22,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   padding: 0,
+  margin: 0,
   lineHeight: 1,
   cursor: "pointer",
-  // The toolbar's hover wash (`data-ptw-baritem`) over the opaque surface.
-  background: `linear-gradient(var(--ptw-bar-item-bg, transparent), var(--ptw-bar-item-bg, transparent)), ${CHROME_SURFACE}`,
-
-  borderWidth: 1,
-  borderStyle: "solid",
-  borderColor: CHROME_BORDER,
+  border: "none",
+  background: "var(--ptw-bar-item-bg, transparent)",
   borderRadius: CHROME_RADIUS,
   color: CHROME_INK,
 };
+
+/** The padding inside a rail group, and the gap between the two groups. */
+export const RAIL_GROUP_PAD = 1;
+export const RAIL_GROUP_GAP = 6;
 
 // The chrome every menu popover wears, wherever it is hung from: the bar's
 // menus open upward from the bar, the rail's opens left of the rail, and the
@@ -131,9 +133,14 @@ export const BAR_LIFT = LANE_INSET + LANE_BTN_H + LANE_GAP;
  the lane gap, the one separation between two pieces of chrome. */
 export const DIAG_STRIP_GAP = LANE_GAP;
 
-// The strip is EXACTLY the button's height — see BAR_ITEM_H for why that is a
-// fixed `height` and not a minimum.
-export const BAR_H = LANE_BTN_H;
+// The strip is VS Code's status bar height, 22 (2026-10-04, batch 2; it was
+// the host button's 26) — see BAR_ITEM_H for why that is a fixed `height` and
+// not a minimum. In the lane it is CENTRED on the button (`BAR_LANE_BOTTOM`).
+export const BAR_H = 22;
+
+/** The strip's `bottom` in the host button's lane: centred on the button,
+ whose 26px stand `LANE_INSET` above the frame's bottom. */
+export const BAR_LANE_BOTTOM = LANE_INSET + (LANE_BTN_H - BAR_H) / 2;
 
 // The gap between items, and the card's own padding. Both feed the ACCENT
 // PILL's margins: an accented item's highlight is inset from the card's top
@@ -142,7 +149,7 @@ export const BAR_H = LANE_BTN_H;
 // filling it edge to edge.
 export const STATUS_GAP = 4;
 
-export const STATUS_PAD_Y = 2;
+export const STATUS_PAD_Y = 1;
 
 export const STATUS_PAD_X = 6;
 
@@ -167,21 +174,18 @@ their own `glyphPx` (up to 19 for `▸`), so an item sized by its line box grew 
 as the row compacted and as `used` was swapped for `narrate`. A status bar that
 changes height when you change a setting is the report this rule answers.
 
-So height comes only from these two numbers: 20 + 2 * STATUS_PAD_Y + 2 (the
-card's border) = 26. Vertical padding on the item is therefore ZERO — the
+So height comes only from these two numbers: 18 + 2 * STATUS_PAD_Y + 2 (the
+card's border) = 22, VS Code's own status bar. Vertical padding on the item is therefore ZERO — the
 height and `alignItems: center` do that work — and every glyph sits inside a
 fixed-size box (`GlyphBox`) so no font size can reach the layout at all.
 `borderRadius` is `CHROME_RADIUS`: items are FLAT, like VS Code's own status-bar
 items (2026-10-02; they were `BAR_ITEM_H / 2` pills, and the focus ring followed
 the pill — a fat squircle on a flat strip). */
-export const BAR_ITEM_H = 20;
+export const BAR_ITEM_H = 18;
 
-// The item's side padding, and so the accent pill's own side margin. It has
-// come down twice, both times to buy row width — 10 → 8 when the glyph
-// prefixes went in, 8 → 6 when the card moved into the host button's lane and
-// gave up 68px of room on the right. Six is where VS Code's own status-bar
-// items sit; below it the pill stops reading as a pill.
-const BAR_ITEM_PAD_X = 6;
+// The item's side padding: VS Code's status-bar item's `0 5px` (2026-10-04;
+// it came down 10 → 8 → 6 to buy row width before that).
+const BAR_ITEM_PAD_X = 5;
 
 export const BAR_ITEM: CSSProperties = {
   boxSizing: "border-box",
@@ -307,8 +311,8 @@ export interface BarValueItem {
 }
 
 /** The status READOUT's facts (statusBar.tsx / `StatusReadout`): the
-declaration's name (already clipped to `STATUS_NAME_MAX`, empty where the
-view has none), the proof's tactic count on the BASE tree, how many goals are
+declaration's name (already clipped to `STATUS_NAME_MAX`; empty where the
+signature header is drawn, which already says it, or where the view has none), the proof's tactic count on the BASE tree, how many goals are
 still open (no step yet — what the frontier chips attach to), and how many
 tactics the drawn tree's cuts hide (the sum of every `+N`). The two handlers
 are the readout's only gestures; a zero count draws no part and no button. */

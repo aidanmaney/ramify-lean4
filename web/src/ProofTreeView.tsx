@@ -250,6 +250,9 @@ import {
   SORRY_FILL,
   DANGER_FILL,
   POPUP_CHROME,
+  STICKY_BG,
+  STICKY_BORDER,
+  STICKY_SHADOW,
   CHROME_BG,
   CHROME_UNDERLAY,
   CHROME_BORDER,
@@ -339,6 +342,8 @@ const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
 // A mode change confirms itself top-centre for this long, then vanishes.
 // `window.setTimeout`, never rAF: a hidden webview fires no animation frames.
 const TOAST_MS = 1500;
+/** How long the first half of a key chord (`${CMD}K`) waits for its second. */
+const CHORD_MS = 1000;
 /** A toast that carries a button (Undo) stays long enough to reach it. */
 const TOAST_ACTION_MS = 6000;
 
@@ -1147,6 +1152,8 @@ export default function ProofTreeView({
     x: number;
     top: number;
     bottom: number;
+    /** Opened by a right-click: hung AT the pointer (top = bottom). */
+    pointer?: boolean;
   } | null>(null);
 
   // KEYBOARD NAVIGATION OF NODES (2026-09-28). The scroll frame is ONE tab
@@ -1163,6 +1170,11 @@ export default function ProofTreeView({
   // Set by a key that hands focus to an overlay (the `⋯` menu, F2's editor):
   // whichever closes it gives focus back to the frame.
   const restoreFocus = useRef(false);
+  // The editor's two-key CHORDS (${CMD}K ${CMD}0 / ${CMD}K ${CMD}J): when the
+  // first half was pressed, 0 when none is pending. Read and written by the
+  // frame's key handler alone, never in render; a chord older than
+  // `CHORD_MS`, or any other key in between, lets it go.
+  const chordAt = useRef(0);
 
   // `upNow`, where present, is read at Esc time instead of `up`: the TIP's
   // visibility lives outside the view's state (so showing one never renders
@@ -4622,7 +4634,12 @@ export default function ProofTreeView({
   );
   // The declaration's name as the author wrote it (the header's last word of
   // `keyword name`), else the server's proof id unless that is a position.
+  // The readout names the declaration ONLY where no signature header is
+  // drawn (2026-10-04, owner): the header already reads `theorem cantor …`,
+  // and `cantor · 12 steps` beneath it said the name twice. Where there is no
+  // header (the harness's NDJSON carries none) the name stays.
   const statusName = useMemo(() => {
+    if (declHeader) return "";
     const words = declHead.trim().split(/\s+/);
     const raw =
       words.length > 1
@@ -4631,7 +4648,7 @@ export default function ProofTreeView({
           ? proof.proofId
           : "";
     return clipText(raw, STATUS_NAME_MAX);
-  }, [declHead, proof.proofId]);
+  }, [declHeader, declHead, proof.proofId]);
 
   // `N open`: the first open goal BELOW THE CURSOR in the base tree's order
   // (the cursor being the node the view is accenting), wrapping to the first.
@@ -5749,6 +5766,39 @@ export default function ProofTreeView({
       bottom: r.bottom - f.top,
     });
   };
+  // RIGHT-CLICK on a box (2026-10-04, batch 2): VS Code's context menu, i.e.
+  // the same `⋯` menu, hung at the pointer. The browser's own menu is
+  // suppressed on a node only — the canvas keeps it.
+  const openNodeMenuAt = (id: string, e: ReactMouseEvent<Element>) => {
+    const root = e.currentTarget.closest("[data-ptw-theme]");
+    if (!root) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const f = root.getBoundingClientRect();
+    tipCtl.dismiss();
+    setNodeMenu({
+      id,
+      proof: proofKey,
+      x: e.clientX - f.left,
+      top: e.clientY - f.top,
+      bottom: e.clientY - f.top,
+      pointer: true,
+    });
+  };
+
+  // F8 / ⇧F8 — VS Code's next / previous problem: the message strip's own
+  // pager (`stepDiag`, the strip's ‹ › click path). Where the strip is shut
+  // the first press opens it on the problem it would show.
+  const goToProblem = (d: number) => {
+    if (diagList.length === 0) {
+      showToast("No problems in this proof");
+      return;
+    }
+    if (!diagStripOpen) {
+      setDiagStripPinned(proofKey);
+      revealNode(diagList[diagIdx].nodeId);
+    } else stepDiag(d);
+  };
 
   // ONE DOM id per drawn node, injective in the node id (every character
   // outside `[A-Za-z0-9-]` is spelled `_<hex>`), prefixed per view instance.
@@ -5778,7 +5828,30 @@ export default function ProofTreeView({
   // event rather than a second copy of what it does.
   const onTreeKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // A modifier alone neither starts nor breaks a chord (the reader may let
+    // go of Ctrl between its halves).
+    if (["Control", "Meta", "Shift", "Alt"].includes(e.key)) return;
+    const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+    const pending = chordAt.current > 0 && e.timeStamp - chordAt.current < CHORD_MS;
+    chordAt.current = 0;
+    if (mod && pending && (e.key === "0" || e.code === "Digit0")) {
+      e.preventDefault();
+      collapseAll();
+      return;
+    }
+    if (mod && pending && (e.key.toLowerCase() === "j" || e.code === "KeyJ")) {
+      e.preventDefault();
+      expandAll();
+      return;
+    }
+    if (mod && !e.shiftKey && (e.key.toLowerCase() === "k" || e.code === "KeyK")) {
+      e.preventDefault();
+      chordAt.current = e.timeStamp || 1;
+      return;
+    }
+    // ${CMD}. — the editor's Quick Fix key — opens the move menu, as ⇧F10 does.
+    const menuKey = mod && (e.key === "." || e.code === "Period");
+    if (!menuKey && (e.ctrlKey || e.metaKey || e.altKey)) return;
     if (
       editing !== null ||
       nodeMenu !== null ||
@@ -5893,9 +5966,28 @@ export default function ProofTreeView({
           new MouseEvent("dblclick", { bubbles: true, cancelable: true }),
         );
         return;
+      case "F8":
+        e.preventDefault();
+        setTreeFocus("kb");
+        goToProblem(e.shiftKey ? -1 : 1);
+        return;
+      // Space folds or unfolds the active goal (or opens a ghost): the same
+      // `onNodeClick` → and ← use, so the relayout is anchored.
+      case " ":
+        e.preventDefault();
+        if (opens) {
+          go(isGhostNode(d!) ? nav.parent.get(cur) : cur, false);
+          onNodeClick(cur);
+        } else if (folds) {
+          go(cur, false);
+          onNodeClick(cur);
+        }
+        return;
+      case ".":
       case "ContextMenu":
       case "F10": {
         if (e.key === "F10" && !e.shiftKey) return;
+        if (e.key === "." && !menuKey) return;
         const box = gEl?.querySelector("[data-ptw-box]");
         if (!box) return;
         e.preventDefault();
@@ -5976,9 +6068,12 @@ export default function ProofTreeView({
 
             textAlign: "left",
             color: NODE_TEXT,
-            background: "var(--ptw-bg)",
-            borderBottom:
-              `1px solid ${CHROME_BORDER}`,
+            // The editor's STICKY SCROLL (2026-10-04, batch 2): its
+            // background, its bottom border and the shadow it casts on the
+            // text scrolling under it.
+            background: STICKY_BG,
+            borderBottom: `1px solid ${STICKY_BORDER}`,
+            boxShadow: `0 3px 2px -2px ${STICKY_SHADOW}`,
             cursor: onRevealHeader ? "pointer" : "default",
 
             // The right padding is the `▾` button's lane (`HDR_BTN_W` at
@@ -6211,8 +6306,6 @@ export default function ProofTreeView({
         sbsEnabled={compact}
         gallery={gallery}
         onGalleryChange={applyGallery}
-        onExpandAll={expandAll}
-        onCollapseAll={collapseAll}
         onReset={resetToSource}
         onSideBySideChange={applySideBySide}
         reflow={reflow}
@@ -7187,6 +7280,7 @@ export default function ProofTreeView({
                         label: everyRowSaid,
                         title: everyRowSaid,
                         shortcut: "⌥-click a row",
+                        slot: "rows",
                         onClick: () => toggleRows(firstRow, true),
                       },
                     ]
@@ -7201,6 +7295,7 @@ export default function ProofTreeView({
                 menuFor === id && chipsOffered
                   ? chipRows(node.data).map(({ kind, ...row }) => ({
                       ...row,
+                      slot: "chip" as const,
                       onClick: chipHandlers[kind],
                     }))
                   : [];
@@ -7228,6 +7323,8 @@ export default function ProofTreeView({
                         label: "Bring back what this box stands for",
                         title: "Bring back what this box stands for",
                         shortcut: "click",
+                        keys: "Space",
+                        slot: "fold" as const,
                         onClick: () => onNodeClick(id),
                       },
                     ]
@@ -7241,6 +7338,8 @@ export default function ProofTreeView({
                             label: `Bring back the ${nFold} hidden step${nFold === 1 ? "" : "s"}`,
                             title: "Bring back the hidden steps",
                             shortcut: `click +${nFold}`,
+                            keys: "Space",
+                            slot: "fold" as const,
                             onClick: () => onNodeClick(id),
                           }
                         : {
@@ -7249,6 +7348,8 @@ export default function ProofTreeView({
                             label: "Hide everything below this goal",
                             title: "Hide everything below this goal",
                             shortcut: "click −",
+                            keys: "Space",
+                            slot: "fold" as const,
                             onClick: () => onNodeClick(id),
                           },
                     ]
@@ -7261,6 +7362,8 @@ export default function ProofTreeView({
                         label: "Edit this tactic",
                         title: "Edit this tactic",
                         shortcut: "double-click",
+                        keys: "F2",
+                        slot: "edit" as const,
                         onClick: () => startEdit(0),
                       },
                     ]
@@ -7274,6 +7377,7 @@ export default function ProofTreeView({
                         label: "Edit the comment",
                         title: "Edit the comment",
                         shortcut: "double-click the strip",
+                        slot: "comment" as const,
                         onClick: () => openCommentEdit(),
                       },
                     ]
@@ -7286,6 +7390,7 @@ export default function ProofTreeView({
                         label: "Take your mark off",
                         title: "Take your mark off",
                         shortcut: "⌥-click its tab",
+                        slot: "mark" as const,
                         onClick: () => toggleMyStop(id),
                       },
                     ]
@@ -7297,6 +7402,7 @@ export default function ProofTreeView({
                           label: "Drop a mark here",
                           title: "Drop a mark here",
                           shortcut: "click the corner",
+                          slot: "mark" as const,
                           onClick: () => toggleMyStop(id),
                         },
                         ...(markWritable
@@ -7307,6 +7413,7 @@ export default function ProofTreeView({
                                 label: "Write a `.mark` into the source",
                                 title: "Write a `.mark` into the source",
                                 shortcut: "⌥-click the corner",
+                                slot: "mark" as const,
                                 onClick: () => writeMark(id),
                               },
                             ]
@@ -7319,6 +7426,7 @@ export default function ProofTreeView({
                   label,
                   title: label,
                   shortcut: "⌥-click the line",
+                  slot: "rename" as const,
                   onClick: () => proposeRewrite(id, rn.rewrite),
                 })),
                 ...ledgerRows,
@@ -7468,6 +7576,7 @@ export default function ProofTreeView({
                             ...MOVE_LOOK.source,
                             label: "Show in source",
                             shortcut: goalRevealable ? `${CMD}-click` : "click",
+                            keys: "Enter",
                             title: `Show in source — or ${goalRevealable ? `${CMD}-click` : "click"} the box`,
                             onClick: () =>
                               goalRevealable
@@ -7491,7 +7600,8 @@ export default function ProofTreeView({
                                 }
                               : {
                                   label: "Back to the whole proof",
-                                  shortcut: "⌥-click · Esc",
+                                  shortcut: "⌥-click",
+                                  keys: "Esc",
                                   title: "Back to the whole proof (⌥-click, or Esc)",
                                   onClick: exitFocus,
                                 }),
@@ -7513,7 +7623,7 @@ export default function ProofTreeView({
                                 }
                               : {
                                   label: "Show the whole proof again",
-                                  shortcut: "Esc",
+                                  keys: "Esc",
                                   title: "Show the whole proof again (Esc)",
                                   onClick: exitPath,
                                 }),
@@ -7528,8 +7638,8 @@ export default function ProofTreeView({
                           {
                             id: k,
                             ...MOVE_LOOK.lens,
-                            label: "Open in the lens",
-                            title: "Open in the lens — the tactic in a slim editor below the infoview",
+                            label: "Open to the side",
+                            title: "Open to the side — the tactic in a slim editor below the infoview (the lens)",
                             onClick: () =>
                               onPopoutEdit!(
                                 getTacticEdit?.(actPos!)?.pos ?? actPos!,
@@ -7856,6 +7966,13 @@ export default function ProofTreeView({
                       : undefined
                   }
                   onClick={clickable && !isEditing ? handleClick : undefined}
+                  // Right-click: the move menu at the pointer (VS Code's
+                  // context menu; ⇧F10 and ${CMD}. from the keys).
+                  onContextMenu={
+                    !isEditing && !traceLeaf
+                      ? (e) => openNodeMenuAt(id, e)
+                      : undefined
+                  }
                   onDoubleClick={
                     (editable ||
                       partEditable ||

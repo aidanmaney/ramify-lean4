@@ -103,7 +103,7 @@
               "⤵ Move a single-use `have` into its one use",
               "⤴ Pull a `(by …)` block out as a `have`",
               "✎ Apply the linter's fix",
-              "⧉ Open the tactic in the lens",
+              "⧉ Open the tactic to the side (the lens, a slim editor below the infoview)",
               "+ Show the goal a calc/constructor step proves"
             ]
           },

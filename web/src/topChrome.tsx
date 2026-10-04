@@ -9,29 +9,33 @@ import {
   tourTabWidth,
 } from "./layout";
 import { type SeedOrigin, hopCaption, seedTitle } from "./elide";
-import { CMD } from "./gestures";
+import { CHORD_FOLD_ALL, CHORD_UNFOLD_ALL, CMD } from "./gestures";
 import { useTip } from "./tipController";
 import {
-  ACCENT_TEXT,
-  RAIL_PRESSED,
   SEQ_STROKE,
   POPUP_CHROME,
   FLOATER_CHROME,
   CHROME_BORDER,
   CHROME_FONT,
   CHROME_RADIUS,
-  DISABLED_OPACITY,
   CHROME_TEXT,
   Z,
   DIM_OPACITY,
   TREE_INK_SW_BOLD,
+  NOTIF_BG,
+  NOTIF_BORDER,
+  NOTIF_FG,
+  chromeSurface,
+  CHROME_SURFACE,
+  WIDGET_SHADOW,
 } from "./theme";
 import { Codicon } from "./codiconView";
 import {
-  BARE_BTN,
   LANE_BTN_H,
   LANE_INSET,
   RAIL_BTN,
+  RAIL_GROUP_GAP,
+  RAIL_GROUP_PAD,
   RAIL_INSET,
   RAIL_LANE_GAP,
 } from "./barMetrics";
@@ -188,45 +192,51 @@ export function LinkMark({
   );
 }
 
+/** One button of the rail: VS Code's action-bar item — a `RAIL_BTN` square,
+ a 16px codicon, no border of its own, the toolbar's hover and pressed
+ washes. The rail's GROUP is what wears the widget surface (`RailGroup`). */
 function RailButton({
   glyph,
   title,
   onClick,
-  pressed,
-  pressedInk,
-  disabled,
 }: {
   glyph: ReactNode;
   title: string;
-  onClick: (e: React.MouseEvent) => void;
-  pressed?: boolean;
-  pressedInk?: string;
-  disabled?: boolean;
+  onClick: () => void;
 }) {
-  const ink = pressedInk ?? RAIL_PRESSED;
   const tip = useTip();
   return (
     <button
       type="button"
       {...tip.props(title)}
       onClick={onClick}
-      disabled={disabled}
       data-ptw-baritem=""
-      style={
-        disabled
-          ? { ...RAIL_BTN, opacity: DISABLED_OPACITY, cursor: "default" }
-          : pressed
-            ? {
-                ...RAIL_BTN,
-                background: ink,
-                borderColor: ink,
-                color: ACCENT_TEXT,
-              }
-            : RAIL_BTN
-      }
+      style={RAIL_BTN}
     >
       {glyph}
     </button>
+  );
+}
+
+/** A column of rail buttons on one widget surface: the editor widget's
+ background, border and shadow, as the hover bar wears them. */
+function RailGroup({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="toolbar"
+      aria-orientation="vertical"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        padding: RAIL_GROUP_PAD,
+        background: CHROME_SURFACE,
+        border: `1px solid ${CHROME_BORDER}`,
+        borderRadius: CHROME_RADIUS,
+        boxShadow: `0 0 3px ${WIDGET_SHADOW}`,
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -372,14 +382,11 @@ export function TourTab({
   );
 }
 
-/** Whether ⌥ is held right now, from `altHeldStore`. The rail's zoom buttons
-carry a SECOND gesture on the modifier (expand all / collapse all); while ⌥ is
-down the two swap their codicons for `expand-all`/`collapse-all`, so the
-modifier announces itself on the control it applies to. The store's two
-sources (key events while the webview has focus, `altKey` off every pointer
-move whatever holds focus) and its blur rule are why the rail needs no
-listeners of its own. A press repaints the subscribers — two buttons, the
-mark tabs — not the tree. */
+/** Whether ⌥ is held right now, from `altHeldStore`: the mark tabs read it
+(a temporary tab's number turns into `×`). The store's two sources (key events
+while the webview has focus, `altKey` off every pointer move whatever holds
+focus) and its blur rule are why no subscriber needs listeners of its own. A
+press repaints the subscribers, not the tree. */
 const useAltHeld = (): boolean =>
   useSyncExternalStore(
     altHeldStore.subscribe,
@@ -513,6 +520,12 @@ export function TopCentre({
               overflow: "hidden",
               textOverflow: "ellipsis",
               ...FLOATER_CHROME,
+              // A NOTIFICATION (2026-10-04, batch 2): every toast wears VS
+              // Code's notification surface, border and ink — one look for
+              // the plain echo and the one with an Undo.
+              background: chromeSurface(NOTIF_BG),
+              border: `1px solid ${NOTIF_BORDER}`,
+              color: NOTIF_FG,
               padding: "4px 10px",
               // The UI face, as the banner above it and the bar it reports on
               // speak (it was the lone monospace floater). Tabular figures keep
@@ -527,16 +540,21 @@ export function TopCentre({
                 style={{ display: "inline-flex", alignItems: "center", gap: 10 }}
               >
                 <span>{toast.text}</span>
+                {/* The action is VS Code's primary BUTTON, as a
+                    notification's is (`data-ptw-btn`: its ink and hover). */}
                 <button
                   type="button"
+                  data-ptw-btn=""
                   onClick={toast.action.run}
                   style={{
-                    ...BARE_BTN,
                     pointerEvents: "auto",
-                    padding: "0 4px",
+                    margin: 0,
+                    border: "none",
+                    padding: "1px 8px",
+                    borderRadius: CHROME_RADIUS,
                     font: "inherit",
-                    fontWeight: 600,
-                    textDecoration: "underline",
+                    lineHeight: "18px",
+                    cursor: "pointer",
                   }}
                 >
                   {toast.action.label}
@@ -568,7 +586,6 @@ export function ZoomRail({
   onCollapseAll: () => void;
   onFit: () => void;
 }) {
-  const alt = useAltHeld();
   return (
     <div
       // THE BOTTOM-RIGHT CORNER, beside the canvas these verbs act on. It
@@ -591,30 +608,42 @@ export function ZoomRail({
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-end",
-        gap: 4,
+        gap: RAIL_GROUP_GAP,
       }}
     >
-      {/* The two zoom buttons carry the two fold-ALL gestures on ⌥, the way
-          the tree's own nodes carry a second gesture there: zoom in opens,
-          zoom out shuts, and the modifier says "everything" rather than
-          "here". While ⌥ is held each wears the codicon of what ⌥ would do
-          (`expand-all`, `collapse-all`), so the modifier is visible on the
-          button it applies to rather than only in a tooltip. */}
-      <RailButton
-        glyph={<Codicon name={alt ? "expand-all" : "zoom-in"} />}
-        title={`Zoom in (${CMD}-scroll zooms at the cursor) — ⌥-click: Expand all, show every step: clear every fold and skip (Undo in the toast)`}
-        onClick={(e) => (e.altKey ? onExpandAll() : onZoomIn())}
-      />
-      <RailButton
-        glyph={<Codicon name={alt ? "collapse-all" : "zoom-out"} />}
-        title="Zoom out — ⌥-click: Collapse to the outline, fold each branch where it leaves the trunk (Undo in the toast)"
-        onClick={(e) => (e.altKey ? onCollapseAll() : onZoomOut())}
-      />
-      <RailButton
-        glyph={<Codicon name="screen-full" />}
-        title="Fit width"
-        onClick={onFit}
-      />
+      {/* TWO ACTION BARS (2026-10-04, batch 2): the view's zoom, then the
+          tree's fold-all pair — each its own visible button, where the
+          fold-all pair used to hide on the zoom buttons' ⌥ (the glyph swap
+          is gone, and the Layout panel's Expand/Collapse buttons with it). */}
+      <RailGroup>
+        <RailButton
+          glyph={<Codicon name="zoom-in" />}
+          title={`Zoom in (${CMD}-scroll zooms at the cursor)`}
+          onClick={onZoomIn}
+        />
+        <RailButton
+          glyph={<Codicon name="zoom-out" />}
+          title="Zoom out"
+          onClick={onZoomOut}
+        />
+        <RailButton
+          glyph={<Codicon name="screen-full" />}
+          title="Fit width"
+          onClick={onFit}
+        />
+      </RailGroup>
+      <RailGroup>
+        <RailButton
+          glyph={<Codicon name="collapse-all" />}
+          title={`Collapse to the outline (${CHORD_FOLD_ALL}) — fold each branch where it leaves the trunk; Undo in the toast`}
+          onClick={onCollapseAll}
+        />
+        <RailButton
+          glyph={<Codicon name="expand-all" />}
+          title={`Expand all (${CHORD_UNFOLD_ALL}) — clear every fold and skip; Undo in the toast`}
+          onClick={onExpandAll}
+        />
+      </RailGroup>
     </div>
   );
 }

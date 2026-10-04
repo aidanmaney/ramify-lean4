@@ -20,6 +20,7 @@ import { CodeText } from "./codeSpans";
 import { focusBox, useRestoreFocus } from "./panelKeys";
 import { BARE_BTN } from "./barMetrics";
 import { Codicon } from "./codiconView";
+import { Keycaps } from "./barChrome";
 
 const INK = CHROME_INK;
 
@@ -143,6 +144,14 @@ export function HelpPanel({
           <Codicon name="close" />
         </button>
       </div>
+      {/* START HERE (2026-10-04, batch 2): the three gestures that reach
+          everything else, before any explanation. */}
+      <div style={{ display: "grid", rowGap: 2 }}>
+        <div style={{ ...SECTION_HEAD, marginTop: 0 }}>Start here</div>
+        <div>Click a tactic to show it in the source.</div>
+        <div>Click a goal's top-right corner to fold what is below it.</div>
+        <div>Right-click a box for every move on it.</div>
+      </div>
       {/* What the picture is, before what can be done to it. Colours are the
           theme's, so none is named: goals and tactics are told apart by what
           is written in them. */}
@@ -209,7 +218,7 @@ function Row({ g, fontFamily }: { g: Gesture; fontFamily: string }) {
           overflowWrap: "anywhere",
         }}
       >
-        {g.input}
+        {g.target === "keys" ? <Keycaps keys={g.input} /> : g.input}
       </span>
       <span style={{ minWidth: 0 }}>
         <CodeText text={g.says.replace(/^to /, "")} />

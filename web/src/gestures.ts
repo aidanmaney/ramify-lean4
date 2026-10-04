@@ -3,6 +3,15 @@ export const CMD =
     ? "⌘"
     : "Ctrl";
 
+/** A key chord's modifier as VS Code prints it: `⌘K ⌘0` on a Mac,
+ `Ctrl+K Ctrl+0` elsewhere. */
+export const KEY_MOD = CMD === "⌘" ? "⌘" : "Ctrl+";
+/** The editor's own fold-all / unfold-all chords and its Quick Fix key, taken
+ by the tree's frame (ProofTreeView `onTreeKey`). */
+export const CHORD_FOLD_ALL = `${KEY_MOD}K ${KEY_MOD}0`;
+export const CHORD_UNFOLD_ALL = `${KEY_MOD}K ${KEY_MOD}J`;
+export const KEY_MENU = `${KEY_MOD}.`;
+
 export const HYP_MARK = "▸";
 
 export type NodeGates = {
@@ -104,7 +113,11 @@ export const gestureShown = (g: Gesture, caps: Caps) =>
 export const gestureText = (g: Gesture) => `${g.input} ${g.says}`;
 
 export const GESTURES: Gesture[] = [
-  { target: "goal", input: "⋯", says: "to list every move on a box" },
+  {
+    target: "goal",
+    input: "right-click, or ⋯",
+    says: "to list every move on a box",
+  },
   {
     target: "goal",
     input: "click the top-right corner",
@@ -241,11 +254,24 @@ export const GESTURES: Gesture[] = [
 
   { target: "keys", input: "? / F1", says: "to open or close this panel" },
   { target: "keys", input: "Esc", says: "to close one thing at a time" },
-  { target: "keys", input: "Tab, then ↑ ↓", says: "to move through the boxes" },
+  { target: "keys", input: "Tab", says: "to reach the boxes" },
+  {
+    target: "keys",
+    input: "↑ / ↓",
+    says: "to move through the boxes (Home, End: the first, the last)",
+  },
   {
     target: "keys",
     input: "→ / ←",
     says: "to open or fold a goal, else step in or out",
+  },
+  { target: "keys", input: "Space", says: "to fold or unfold a goal" },
+  { target: "keys", input: CHORD_FOLD_ALL, says: "to collapse to the outline" },
+  { target: "keys", input: CHORD_UNFOLD_ALL, says: "to expand all" },
+  {
+    target: "keys",
+    input: "F8 / ⇧F8",
+    says: "to go to the next / previous problem",
   },
   {
     target: "keys",
@@ -261,13 +287,13 @@ export const GESTURES: Gesture[] = [
   },
   {
     target: "keys",
-    input: "⇧F10",
+    input: `⇧F10 / ${KEY_MENU}`,
     says: "to open the moves menu (on an open goal it has the chips' moves, on a calc its every-row toggle)",
     needs: "add",
   },
   {
     target: "keys",
-    input: "⇧F10",
+    input: `⇧F10 / ${KEY_MENU}`,
     says: "to open the moves menu (on a calc, its every-row toggle)",
     unless: "add",
   },
@@ -278,7 +304,7 @@ export const GESTURES: Gesture[] = [
   },
   {
     target: "keys",
-    input: `${CMD}Z / ${CMD}⇧Z`,
+    input: `${KEY_MOD}Z / ${KEY_MOD}⇧Z`,
     says: "to undo / redo",
     needs: "undo",
   },

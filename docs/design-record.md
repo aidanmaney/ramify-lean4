@@ -4347,3 +4347,87 @@ Gates: `npm test` green with `probe fingerprint` identical (1189 stage
 outputs), `overlap`/`order`/`hopgap` unchanged, `check-sync`,
 `check-settings`, `gen-codicons --check`. Screenshots (harness, light and
 dark, 1200 and 760): the hover bar reads as the notebook cell toolbar.
+
+## 2026-10-04 — Menus, panels, strip and keys (batch 2)
+
+The critique verdict's batch 2 ("chrome structure; no feature removed"), with
+two batch-1 leftovers (B12, D13) and one owner request folded in. Owner
+direction as for batch 1: VS Code-native, regular, economical.
+
+**What moved.**
+- **Right-click** on a box opens the `⋯` move menu AT the pointer
+  (`openNodeMenuAt`: `preventDefault` + `stopPropagation` on the node `<g>`
+  only — the canvas keeps the browser's menu; measured: a synthetic
+  `contextmenu` on a node returns `false`). ⇧F10 and, new, ⌘./Ctrl+. open the
+  same menu from the keys. Not on a trace leaf or while editing.
+- **The menu is a VS Code context menu**: four GROUPS with a separator
+  between them (moves.ts `MENU_SLOTS` → `MENU_GROUP`; `NodeMove.slot` for the
+  menu-only rows, the move id otherwise; `NodeMenu` sorts stably by slot),
+  26px rows, the icon column kept (it is the bar's legend, ruling B3), and the
+  gesture column split: a mouse gesture is dim text (`shortcut`), a key is a
+  keycap (`NodeMove.keys` → `Keycaps`, VS Code's keybinding label in
+  `--ptw-key-*`). Keys now shown: Enter (show in source), Space (hide / bring
+  back), F2 (edit), Esc (leave focus / path).
+- **Panels are check menus**: every `BarRow` is `[check|blank] label` —
+  pick-one and toggle alike; `●/○` is gone, an action row keeps the blank
+  column so the words align; `MenuDivider` is `role=separator` in
+  `--ptw-menu-sep`.
+- **Strip**: `BAR_H` 26 → 22 (VS Code's status bar), items 20 → 18 at
+  `0 5px`, `STATUS_PAD_Y` 1, centred on the 26px host button
+  (`BAR_LANE_BOTTOM`), tabular figures, `BarDivider` deleted (from the row and
+  from `fit`'s arithmetic and ghost: measurer and renderer together). A lit
+  item (its panel open) wears the toolbar's PRESSED wash instead of the
+  inverted block. Measured against a worktree of c709a11 at 1200px: 25 nodes
+  both, every node transform and the frame's scroll position/size identical.
+- **Rail**: two action bars (`RailGroup`: widget surface, border, shadow;
+  `RAIL_BTN` 22, borderless): `zoom-in · zoom-out · screen-full`, a gap,
+  `collapse-all · expand-all`. The ⌥ glyph swap is gone (`useAltHeld` now
+  serves the mark tabs only), and so are the Layout panel's Expand all /
+  Collapse buttons and `BarActionRow` with its `[data-ptw-rowgroup]` keys;
+  `Reset tree` is the panel's one action `BarRow`.
+- **Header** = sticky scroll (`--ptw-sticky-bg/-border/-shadow`).
+- **Keys** (frame-scoped, target === frame): Space folds/unfolds the active
+  goal or opens a ghost (the →/← `onNodeClick` path); ⌘K ⌘0 / ⌘K ⌘J
+  (Ctrl+K Ctrl+0 / Ctrl+K Ctrl+J elsewhere) collapse to the outline / expand
+  all — the first half is an event `timeStamp` in the `chordAt` ref, never
+  read in render, dropped after 1 s or any other non-modifier key (a bare
+  Control/Meta keydown between the halves neither starts nor breaks it); F8 /
+  ⇧F8 next / previous problem (`goToProblem`: opens the strip on the problem
+  it would show, else `stepDiag`, the pager's own path; "No problems in this
+  proof" where there are none). `Date.now()` in the handler tripped
+  react-hooks/purity; the event's own timestamp does the job.
+- **Help**: a three-line "Start here" head; the Keys section draws its inputs
+  as keycaps (one cap per chord half, ` / ` between alternatives); new rows
+  for Space, the two chords, F8; ⌘Z rows print `Ctrl+Z` off a Mac.
+- **D13**: every toast is a NOTIFICATION (`--ptw-notif-*`) — one look for the
+  echo and the Undo kind — and Undo is a primary button (`--ptw-btn-*`,
+  `[data-ptw-btn]` with its hover).
+- **B12**: the lens row reads "Open to the side" (VS Code's Explorer
+  wording), its tip and `SLOT_NAME` too; package.json's enum description
+  follows.
+- **Owner request**: the status readout drops the declaration NAME whenever
+  the signature header is drawn (it already says `theorem cantor …`); the
+  name stays only without a header (the harness's NDJSON). The `status-short`
+  ghost is drawn only where there is a name, and `fit` reads the full form
+  for both widths otherwise, so `statusForm` is 2 or 0 with a header.
+
+**Deviations from the spec, and why.**
+- Groups: the verdict put `collapse/expand` in Fold. Those ids are ⇓ "replace
+  with automation" and ⇑ "write out what simp used" — rewrites — so they sit
+  in Refactor; Fold holds skip, hide/bring back (the goal corner, Space), the
+  ledger's goal row and the calc every-row toggle. Chips sit in Edit.
+- Radius: the menu and panels keep `CHROME_RADIUS` rather than
+  `cornerRadius-large` — the per-surface radius is deferred (A4), as batch 1
+  did for the hover bar.
+- The menu shows BOTH the mouse gesture and the key where a move has both
+  (`double-click F2`): the menu is the icon explainer by ruling B3.
+- Toasts without an action wear the notification tokens too (the spec named
+  only the Undo kind): one look is the regular choice.
+- An empty menu (⇧F10 / right-click on a box with no moves) says "No moves
+  on this box" rather than drawing an empty box.
+
+Not verified live: whether VS Code consumes ⌘. or F8 before the webview
+(⇧F10 and the strip's arrows remain). Gates: `npm test` green, `probe
+fingerprint` identical (1189), `check-sync`, `check-settings`,
+`gen-codicons --check` (no new names), `gen-experience --check`.
+Screenshots: /tmp/claude-0/batch2/.

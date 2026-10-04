@@ -90,17 +90,6 @@ export function panelKeys(
   const at = stops.indexOf(e.target as HTMLElement);
   if (at < 0 || stops.length === 0) return;
   const onSlider = (e.target as HTMLElement).tagName === "INPUT";
-  // A ROW OF SHORT ACTIONS (`BarActionRow`): ←/→ step between its buttons, no
-  // wrap; ↑/↓ still visit them in turn, as they do every other row.
-  const group = (e.target as HTMLElement).closest("[data-ptw-rowgroup]");
-  if (group && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-    const mates = stops.filter((s) => group.contains(s));
-    const k = mates.indexOf(e.target as HTMLElement) + (e.key === "ArrowRight" ? 1 : -1);
-    e.preventDefault();
-    e.stopPropagation();
-    if (k >= 0 && k < mates.length) mates[k].focus({ preventScroll: true });
-    return;
-  }
   let to: number;
   if (e.key === "ArrowDown") to = (at + 1) % stops.length;
   else if (e.key === "ArrowUp") to = (at - 1 + stops.length) % stops.length;

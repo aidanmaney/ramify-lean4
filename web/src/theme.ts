@@ -241,6 +241,25 @@ const PALETTE_CSS = `
   --ptw-menu-sel-fg: var(--vscode-menu-selectionForeground, var(--ptw-menu-fg));
   --ptw-chrome-lit: var(--vscode-list-activeSelectionBackground, color-mix(in srgb, var(--ptw-hue-goal) 16%, transparent));
   --ptw-focus: var(--vscode-focusBorder, var(--ptw-hue-goal));
+  /* Batch 2 (2026-10-04). The signature header is the editor's STICKY
+     SCROLL (its background, its bottom border and the shadow under it); a
+     KEYCAP is VS Code's keybinding label (menus' shortcut column, the help
+     panel's keys); TOASTS are its notifications, and a toast's action is a
+     primary BUTTON. Fallbacks are today's inks, so the harness and the
+     static viewer only change where a token had no equivalent before. */
+  --ptw-sticky-bg: var(--vscode-editorStickyScroll-background, var(--ptw-bg));
+  --ptw-sticky-border: var(--vscode-editorStickyScroll-border, var(--ptw-chrome-border));
+  --ptw-sticky-shadow: var(--vscode-editorStickyScroll-shadow, transparent);
+  --ptw-key-bg: var(--vscode-keybindingLabel-background, color-mix(in srgb, var(--ptw-fg) 9%, transparent));
+  --ptw-key-border: var(--vscode-keybindingLabel-border, color-mix(in srgb, var(--ptw-fg) 20%, transparent));
+  --ptw-key-bottom: var(--vscode-keybindingLabel-bottomBorder, color-mix(in srgb, var(--ptw-fg) 28%, transparent));
+  --ptw-key-fg: var(--vscode-keybindingLabel-foreground, var(--ptw-menu-fg));
+  --ptw-notif-bg: var(--vscode-notifications-background, var(--ptw-chrome-bg));
+  --ptw-notif-fg: var(--vscode-notifications-foreground, var(--ptw-chrome-ink));
+  --ptw-notif-border: var(--vscode-notifications-border, var(--ptw-chrome-border));
+  --ptw-btn-bg: var(--vscode-button-background, var(--ptw-hue-goal));
+  --ptw-btn-fg: var(--vscode-button-foreground, var(--ptw-accent-text));
+  --ptw-btn-hover: var(--vscode-button-hoverBackground, color-mix(in srgb, var(--ptw-btn-bg) 88%, var(--ptw-fg)));
   /* THE MESSAGE STRIP is the editor's MARKER NAVIGATION widget (the peek F8
      opens): its background, and per severity the widget's frame colour (the
      left edge here) and its header tint (the wash). A lint is the INFO row,
@@ -347,6 +366,18 @@ const PALETTE_CSS = `
 [data-ptw-theme] [data-ptw-baritem]:not(:disabled):hover {
   --ptw-bar-item-bg: var(--ptw-chrome-btn);
 }
+[data-ptw-theme] [data-ptw-baritem]:not(:disabled):active {
+  --ptw-bar-item-bg: var(--ptw-toolbar-active);
+}
+
+/* A primary button (a toast's Undo): VS Code's button and its hover. */
+[data-ptw-theme] [data-ptw-btn] {
+  background: var(--ptw-btn-bg);
+  color: var(--ptw-btn-fg);
+}
+[data-ptw-theme] [data-ptw-btn]:hover {
+  background: var(--ptw-btn-hover);
+}
 
 /* Outline mode (the rail's □): drop the fills, keep the borders. Last in the
    sheet on purpose — it has the same specificity as the theme blocks above,
@@ -449,6 +480,23 @@ export const WIDGET_SHADOW = "var(--ptw-widget-shadow)";
 export const MENU_BG = "var(--ptw-menu-bg)";
 export const MENU_FG = "var(--ptw-menu-fg)";
 export const MENU_BORDER = "var(--ptw-menu-border)";
+/** The hairline between a menu's groups (`menu.separatorBackground`). */
+export const MENU_SEP = "var(--ptw-menu-sep)";
+/** A keycap: VS Code's keybinding label. */
+export const KEY_BG = "var(--ptw-key-bg)";
+export const KEY_BORDER = "var(--ptw-key-border)";
+export const KEY_BOTTOM = "var(--ptw-key-bottom)";
+export const KEY_FG = "var(--ptw-key-fg)";
+/** The signature header: the editor's sticky scroll. */
+export const STICKY_BG = "var(--ptw-sticky-bg)";
+export const STICKY_BORDER = "var(--ptw-sticky-border)";
+export const STICKY_SHADOW = "var(--ptw-sticky-shadow)";
+/** A notification (every toast) and its action, a primary button. */
+export const NOTIF_BG = "var(--ptw-notif-bg)";
+export const NOTIF_FG = "var(--ptw-notif-fg)";
+export const NOTIF_BORDER = "var(--ptw-notif-border)";
+export const BUTTON_BG = "var(--ptw-btn-bg)";
+export const BUTTON_FG = "var(--ptw-btn-fg)";
 export const MENU_SEL_BG = "var(--ptw-menu-sel-bg)";
 export const MENU_SEL_FG = "var(--ptw-menu-sel-fg)";
 /** The tips' surface: the editor's hover widget. */

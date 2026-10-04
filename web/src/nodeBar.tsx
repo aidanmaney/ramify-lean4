@@ -1,11 +1,19 @@
 // The node hover bar and its ⋯ move menu: the NodeAction/NodeMove shapes the tree hands it, the bar itself
 // (a VS Code action bar of codicons) and the icon-explainer menu.
-import { useState, useRef, useLayoutEffect } from "react";
+import { Fragment, useState, useRef, useLayoutEffect } from "react";
 import { type CodiconName } from "./codicon";
 import { Codicon } from "./codiconView";
 import { CodeText } from "./codeSpans";
 import { plainTicks } from "./ticks";
-import { pinLabel, type BarKind, type MoveId } from "./moves";
+import {
+  MENU_GROUP,
+  MENU_SLOTS,
+  pinLabel,
+  type BarKind,
+  type MenuSlot,
+  type MoveId,
+} from "./moves";
+import { Keycaps, MenuDivider } from "./barChrome";
 import { useTip } from "./tipController";
 import {
   DANGER_FILL,
@@ -75,7 +83,15 @@ interface NodeAction {
  array of ref-touching closures as a ref read during render.) */
 export interface NodeMove extends NodeAction {
   label: string;
+  /** The MOUSE gesture that reaches the move without the menu, drawn as dim
+   text (`⌥-click`, `double-click`). */
   shortcut?: string;
+  /** The KEY that reaches it from the tree (`F2`, `Space`, `Enter`, `Esc`),
+   drawn as a keycap (`Keycaps`). */
+  keys?: string;
+  /** Where the row sits in the menu (moves.ts `MENU_SLOTS`): a bar move's own
+   id where absent. */
+  slot?: MenuSlot;
   /** The move's id where it can sit on the bar (moves.ts `MOVE_IDS`) — the
    menu row then wears a PIN. Menu-only rows (edit, marks, rename, fold) have
    none. */
@@ -256,29 +272,48 @@ export function NodeActionBar({
 // The keyed row is drawn by its LIT FILL alone (`idx`); DOM focus still
 // follows it for assistive tech, but draws no ring — a ring on top of the fill
 // said the same thing twice (2026-09-22).
+// A menu row: VS Code's 26px, the words centred in it (a wrapped label grows
+// the row).
+const MENU_ROW_PAD = {
+  minHeight: 26,
+  padding: "2px 6px",
+} as const;
+
 const MENU_ROW_CSS =
   "[data-ptw-menu] .ptw-menu-row:focus," +
   "[data-ptw-menu] .ptw-menu-row:focus-visible{outline:none;box-shadow:none}";
 
-/* THE `⋯` MENU (2026-09-22). Every move on one node, in words, with the
-gesture that reaches it without the menu — the answer to "what can I do here?"
-for a reader who does not yet read the bar's glyphs. HTML, hung in the frame
+/** A row's place in the menu: its slot's index in `MENU_SLOTS`. */
+const slotRank = (m: NodeMove): number =>
+  MENU_SLOTS.indexOf(m.slot ?? m.id ?? "edit");
+
+/* THE `⋯` MENU (2026-09-22) — and, since 2026-10-04 (batch 2), a VS Code
+CONTEXT MENU: right-click on a box opens it at the pointer (so do ⇧F10 and
+${CMD}. from the keys); the rows sit in four GROUPS with a separator between them
+(moves.ts `MENU_SLOTS`: navigate · fold · edit · refactor), 26px rows in the
+menu's tokens, and the gesture column says KEYS as keycaps and mouse
+gestures as dim text. Every move on one node, in words — the answer to "what
+can I do here?" for a reader who does not yet read the bar's glyphs, which is
+why the icon column stays (it is the bar's legend). HTML, hung in the frame
 beside the tooltip layer and positioned like it (measured off the `⋯` button's
-rect, written onto the element in a layout effect, clamped inside the frame):
-an overlay, so opening it moves nothing. Rows are the node's own `NodeMove`s,
-so a row runs exactly the closure its button or gesture runs. Arrow keys,
-Home/End and Enter; Esc, a press outside, a scroll and a proof change close
-it (the view's `nodeMenu` layer). Moves that are not available are simply
-not in the list — a greyed row is a question the reader cannot act on. */
+rect or the pointer, written onto the element in a layout effect, clamped
+inside the frame): an overlay, so opening it moves nothing. Rows are the
+node's own `NodeMove`s, so a row runs exactly the closure its button or
+gesture runs. Arrow keys, Home/End and Enter; Esc, a press outside, a scroll
+and a proof change close it (the view's `nodeMenu` layer). Moves that are not
+available are simply not in the list — a greyed row is a question the reader
+cannot act on. */
 export function NodeMenu({
   at,
-  moves,
+  moves: given,
   kind,
   pinned,
   onPin,
   onClose,
 }: {
-  at: { x: number; top: number; bottom: number };
+  /** The rect to hang from, in frame coordinates; `pointer` is a right-click's
+   point (top = bottom), where the menu opens AT it rather than 4px clear. */
+  at: { x: number; top: number; bottom: number; pointer?: boolean };
   moves: NodeMove[];
   /** Which bar the pins write to: this node's kind. */
   kind: BarKind;
@@ -288,6 +323,12 @@ export function NodeMenu({
 }) {
   const { ctl } = useTip();
   const boxRef = useRef<HTMLDivElement | null>(null);
+  // The rows in MENU ORDER (stable within a slot: a slot's several rows keep
+  // the order the view built them in). The keys walk this list.
+  const moves = given
+    .map((m, i) => ({ m, i, r: slotRank(m) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.m);
   // The row the keys are on. In STATE, not only DOM focus: the row is drawn
   // lit from this, so the reader sees where Enter will land even where the
   // webview has not got system focus (a press elsewhere, the hidden pane).
@@ -303,10 +344,11 @@ export function NodeMenu({
     if (!root) return;
     const bw = box.offsetWidth;
     const bh = box.offsetHeight;
+    const gap = at.pointer ? 0 : 4;
     let left = at.x;
     left = Math.max(4, Math.min(left, root.clientWidth - bw - 4));
-    let top = at.bottom + 4;
-    if (top + bh > root.clientHeight - 4) top = at.top - 4 - bh;
+    let top = at.bottom + gap;
+    if (top + bh > root.clientHeight - 4) top = at.top - gap - bh;
     top = Math.max(4, Math.min(top, root.clientHeight - bh - 4));
     box.style.left = `${Math.round(left)}px`;
     box.style.top = `${Math.round(top)}px`;
@@ -383,12 +425,23 @@ export function NodeMenu({
       {/* Focus draws no outline of its own; the lit row (`idx`) is what
           says where the keys are. */}
       <style>{MENU_ROW_CSS}</style>
+      {moves.length === 0 && (
+        <div style={{ ...MENU_ROW_PAD, opacity: DISABLED_OPACITY }}>
+          No moves on this box
+        </div>
+      )}
       {moves.map((m, i) => {
         const pinOn = !!m.id && pinned.includes(m.id);
         const pinSaid = pinLabel(pinOn, kind);
+        // A SEPARATOR where the group changes (VS Code's context menu).
+        const sep =
+          i > 0 &&
+          MENU_GROUP[MENU_SLOTS[slotRank(m)]] !==
+            MENU_GROUP[MENU_SLOTS[slotRank(moves[i - 1])]];
         return (
+          <Fragment key={`${m.glyph}:${m.label}:${i}`}>
+          {sep && <MenuDivider />}
           <div
-            key={`${m.glyph}:${m.label}:${i}`}
             onMouseEnter={() => setIdx(i)}
             style={{
               display: "flex",
@@ -410,7 +463,7 @@ export function NodeMenu({
                 flex: 1,
                 minWidth: 0,
                 boxSizing: "border-box",
-                padding: "3px 6px",
+                ...MENU_ROW_PAD,
                 border: "none",
                 borderRadius: CHROME_RADIUS,
                 background: "transparent",
@@ -472,17 +525,25 @@ export function NodeMenu({
                 >
                   <CodeText text={m.label} />
                 </span>
-                {m.shortcut && (
+                {(m.shortcut || m.keys) && (
                   <span
                     style={{
                       flex: "0 0 auto",
                       marginLeft: "auto",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
                       whiteSpace: "nowrap",
-                      opacity: DIM_OPACITY,
                       fontSize: CHROME_TEXT_SM,
                     }}
                   >
-                    <CodeText text={m.shortcut} />
+                    {/* A mouse gesture is dim text; a key is a keycap. */}
+                    {m.shortcut && (
+                      <span style={{ opacity: DIM_OPACITY }}>
+                        <CodeText text={m.shortcut} />
+                      </span>
+                    )}
+                    {m.keys && <Keycaps keys={m.keys} />}
                   </span>
                 )}
               </span>
@@ -522,6 +583,7 @@ export function NodeMenu({
               <span aria-hidden style={{ flex: "none", width: 22 }} />
             )}
           </div>
+          </Fragment>
         );
       })}
     </div>

@@ -40,6 +40,7 @@ import {
   BAR_GROUP_GAP,
   BAR_H,
   BAR_ITEM_H,
+  BAR_LANE_BOTTOM,
   BAR_LIFT,
   BAR_RIGHT_RESERVE,
   type BarForm,
@@ -53,9 +54,7 @@ import {
   type StatusInfo,
 } from "./barMetrics";
 import {
-  BarActionRow,
   BarButton,
-  BarDivider,
   BarMenu,
   BarPanel,
   BarRow,
@@ -90,8 +89,6 @@ export function StatusBar({
   onSideBySideChange,
   gallery,
   onGalleryChange,
-  onExpandAll,
-  onCollapseAll,
   onReset,
   reflow,
   forcedReflow,
@@ -141,10 +138,7 @@ export function StatusBar({
   onSideBySideChange: (v: boolean) => void;
   gallery: boolean;
   onGalleryChange: (v: boolean) => void;
-  /** The Layout panel's action rows: the rail's ⌥ gestures (same handlers, so
-   the toast and its Undo match) and Reset tree. */
-  onExpandAll: () => void;
-  onCollapseAll: () => void;
+  /** The Layout panel's one action row, Reset tree. */
   onReset: () => void;
   reflow: ReflowMode;
   forcedReflow?: number;
@@ -418,7 +412,6 @@ export function StatusBar({
     resv      the widest that item's value could ever be, over EVERY value
               it can take (`outline` vs `tracks`, `intro`, `narrate`, `–/99`; none for Reading)
     glyphW    the glyph form
-    divW      the group divider
     helpW     `?`
 
   `resv` is also what the real row RESERVES for each value in BOTH word forms,
@@ -488,7 +481,6 @@ export function StatusBar({
     const bareW = ids.map((id) => wide(pick(`b:${id}`)));
     const glyphW = ids.map((id) => wide(pick(`g:${id}`)));
     const resvW = ids.map((id) => Math.ceil(wide(pick(`v:${id}`))));
-    const divW = wide(pick("div"));
     const helpW = wide(pick("help"));
     if (helpW <= 0) return;
     // The diagnostics COUNT item, where there is one: its ghost is the very
@@ -499,7 +491,9 @@ export function StatusBar({
     // The status readout at its ACTUAL width, in its two forms (with and
     // without the name); 0 where there is none.
     const statusW = wide(pick("status"));
-    const statusShortW = wide(pick("status-short"));
+    // The short form exists only where the readout carries a name (no
+    // signature header); without one the readout IS its short form.
+    const statusShortW = wide(pick("status-short")) || statusW;
 
     setResv((prev) =>
       Object.keys(prev).length === n &&
@@ -522,10 +516,10 @@ export function StatusBar({
       parts.length === 0
         ? 0
         : parts.reduce((a, b) => a + b, 0) + (parts.length - 1) * STATUS_GAP;
-    /* TWO GROUPS, one gap between them. LEFT: the value items and Reading,
-    with a divider before Reading (the settings, then the reading). RIGHT: the
-    marks (when there are any), a divider where the count follows them, the
-    diagnostics count (when there is one) and `?`. Marks is the LAST item of
+    /* TWO GROUPS, one gap between them and NO DIVIDERS (2026-10-04: VS
+    Code's status bar has none; the gap between the groups is the grouping).
+    LEFT: the value items and Reading. RIGHT: the readout, the marks (when
+    there are any), the diagnostics count (when there is one) and `?`. Marks is the LAST item of
     the ladder (it sheds first) and the left end of the right group. The
     least room kept between the groups is `BAR_GROUP_GAP`. */
     const tIdx = ids.indexOf("tour");
@@ -536,24 +530,19 @@ export function StatusBar({
       sw = 0,
     ) => {
       const left: number[] = [];
-      ids.forEach((id, i) => {
-        if (i === tIdx) return;
-        if (id === "reading") left.push(divW);
-        left.push(itemW(i, names, words));
+      ids.forEach((_, i) => {
+        if (i !== tIdx) left.push(itemW(i, names, words));
       });
       const right: number[] = [];
-      // The readout, where it is shown, is the LEFT END of the right group,
-      // with a divider after it.
-      if (sw > 0) right.push(sw, divW);
+      // The readout, where it is shown, is the LEFT END of the right group.
+      if (sw > 0) right.push(sw);
       if (tIdx >= 0) right.push(itemW(tIdx, names, words));
-      if (tIdx >= 0 && dw > 0) right.push(divW);
       if (dw > 0) right.push(dw);
       right.push(helpW);
       return rowW(left) + rowW(right) + BAR_GROUP_GAP;
     };
     /* THE STRIP FILLS THE LANE, and leaving the lane is the one fallback.
-    `need(0, 0)` is the row's FLOOR — every item at its glyph, the dividers,
-    the gaps — and where the lane beside the button cannot hold even that,
+    `need(0, 0)` is the row's FLOOR — every item at its glyph, the gaps — and where the lane beside the button cannot hold even that,
     the row would be clipped down to whatever fits, with the button's 110px
     of canvas left empty beside it. That is what a thin panel reported (a
     ~280px frame). So the strip goes one lane UP and takes the frame between
@@ -584,8 +573,9 @@ export function StatusBar({
     state, not a setting, so it keeps its place until the settings have
     compacted as far as they go: the ladder above is walked with the readout
     at its full ACTUAL width, and only where even the all-glyph floor cannot
-    hold it does it shed its name, then go to nothing. Its width depends on
-    the proof and its cuts, never on the stage, so it cannot oscillate. */
+    hold it does it shed its name (where it has one: only without a
+    signature header), then go to nothing. Its width depends on the proof
+    and its cuts, never on the stage, so it cannot oscillate. */
     const dw = diagCompact ? diagShort : diagFull;
     const fits = (sw: number) =>
       sw > 0 && needWith(got.names, got.words, dw, sw) <= avail;
@@ -715,8 +705,8 @@ export function StatusBar({
   );
 
   // The ladder's index of an item decides its form; the DRAW order is the two
-  // groups. LEFT: the settings, a divider, Reading. RIGHT: Marks at its left
-  // end, a divider where the count follows, the count, `?`.
+  // groups. LEFT: the settings, Reading. RIGHT: the readout, Marks, the
+  // count, `?`.
   const formOf = (i: number): BarForm =>
     i < stage.names ? "full" : i < stage.words ? "value" : "glyph";
   const drawItem = (id: string) => {
@@ -738,14 +728,15 @@ export function StatusBar({
       style={{
         position: "absolute",
         /* ONE PLACEMENT, and one fallback. In the lane: `left: LANE_INSET`,
-        `right: BAR_RIGHT_RESERVE`, at the button's own inset and height. The
+        `right: BAR_RIGHT_RESERVE`, centred on the button (`BAR_LANE_BOTTOM`;
+        22px, VS Code's status bar, against its 26). The
         fallback is where the lane cannot hold even the all-glyph row (`fit`):
         the strip goes one lane UP — the button, the host's, draws over
         whatever is in its lane, and it hid `?` in a 424px pane — spans the
         frame between its insets, and the rail climbs over it (`lifted`). */
         left: LANE_INSET,
         right: lifted ? LANE_INSET : BAR_RIGHT_RESERVE,
-        bottom: lifted ? BAR_LIFT : LANE_INSET,
+        bottom: lifted ? BAR_LIFT : BAR_LANE_BOTTOM,
         // A fixed `height`, never a minimum: see BAR_ITEM_H.
         height: BAR_H,
         zIndex: Z.chrome,
@@ -756,6 +747,9 @@ export function StatusBar({
         fontSize: CHROME_TEXT,
         lineHeight: 1,
         whiteSpace: "nowrap",
+        // Figures at one width, as VS Code's status bar draws them: a count
+        // ticking over moves nothing beside it.
+        fontVariantNumeric: "tabular-nums",
         ...POPUP_CHROME,
         padding: `${STATUS_PAD_Y}px ${STATUS_PAD_X}px`,
         borderRadius: CHROME_RADIUS,
@@ -792,23 +786,19 @@ export function StatusBar({
           {drawItem("layout")}
           {drawItem("context")}
           {drawItem("comments")}
-          <BarDivider />
           {drawItem("reading")}
         </div>
 
         {/* RIGHT, right-aligned and so FLUSH against the host's button
-            whatever the left group carries: the marks at its left end (their
-            arrival moves nothing), a divider where the count follows them,
-            the count, `?`. */}
+            whatever the left group carries: the readout and the marks at its
+            left end (their arrival moves nothing), the count, `?`. */}
         <div style={{ ...GROUP_STYLE, marginLeft: "auto" }}>
           {statusForm > 0 && status && (
             <>
               <StatusReadout info={statusForm === 2 ? status : { ...status, name: "" }} />
-              <BarDivider />
             </>
           )}
           {drawItem("tour")}
-          {hasMarks && diag && <BarDivider />}
           {diag && (
             <div style={{ flex: "none" }}>
               <DiagCountItem {...diag} compact={diagCompact} />
@@ -870,11 +860,8 @@ export function StatusBar({
             </span>
           )),
         )}
-        {/* The divider and `?`, each on its own: `fit` lays the two groups
-            out itself, counting the gaps. */}
-        <span data-g="div" style={{ display: "inline-flex" }}>
-          <BarDivider />
-        </span>
+        {/* `?` on its own: `fit` lays the two groups out itself, counting
+            the gaps. */}
         <span data-g="help" style={{ display: "inline-flex" }}>
           {helpBtn}
         </span>
@@ -885,9 +872,11 @@ export function StatusBar({
             <span data-g="status" style={{ display: "inline-flex" }}>
               <StatusReadout info={status} />
             </span>
-            <span data-g="status-short" style={{ display: "inline-flex" }}>
-              <StatusReadout info={{ ...status, name: "" }} />
-            </span>
+            {status.name && (
+              <span data-g="status-short" style={{ display: "inline-flex" }}>
+                <StatusReadout info={{ ...status, name: "" }} />
+              </span>
+            )}
           </>
         )}
         {/* The diagnostics count item, measured on its own: it is present
@@ -959,32 +948,16 @@ export function StatusBar({
             onClick={() => onGalleryChange(!gallery)}
           />
           <MenuDivider />
-          {/* ACTIONS: the rail's ⌥ gestures (⌥ on + and −), for a reader
-              without the modifier, and Reset tree (moved off the rail,
-              2026-10-02: it is an action on the view, and the rail is the
-              zoom). They leave the panel up, like every action row; the
-              toast's Undo brings back what each replaced. */}
-          <BarActionRow
-            actions={[
-              {
-                label: "Expand all",
-                name: "Expand all",
-                title: "show every step: clear every fold and skip (Undo in the toast brings them back)",
-                onClick: onExpandAll,
-              },
-              {
-                label: "Collapse",
-                name: "Collapse to the outline",
-                title: "fold each branch where it leaves the trunk, so only the spine is drawn (Undo in the toast brings the folds back)",
-                onClick: onCollapseAll,
-              },
-              {
-                label: "Reset",
-                name: "Reset tree",
-                title: "put the view back to what the source asks for: folds and skips from its flags, no scoping, no temporary marks (Undo in the toast brings the view back)",
-                onClick: onReset,
-              },
-            ]}
+          {/* RESET TREE, a lone action (it leaves the panel up; the
+              toast's Undo brings the view back). Expand all and Collapse to
+              the outline were a row of buttons here while they hid on the
+              rail's ⌥; they are the rail's own buttons now (2026-10-04). */}
+          <BarRow
+            kind="action"
+            label="Reset tree"
+            icon={null}
+            title="Reset tree — put the view back to what the source asks for: folds and skips from its flags, no scoping, no temporary marks (Undo in the toast brings the view back)"
+            onClick={onReset}
           />
           <MenuDivider />
           {/* THE WIDTH, which was a bar item of its own until 2026-09-24 —

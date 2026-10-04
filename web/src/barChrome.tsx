@@ -1,7 +1,6 @@
 // The status bar's small parts: buttons, checks, rows, panels and menus, the glyph box, and the one dot
 // under a bar item. Every mark is a codicon (codiconView.tsx).
 import {
-  Fragment,
   useCallback,
   useEffect,
   useState,
@@ -12,14 +11,16 @@ import {
 import { plainTicks } from "./ticks";
 import { useTip } from "./tipController";
 import {
-  ACCENT_TEXT,
-  RAIL_PRESSED,
-  CHROME_BORDER,
   CHROME_INK,
-  CHROME_TEXT_SM,
   DISABLED_OPACITY,
   DIM_OPACITY,
   CHROME_RADIUS,
+  MENU_SEP,
+  CHROME_FONT,
+  KEY_BG,
+  KEY_BORDER,
+  KEY_BOTTOM,
+  KEY_FG,
 } from "./theme";
 import { Codicon } from "./codiconView";
 import { focusFirstRow, panelKeys, useRestoreFocus } from "./panelKeys";
@@ -229,7 +230,9 @@ export function BarButton({
         ...BAR_ITEM,
         opacity: disabled ? DISABLED_OPACITY : muted ? DIM_OPACITY : 1,
         cursor: disabled ? "default" : "pointer",
-        ...(accent ? { background: RAIL_PRESSED, color: ACCENT_TEXT } : null),
+        // LIT while its panel is up: the toolbar's PRESSED wash, as VS Code
+        // draws a status-bar item whose menu is open — not an inverted block.
+        ...(accent ? { background: "var(--ptw-toolbar-active)" } : null),
       }}
     >
       {label}
@@ -371,28 +374,21 @@ export function BarRow({
         background: "var(--ptw-bar-item-bg, transparent)",
       }}
     >
-      {/* THE ROW'S MARK, in one 16px column: a toggle is the infoview's
-          check menu (`check` when on, nothing when off); a pick keeps its
-          radio; an action has none. */}
-      {kind === "toggle" ? (
-        <span style={{ flex: `0 0 ${ROW_MARK_W}px`, alignSelf: "center" }}>
-          <Codicon name={on ? "check" : "blank"} />
-        </span>
-      ) : kind === "action" ? (
-        <span aria-hidden style={{ flex: `0 0 ${ROW_MARK_W}px` }} />
-      ) : (
-        <span
-          style={{
-            flex: `0 0 ${ROW_MARK_W}px`,
-            fontSize: 10,
-            textAlign: "center",
-            color: on ? RAIL_PRESSED : "inherit",
-            opacity: on ? 1 : DIM_OPACITY,
-          }}
-        >
-          {on ? "●" : "○"}
-        </span>
-      )}
+      {/* THE ROW'S MARK, in one 16px column: the infoview's CHECK MENU
+          (2026-10-04, batch 2) — `check` where the row is on, a blank of the
+          same width where it is off, for a pick-one row and a toggle alike
+          (the `●/○` radio is gone); an action has the blank column only, so
+          every panel's words align. */}
+      <span
+        aria-hidden
+        style={{
+          flex: `0 0 ${ROW_MARK_W}px`,
+          alignSelf: "center",
+          display: "inline-flex",
+        }}
+      >
+        <Codicon name={kind !== "action" && on ? "check" : "blank"} />
+      </span>
       {icon !== undefined && (
         <span
           aria-hidden
@@ -408,73 +404,6 @@ export function BarRow({
       )}
       <span>{label}</span>
     </button>
-  );
-}
-
-/* ONE ROW OF SHORT ACTIONS under a panel's divider (`Expand all · Collapse ·
-Reset`), where three `BarRow`s took three full rows. Each is a real `<button>`
-with the `menuitem` role, so `panelKeys`' ↑/↓ reach every one in turn and its
-←/→ move between them (the row is a `[data-ptw-rowgroup]`); the tip and the
-aria-label are `name — what it does`, the name being the full one the short
-label stands for. Left-aligned, `CHROME_TEXT_SM`, a `·` between — the voice the
-bar's own lists use. Actions leave the panel up, like every action row.
-RULE: a LONE action in a panel is a full `BarRow kind="action"`; a GROUP of 2+ is this compact row. */
-export function BarActionRow({
-  actions,
-}: {
-  actions: {
-    label: string;
-    name: string;
-    title: string;
-    onClick: () => void;
-    disabled?: boolean;
-  }[];
-}) {
-  const { ctl } = useTip();
-  return (
-    <div
-      role="group"
-      data-ptw-rowgroup=""
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 2,
-        padding: "3px 6px",
-        fontSize: CHROME_TEXT_SM,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {actions.map((a, i) => (
-        <Fragment key={a.name}>
-          {i > 0 && (
-            <span aria-hidden style={{ opacity: DIM_OPACITY }}>
-              ·
-            </span>
-          )}
-          <button
-            type="button"
-            role="menuitem"
-            data-ptw-baritem=""
-            aria-label={plainTicks(`${a.name} — ${a.title}`)}
-            disabled={a.disabled}
-            onClick={a.onClick}
-            onPointerEnter={(e) => ctl.enter(e.currentTarget)}
-            onPointerLeave={(e) => ctl.leave(e.currentTarget)}
-            style={{
-              ...BAR_ROW,
-              width: "auto",
-              alignItems: "center",
-              padding: "2px 5px",
-              fontSize: CHROME_TEXT_SM,
-              opacity: a.disabled ? DISABLED_OPACITY : 1,
-              background: "var(--ptw-bar-item-bg, transparent)",
-            }}
-          >
-            {a.label}
-          </button>
-        </Fragment>
-      ))}
-    </div>
   );
 }
 
@@ -613,43 +542,75 @@ export const MENU_MIN_W = 196;
 /** The room a panel keeps from the frame's edge when it is slid back inside. */
 const PANEL_EDGE = 4;
 
-/* A hairline between GROUPS in the bar's own row. It has been taken out and
-put back twice, and the reason it stands now is that the row MIXES KINDS:
-the settings that say how the tree is drawn, then `Reading` (how much of each
-node you are asked to take in), then — in the right group — the marks (a
-reading position) and the diagnostics count (a fact about the proof). The
-rule says where one kind of thing ends: one between the settings and
-Reading, one between Marks and the count where both exist.
-
-It is the item's 20px tall, centred, so it cannot reach the strip's height;
-`fit` measures it off its own ghost and counts one STATUS_GAP either side. */
-export function BarDivider() {
-  return (
-    <span
-      aria-hidden
-      style={{
-        flex: "0 0 1px",
-        width: 1,
-        height: BAR_ITEM_H,
-        alignSelf: "center",
-        background: CHROME_BORDER,
-      }}
-    />
-  );
-}
-
-// A hairline between groups of rows INSIDE a menu panel — the same rule as
-// `BarDivider`, drawn across a panel instead of down a row.
+/** The separator between a menu's groups — VS Code's: one hairline in
+ `menu.separatorBackground`, inset from the menu's sides, with room above and
+ below. The `⋯` menu's groups and every bar panel's draw this one. */
 export function MenuDivider() {
   return (
     <div
-      aria-hidden
+      role="separator"
       style={{
         height: 1,
         margin: "4px 6px",
-        background: CHROME_BORDER,
-        opacity: DIM_OPACITY,
+        background: MENU_SEP,
       }}
     />
   );
 }
+
+/** VS Code's KEYBINDING LABEL (2026-10-04, batch 2): one keycap per key of a
+ chord — `Ctrl+K Ctrl+0` is two caps — and ` / ` between alternatives
+ (`? / F1`). The menus' shortcut column and the help panel's keys draw it;
+ a MOUSE gesture is plain dim text beside it, never a cap. */
+export function Keycaps({ keys }: { keys: string }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: 2,
+        verticalAlign: "middle",
+      }}
+    >
+      {keys.split(" / ").map((alt, i) => (
+        <span
+          key={i}
+          style={{ display: "inline-flex", alignItems: "center", gap: 2 }}
+        >
+          {i > 0 && (
+            <span aria-hidden style={{ opacity: DIM_OPACITY, padding: "0 1px" }}>
+              /
+            </span>
+          )}
+          {alt.split(" ").map((k, j) => (
+            <kbd
+              key={j}
+              style={{
+                boxSizing: "border-box",
+                display: "inline-block",
+                minWidth: 18,
+                padding: "0 4px",
+                fontFamily: CHROME_FONT,
+                fontSize: KEYCAP_PX,
+                lineHeight: "15px",
+                textAlign: "center",
+                whiteSpace: "nowrap",
+                color: KEY_FG,
+                background: KEY_BG,
+                border: `1px solid ${KEY_BORDER}`,
+                borderBottomColor: KEY_BOTTOM,
+                borderRadius: CHROME_RADIUS,
+                boxShadow: `inset 0 -1px 0 ${KEY_BOTTOM}`,
+              }}
+            >
+              {k}
+            </kbd>
+          ))}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+const KEYCAP_PX = 11;

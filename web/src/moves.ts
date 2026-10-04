@@ -17,8 +17,8 @@
  the list's order, each only where the move is available — `⋯` is always last
  and is not in the list. Two lists, one per node kind: `ramify.hoverBar.tactic`
  and `ramify.hoverBar.goal` (package.json's enums are this array, per kind by
- moveSlots.ts `appliesToKind`; scripts/check-sync.mjs asserts it), with `?hoverbar-tactic=`/`?hoverbar-goal=` in the harness. The order
- here is the `⋯` menu's. */
+ moveSlots.ts `appliesToKind`; scripts/check-sync.mjs asserts it), with `?hoverbar-tactic=`/`?hoverbar-goal=` in the harness. The `⋯`
+ menu orders its rows by `MENU_SLOTS`, not by this list. */
 export const MOVE_IDS = [
   "source",
   "focus",
@@ -36,6 +36,59 @@ export const MOVE_IDS = [
 ] as const;
 
 export type MoveId = (typeof MOVE_IDS)[number];
+
+/** THE `⋯` MENU'S GROUPS (2026-10-04, batch 2), VS Code's context-menu
+ structure: rows in four groups with a separator between them — NAVIGATE (where
+ to look), FOLD (what is drawn), EDIT (the source text), REFACTOR (rewrites the
+ elaborator checks, and what automation used). A row's SLOT is its move id, or
+ for a menu-only row the word below; `MENU_SLOTS` is the order, groups in turn. */
+export const MENU_SLOTS = [
+  // navigate
+  "source",
+  "focus",
+  "path",
+  "lens",
+  // fold
+  "skip",
+  "fold",
+  "goal",
+  "rows",
+  // edit
+  "edit",
+  "comment",
+  "delete",
+  "mark",
+  "chip",
+  // refactor
+  "inline",
+  "extract",
+  "collapse",
+  "expand",
+  "lint",
+  "rename",
+  "trace",
+] as const;
+
+export type MenuSlot = (typeof MENU_SLOTS)[number];
+
+export type MenuGroup = "navigate" | "fold" | "edit" | "refactor";
+
+const GROUP_FIRST: [MenuSlot, MenuGroup][] = [
+  ["source", "navigate"],
+  ["skip", "fold"],
+  ["edit", "edit"],
+  ["inline", "refactor"],
+];
+
+/** Each slot's group, read off `MENU_SLOTS`' runs. */
+export const MENU_GROUP = Object.fromEntries(
+  MENU_SLOTS.map((slot, i) => {
+    let g: MenuGroup = "navigate";
+    for (const [first, group] of GROUP_FIRST)
+      if (MENU_SLOTS.indexOf(first) <= i) g = group;
+    return [slot, g];
+  }),
+) as Record<MenuSlot, MenuGroup>;
 
 export type BarKind = "tactic" | "goal";
 
@@ -197,7 +250,7 @@ const SLOT_NAME: Record<MoveId, string> = {
   inline: "Move into its one use",
   extract: "Pull out as a `have`",
   lint: "Apply the linter's fix",
-  lens: "Open in the lens",
+  lens: "Open to the side",
   goal: "Show the goal this step proves",
 };
 
