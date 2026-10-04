@@ -88,3 +88,12 @@ needs = ["proofTreeWidgetJs"]
 name = "ppharness"
 root = "Main"
 supportInterpreter = true
+
+# --- Playground baker spike (file: PlaygroundBake.lean) ----------------------
+# Core-only BFS over (goal, tactic) answers for a static "baked playground";
+# see docs/playground-spike.md. Not a default target, imports nothing of ours.
+# `lake exe playgroundbake OUTDIR [DEPTH] [canon]`
+[[lean_exe]]
+name = "playgroundbake"
+root = "PlaygroundBake"
+supportInterpreter = true
