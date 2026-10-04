@@ -345,3 +345,15 @@ propagate under section 4(d).
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+## Visual Studio Code — Code - OSS (squiggle tiles)
+
+MIT License. Copyright (c) Microsoft Corporation.
+<https://github.com/microsoft/vscode> — licence text:
+<https://github.com/microsoft/vscode/blob/main/LICENSE.txt>
+
+`web/src/squiggle.tsx` draws a diagnostic with the editor's own `.squiggly-*`
+decoration tiles (the 6×3 wave and the hint's three dots), whose SVG geometry is
+copied from the workbench so the tree's mark matches the editor's. No other
+VS Code code or asset is copied; the `--vscode-*` theme variables Ramify reads
+are the public webview theming API.
