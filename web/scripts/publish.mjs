@@ -10,7 +10,8 @@
 // each file's records into one versioned payload and writes a site that any
 // static host (GitHub Pages) serves as is:
 //
-//   <out>/index.html          every published file and its theorems
+//   <out>/index.html          a card per published file (thumbs.mjs draws the pictures)
+//   <out>/cards.json          what each card shows: file, featured proof, the hero
 //   <out>/view.html           the viewer: view.html#file=<name>&proof=<decl>
 //   <out>/viewer-<hash>.js    the viewer bundle, shared and cache-safe
 //   <out>/data/<name>.json    one payload per source file (format version 1)
@@ -24,7 +25,9 @@
 //   --no-lint         skip D4's Mathlib linters
 //   --list FILE       publish the sources FILE names, one per line, in that
 //                     order (paths relative to FILE; `#` comments) — the
-//                     site's own list is demos/site.txt
+//                     site's own list is demos/site.txt; a line may name
+//                     the proof its card opens (`Cantor.lean cantor`), and
+//                     `@hero <name>` the file the index opens with
 //   --cache DIR       keep each file's ppharness output in DIR/<name>.ndjson and
 //                     reuse it while it is newer than the source (iteration)
 //   --ndjson F=SRC    use an existing ppharness --widget-data output F for the
@@ -61,6 +64,10 @@ function parseArgs(argv) {
     files: [],
     /** Index-page group headings, keyed by the index of the first file. */
     groups: new Map(),
+    /** The proof a file's card opens and pictures, by source path. */
+    featured: new Map(),
+    /** The file (by published name) whose viewer the index opens with. */
+    hero: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -85,8 +92,18 @@ function parseArgs(argv) {
           o.groups.set(o.files.length, g[1].trim());
           continue;
         }
-        const f = line.replace(/#.*/, "").trim();
-        if (f) o.files.push(path.resolve(path.dirname(list), f));
+        // `@hero <name>` picks the index's opening picture.
+        const h = /^@hero\s+(\S+)/.exec(line.trim());
+        if (h) {
+          o.hero = h[1];
+          continue;
+        }
+        // `<file.lean> [proof]`: the proof names the file's card.
+        const [f, proof] = line.replace(/#.*/, "").trim().split(/\s+/);
+        if (!f) continue;
+        const abs = path.resolve(path.dirname(list), f);
+        o.files.push(abs);
+        if (proof) o.featured.set(abs, proof);
       }
     }
     else if (a === "--ndjson") {
@@ -253,34 +270,47 @@ const inlineMd = (s) =>
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 
-function indexPage(entries) {
-  const files = entries
-    .map((e) => {
-      const rows = e.payload.proofs
-        .map((p) => {
-          const slug = p.name ?? `@${p.index}`;
-          // The statement as written, without the `:= by` that opens the body.
-          const head = (p.proof.declHeader ?? "")
-            .replace(/\s+/g, " ")
-            .replace(/\s*:=\s*(by)?\s*$/, "")
-            .trim();
-          const errs = (p.proof.diagnostics ?? []).filter((d) => d.severity === 1).length;
-          return `<li><a href="view.html#file=${encodeURIComponent(e.name)}&amp;proof=${encodeURIComponent(slug)}"><code>${esc(head || slug)}</code></a>${errs ? ` <span class="err">${errs} error${errs > 1 ? "s" : ""}</span>` : ""}</li>`;
-        })
-        .join("\n");
-      const exp = e.exportBytes
-        ? ` · <a href="export/${encodeURIComponent(e.name)}.html" download>one-file copy</a> <span class="dim">(${kb(e.exportBytes)})</span>`
-        : "";
-      const doc = fileDoc(e.payload.source);
-      const count = `${e.payload.proofs.length} proof${e.payload.proofs.length === 1 ? "" : "s"}`;
-      return `${e.group ? `<h2 class="group">${inlineMd(e.group)}</h2>\n` : ""}<section>
-<h3>${doc ? inlineMd(doc.title) : `<code>${esc(e.payload.file)}</code>`}</h3>
-${doc?.blurb ? `<p>${inlineMd(doc.blurb)}</p>\n` : ""}<p class="dim"><code>${esc(e.payload.file)}</code> · ${count}${exp}</p>
-<ul>
-${rows}
-</ul>
-</section>`;
-    })
+/** The slug of the proof a file's card opens: the one the list named, else
+ the file's longest (its main theorem, as a rule). */
+function featuredProof(payload, named, display) {
+  const slug = (p) => p.name ?? `@${p.index}`;
+  if (named) {
+    if (payload.proofs.some((p) => slug(p) === named)) return named;
+    console.warn(`${display}: no proof named ${named} — the card opens the longest`);
+  }
+  const steps = (p) => p.proof.steps?.length ?? 0;
+  return slug(payload.proofs.reduce((a, b) => (steps(b) > steps(a) ? b : a)));
+}
+
+const viewHref = (file, proof) =>
+  `view.html#file=${encodeURIComponent(file)}&amp;proof=${encodeURIComponent(proof)}`;
+
+function indexPage(entries, hero) {
+  const pic = (base, alt) =>
+    `<img class="lt" src="thumbs/${base}-light.webp" alt="${esc(alt)}" loading="lazy" onerror="this.parentNode.classList.add('none')"><img class="dk" src="thumbs/${base}-dark.webp" alt="" loading="lazy">`;
+  const card = (e) => {
+    const doc = fileDoc(e.payload.source);
+    const title = doc ? doc.title : e.payload.file;
+    const n = e.payload.proofs.length;
+    const tip = doc?.blurb ? doc.blurb.replace(/[`*]|\]\([^)]*\)|\[/g, "") : e.payload.file;
+    const dl = e.exportBytes
+      ? `<a class="dl" href="export/${encodeURIComponent(e.name)}.html" download title="One-file copy (${kb(e.exportBytes)})" aria-label="Download ${esc(title)} as one file">${DOWNLOAD_SVG}</a>`
+      : "";
+    return `<div class="card">
+<a class="go" href="${viewHref(e.name, e.featured)}" title="${esc(tip)}"><span class="thumb">${pic(e.name, `The proof tree of ${e.featured}`)}</span>
+<span class="cap"><span class="t">${inlineMd(title)}</span>${n > 1 ? `<span class="n">${n} proofs</span>` : ""}</span></a>${dl}
+</div>`;
+  };
+  const groups = [];
+  for (const e of entries) {
+    if (e.group || groups.length === 0) groups.push({ head: e.group ?? null, items: [] });
+    groups.at(-1).items.push(e);
+  }
+  const body = groups
+    .map(
+      (g) =>
+        `${g.head ? `<h2>${inlineMd(g.head)}</h2>\n` : ""}<div class="grid">\n${g.items.map(card).join("\n")}\n</div>`,
+    )
     .join("\n");
   return `<!doctype html>
 <html lang="en">
@@ -292,37 +322,81 @@ ${rows}
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 ${THEME_BOOT}
 <style>${BOOT_CSS}
-:root { --dim: #57606a; --line: #d0d7de; --link: #1f5fae; --err: #cf222e; }
+:root { --dim: #57606a; --line: #d0d7de; --link: #1f5fae; --card: #f6f8fa; --lift: 0 6px 20px rgba(0,0,0,.12); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --dim: #aab1bb; --line: #3b404a; --link: #86b4f5; --err: #f47067; }
+  :root:not([data-theme="light"]) { --dim: #aab1bb; --line: #3b404a; --link: #86b4f5; --card: #22252b; --lift: 0 6px 20px rgba(0,0,0,.5); }
+  :root:not([data-theme="light"]) .lt { display: none; }
+  :root:not([data-theme="light"]) .dk { display: block; }
 }
-:root[data-theme="dark"] { --dim: #aab1bb; --line: #3b404a; --link: #86b4f5; --err: #f47067; }
-body { margin: 0; font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
-h1 { font-size: 22px; margin: 0 0 4px; }
-h2.group { font-size: 18px; margin: 44px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
-h3 { font-size: 15px; margin: 26px 0 2px; }
-code { font-family: "JuliaMono", "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 13px; }
+:root[data-theme="dark"] { --dim: #aab1bb; --line: #3b404a; --link: #86b4f5; --card: #22252b; --lift: 0 6px 20px rgba(0,0,0,.5); }
+:root[data-theme="dark"] .lt { display: none; }
+:root[data-theme="dark"] .dk { display: block; }
+body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 a { color: var(--link); text-decoration: none; }
-a:hover { text-decoration: underline; }
-ul { padding-left: 0; list-style: none; margin: 6px 0; }
-li { padding: 3px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
-.dim { color: var(--dim); }
-.err { color: var(--err); font-size: 12px; }
-.intro { margin: 0 0 8px; }
+.top { display: flex; align-items: center; gap: 16px; max-width: 1120px; margin: 0 auto; padding: 14px 16px; }
+.brand { color: inherit; font-weight: 600; font-size: 17px; display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.brand img { width: 20px; height: 20px; }
+.cta { border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; }
+.cta:hover { background: var(--card); }
+#theme { background: none; border: 1px solid var(--line); border-radius: 6px; color: inherit; width: 30px; height: 30px; cursor: pointer; display: grid; place-items: center; }
+main { max-width: 1120px; margin: 0 auto; padding: 0 16px 64px; }
+h1 { font-size: clamp(24px, 4vw, 34px); font-weight: 600; letter-spacing: -.01em; margin: 20px 0 18px; }
+.hero { display: block; position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: var(--lift); }
+.hero img { display: block; width: 100%; height: auto; }
+.hero .dk, .thumb .dk { display: none; }
+.hero .open { position: absolute; right: 14px; bottom: 14px; background: var(--link); color: var(--page-bg); border-radius: 6px; padding: 6px 14px; font-weight: 600; opacity: .92; }
+.hero:hover .open { opacity: 1; }
+h2 { font-size: 13px; font-weight: 600; text-transform: none; color: var(--dim); margin: 44px 0 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.card { position: relative; }
+.go { display: block; color: inherit; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--page-bg); transition: box-shadow .2s, transform .2s; }
+.go:hover, .go:focus-visible { box-shadow: var(--lift); transform: translateY(-2px); }
+.thumb { display: block; height: 220px; background: var(--card); border-bottom: 1px solid var(--line); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 0; transition: object-position 4s ease-in-out; }
+.go:hover .thumb img, .go:focus-visible .thumb img { object-position: 50% 100%; transition-duration: 6s; }
+.thumb.none img, .hero.none img { display: none !important; }
+.hero.none { min-height: 160px; background: var(--card); }
+.cap { display: flex; align-items: baseline; gap: 8px; padding: 9px 12px 10px; }
+.t { font-weight: 500; flex: 1; min-width: 0; }
+.t code { font-size: 13px; }
+.n { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dl { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 6px; background: var(--page-bg); border: 1px solid var(--line); color: var(--dim); opacity: 0; transition: opacity .15s; }
+.card:hover .dl, .dl:focus-visible { opacity: 1; }
+.dl:hover { color: var(--link); }
+footer { max-width: 1120px; margin: 0 auto; padding: 0 16px 40px; color: var(--dim); font-size: 13px; }
+footer a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .thumb img, .go { transition: none !important; } .go:hover .thumb img { object-position: 50% 0; } }
+@media (hover: none) { .dl { opacity: 1; } }
 </style>
 </head>
 <body>
+<header class="top">
+<a class="brand" href="./"><img src="favicon.svg" alt="">Ramify</a>
+<a class="cta" href="${RELEASE_URL}" title="The same tree, live in the infoview: edit it, see diagnostics as you type, restructure with Lean checking each change">Get it for VS Code</a>
+<button id="theme" type="button" aria-label="Switch theme" title="Switch theme"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 1.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg></button>
+</header>
 <main>
-<h1>Ramify</h1>
-<p class="intro">Lean 4 proofs drawn as trees: goals and the tactics between them, with hovers, comments and diagnostics. Pick a proof to read it beside its source.</p>
-<p class="dim">These pages are for reading. The <a href="https://github.com/aidanmaney/ramify-lean4/releases/latest">VS Code extension</a> draws the same tree live in the infoview, where you can edit in the tree, see diagnostics as you type, and restructure a proof with Lean checking each change (<a href="https://github.com/aidanmaney/ramify-lean4/blob/main/INSTALL.md">install guide</a>).</p>
-${files}
+<h1>Lean proofs, drawn as trees.</h1>
+<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured}, read beside its source`)}<span class="open">Open it →</span></a>
+${body}
 </main>
+<footer><a href="${INSTALL_URL}">Install guide</a> · <a href="${REPO_URL}">Source</a></footer>
+<script>
+document.getElementById("theme").onclick = function () {
+  var r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("ramify-viewer-theme", r.dataset.theme); } catch (e) {}
+};
+</script>
 </body>
 </html>
 `;
 }
+
+const REPO_URL = "https://github.com/aidanmaney/ramify-lean4";
+const RELEASE_URL = `${REPO_URL}/releases/latest`;
+const INSTALL_URL = `${REPO_URL}/blob/main/INSTALL.md`;
+const DOWNLOAD_SVG = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 2v7M4 6.5 7 9.5l3-3M2.5 12h9"/></svg>`;
 
 const kb = (n) => `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
 
@@ -402,9 +476,19 @@ export async function publish(o) {
     }
     if (pendingGroup) entry.group = pendingGroup;
     pendingGroup = null;
+    entry.featured = featuredProof(payload, o.featured.get(file), display);
     entries.push(entry);
   }
-  fs.writeFileSync(path.join(o.out, "index.html"), indexPage(entries));
+  const hero = entries.find((e) => e.name === o.hero) ?? entries[0];
+  if (o.hero && hero.name !== o.hero) console.warn(`@hero ${o.hero}: no such file — using ${hero.name}`);
+  fs.writeFileSync(path.join(o.out, "index.html"), indexPage(entries, hero));
+  fs.writeFileSync(
+    path.join(o.out, "cards.json"),
+    JSON.stringify({
+      hero: { file: hero.name, proof: hero.featured },
+      cards: entries.map((e) => ({ file: e.name, proof: e.featured })),
+    }),
+  );
 
   console.log(`\nwrote ${path.relative(process.cwd(), o.out) || "."}/`);
   console.log(`  ${jsName}  ${kb(Buffer.byteLength(js))}`);

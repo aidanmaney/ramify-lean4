@@ -42,7 +42,6 @@ import {
   CHROME_INK,
   CHROME_RADIUS,
   CHROME_TEXT,
-  CHROME_TEXT_SM,
   DIM_OPACITY,
   chromeScopeProps,
   type ThemeKind,
@@ -191,7 +190,6 @@ body {
 .ptw-viewer-file { font-family: var(--vscode-editor-font-family); }
 .ptw-viewer-dim { opacity: ${DIM_OPACITY}; }
 .ptw-viewer-spacer { flex: 1 1 0; }
-.ptw-viewer-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ptw-viewer-head select { min-width: 0; max-width: 240px; flex: 0 1 auto; }
 .ptw-viewer-main { flex: 1 1 auto; display: flex; min-height: 0; }
 .ptw-viewer-tree { flex: 1 1 60%; min-width: 0; min-height: 0; position: relative; }
@@ -224,7 +222,6 @@ body {
 }
 .ptw-viewer[data-narrow] .ptw-viewer-head { flex-wrap: wrap; row-gap: 6px; }
 .ptw-viewer[data-narrow] .ptw-viewer-head select { flex: 1 1 140px; max-width: none; }
-.ptw-viewer[data-narrow] .ptw-viewer-note,
 .ptw-viewer[data-narrow] .ptw-viewer-file,
 .ptw-viewer[data-narrow] .ptw-viewer-install { display: none; }
 .ptw-viewer[data-narrow] .ptw-viewer-head { gap: 8px; padding: 6px 10px; }
@@ -606,15 +603,12 @@ export default function Viewer() {
       {payload && <span className="ptw-viewer-file">{payload.file}</span>}
       {picker}
       <span className="ptw-viewer-spacer" />
-      <span
-        className="ptw-viewer-note ptw-viewer-dim"
-        style={{ fontSize: CHROME_TEXT_SM }}
+      <a
+        href={RELEASE_URL}
         title="This page is for reading. In VS Code the same tree is live: edit in the tree, see diagnostics as you type, and restructure a proof with Lean checking each change."
       >
-        For reading · in VS Code: edit in the tree, live diagnostics,
-        restructuring checked by Lean
-      </span>
-      <a href={RELEASE_URL}>Get Ramify for VS Code</a>
+        Get Ramify for VS Code
+      </a>
       <a href={INSTALL_URL} className="ptw-viewer-dim ptw-viewer-install">
         install guide
       </a>

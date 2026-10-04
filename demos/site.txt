@@ -1,26 +1,30 @@
 # The website's proofs, in the order the index lists them:
-# `cd web && npm run publish:site` (or node scripts/publish.mjs --list ../demos/site.txt).
-# Each file's title and blurb come from its leading `/-! # … -/` block;
-# a `## Heading` line starts a group on the index page.
+# `cd web && npm run publish:site` (publish.mjs --list ../demos/site.txt, then
+# thumbs.mjs for the pictures). Each card's title comes from its file's
+# leading `/-! # … -/` block; a `## Heading` line starts a group.
+# `<file> <proof>` names the proof the card opens and pictures (else the
+# file's longest); `@hero <name>` is the picture the index opens with.
+
+@hero Cantor
 
 ## Start here
-ReadingTour.lean                          # how to read a tree
+ReadingTour.lean                          tour_reading            # how to read a tree
 
-## Classic proofs, written to be read
-Irrationality.lean                        # √2, and an irrational power that is rational
-Cantor.lean                               # the diagonal argument
-Euclid.lean                               # infinitely many primes
-Induction.lean                            # Gauss, Bernoulli, strong induction
-Limits.lean                               # ε–N: sums of limits, uniqueness
-Groups.lean                               # calc chains from the group axioms
-SchroederBernstein.lean                   # the showcase
+## Classics
+Irrationality.lean                        sqrt_two_irrational     # √2, and an irrational power that is rational
+Cantor.lean                               cantor                  # the diagonal argument
+Euclid.lean                               infinitude_of_primes    # infinitely many primes
+Induction.lean                            two_pow_mul_odd         # Gauss, Bernoulli, strong induction
+Limits.lean                               convergesTo_unique      # ε–N: sums of limits, uniqueness
+Groups.lean                               mul_comm_of_sq_eq_one   # calc chains from the group axioms
+SchroederBernstein.lean                   sb_injective            # the showcase
 
-## From Mathlib's Archive — real community proofs, unedited
-mathlib-archive/Konigsberg.lean           # Euler's bridges
+## From Mathlib's Archive
+mathlib-archive/Konigsberg.lean           not_even_degree_iff     # Euler's bridges
 mathlib-archive/InverseTriangleSum.lean
-mathlib-archive/BirthdayProblem.lean
-mathlib-archive/PerfectNumbers.lean       # Euclid–Euler
+mathlib-archive/BirthdayProblem.lean      birthday_measure
+mathlib-archive/PerfectNumbers.lean       eq_two_pow_mul_odd      # Euclid–Euler
 mathlib-archive/HeronsFormula.lean
-mathlib-archive/AscendingDescendingSequences.lean   # Erdős–Szekeres
-mathlib-archive/SumOfPrimeReciprocalsDiverges.lean  # Erdős
-mathlib-archive/ZagierTwoSquares.lean     # Fermat's two squares, Zagier's proof
+mathlib-archive/AscendingDescendingSequences.lean   erdos_szekeres
+mathlib-archive/SumOfPrimeReciprocalsDiverges.lean  Real.tendsto_sum_one_div_prime_atTop
+mathlib-archive/ZagierTwoSquares.lean     Nat.Prime.sq_add_sq'    # Fermat's two squares, Zagier's proof

@@ -14,7 +14,7 @@
     "preview": "vite preview",
     "probe": "node probe/run.mjs",
     "test": "node probe/test.mjs",
-    "publish:site": "node scripts/publish.mjs --list ../demos/site.txt"
+    "publish:site": "node scripts/publish.mjs --list ../demos/site.txt && node scripts/thumbs.mjs"
   },
   "dependencies": {
     "@leanprover/unicode-input": "^0.1.11",

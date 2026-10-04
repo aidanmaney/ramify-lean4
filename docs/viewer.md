@@ -22,7 +22,9 @@ python3 -m http.server -d ../site 8000     # then open http://localhost:8000/
 
 | path | what |
 | --- | --- |
-| `site/index.html` | every published file and its theorems (statement, error count, a link to the one-file copy) |
+| `site/index.html` | a hero picture and a card per published file — its title, its featured proof's tree, a download for the one-file copy; prose only in tooltips |
+| `site/cards.json` | what the cards show (file, featured proof, the hero), read by `thumbs.mjs` |
+| `site/thumbs/*.webp` | the pictures, drawn by `thumbs.mjs` — absent, a card shows its title alone |
 | `site/view.html` | the viewer: `view.html#file=<name>&proof=<decl>` |
 | `site/viewer-<hash>.js` | the viewer bundle, shared by every page; the hash changes with its content, so it caches safely |
 | `site/data/<name>.json` | one payload per source file |
@@ -39,9 +41,18 @@ index order by `demos/site.txt`, where `## Heading` lines group them:
 cd web && npm run publish:site    # = node scripts/publish.mjs --list ../demos/site.txt
 ```
 
-Each file's leading `/-! # Title … -/` block becomes its heading and blurb on the
-index (a copyright header before it is skipped; `` `code` ``, `**bold**` and
-`[links](https://…)` render).
+Each file's leading `/-! # Title … -/` block gives its card's title (a
+copyright header before it is skipped) and its first paragraph the card's
+tooltip. A line may name the proof the card opens and pictures
+(`Cantor.lean cantor`; otherwise the file's longest), and `@hero <name>` the
+file whose viewer the index opens with.
+
+The pictures are the viewer's own rendering: `scripts/thumbs.mjs [site]`
+(the second half of `publish:site`) serves the site on loopback and, in
+headless Chromium (Playwright: `npm i -D playwright`, or `NODE_PATH` to an
+install), shoots each featured tree in the wide layout (stacked where wide is
+wider than 1300px), cropped to its ink, light and dark, as ≤640px WebP (about
+2 MB for the demo set). On hover a card pans down through its whole tree.
 
 ### Deploying to GitHub Pages
 
