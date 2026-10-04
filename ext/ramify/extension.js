@@ -141,7 +141,7 @@ const SETTINGS_REQUEST = "settings-request.json";
 // `focus` is goal-only, `TACTIC_ONLY_MOVES` tactic-only). scripts/check-sync.mjs
 // asserts all of it equal.
 const MOVE_IDS = [
-  "source", "focus", "skip", "path", "delete", "trace", "collapse",
+  "source", "focus", "skip", "path", "fix", "delete", "trace", "collapse",
   "expand", "inline", "extract", "lint", "lens", "goal",
 ];
 const TACTIC_ONLY_MOVES = ["skip", "trace", "expand", "inline", "extract", "lens", "goal"];

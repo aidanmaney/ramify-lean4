@@ -93,6 +93,7 @@
               "source",
               "skip",
               "path",
+              "fix",
               "delete",
               "trace",
               "collapse",
@@ -107,6 +108,7 @@
               "» Show in source",
               "◌ Skip this step while reading (where it has one continuation or is a leaf)",
               "⊹ Show only the path from the root to here",
+              "Lightbulb: the fixes and refactorings for the box (opens `⋯` at its Quick Fix and Refactor sections; greyed where there are none)",
               "Delete (trash can; arms first, then writes)",
               "⁇ What did the automation (`simp`, `grind`, `aesop`…) use?",
               "⇓ Replace a closing run of steps with one automation tactic",
@@ -123,9 +125,10 @@
             "source",
             "skip",
             "path",
+            "fix",
             "delete"
           ],
-          "markdownDescription": "The buttons on the hover bar of a **tactic** box, left to right, each drawn only where the move is available on that box. `⋯` (every move on the box, with what each icon means and a pin to put it on the bar) is always last and is not listed. Pinning in `⋯` writes this setting. Unset, the `ramify.experience` preset decides (beginner also shows `⁇`)."
+          "markdownDescription": "The buttons on the hover bar of a **tactic** box, left to right, each drawn only where the move is available on that box. `⋯` (every move on the box, with what each icon means and a pin to put it on the bar) is always last and is not listed. Pinning in `⋯` writes this setting. Unset, the `ramify.experience` preset decides (beginner also shows `⁇`). The automation and restructuring moves (`⇓ ⇑ ⤵ ⤴ ✎`) sit behind `fix`, the lightbulb, unless pinned here."
         },
         "ramify.hoverBar.goal": {
           "type": "array",
@@ -136,6 +139,7 @@
               "source",
               "focus",
               "path",
+              "fix",
               "delete",
               "collapse",
               "lint"
@@ -144,6 +148,7 @@
               "» Show in source",
               "◎ Focus on this goal's subtree (or back to the whole proof)",
               "⊹ Show only the path from the root to here",
+              "Lightbulb: the fixes and refactorings for the box (opens `⋯` at its Quick Fix and Refactor sections; greyed where there are none)",
               "Delete (trash can; arms first, then writes)",
               "⇓ Replace a closing run of steps with one automation tactic",
               "✎ Apply the linter's fix"
@@ -154,6 +159,7 @@
             "source",
             "focus",
             "path",
+            "fix",
             "delete"
           ],
           "markdownDescription": "The buttons on the hover bar of a **goal** box, left to right, each drawn only where the move is available on that box. `⋯` (every move on the box, with what each icon means and a pin to put it on the bar) is always last and is not listed. Pinning in `⋯` writes this setting. Unset, the `ramify.experience` preset decides."
@@ -195,7 +201,10 @@
         },
         "ramify.hypMarkStyle": {
           "type": "string",
-          "enum": ["highlight", "underline"],
+          "enum": [
+            "highlight",
+            "underline"
+          ],
           "default": "highlight",
           "markdownDescription": "How the tree marks the hypotheses a tactic uses when you hover its box."
         },

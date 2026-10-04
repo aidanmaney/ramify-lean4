@@ -13,7 +13,8 @@
 
 /** THE HOVER BAR'S BUTTONS, BY ID (2026-09-22). Every move the bar can carry;
  the `⋯` menu carries every one of them that is available on the node (plus
- the menu-only rows), and the bar carries the ones the reader's list names, in
+ the menu-only rows) except `fix`, the lightbulb, which is not a row but opens
+ the menu at its Quick Fix and Refactor sections; and the bar carries the ones the reader's list names, in
  the list's order, each only where the move is available — `⋯` is always last
  and is not in the list. Two lists, one per node kind: `ramify.hoverBar.tactic`
  and `ramify.hoverBar.goal` (package.json's enums are this array, per kind by
@@ -24,6 +25,7 @@ export const MOVE_IDS = [
   "focus",
   "skip",
   "path",
+  "fix",
   "delete",
   "trace",
   "collapse",
@@ -38,16 +40,22 @@ export const MOVE_IDS = [
 export type MoveId = (typeof MOVE_IDS)[number];
 
 /** THE `⋯` MENU'S GROUPS (2026-10-04, batch 2), VS Code's context-menu
- structure: rows in four groups with a separator between them — NAVIGATE (where
- to look), FOLD (what is drawn), EDIT (the source text), REFACTOR (rewrites the
- elaborator checks, and what automation used). A row's SLOT is its move id, or
- for a menu-only row the word below; `MENU_SLOTS` is the order, groups in turn. */
+ structure: rows in groups with a separator between them — NAVIGATE (where to
+ look, and what automation used), FOLD (what is drawn), EDIT (the source text),
+ and the two CODE-ACTION sections the lightbulb opens (batch 4): QUICK FIX
+ (the linter's fix, writing out what `simp` used, a Mathlib-style rename) and
+ REFACTOR (inline, extract, replace a run with automation, ask the model) —
+ VS Code's code-action order, quick fixes first. A row's SLOT is its move id,
+ or for a menu-only row the word below; `MENU_SLOTS` is the order, groups in
+ turn. `fix` (the lightbulb) is a bar slot with no row of its own: it OPENS
+ these two sections. */
 export const MENU_SLOTS = [
   // navigate
   "source",
   "focus",
   "path",
   "lens",
+  "trace",
   // fold
   "skip",
   "fold",
@@ -59,24 +67,26 @@ export const MENU_SLOTS = [
   "delete",
   "mark",
   "chip",
+  // quick fix
+  "lint",
+  "expand",
+  "rename",
   // refactor
   "inline",
   "extract",
   "collapse",
-  "expand",
-  "lint",
-  "rename",
-  "trace",
+  "propose",
 ] as const;
 
 export type MenuSlot = (typeof MENU_SLOTS)[number];
 
-export type MenuGroup = "navigate" | "fold" | "edit" | "refactor";
+export type MenuGroup = "navigate" | "fold" | "edit" | "quickfix" | "refactor";
 
 const GROUP_FIRST: [MenuSlot, MenuGroup][] = [
   ["source", "navigate"],
   ["skip", "fold"],
   ["edit", "edit"],
+  ["lint", "quickfix"],
   ["inline", "refactor"],
 ];
 
@@ -90,6 +100,18 @@ export const MENU_GROUP = Object.fromEntries(
   }),
 ) as Record<MenuSlot, MenuGroup>;
 
+/** The CODE-ACTION sections wear a heading, as VS Code's lightbulb menu does,
+ in VS Code's own words (its action-widget headers are title case: "Quick
+ Fix", "Refactor"). The other groups are told apart by the separator alone. */
+export const MENU_SECTION_TITLE: Partial<Record<MenuGroup, string>> = {
+  quickfix: "Quick Fix",
+  refactor: "Refactor",
+};
+
+/** The groups the lightbulb (`fix`) and ⌘. open the menu at. */
+export const isCodeActionGroup = (g: MenuGroup): boolean =>
+  g === "quickfix" || g === "refactor";
+
 export type BarKind = "tactic" | "goal";
 
 /** The character each move is known by in PROSE (`describePreset`,
@@ -100,6 +122,7 @@ export const MOVE_MARK: Record<MoveId, string> = {
   focus: "◎",
   skip: "◌",
   path: "⊹",
+  fix: "fix",
   delete: "delete",
   trace: "⁇",
   collapse: "⇓",
@@ -113,12 +136,18 @@ export const MOVE_MARK: Record<MoveId, string> = {
 
 /** The bar a reader meets with no setting and no preset opinion (user
  direction, 2026-09-22: "source focus skip path delete more … by default as
- icons"). The automation and restructuring moves live in `⋯` until pinned. */
+ icons"). The automation and restructuring moves live in `⋯` until pinned;
+ since 2026-10-04 (batch 4) their one door on the bar is the LIGHTBULB
+ (`fix`), which opens the menu at its Quick Fix and Refactor sections. It sits
+ after the reading moves and before the trash: the reading moves come first,
+ the two moves that change the source sit together, and the destructive one
+ stays last, where VS Code puts it. */
 export const DEFAULT_BAR: readonly MoveId[] = [
   "source",
   "focus",
   "skip",
   "path",
+  "fix",
   "delete",
 ];
 
@@ -203,7 +232,19 @@ export const EXTRACT_TITLE = "pull the `by` block out as `have this`";
 /** D4's `✎`. `fix` is `LINT_FIXES`' sentence for the linter. */
 export const lintMoveLabel = (fix: string) => `Apply the linter's fix: ${fix}`;
 
-/** D5, on a context line (⌥-click) and in the goal's `⋯` menu. */
+/** THE LIGHTBULB (batch 4): what the bar's `fix` slot does to this step —
+ opens its fixes. `lint`: one of them is the linter's, so the bulb wears
+ `lightbulb-autofix`, as VS Code's does for a preferred quick fix. */
+export const fixMoveLabel = (lint: boolean) =>
+  lint
+    ? "Show fixes for this step — the linter has one"
+    : "Show fixes and refactorings for this step";
+
+/** D6's row in the Refactor section: the model picks one of THIS step's
+ rewrites (or none) and says why; the pick still goes through Lean. */
+export const PROPOSE_MOVE_LABEL = "Ask the model for a rewrite";
+
+/** D5, on a context line (⌥-click) and in the goal's `⋯` menu (Quick Fix). */
 export const renameMoveLabel = (from: string, to: string) =>
   `Rename ${tick(from)} to ${tick(to)} (Mathlib style)`;
 
@@ -243,6 +284,7 @@ const SLOT_NAME: Record<MoveId, string> = {
   focus: "Focus",
   skip: "Skip this step",
   path: "Show only the path to here",
+  fix: "Fixes and refactorings",
   delete: "Delete this step",
   trace: "Show what the step used",
   collapse: "Replace with automation",
@@ -277,6 +319,10 @@ const SLOT_WHY: Partial<Record<MoveId, Partial<Record<Unavailable, string>>>> = 
     noExtent: "this box has no source extent of its own",
   },
   trace: { notAutomation: "offered on simp, grind, aesop and the like" },
+  fix: {
+    generic: "nothing to fix or refactor on this step",
+    pending: PENDING_WHY.pending,
+  },
   ...Object.fromEntries(RESTRUCTURE.map((id) => [id, PENDING_WHY])),
 };
 

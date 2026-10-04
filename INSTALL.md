@@ -127,11 +127,11 @@ The same `.vsix` is attached to each [GitHub release](https://github.com/aidanma
 	- Hovering a tactic node shows its range in the visible editors; arming a delete (the trash can) previews the extent the same way.
 - **Undo/redo from the tree** (⌘Z / ⌘⇧Z with the tree focused)
 	- Edits made from the tree leave focus in the webview, where ⌘Z won't do anything; the extension works around this by focusing the editor.
-- **Name a hoisted `have`** (`⤴`, in a tactic's `⋯` menu)
+- **Name a hoisted `have`** (`⤴`, under a tactic's lightbulb, in its Refactor section)
 	- Hoisting a `(by …)` writes `have this : … := by …`; the extension then opens the editor's own Rename Symbol on `this` once Lean has caught up, so you type the name and Lean renames every use. `Esc` keeps `this`. `ramify.restructure.renameAfterHoist` turns it off.
 - **Optional model features** (both off by default; see [Privacy](#privacy-and-the-optional-model-features))
 	- *Polish*: in `Comments: narrate` the tree writes a sentence per step from the step itself; with `ramify.narration.polish` on, those sentences are sent to be rewritten as fluent English, shown with `≈` instead of `∴`.
-	- *Suggest a rewrite*: with `ramify.restructure.propose` on, the tree's reading options gain `suggest a rewrite`, which asks a model to pick one of the restructurings the tree already offers. The model never writes text; whatever it picks is still checked by Lean before you are offered it.
+	- *Suggest a rewrite*: with `ramify.restructure.propose` on, the tree's reading options gain `suggest a rewrite`, which asks a model to pick one of the restructurings the tree already offers, and a lightbulb's Refactor section gains *Ask the model for a rewrite*, the same ask limited to that step's own. The model never writes text; whatever it picks is still checked by Lean before you are offered it.
 	- Rows that need a model are not drawn at all unless the setting is on and a key is available.
 
 ### Commands
@@ -170,7 +170,7 @@ All settings live under `ramify.` in VS Code's settings UI; the extension's own 
 | --- | --- | --- |
 | `ramify.experience` | `intermediate` | `beginner`, `intermediate` or `expert`: how much the tree explains itself. A preset that only fills defaults (the hover bar's buttons, the automation trace, comments, context, lints, brief mode, and whether hovering a context line shows where the hypothesis came from — on for beginner); anything you switch in the tree keeps your choice for the session. Also **Ramify: Set experience level**. |
 | `ramify.appearance` | `vscode` | `vscode` or `classic`: how the tree and its chrome are drawn. `vscode` wears VS Code's own icons and colours (a squiggle under a line with a problem, fold chevrons, a `⋯` chip on a skipped run); `classic` is Ramify's earlier skin (drawn glyphs, a coloured ribbon down a box with a problem, the corner `−` and `+N`, a slanted break on a skipped run). Paint only — the layout is the same. The Layout panel's **classic look** row switches it for the session. |
-| `ramify.hoverBar.tactic`, `ramify.hoverBar.goal` | source, focus, skip, path, delete | Which icons each hover bar carries, in order. `⋯` is always last. The `⋯` menu's pins write these; unset, the experience preset decides. |
+| `ramify.hoverBar.tactic`, `ramify.hoverBar.goal` | source, focus, skip, path, fix, delete | Which icons each hover bar carries, in order. `⋯` is always last. `fix` is the lightbulb: it opens `⋯` at its Quick Fix and Refactor sections (also ⌘. / Ctrl+.). The `⋯` menu's pins write these; unset, the experience preset decides. |
 | `ramify.outlineOnly` | off | Draw node boxes as borders with no fill. Cosmetic. |
 | `ramify.linkMarks` | off | Draw a dot near either end of a connector for goals, a dash for tactics. |
 | `ramify.linkTint` | off | Tint each connector by the node it ends at. |

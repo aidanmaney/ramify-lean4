@@ -8,7 +8,9 @@ import { CodeText } from "./codeSpans";
 import { plainTicks } from "./ticks";
 import {
   MENU_GROUP,
+  MENU_SECTION_TITLE,
   MENU_SLOTS,
+  isCodeActionGroup,
   pinLabel,
   type BarKind,
   type MenuSlot,
@@ -56,6 +58,10 @@ interface NodeAction {
   /** The move's codicon (moveSlots.ts `MOVE_LOOK`): what the bar draws, and
    what heads the move's row in the `⋯` menu. */
   codicon?: CodiconName;
+  /** The icon's own ink where the move has one (the lightbulb's
+   `--ptw-lightbulb(-autofix)`); chrome ink otherwise, and always while
+   disabled — a grey bulb says "nothing here", a yellow one "something". */
+  ink?: string;
   title: string;
   /** The button's own element rides along, for the one move that hangs a
    popover off it (`⋯`); every other move ignores it. */
@@ -229,7 +235,9 @@ export function NodeActionBar({
         const ink =
           a.danger && !a.disabled && (hovered === i || a.active)
             ? DANGER_FILL
-            : CHROME_INK;
+            : a.ink && !a.disabled
+              ? a.ink
+              : CHROME_INK;
         return (
           <g
             key={a.glyph}
@@ -310,13 +318,24 @@ const MENU_ROW_CSS =
   "[data-ptw-menu] .ptw-menu-row:focus-visible{outline:none;box-shadow:none}";
 
 /** A row's place in the menu: its slot's index in `MENU_SLOTS`. */
-const slotRank = (m: NodeMove): number =>
-  MENU_SLOTS.indexOf(m.slot ?? m.id ?? "edit");
+const slotRank = (m: NodeMove): number => {
+  const slot = m.slot ?? m.id ?? "edit";
+  // `fix` (the lightbulb) is the menu's door and never one of its rows.
+  return MENU_SLOTS.indexOf(slot === "fix" ? "lint" : slot);
+};
+
+/** Air kept above a code-action heading (or a keyed row) when the menu is
+ scrolled to it: the menu's own padding. */
+const SECTION_AIR = 4;
+
+/** A row's group (moves.ts `MENU_GROUP`). */
+const groupOf = (m: NodeMove) => MENU_GROUP[MENU_SLOTS[slotRank(m)]];
 
 /* THE `⋯` MENU (2026-09-22) — and, since 2026-10-04 (batch 2), a VS Code
 CONTEXT MENU: right-click on a box opens it at the pointer (so do ⇧F10 and
-${CMD}. from the keys); the rows sit in four GROUPS with a separator between them
-(moves.ts `MENU_SLOTS`: navigate · fold · edit · refactor), 26px rows in the
+${CMD}. from the keys); the rows sit in GROUPS with a separator between them
+(moves.ts `MENU_SLOTS`: navigate · fold · edit · quick fix · refactor, the last
+two headed as VS Code's lightbulb menu heads them — batch 4), 26px rows in the
 menu's tokens, and the gesture column says KEYS as keycaps and mouse
 gestures as dim text. Every move on one node, in words — the answer to "what
 can I do here?" for a reader who does not yet read the bar's glyphs, which is
@@ -338,8 +357,19 @@ export function NodeMenu({
   onClose,
 }: {
   /** The rect to hang from, in frame coordinates; `pointer` is a right-click's
-   point (top = bottom), where the menu opens AT it rather than 4px clear. */
-  at: { x: number; top: number; bottom: number; pointer?: boolean };
+   point (top = bottom), where the menu opens AT it rather than 4px clear.
+   `fixes`: opened by the LIGHTBULB or ${CMD}. (batch 4) — the keyed row is
+   the first code action, and the menu is hung so its Quick Fix / Refactor
+   heading sits where the menu would have started (the menu is not a
+   scroller: "scrolled to the section" is the section placed under the
+   pointer). */
+  at: {
+    x: number;
+    top: number;
+    bottom: number;
+    pointer?: boolean;
+    fixes?: boolean;
+  };
   moves: NodeMove[];
   /** Which bar the pins write to: this node's kind. */
   kind: BarKind;
@@ -347,7 +377,6 @@ export function NodeMenu({
   onPin: (id: MoveId) => void;
   onClose: () => void;
 }) {
-  const { ctl } = useTip();
   const boxRef = useRef<HTMLDivElement | null>(null);
   // The rows in MENU ORDER (stable within a slot: a slot's several rows keep
   // the order the view built them in). The keys walk this list.
@@ -358,7 +387,14 @@ export function NodeMenu({
   // The row the keys are on. In STATE, not only DOM focus: the row is drawn
   // lit from this, so the reader sees where Enter will land even where the
   // webview has not got system focus (a press elsewhere, the hidden pane).
-  const [idx, setIdx] = useState(0);
+  const [idx, setIdx] = useState(() =>
+    at.fixes
+      ? Math.max(
+          0,
+          moves.findIndex((m) => isCodeActionGroup(groupOf(m))),
+        )
+      : 0,
+  );
   const pick = (m: NodeMove) => {
     onClose();
     m.onClick();
@@ -369,7 +405,24 @@ export function NodeMenu({
     const root = box.offsetParent as HTMLElement | null;
     if (!root) return;
     const bw = box.offsetWidth;
-    const bh = box.offsetHeight;
+    let bh = box.offsetHeight;
+    // AT THE FIXES (the lightbulb, ${CMD}.): the menu is SCROLLED to its first
+    // code-action heading — cut to the height of the Quick Fix and Refactor
+    // sections and scrolled down to them, so they are what the reader meets
+    // under the bulb (VS Code's lightbulb shows its actions alone) while the
+    // rest of the menu is a scroll up. Hung below the button like any other
+    // opening, so the pointer that clicked the bulb is not over a row.
+    const section = at.fixes
+      ? box.querySelector<HTMLElement>("[data-ptw-section]")
+      : null;
+    if (section) {
+      const from = Math.max(0, section.offsetTop - SECTION_AIR);
+      const h = Math.min(bh - from, root.clientHeight - 8);
+      box.style.maxHeight = `${h}px`;
+      box.style.overflowY = "auto";
+      box.scrollTop = from;
+      bh = h;
+    }
     const gap = at.pointer ? 0 : 4;
     let left = at.x;
     left = Math.max(4, Math.min(left, root.clientWidth - bw - 4));
@@ -380,11 +433,24 @@ export function NodeMenu({
     box.style.top = `${Math.round(top)}px`;
     box.style.visibility = "visible";
   }, [at]);
-  // DOM focus follows the lit row (the accessible half of `idx`).
+  // DOM focus follows the lit row (the accessible half of `idx`). Where the
+  // menu scrolls (opened at its fixes), the row is brought into the MENU's
+  // view by hand — `scrollIntoView` could move the tree's frame as well, and
+  // the view never moves on its own.
   useLayoutEffect(() => {
-    const rows =
-      boxRef.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]");
-    rows?.[idx]?.focus({ preventScroll: true });
+    const box = boxRef.current;
+    const row = box?.querySelectorAll<HTMLButtonElement>("[role=menuitem]")[
+      idx
+    ];
+    if (!box || !row) return;
+    row.focus({ preventScroll: true });
+    if (box.scrollHeight <= box.clientHeight) return;
+    const cell = row.parentElement ?? row;
+    const top = cell.offsetTop - SECTION_AIR;
+    const bottom = cell.offsetTop + cell.offsetHeight + SECTION_AIR;
+    if (top < box.scrollTop) box.scrollTop = top;
+    else if (bottom > box.scrollTop + box.clientHeight)
+      box.scrollTop = bottom - box.clientHeight;
   }, [idx]);
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const n = moves.length;
@@ -459,14 +525,44 @@ export function NodeMenu({
       {moves.map((m, i) => {
         const pinOn = !!m.id && pinned.includes(m.id);
         const pinSaid = pinLabel(pinOn, kind);
-        // A SEPARATOR where the group changes (VS Code's context menu).
-        const sep =
-          i > 0 &&
-          MENU_GROUP[MENU_SLOTS[slotRank(m)]] !==
-            MENU_GROUP[MENU_SLOTS[slotRank(moves[i - 1])]];
+        // A SEPARATOR where the group changes (VS Code's context menu), and
+        // a HEADING over each code-action section (its lightbulb menu).
+        const group = groupOf(m);
+        const starts = i === 0 || group !== groupOf(moves[i - 1]);
+        const heading = starts ? MENU_SECTION_TITLE[group] : undefined;
+        // The lightbulb's own pin rides the FIRST code-action heading: `fix`
+        // has no row, and this is where its rows begin.
+        const bulbPin =
+          !!heading &&
+          moves.findIndex((x) => isCodeActionGroup(groupOf(x))) === i;
+        const bulbOn = pinned.includes("fix");
         return (
           <Fragment key={`${m.glyph}:${m.label}:${i}`}>
-          {sep && <MenuDivider />}
+          {starts && i > 0 && <MenuDivider />}
+          {heading && (
+            <div
+              data-ptw-section={group}
+              role="presentation"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                minHeight: 22,
+                padding: "0 0 0 6px",
+                fontSize: CHROME_TEXT_SM,
+                opacity: DIM_OPACITY,
+              }}
+            >
+              <span style={{ flex: 1 }}>{heading}</span>
+              {bulbPin && (
+                <MenuPin
+                  on={bulbOn}
+                  said={`Lightbulb: ${pinLabel(bulbOn, kind).replace(/^./, (c) => c.toLowerCase())}`}
+                  dim={bulbOn ? 0.9 : 0.5}
+                  onClick={() => onPin("fix")}
+                />
+              )}
+            </div>
+          )}
           <div
             onMouseEnter={() => setIdx(i)}
             style={{
@@ -579,33 +675,12 @@ export function NodeMenu({
                 kind. Its own button (a button inside the row's would not be
                 one), so a pin leaves the menu open and runs nothing else. */}
             {m.id ? (
-              <button
-                type="button"
-                data-ptw-pin=""
-                aria-label={pinSaid}
-                aria-pressed={pinOn}
+              <MenuPin
+                on={pinOn}
+                said={pinSaid}
+                dim={pinOn ? 0.9 : i === idx ? 0.5 : 0.22}
                 onClick={() => onPin(m.id!)}
-                onPointerEnter={(e) => ctl.enter(e.currentTarget)}
-                onPointerLeave={(e) => ctl.leave(e.currentTarget)}
-                style={{
-                  flex: "none",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 20,
-                  height: 20,
-                  marginRight: 2,
-                  padding: 0,
-                  border: "none",
-                  borderRadius: CHROME_RADIUS,
-                  background: "transparent",
-                  color: "inherit",
-                  opacity: pinOn ? 0.9 : i === idx ? 0.5 : 0.22,
-                  cursor: "pointer",
-                }}
-              >
-                <Codicon name={pinOn ? "pinned" : "pin"} set="node" />
-              </button>
+              />
             ) : (
               <span aria-hidden style={{ flex: "none", width: 22 }} />
             )}
@@ -614,5 +689,51 @@ export function NodeMenu({
         );
       })}
     </div>
+  );
+}
+
+/** A menu PIN: whether a move sits on the bar for this node's kind. Its own
+ button (a button inside the row's would not be one), so a pin leaves the menu
+ open and runs nothing else. A row's pin, and the lightbulb's on its heading. */
+function MenuPin({
+  on,
+  said,
+  dim,
+  onClick,
+}: {
+  on: boolean;
+  said: string;
+  dim: number;
+  onClick: () => void;
+}) {
+  const { ctl } = useTip();
+  return (
+    <button
+      type="button"
+      data-ptw-pin=""
+      aria-label={said}
+      aria-pressed={on}
+      onClick={onClick}
+      onPointerEnter={(e) => ctl.enter(e.currentTarget)}
+      onPointerLeave={(e) => ctl.leave(e.currentTarget)}
+      style={{
+        flex: "none",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 20,
+        height: 20,
+        marginRight: 2,
+        padding: 0,
+        border: "none",
+        borderRadius: CHROME_RADIUS,
+        background: "transparent",
+        color: "inherit",
+        opacity: dim,
+        cursor: "pointer",
+      }}
+    >
+      <Codicon name={on ? "pinned" : "pin"} set="node" />
+    </button>
   );
 }

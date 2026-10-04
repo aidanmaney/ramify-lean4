@@ -34,7 +34,7 @@ const NAMES = [
   "zoom-in", "zoom-out", "screen-full", "expand-all", "collapse-all",
   // the hover bar and the `⋯` menu
   "go-to-file", "target", "debug-step-over", "filter", "trash", "references",
-  "wand", "fold-down", "fold-up", "lightbulb-autofix", "add", "remove",
+  "wand", "fold-down", "fold-up", "lightbulb", "lightbulb-autofix", "add", "remove",
   "ellipsis", "edit", "pin", "pinned", "loading",
 ];
 

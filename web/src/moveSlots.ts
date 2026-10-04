@@ -16,6 +16,9 @@ export const MOVE_LOOK: Record<MoveId, Pick<NodeMove, "glyph" | "codicon">> = {
   focus: { glyph: MOVE_MARK.focus, codicon: "target" },
   skip: { glyph: "skip", codicon: "debug-step-over" },
   path: { glyph: MOVE_MARK.path, codicon: "filter" },
+  // The lightbulb: `lightbulb-autofix` where the linter has a fix (the view
+  // swaps the codicon and the ink, `--ptw-lightbulb(-autofix)`).
+  fix: { glyph: MOVE_MARK.fix, codicon: "lightbulb" },
   delete: { glyph: "delete", codicon: "trash" },
   trace: { glyph: MOVE_MARK.trace, codicon: "references" },
   collapse: { glyph: MOVE_MARK.collapse, codicon: "wand" },

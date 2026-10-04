@@ -4528,3 +4528,74 @@ Gates: `npm test` green, fingerprint identical; `check-sync`,
 `check-settings`, `gen-codicons --check`, `gen-experience --check`;
 `lake build Ramify`. Screenshots: /tmp/claude-0/classic/ (both skins, light
 and dark: tree with a fold, hover bar, `⋯` menu, Layout panel, a hop).
+
+## 2026-10-04 — Lightbulb: Quick Fix and Refactor (batch 4)
+
+Batch 4 of `docs/vscode-idioms/verdict.md` §3 (ruling B6), owner-approved.
+
+- **One new move id, `fix`** (moves.ts `MOVE_IDS`, extension.js, both
+  package.json hover-bar enums + descriptions + defaults; `check-sync` green).
+  It is a BAR SLOT with no menu row of its own: codicon `lightbulb` in
+  `--ptw-lightbulb` (`editorLightBulb-foreground`, fallback the warning amber),
+  `lightbulb-autofix` in `--ptw-lightbulb-autofix`
+  (`editorLightBulbAutoFix-foreground`, fallback the info blue) where a lint fix
+  is on the node — `NodeAction.ink`, chrome ink while disabled. Classic: both
+  tokens are chrome ink, `lightbulb` is a drawn stroked bulb, and the autofix
+  state keeps the old `✎` (the lint row's classic glyph).
+- **The click** — and ⌘./Ctrl+. on a node (⇧F10 still opens the whole menu
+  from the top) — opens the `⋯` menu AT ITS FIXES (`nodeMenu.fixes`): the keyed
+  row is the first code action, and the menu is cut to the height of the two
+  code-action sections and scrolled down to them, so they are what is under
+  the bulb (VS Code's lightbulb shows its actions alone) and the rest of the
+  menu is a scroll up. A first try LIFTED the whole menu so the heading sat
+  under the bulb: it covered the hover bar and put the pointer that had just
+  clicked over the row above the section, whose `mouseenter` stole the keyed
+  row. Consequences: a scroll or wheel INSIDE the menu no longer closes it
+  (the outside rule still does), and the keyed row is scrolled into the
+  MENU's view by hand (`scrollIntoView` could move the tree's frame).
+- **The menu's groups**: navigate (source focus path lens **trace**) · fold ·
+  edit · **Quick Fix** (lint, expand ⇑, rename) · **Refactor** (inline ⤵,
+  extract ⤴, collapse ⇓, propose) — VS Code's code-action order, quick fixes
+  first, the two code-action groups headed in VS Code's own title-case words
+  (`MENU_SECTION_TITLE`). `trace` ("what did `simp` use?") moved to navigate:
+  it reads, it does not rewrite, and VS Code puts its reference peeks in the
+  navigation group.
+- **D5 rename gets a visible door**: its rows (already in the goal's menu)
+  sit in Quick Fix; the ⌥-click on the hypothesis line stays.
+- **D6 "Ask the model for a rewrite"** (`sparkle`, slot `propose`) in the
+  Refactor section, drawn only where the propose gate is open
+  (`onPropose && proposeReady`) AND the node has a rewrite an answer could
+  name — `askAgent(id)` sends the whole outline but only THIS node's
+  primitives. So it never lights the bulb on its own; the reading panel's
+  `suggest a rewrite` stays the proof-wide ask.
+- **Availability**: `fixable` = no proposal pending and any of lint / expand /
+  rename / inline / extract / collapse offered — the same booleans the rows are
+  built from. Otherwise the slot is DISABLED, `Fixes and refactorings —
+  nothing to fix or refactor on this step` (or the shared pending reason);
+  `never-session` without `caps.restructure`, so the static viewer has no
+  bulb. The five ids stay in `MOVE_IDS` and stay pinnable; the bulb's own pin
+  rides the first code-action heading (it has no row).
+- **The pill stays**: every row still runs `checkRewrite` → the pill → the
+  second click (screenshot: inline through the bulb's row, `✓ elaborates`).
+- **Default bars**: `DEFAULT_BAR` = `source focus skip path fix delete`;
+  beginner's tactic bar `source focus skip path fix trace delete` (`⁇` still
+  just before the trash). The bulb goes after the reading moves and before the
+  trash: the moves that change the source sit together, the destructive one
+  stays last. It is on every level's bar: greyed where it has nothing to say,
+  it costs one slot and is the only door to five moves.
+- Help/hints: a "the lightbulb (⌘.)" row under Goals and Tactics (gate
+  `fixable`), the rename row says "also under the lightbulb", and the Keys
+  section splits ⇧F10 from ⌘. INSTALL.md: the hover-bar defaults row, `⤴`'s
+  location, and the model ask's per-step form.
+
+Gates: `npm test` green — fingerprint identical (1189), `probe rewrite
+--declines` byte-identical to HEAD; `check-sync`, `check-settings`,
+`gen-codicons --check` (+`lightbulb`, 49 icons), `gen-experience --check`
+(the descriptions only list extras over `DEFAULT_BAR`, so unchanged); widget
+bundle rebuilt. Screenshots: /tmp/claude-0/batch4/ (light/dark × vscode/
+classic: `bar-*`, `bulb-tip-*`, `menu-*` (Refactor), `pill-*`,
+`autofix-bar-*`/`autofix-menu-*` (Quick Fix, `?lint-stub`), `disabled-*`,
+`menu-euclid-p-*` (with the model row, `?propose-stub`),
+`goal-quickfix-light-vscode.png` (a folded goal's ⇓)). Not verified live:
+whether VS Code takes ⌘. before the webview (batch 2's open question), and a
+rename row through the bulb (the corpus's drawn goals offered none).

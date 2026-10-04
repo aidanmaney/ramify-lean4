@@ -96,7 +96,9 @@ import {
   type Availability,
   unavailableTip,
   EXTRACT_MOVE_LABEL,
+  PROPOSE_MOVE_LABEL,
   collapseMoveLabel,
+  fixMoveLabel,
   expandMoveLabel,
   inlineMoveLabel,
   lintMoveLabel,
@@ -205,6 +207,7 @@ import {
 } from "./flagEdit";
 import {
   CMD,
+  KEY_MENU,
   FLAG_GROUP,
   VERB_DOC,
   nodeHints,
@@ -278,6 +281,8 @@ import {
   TREE_INK_SW_BOLD,
   CHROME_TEXT_SM,
   FOCUS_INK,
+  LIGHTBULB_INK,
+  LIGHTBULB_AUTOFIX_INK,
 } from "./theme";
 import { HypBlock } from "./hypBlock";
 import {
@@ -1180,6 +1185,9 @@ export default function ProofTreeView({
     bottom: number;
     /** Opened by a right-click: hung AT the pointer (top = bottom). */
     pointer?: boolean;
+    /** Opened by the lightbulb or ${CMD}. (batch 4): at the Quick Fix /
+     Refactor sections. */
+    fixes?: boolean;
   } | null>(null);
 
   // KEYBOARD NAVIGATION OF NODES (2026-09-28). The scroll frame is ONE tab
@@ -2943,16 +2951,23 @@ export default function ProofTreeView({
       .join("\n")
       .slice(0, 8000);
 
-  const askAgent = () => {
+  // `only`: the lightbulb's "Ask the model for a rewrite" row (batch 4) — the
+  // model still reads the whole outline, but may pick only among THIS node's
+  // rewrites (the row is drawn only where there is one). Without it, the
+  // reading panel's proof-wide ask.
+  const askAgent = (only?: string) => {
     if (!onPropose || proposeBusy) return;
-    if (agentPrimitives.length === 0) {
+    const offered = only
+      ? agentPrimitives.filter((p) => p.nodeId === only)
+      : agentPrimitives;
+    if (offered.length === 0) {
       showToast("Nothing to propose — no rewrite is offered on this proof");
       return;
     }
     setProposeBusy(true);
     void onPropose({
       text: agentText(),
-      primitives: agentPrimitives.map(({ nodeId, kind, title }) => ({
+      primitives: offered.map(({ nodeId, kind, title }) => ({
         nodeId,
         kind,
         title,
@@ -2960,7 +2975,7 @@ export default function ProofTreeView({
     }).then(
       (res) => {
         setProposeBusy(false);
-        const hit = agentPrimitives.find(
+        const hit = offered.find(
           (p) =>
             p.nodeId === res.nodeId && (!res.kind || p.kind === res.kind),
         );
@@ -4255,7 +4270,13 @@ export default function ProofTreeView({
       if (t?.closest?.("[data-ptw-menu]")) return;
       setNodeMenu(null);
     };
-    const off = () => setNodeMenu(null);
+    // A scroll or wheel INSIDE the menu is the menu's own (opened at its
+    // fixes it is a scroller); anything else closes it.
+    const off = (e: Event) => {
+      const t = e.target as Element | null;
+      if (t?.closest?.("[data-ptw-menu]")) return;
+      setNodeMenu(null);
+    };
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("scroll", off, true);
     document.addEventListener("wheel", off, { capture: true, passive: true });
@@ -5778,7 +5799,10 @@ export default function ProofTreeView({
   // The node the `⋯` menu is open on (null in another proof).
   const menuFor =
     nodeMenu && nodeMenu.proof === proofKey ? nodeMenu.id : null;
-  const openNodeMenu = (id: string, el?: Element) => {
+  // `fixes`: the LIGHTBULB's door (and ${CMD}.'s) — the same menu, keyed on
+  // its first code action and hung so the Quick Fix / Refactor heading sits
+  // under the button (nodeBar.tsx `NodeMenu`).
+  const openNodeMenu = (id: string, el?: Element, fixes?: boolean) => {
     const root = el?.closest("[data-ptw-theme]");
     if (!el || !root) return;
     const r = el.getBoundingClientRect();
@@ -5790,6 +5814,7 @@ export default function ProofTreeView({
       x: r.left - f.left,
       top: r.top - f.top,
       bottom: r.bottom - f.top,
+      ...(fixes ? { fixes } : {}),
     });
   };
   // RIGHT-CLICK on a box (2026-10-04, batch 2): VS Code's context menu, i.e.
@@ -6019,7 +6044,9 @@ export default function ProofTreeView({
         e.preventDefault();
         setTreeFocus("kb");
         restoreFocus.current = true;
-        openNodeMenu(cur, box);
+        // ${CMD}. is VS Code's Quick Fix key: the menu opens at its fixes
+        // (a box with none opens it from the top, as ⇧F10 does).
+        openNodeMenu(cur, box, e.key === ".");
         return;
       }
     }
@@ -6363,7 +6390,7 @@ export default function ProofTreeView({
         }
         proposeShown={!!onPropose && proposeReady}
         proposeBusy={proposeBusy}
-        onPropose={askAgent}
+        onPropose={() => askAgent()}
         commentMode={commentMode}
         onCommentModeChange={applyCommentMode}
         hypMode={hypMode}
@@ -6951,6 +6978,21 @@ export default function ProofTreeView({
                 (node.data.trace
                   ? node.data.trace.kind === "lemmas"
                   : !!onTrace);
+              // D5 — a context line here has a Mathlib-style name to offer.
+              const renamable = (renames.get(id)?.size ?? 0) > 0;
+              // THE LIGHTBULB (batch 4): lit where any Quick Fix or Refactor
+              // row is on offer — the same booleans those rows are built
+              // from, so the bulb and the section cannot disagree. D6's "ask
+              // the model" row needs one of these on the node, so it never
+              // lights the bulb alone.
+              const fixable =
+                !proposing &&
+                (!!lintable ||
+                  expandable ||
+                  renamable ||
+                  inlinable ||
+                  extractable ||
+                  collapsible);
 
               const hasBar =
                 !isEditing &&
@@ -6969,6 +7011,7 @@ export default function ProofTreeView({
                   extractable ||
                   collapsible ||
                   expandable ||
+                  fixable ||
                   barLinkPlus);
 
               const hoverHighlights =
@@ -7004,7 +7047,8 @@ export default function ProofTreeView({
                 tourStop: myStopIds.has(id),
                 tourMarkable: markWritable,
                 tourTab: tab?.who ?? null,
-                renamable: (renames.get(id)?.size ?? 0) > 0,
+                renamable,
+                fixable,
               });
 
               const diagTip = (nodeDiags ?? [])
@@ -7464,6 +7508,27 @@ export default function ProofTreeView({
                           : []),
                       ]
                     : []),
+                // D6 — the model picks one of THIS node's rewrites (Refactor
+                // section). Drawn only where the propose gate is open
+                // (companion + key + setting) and the node has a rewrite an
+                // answer could name.
+                ...(!proposing &&
+                !!onPropose &&
+                proposeReady &&
+                agentPrimitives.some((p) => p.nodeId === id)
+                  ? [
+                      {
+                        glyph: "propose",
+                        codicon: "sparkle" as const,
+                        label: proposeBusy
+                          ? "Asking the model…"
+                          : PROPOSE_MOVE_LABEL,
+                        title: `${PROPOSE_MOVE_LABEL} — it picks one of this step's rewrites and says why; ${CHECKED_FIRST}`,
+                        slot: "propose" as const,
+                        onClick: () => askAgent(id),
+                      },
+                    ]
+                  : []),
                 ...renameLabels.map(({ rn, label }) => ({
                   glyph: `rename:${label}`,
                   codicon: MENU_ICON.edit,
@@ -7785,6 +7850,29 @@ export default function ProofTreeView({
                           },
                         ]
                       : [];
+                  // THE LIGHTBULB (batch 4): not a move of its own but the
+                  // door to the menu's Quick Fix and Refactor sections —
+                  // VS Code's `lightbulb`, `lightbulb-autofix` in its own ink
+                  // where one of the fixes is the linter's.
+                  case "fix": {
+                    if (!fixable) return [];
+                    const said = fixMoveLabel(!!lintable);
+                    return [
+                      {
+                        id: k,
+                        ...MOVE_LOOK.fix,
+                        ...(lintable
+                          ? {
+                              codicon: "lightbulb-autofix" as const,
+                              ink: LIGHTBULB_AUTOFIX_INK,
+                            }
+                          : { ink: LIGHTBULB_INK }),
+                        label: said,
+                        title: `${said} (${KEY_MENU})`,
+                        onClick: (el?: Element) => openNodeMenu(id, el, true),
+                      },
+                    ];
+                  }
                   case "delete": {
                     if (!deletable || isArming) return [];
                     const said =
@@ -7934,6 +8022,8 @@ export default function ProofTreeView({
                       !caps.restructure,
                       restructureWhy,
                     );
+                  case "fix":
+                    return avail(k, fixable, !caps.restructure, restructureWhy);
                   case "delete":
                     return avail(
                       k,
@@ -7959,7 +8049,11 @@ export default function ProofTreeView({
                 ? barIds[barKind].flatMap(barSlot)
                 : [];
               const moves: NodeMove[] = menuHere
-                ? [...MOVE_IDS.flatMap(movesFor), ...menuOnlyMoves]
+                ? [
+                    // `fix` is the menu's door, not a row in it.
+                    ...MOVE_IDS.flatMap((k) => (k === "fix" ? [] : movesFor(k))),
+                    ...menuOnlyMoves,
+                  ]
                 : [];
 
               const said = node.data.label.replace(/\s+/g, " ").trim();

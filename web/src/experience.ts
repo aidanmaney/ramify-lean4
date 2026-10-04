@@ -19,8 +19,11 @@
  * The hover bar is ICONS ONLY at every level (2026-09-22: words on the bar
  * were "way too aggro", and the `⋯` menu is where a glyph is explained). Its
  * row here is WHICH buttons: `default` is moves.ts's `DEFAULT_BAR` (» ◎ ◌ ⊹
- * trash, then `⋯`), and a beginner's tactic bar also carries `⁇` — "what did
- * `simp` use?" is the question a beginner is asking of automation. The
+ * lightbulb trash, then `⋯`), and a beginner's tactic bar also carries `⁇`,
+ * just before the trash — "what did `simp` use?" is the question a beginner
+ * is asking of automation. The lightbulb (batch 4) is on every level's bar:
+ * it is the one door to the fixes and refactorings, greyed where there are
+ * none, so it costs nothing where it has nothing to say. The
  * `ramify.hoverBar.*` settings WIN where set (the companion only sends a list
  * the reader chose, read with `inspect()`), and a pin in the `⋯` menu wins
  * over both for the session.
@@ -65,7 +68,7 @@ export interface Preset {
 export const PRESETS: Record<Experience, Preset> = {
   beginner: {
     hoverBar: {
-      tactic: ["source", "focus", "skip", "path", "trace", "delete"],
+      tactic: ["source", "focus", "skip", "path", "fix", "trace", "delete"],
       goal: DEFAULT_BAR,
     },
     autoTrace: true,

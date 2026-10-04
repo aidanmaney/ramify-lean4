@@ -57,6 +57,11 @@ export type NodeGates = {
    LINE's ⌥-click, not a bar button: a context line already has a hit target
    and a title, and the move is about one word in it. */
   renamable: boolean;
+
+  /** Batch 4 — the LIGHTBULB is lit: some Quick Fix or Refactor row (a
+   linter's fix, writing out what automation used, a rename, inline, extract,
+   replace with automation) is on offer here. */
+  fixable: boolean;
 };
 
 export type Caps = {
@@ -152,7 +157,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "goal",
     input: "⌥-click a context line",
-    says: "to rename a generic `h` or `this` the Mathlib way",
+    says: "to rename a generic `h` or `this` the Mathlib way (also under the lightbulb)",
     needs: "restructure",
     when: (g) => g.renamable,
   },
@@ -161,6 +166,20 @@ export const GESTURES: Gesture[] = [
     input: "click a calc row",
     says: "to show its goal (⌥: every row's)",
     when: (g) => g.ledgerRows,
+  },
+  {
+    target: "goal",
+    input: `the lightbulb (${KEY_MENU})`,
+    says: "to see the fixes and refactorings here — Lean checks each before the pill writes it",
+    needs: "restructure",
+    when: (g) => g.fixable,
+  },
+  {
+    target: "tactic",
+    input: `the lightbulb (${KEY_MENU})`,
+    says: "to see the fixes and refactorings here — Lean checks each before the pill writes it",
+    needs: "restructure",
+    when: (g) => g.fixable,
   },
   {
     target: "tactic",
@@ -287,15 +306,27 @@ export const GESTURES: Gesture[] = [
   },
   {
     target: "keys",
-    input: `⇧F10 / ${KEY_MENU}`,
+    input: "⇧F10",
     says: "to open the moves menu (on an open goal it has the chips' moves, on a calc its every-row toggle)",
     needs: "add",
   },
   {
     target: "keys",
-    input: `⇧F10 / ${KEY_MENU}`,
+    input: "⇧F10",
     says: "to open the moves menu (on a calc, its every-row toggle)",
     unless: "add",
+  },
+  {
+    target: "keys",
+    input: KEY_MENU,
+    says: "to open the moves menu at its Quick Fix and Refactor sections",
+    needs: "restructure",
+  },
+  {
+    target: "keys",
+    input: KEY_MENU,
+    says: "to open the moves menu",
+    unless: "restructure",
   },
   {
     target: "keys",

@@ -108,6 +108,12 @@ const PALETTE_CSS = `
   /* Info (a lint's icon in the problems count and the message strip): the
      editor's own info colour, as the Problems view draws a hint. */
   --ptw-info: var(--vscode-editorInfo-foreground, var(--ptw-hue-info));
+  /* The LIGHTBULB on the hover bar (batch 4): the editor's own two bulb
+     inks — a plain bulb (fixes or refactorings here), and the autofix bulb
+     where one of them is the linter's preferred fix. Fallbacks are the warning
+     amber and the info blue, which is what VS Code's defaults are made of. */
+  --ptw-lightbulb: var(--vscode-editorLightBulb-foreground, var(--ptw-hue-warn));
+  --ptw-lightbulb-autofix: var(--vscode-editorLightBulbAutoFix-foreground, var(--ptw-hue-info));
 
   /* Context lines are the densest text in the tree, so they are plain
      foreground with the unused ones dimmed — no hue at all. The dim is 74%
@@ -387,6 +393,9 @@ const PALETTE_CSS = `
   --ptw-diag-error-wash: color-mix(in srgb, var(--ptw-danger) 13%, var(--ptw-chrome-bg));
   --ptw-diag-warn-wash: color-mix(in srgb, var(--ptw-warn) 13%, var(--ptw-chrome-bg));
   --ptw-diag-lint-wash: color-mix(in srgb, var(--ptw-comment) 11%, var(--ptw-chrome-bg));
+  /* The bar's marks were all chrome ink before the lightbulb. */
+  --ptw-lightbulb: var(--ptw-chrome-ink);
+  --ptw-lightbulb-autofix: var(--ptw-chrome-ink);
 }
 /* An inaccessible name drew like any other before the infoview's inks; the
    rule outranks the plain path's presentation attributes too. */
@@ -506,6 +515,8 @@ export const DANGER_FILL = "var(--ptw-danger)";
 
 export const WARN_FILL = "var(--ptw-warn)";
 export const INFO_FILL = "var(--ptw-info)";
+export const LIGHTBULB_INK = "var(--ptw-lightbulb)";
+export const LIGHTBULB_AUTOFIX_INK = "var(--ptw-lightbulb-autofix)";
 export const LINK_STROKE = "var(--ptw-link)";
 
 export const LINK_STROKE_GOAL = "var(--ptw-link-goal)";

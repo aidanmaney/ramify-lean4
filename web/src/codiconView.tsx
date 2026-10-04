@@ -282,6 +282,15 @@ const NODE_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
     ),
   ),
   "lightbulb-autofix": glyph("✎"),
+  // The lightbulb slot (batch 4) never existed in the old skin: drawn in the
+  // stroked hand of `TrashIcon` — a bulb, its neck and two thread lines.
+  lightbulb: hover(
+    p("M-1.6 2.4 C-1.6 0.9 -3.6 0.2 -3.6 -1.9 A3.6 3.6 0 0 1 3.6 -1.9 C3.6 0.2 1.6 0.9 1.6 2.4 Z", { key: 1 }),
+    p("M-1.4 3.9 H1.4", { key: 2 }),
+    p("M-0.9 5.2 H0.9", { key: 3 }),
+  ),
+  // D6's "Ask the model" row: a four-point star, the polish line's cousin.
+  sparkle: glyph("✦", 12),
   "split-horizontal": glyph("⧉"),
   ellipsis: glyph("⋯"),
   // menuIcons.ts's stroked rows.
