@@ -60,6 +60,15 @@ to light) — a window with the hero file open and Ramify in the infoview,
 about 16:9. Until one exists the hero is the viewer's own rendering. Its
 `Preview` button opens the same proof here, in the browser.
 
+The committed pair was shot in code-server (VS Code in a browser, which runs
+the real extension host, unlike vscode.dev/github.dev, which have no Lean
+server): Node 24, `npm i code-server`, the `leanprover.lean4` extension built
+from its repository with `vsce package`, `dist/ramify-*.vsix`, then Playwright
+at 1600×900 @2x with `Default Light Modern` / `Default Dark Modern`, the
+sidebar hidden and the cursor on `by_cases`. Allow ~90 s for the worker to
+load Mathlib, and move the cursor once after it finishes so the infoview
+re-asks.
+
 ### Deploying to GitHub Pages
 
 The site is generated, so it lives on its own branch rather than in `dev`:
