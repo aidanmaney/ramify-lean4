@@ -11,6 +11,7 @@ import {
   CHROME_INK,
   FLOATER_CHROME,
   CHROME_TEXT,
+  CHROME_RADIUS,
   DIM_OPACITY,
 } from "./theme";
 import { injectStyleOnce } from "./taggedCore";
@@ -18,6 +19,7 @@ import { useTip } from "./tipController";
 import { CodeText } from "./codeSpans";
 import { focusBox, useRestoreFocus } from "./panelKeys";
 import { BARE_BTN } from "./barMetrics";
+import { Codicon } from "./codiconView";
 
 const INK = CHROME_INK;
 
@@ -131,13 +133,14 @@ export function HelpPanel({
           type="button"
           {...tip.props("Close (Esc, or ?)")}
           onClick={onClose}
+          data-ptw-baritem=""
           style={{
             ...BARE_BTN,
-            fontSize: CHROME_TEXT,
-            opacity: DIM_OPACITY,
+            borderRadius: CHROME_RADIUS,
+            background: "var(--ptw-bar-item-bg, transparent)",
           }}
         >
-          ✕
+          <Codicon name="close" />
         </button>
       </div>
       {/* What the picture is, before what can be done to it. Colours are the

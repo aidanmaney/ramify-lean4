@@ -55,6 +55,9 @@ const PALETTE_CSS = `
      (26°), so a warning ribbon and a temporary mark cannot be mistaken.
      4.9:1 on white; the dark block lifts it. A host colour wins (below). */
   --ptw-hue-warn: #9a6700;
+  /* Info blue: VS Code's own editorInfo.foreground defaults (light/dark), the
+     fallback where the host variable is absent. */
+  --ptw-hue-info: #1a85ff;
   /* Raw syntax hues (VS Code Light+). Muted into --ptw-fg by the recipes. */
   --ptw-raw-keyword: #af00db;
   --ptw-raw-function: #795e26;
@@ -102,6 +105,9 @@ const PALETTE_CSS = `
      behind that squiggle; the fallback is its own amber (--ptw-hue-warn), distinct from the accent.
      (No backticks in here — this block is a template literal.) */
   --ptw-warn: var(--vscode-editorWarning-foreground, var(--ptw-hue-warn));
+  /* Info (a lint's icon in the problems count and the message strip): the
+     editor's own info colour, as the Problems view draws a hint. */
+  --ptw-info: var(--vscode-editorInfo-foreground, var(--ptw-hue-info));
 
   /* Context lines are the densest text in the tree, so they are plain
      foreground with the unused ones dimmed — no hue at all. The dim is 74%
@@ -131,24 +137,56 @@ const PALETTE_CSS = `
      diff's green and red. Mixed against --ptw-surface, not --ptw-bg: it lands
      inside a node box (the --ptw-prose lesson). */
   --ptw-hyp-lit: #f0dcc9;
-  --ptw-hyp-lit: color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface));
+  --ptw-hyp-lit: var(--vscode-editor-wordHighlightBackground, color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface)));
+  /* The STRONG half of the pair (2026-10-04): the editor washes a symbol's
+     READS in wordHighlightBackground and its WRITE in the strong one, and the
+     B2 origin hover is exactly that — the line that reads a hypothesis, and
+     the step that wrote it. Same fallback weight, so the harness is
+     unchanged. */
+  --ptw-hyp-lit-strong: #f0dcc9;
+  --ptw-hyp-lit-strong: var(--vscode-editor-wordHighlightStrongBackground, color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface)));
 
   /* TACTIC DIFF backgrounds — what the producing tactic changed inside a goal
-     box. Only a FALLBACK: wherever --vscode-diffEditor-*TextBackground exists
-     (any VS Code host) taggedRender's rules take the editor's own colour, so
-     a highlight in the tree is the very colour the infoview paints. These are
-     for a host without those variables. Mixed against --ptw-surface, not
+     box. The host's diffEditor-*TextBackground wins (any VS Code host), so a
+     highlight in the tree is the very colour the infoview paints; the mixes
+     are for a host without those variables. Mixed against --ptw-surface, not
      --ptw-bg, because they land inside a node box (the --ptw-prose lesson),
      and kept WEAK — 22% — since the highlight sits under code that must stay
      readable, unlike the ribbons, which sit beside it. */
   --ptw-diff-ins: #dcf0e2;
-  --ptw-diff-ins: color-mix(in srgb, var(--ptw-hue-tactic) 22%, var(--ptw-surface));
+  --ptw-diff-ins: var(--vscode-diffEditor-insertedTextBackground, color-mix(in srgb, var(--ptw-hue-tactic) 22%, var(--ptw-surface)));
   --ptw-diff-del: #f6dede;
-  --ptw-diff-del: color-mix(in srgb, var(--ptw-danger) 22%, var(--ptw-surface));
+  --ptw-diff-del: var(--vscode-diffEditor-removedTextBackground, color-mix(in srgb, var(--ptw-danger) 22%, var(--ptw-surface)));
+  --ptw-diff-ins-border: var(--vscode-diffEditor-insertedTextBorder, transparent);
+  --ptw-diff-del-border: var(--vscode-diffEditor-removedTextBorder, transparent);
 
   --ptw-comment: #767676;
   --ptw-case: #6b7f99;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
+  /* THE INFOVIEW'S OWN INKS (2026-10-04), one pane over: the goal list
+     colours a hypothesis's NAME, the turnstile and a case label from the
+     lean4 extension's theme colours. They exist only in the VS Code host;
+     the fallbacks are what the tree drew before, so the harness and the
+     static viewer are unchanged. (The dots are escaped: they are part of the
+     variable's name.) */
+  --ptw-hypname: var(--vscode-lean4-infoView\\.hypothesisName, var(--ptw-hyp-used));
+  --ptw-turnstile: var(--vscode-lean4-infoView\\.turnstile, var(--ptw-node-text));
+  --ptw-case-ink: var(--vscode-lean4-infoView\\.caseLabel, var(--ptw-case));
+  --ptw-inaccessible: var(--vscode-lean4-infoView\\.inaccessibleHypothesisName, var(--ptw-hypname));
+  /* An AUTHOR's comment strip speaks in the theme's comment colour (the
+     syntax token the companion sends, else the muted Light+/Dark+ green), as
+     the same line does in the buffer. A GENERATED strip (narration, polish)
+     is not the author's words, so it wears the editor's GHOST TEXT — what an
+     inline completion is drawn in — and the two can be told apart at a
+     glance. --ptw-comment itself stays the neutral annotation voice (mark
+     tabs, captions, trace leaves). */
+  --ptw-comment-text: var(--ptw-tok-comment, var(--ptw-comment));
+  --ptw-ghost-text: var(--vscode-editorGhostText-foreground, var(--ptw-comment));
+  /* Folding, the editor's three inks: the gutter's chevron, the folded
+     line's placeholder, and the wash over a folded range. */
+  --ptw-fold-ctl: var(--vscode-editorGutter-foldingControlForeground, var(--ptw-chrome-ink));
+  --ptw-fold-ph: var(--vscode-editor-foldPlaceholderForeground, var(--ptw-muted));
+  --ptw-fold-bg: var(--vscode-editor-foldBackground, color-mix(in srgb, var(--ptw-hue-goal) 8%, transparent));
   /* Narration mode's prose, drawn INSIDE a node box rather than on the page.
      Same words, different ground: --ptw-comment is mixed against --ptw-bg,
      which is right for a strip riding on the background, but a box sits on
@@ -184,21 +222,38 @@ const PALETTE_CSS = `
   --ptw-chrome-bg: var(--vscode-editorWidget-background, var(--ptw-surface));
   --ptw-chrome-border: var(--vscode-editorWidget-border, color-mix(in srgb, var(--ptw-fg) 22%, var(--ptw-bg)));
   --ptw-chrome-ink: var(--vscode-icon-foreground, color-mix(in srgb, var(--ptw-fg) 85%, var(--ptw-bg)));
-  --ptw-chrome-btn: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--ptw-fg) 5%, var(--ptw-chrome-bg)));
+  /* A toolbar button's hover and pressed washes (hover bar, rail, bar
+     items): VS Code's own toolbar pair. */
+  --ptw-toolbar-hover: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--ptw-fg) 8%, transparent));
+  --ptw-toolbar-active: var(--vscode-toolbar-activeBackground, color-mix(in srgb, var(--ptw-fg) 14%, transparent));
+  --ptw-chrome-btn: var(--ptw-toolbar-hover);
+  --ptw-widget-shadow: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.16));
+  /* TIPS are the editor's hover widget; the move menu and the bar's panels
+     are its menus (2026-10-04). Each falls back to the chrome's own tokens. */
+  --ptw-hover-bg: var(--vscode-editorHoverWidget-background, var(--ptw-chrome-bg));
+  --ptw-hover-border: var(--vscode-editorHoverWidget-border, var(--ptw-chrome-border));
+  --ptw-hover-fg: var(--vscode-editorHoverWidget-foreground, var(--ptw-fg));
+  --ptw-menu-bg: var(--vscode-menu-background, var(--ptw-chrome-bg));
+  --ptw-menu-fg: var(--vscode-menu-foreground, var(--ptw-fg));
+  --ptw-menu-border: var(--vscode-menu-border, var(--ptw-chrome-border));
+  --ptw-menu-sep: var(--vscode-menu-separatorBackground, var(--ptw-chrome-border));
+  --ptw-menu-sel-bg: var(--vscode-menu-selectionBackground, var(--ptw-chrome-lit));
+  --ptw-menu-sel-fg: var(--vscode-menu-selectionForeground, var(--ptw-menu-fg));
   --ptw-chrome-lit: var(--vscode-list-activeSelectionBackground, color-mix(in srgb, var(--ptw-hue-goal) 16%, transparent));
   --ptw-focus: var(--vscode-focusBorder, var(--ptw-hue-goal));
-  /* THE MESSAGE STRIP's tint (2026-09-24): a wash of the severity's own ink
-     over the chrome's background (so it stays opaque over the tree and lands
-     on either side of the luminance split with the chrome ink still readable
-     on it), and the same ink, whole, for its left edge. Error and warning take
-     the editor's own colours (--ptw-danger / --ptw-warn); a lint is comment
-     ink, as its ribbon is — the proof is correct and a style rule speaks. */
-  --ptw-diag-error-edge: var(--ptw-danger);
-  --ptw-diag-warn-edge: var(--ptw-warn);
-  --ptw-diag-lint-edge: var(--ptw-comment);
-  --ptw-diag-error-wash: color-mix(in srgb, var(--ptw-danger) 13%, var(--ptw-chrome-bg));
-  --ptw-diag-warn-wash: color-mix(in srgb, var(--ptw-warn) 13%, var(--ptw-chrome-bg));
-  --ptw-diag-lint-wash: color-mix(in srgb, var(--ptw-comment) 11%, var(--ptw-chrome-bg));
+  /* THE MESSAGE STRIP is the editor's MARKER NAVIGATION widget (the peek F8
+     opens): its background, and per severity the widget's frame colour (the
+     left edge here) and its header tint (the wash). A lint is the INFO row,
+     as the Problems view draws a hint. Fallbacks: the severity's own ink,
+     and a wash of it over the chrome — opaque over the tree, readable on
+     either side of the luminance split. */
+  --ptw-marker-bg: var(--vscode-editorMarkerNavigation-background, var(--ptw-chrome-bg));
+  --ptw-diag-error-edge: var(--vscode-editorMarkerNavigationError-background, var(--ptw-danger));
+  --ptw-diag-warn-edge: var(--vscode-editorMarkerNavigationWarning-background, var(--ptw-warn));
+  --ptw-diag-lint-edge: var(--vscode-editorMarkerNavigationInfo-background, var(--ptw-info));
+  --ptw-diag-error-wash: var(--vscode-editorMarkerNavigationError-headerBackground, color-mix(in srgb, var(--ptw-danger) 13%, var(--ptw-marker-bg)));
+  --ptw-diag-warn-wash: var(--vscode-editorMarkerNavigationWarning-headerBackground, color-mix(in srgb, var(--ptw-warn) 13%, var(--ptw-marker-bg)));
+  --ptw-diag-lint-wash: var(--vscode-editorMarkerNavigationInfo-headerBackground, color-mix(in srgb, var(--ptw-info) 11%, var(--ptw-marker-bg)));
   --ptw-edit-bg: var(--vscode-input-background, var(--ptw-surface));
   --ptw-edit-text: var(--vscode-input-foreground, var(--ptw-fg));
 
@@ -227,6 +282,7 @@ const PALETTE_CSS = `
   --ptw-hue-tactic: #94d3a2;
   --ptw-hue-accent: #e0a06a;
   --ptw-hue-warn: #d9b53f;
+  --ptw-hue-info: #3794ff;
   /* Raw syntax hues (VS Code Dark+), muted into --ptw-fg by the recipes. */
   --ptw-raw-keyword: #c586c0;
   --ptw-raw-function: #dcdcaa;
@@ -253,7 +309,9 @@ const PALETTE_CSS = `
   --ptw-hyp-mark: #d9a271;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
   --ptw-hyp-lit: #4a3f37;
-  --ptw-hyp-lit: color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface));
+  --ptw-hyp-lit: var(--vscode-editor-wordHighlightBackground, color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface)));
+  --ptw-hyp-lit-strong: #4a3f37;
+  --ptw-hyp-lit-strong: var(--vscode-editor-wordHighlightStrongBackground, color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface)));
   --ptw-comment: #989898;
   --ptw-case: #8fa3bf;
   --ptw-comment: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
@@ -277,6 +335,12 @@ const PALETTE_CSS = `
 [data-ptw-theme] button:focus-visible {
   outline: 1px solid var(--ptw-focus);
   outline-offset: -1px;
+}
+
+/* The hover bar's buttons: pressed, VS Code's toolbar active wash (hover is
+   the bar's own paint state, which also reddens the trash). */
+[data-ptw-theme] [data-ptw-barbtn]:active > rect {
+  fill: var(--ptw-toolbar-active);
 }
 
 /* The status bar's items wash on hover, as VS Code's status-bar items do. */
@@ -326,19 +390,30 @@ export const HYP_USED_FILL = "var(--ptw-hyp-used)";
 export const HYP_UNUSED_FILL = "var(--ptw-hyp-unused)";
 export const HYP_MARK_FILL = "var(--ptw-hyp-mark)";
 export const HYP_LIT_FILL = "var(--ptw-hyp-lit)";
+/** The introducing step's wash (the B2 origin hover): the WRITE half of the
+ editor's word-highlight pair. */
+export const HYP_LIT_STRONG_FILL = "var(--ptw-hyp-lit-strong)";
+/** The infoview's inks for a hypothesis name, `⊢` and a case label. */
+export const HYP_NAME_FILL = "var(--ptw-hypname)";
+export const TURNSTILE_FILL = "var(--ptw-turnstile)";
+export const INACCESSIBLE_FILL = "var(--ptw-inaccessible)";
 
 export type HypMarkStyle = "highlight" | "underline";
-export const COMMENT_FILL = "var(--ptw-comment)";
+/** An author's comment strip (the theme's comment colour). */
+export const COMMENT_FILL = "var(--ptw-comment-text)";
+/** A generated (`∴`/`≈`) strip: the editor's ghost text. */
+export const GHOST_TEXT_FILL = "var(--ptw-ghost-text)";
 
 export const PROSE_FILL = "var(--ptw-prose)";
 
-export const CASE_FILL = "var(--ptw-case)";
+export const CASE_FILL = "var(--ptw-case-ink)";
 
 export const SORRY_FILL = "var(--ptw-tok-sorry)";
 
 export const DANGER_FILL = "var(--ptw-danger)";
 
 export const WARN_FILL = "var(--ptw-warn)";
+export const INFO_FILL = "var(--ptw-info)";
 export const LINK_STROKE = "var(--ptw-link)";
 
 export const LINK_STROKE_GOAL = "var(--ptw-link-goal)";
@@ -364,10 +439,24 @@ export const CHROME_SURFACE = chromeSurface();
 export const CHROME_UNDERLAY = "var(--ptw-bg)";
 export const CHROME_BORDER = "var(--ptw-chrome-border)";
 export const CHROME_INK = "var(--ptw-chrome-ink)";
-/** A glyph button's resting fill (the hover bar's squares). */
+/** A toolbar button's hover wash (the hover bar's squares). */
 export const CHROME_BTN = "var(--ptw-chrome-btn)";
 /** The keyed row of a menu. */
 export const CHROME_LIT = "var(--ptw-chrome-lit)";
+/** VS Code's widget shadow (`widget.shadow`), for the hover bar. */
+export const WIDGET_SHADOW = "var(--ptw-widget-shadow)";
+/** The menus' surface (the `⋯` menu, the bar's panels). */
+export const MENU_BG = "var(--ptw-menu-bg)";
+export const MENU_FG = "var(--ptw-menu-fg)";
+export const MENU_BORDER = "var(--ptw-menu-border)";
+export const MENU_SEL_BG = "var(--ptw-menu-sel-bg)";
+export const MENU_SEL_FG = "var(--ptw-menu-sel-fg)";
+/** The tips' surface: the editor's hover widget. */
+export const HOVER_BG = "var(--ptw-hover-bg)";
+export const HOVER_BORDER = "var(--ptw-hover-border)";
+export const HOVER_FG = "var(--ptw-hover-fg)";
+/** The message strip's surface: the marker-navigation widget. */
+export const MARKER_BG = "var(--ptw-marker-bg)";
 /** The message strip's tint per severity (1 error, 2 warning, 3 lint): the
  left edge in the severity's ink and a wash of it over the chrome. */
 export const DIAG_EDGE = {

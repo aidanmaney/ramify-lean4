@@ -2,6 +2,10 @@ import { useContext, useEffect, useLayoutEffect, useRef, useSyncExternalStore } 
 import {
   FLOATER_CHROME,
   CHROME_TEXT_SM,
+  HOVER_BG,
+  HOVER_BORDER,
+  HOVER_FG,
+  chromeSurface,
   Z,
 } from "./theme";
 import { TipContext } from "./tipController";
@@ -21,7 +25,7 @@ written straight onto the element in a layout effect — measured off the target
 and the tip's own box, never through React state — above the target, below it
 where there is no room above, clamped inside the frame. `left`/`top` are never
 in the JSX, so a re-render cannot reset them. The chrome is the toast's and the
-doc-token popup's: `POPUP_CHROME` + the editor-widget border. */
+doc-token popup's: `POPUP_CHROME`, in the editor hover widget's tokens. */
 export function TipLayer() {
   const ctl = useContext(TipContext);
   const tip = useSyncExternalStore(ctl.subscribe, ctl.getSnapshot);
@@ -83,6 +87,10 @@ export function TipLayer() {
         width: "max-content",
         maxWidth: TIP_MAX_W,
         ...FLOATER_CHROME,
+        // The editor's HOVER WIDGET (2026-10-04): a tip is a hover.
+        background: chromeSurface(HOVER_BG),
+        border: `1px solid ${HOVER_BORDER}`,
+        color: HOVER_FG,
         fontSize: CHROME_TEXT_SM,
         lineHeight: "15px",
         textAlign: "left",

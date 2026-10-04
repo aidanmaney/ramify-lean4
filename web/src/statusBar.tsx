@@ -51,7 +51,6 @@ import {
   STATUS_PAD_X,
   STATUS_PAD_Y,
   type StatusInfo,
-  TEXT_GLYPH_BOX_W,
 } from "./barMetrics";
 import {
   BarActionRow,
@@ -60,19 +59,14 @@ import {
   BarMenu,
   BarPanel,
   BarRow,
-  CommentGlyph,
-  EyeGlyph,
   GlyphBox,
-  ChevronGlyph,
-  DisclosureGlyph,
-  LayoutExtraGlyph,
-  LayoutGlyph,
   MenuDivider,
   ROW_ICON_W,
   StatusReadout,
 } from "./barChrome";
 import { READING_OPTIONS, readingOn, type ReadingId, type ReadingState } from "./experience";
 import { type DiagBarProps, DiagCountItem, DiagStrip } from "./diagBar";
+import { Codicon } from "./codiconView";
 
 // One group of the strip: its items in a flex row, one STATUS_GAP apart. The
 // groups never shrink; the strip clips at its ends only as the last resort.
@@ -240,10 +234,10 @@ export function StatusBar({
     ...(effReflow !== "off" ? ["narrower width"] : []),
   ];
 
-  // A compact label is drawn in the TREE's code font, not the bar's system UI
-  // font: these glyphs were designed to sit in that stack and several are
-  // missing or ill-proportioned in the other. The `GlyphBox` is what stops
-  // `glyphPx` — up to 19 — from reaching the item's own box.
+  // Context's compact label is drawn in the TREE's code font, not the bar's
+  // system UI font: its glyphs (`▸ λ Δ ∀`) were designed to sit in that stack.
+  // The `GlyphBox` is what stops `glyphPx` — up to 19 — from reaching the
+  // item's own box. (Every other item's glyph is a codicon.)
   const glyph = (g: string, px = 13, w?: number) => (
     <GlyphBox w={w}>
       <span style={{ fontFamily, fontSize: px, lineHeight: 1 }}>{g}</span>
@@ -259,7 +253,7 @@ export function StatusBar({
       prefix: "Layout:",
       glyph: (
         <GlyphBox>
-          <LayoutGlyph mode={layout} />
+          <Codicon name={LAYOUT_MODES[layout].icon} />
         </GlyphBox>
       ),
       value: LAYOUT_MODES[layout].name,
@@ -289,7 +283,7 @@ export function StatusBar({
       prefix: "Comments:",
       glyph: (
         <GlyphBox>
-          <CommentGlyph mode={commentMode} />
+          <Codicon name={COMMENT_MODES[commentMode].icon} />
         </GlyphBox>
       ),
       value: commentName,
@@ -307,14 +301,14 @@ export function StatusBar({
       prefix: "Reading",
       glyph: (
         <GlyphBox>
-          <EyeGlyph />
+          <Codicon name="eye" />
         </GlyphBox>
       ),
       words: {
         full: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
             Reading
-            <DisclosureGlyph />
+            <Codicon name="chevron-down" />
           </span>
         ),
         value: "Reading",
@@ -335,7 +329,11 @@ export function StatusBar({
     ...(!hasMarks ? [] : [{
       id: "tour",
       prefix: "Marks:",
-      glyph: glyph("⚑", 12),
+      glyph: (
+        <GlyphBox>
+          <Codicon name="bookmark" />
+        </GlyphBox>
+      ),
       value: tourValue,
       // Every value it could show: the widest is what the row reserves, so
       // stepping from 2/5 to 3/5 moves nothing to its right.
@@ -358,12 +356,11 @@ export function StatusBar({
       after: (
         <>
           <BarButton
-            // The chevrons are `ChevronGlyph`, the one drawn pager mark (the
-            // message strip wears the same). The BOX stays `TEXT_GLYPH_BOX_W`,
-            // so nothing the row measured moves.
+            // The pager's codicon chevrons, in the same fixed glyph box as
+            // every other mark, so nothing the row measured moves.
             label={
-              <GlyphBox w={TEXT_GLYPH_BOX_W}>
-                <ChevronGlyph dir="prev" />
+              <GlyphBox>
+                <Codicon name="chevron-left" />
               </GlyphBox>
             }
             title={
@@ -376,8 +373,8 @@ export function StatusBar({
           />
           <BarButton
             label={
-              <GlyphBox w={TEXT_GLYPH_BOX_W}>
-                <ChevronGlyph dir="next" />
+              <GlyphBox>
+                <Codicon name="chevron-right" />
               </GlyphBox>
             }
             title={
@@ -704,7 +701,11 @@ export function StatusBar({
   // GHOST measures it on its own (`helpW`).
   const helpBtn = (
     <BarButton
-      label={<GlyphBox w={TEXT_GLYPH_BOX_W}>?</GlyphBox>}
+      label={
+        <GlyphBox>
+          <Codicon name="question" />
+        </GlyphBox>
+      }
       title="What you can do here (?)"
       accent={helpOpen}
       popup="dialog"
@@ -924,9 +925,9 @@ export function StatusBar({
               label={LAYOUT_MODES[m].name}
               title={LAYOUT_MODES[m].title}
               on={layout === m}
-              // Each mode wears its own drawn mark, the bar's glyph, in a
-              // fixed box so the words align.
-              icon={<LayoutGlyph mode={m} />}
+              // Each mode wears its bar glyph, in a fixed box so the words
+              // align.
+              icon={<Codicon name={LAYOUT_MODES[m].icon} />}
               onClick={() => {
                 onLayoutChange(m);
                 close();
@@ -945,7 +946,7 @@ export function StatusBar({
                 : "Side-by-side needs a compact layout; the wide tree lays branches out itself"
             }
             on={sbsEnabled && sideBySide}
-            icon={<LayoutExtraGlyph kind="side-by-side" />}
+            icon={<Codicon name="split-horizontal" />}
             disabled={!sbsEnabled}
             onClick={() => onSideBySideChange(!sideBySide)}
           />
@@ -954,7 +955,7 @@ export function StatusBar({
             label="gallery"
             title="Show one subtree at a time, with a pager"
             on={gallery}
-            icon={<LayoutExtraGlyph kind="gallery" />}
+            icon={<Codicon name="window" />}
             onClick={() => onGalleryChange(!gallery)}
           />
           <MenuDivider />
@@ -1003,7 +1004,7 @@ export function StatusBar({
               whiteSpace: "nowrap",
             }}
           >
-            <span aria-hidden style={{ flex: "0 0 12px" }} />
+            <span aria-hidden style={{ flex: `0 0 ${ROW_ICON_W}px` }} />
             <span
               aria-hidden
               style={{
@@ -1013,7 +1014,7 @@ export function StatusBar({
                 justifyContent: "center",
               }}
             >
-              <LayoutExtraGlyph kind="width" />
+              <Codicon name="word-wrap" />
             </span>
             <span>width</span>
             <input

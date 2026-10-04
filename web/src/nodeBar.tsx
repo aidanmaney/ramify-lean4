@@ -1,6 +1,8 @@
-// The node hover bar and its ⋯ move menu: the drawn icons (skip, inline, trash, pin), the NodeAction/NodeMove
-// shapes the tree hands it, the bar itself and the icon-explainer menu.
-import { useState, useRef, useLayoutEffect, type ReactNode } from "react";
+// The node hover bar and its ⋯ move menu: the NodeAction/NodeMove shapes the tree hands it, the bar itself
+// (a VS Code action bar of codicons) and the icon-explainer menu.
+import { useState, useRef, useLayoutEffect } from "react";
+import { type CodiconName } from "./codicon";
+import { Codicon } from "./codiconView";
 import { CodeText } from "./codeSpans";
 import { plainTicks } from "./ticks";
 import { pinLabel, type BarKind, type MoveId } from "./moves";
@@ -12,18 +14,21 @@ import {
   CHROME_BORDER,
   CHROME_INK,
   CHROME_BTN,
-  CHROME_LIT,
   CHROME_RADIUS,
   DIM_OPACITY,
   DISABLED_OPACITY,
   CHROME_TEXT_SM,
+  MENU_SEL_BG,
+  MENU_SEL_FG,
+  WIDGET_SHADOW,
   Z,
 } from "./theme";
-import { HOVER_ICON_SW, MENU_PANEL } from "./barMetrics";
+import { MENU_PANEL } from "./barMetrics";
 import {
   BAR_BTN,
   BAR_FRAME_INSET,
   BAR_GAP,
+  BAR_ICON,
   BAR_OVERLAP,
   BAR_PAD,
 } from "./hoverBarMetrics";
@@ -35,99 +40,13 @@ box in the tree, so a row that grows the card under the pointer moves the very
 buttons it is naming, and it says on every node what the tooltip says on the
 one you are aiming at. The vocabulary lives in `?` (the gesture panel), which
 reads the same `nodeHints` list. */
-/** A trash can in the shape VS Code's own codicon `trash` draws it — a flat
-lid line with a small centred handle, a PLAIN rectangular body (no taper), two
-short ribs — drawn rather than typed: no code font carries a can, and the ⊘
-that used to stand here says "forbidden", not "delete". Stroked in
-`currentColor` so the bar's `danger` ink reaches it unchanged.
-
-Its size is set by the NEIGHBOURS, not by a nominal icon box: measured on the
-raster at the bar's own 13px, `⧉` inks 9px tall and the skip box 9 (its 9-unit
-rect plus the stroke), so the paths span 7.5 units and the stroke brings the
-drawn ink to **8.4** — inside 1px of both.
-The taper and the 10.5px ink an earlier version drew made one button visibly
-bigger than every glyph beside it.
-
-The STROKE is 0.9, not the 1.25 it was: a can is five strokes inside 7.5 units,
-so the same weight that reads as one line on a hairline glyph reads as a solid
-block here,
-and beside the hairline glyphs it looked like a different, heavier vocabulary.
-If it ever reads muddy at 12px the answer is a SIMPLER shape (lid line, open
-rectangle, one rib) — never a thicker stroke, which is the change that put it
-out of key with its neighbours in the first place. */
-/* The skip button is the AXIS BREAK in miniature, drawn as the real one is:
-the line runs into the centre of the upper slant and out of the centre of the
-lower one, with the two slants 3.6 px apart — the gap the eye reads (a 1.2 px
-one read as a crossed line; user report). Stroke 0.9 like the can, so the
-drawn buttons read as one vocabulary. */
-export function SkipIcon() {
-  return (
-    <g
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={HOVER_ICON_SW}
-      strokeLinecap="round"
-    >
-      <path d="M0 -4.8 V-1.8 M0 1.8 V4.8" />
-      <path d="M-2.6 -0.6 L2.6 -3 M-2.6 3 L2.6 0.6" />
-    </g>
-  );
-}
-
-/* D1's inline (`⤵`) and extract (`⤴`), DRAWN: as font glyphs they fell back
-to a symbol font that inked 12.3×12.1 px at the bar's 13px against `⊹`'s 8×8
-and the can's 9.5×8.5 (measured on the raster, 2026-09-22). Rightwards, then
-a quarter turn down (inline: the `have` goes down into its use) or up
-(extract: the block comes up out of the term), mirrored because the moves are
-inverse. The paths span 7.6 units and stroke 0.9, the can's key. */
-export function InlineIcon({ up = false }: { up?: boolean }) {
-  return (
-    <g
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={HOVER_ICON_SW}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      transform={up ? "scale(1,-1)" : undefined}
-    >
-      <path d="M-3.8 -3.6 H-0.4 A2.6 2.6 0 0 1 2.2 -1 V3.6" />
-      <path d="M0.6 2 L2.2 3.6 L3.8 2" />
-    </g>
-  );
-}
-
-export function TrashIcon() {
-  return (
-    <g
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={HOVER_ICON_SW}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {/* lid, with its small centred handle */}
-      <path d="M-4.3 -2.8 H4.3" />
-      <path d="M-1.5 -2.8 V-3.9 H1.5 V-2.8" />
-      {/* body — a plain rectangle */}
-      <path d="M-3.2 -2.8 V3.6 H3.2 V-2.8" />
-      {/* the two ribs */}
-      <path d="M-1.15 -0.8 V2" />
-      <path d="M1.15 -0.8 V2" />
-    </g>
-  );
-}
-
 interface NodeAction {
-  /** Also the button's React key, so it must be unique within one bar. */
+  /** Also the button's React key, so it must be unique within one bar; drawn
+   as text only where there is no `codicon` (a busy `…`). */
   glyph: string;
-  /** Drawn INSTEAD of `glyph` when present (the glyph still keys the button). */
-  icon?: ReactNode;
-  /** Font size for THIS glyph, where the shared 13 does not ink like the rest
-   of the bar — the `RailButton.glyphPx` rule, and for the same reason: the
-   target is equal INK height, not equal font size. `⊹` is the one user
-   (measured on the raster: 7x8 of ink at 13, 9x9 at 15, against `⧉`'s 10x9
-   and the drawn skip box's 9). */
-  glyphPx?: number;
+  /** The move's codicon (moveSlots.ts `MOVE_LOOK`): what the bar draws, and
+   what heads the move's row in the `⋯` menu. */
+  codicon?: CodiconName;
   title: string;
   /** The button's own element rides along, for the one move that hangs a
    popover off it (`⋯`); every other move ignores it. */
@@ -164,9 +83,6 @@ export interface NodeMove extends NodeAction {
   /** The glyph is a frontier chip's WORD (`sorry`, `calc`, `step`): drawn
    small, as the chip draws it, where the icon box takes two characters. */
   chip?: boolean;
-  /** A stroked mark (menuIcons.ts, self-wrapped in the bar's stroke) for a row
-   whose bar glyph is plain text or absent; drawn only where `icon` is not. */
-  menuIcon?: ReactNode;
 }
 
 export function NodeActionBar({
@@ -241,10 +157,12 @@ export function NodeActionBar({
   });
   return (
     <g data-ptw-bar="" ref={gRef}>
-      {/* ONE flat rectangle at `CHROME_RADIUS` (no pill, 2026-10-02); the
-          buttons sit in it separated by hairlines (not five bordered
-          squares). Same `w`/`h` as before, so what is measured for the
-          frame clamp is what paints. */}
+      {/* VS CODE'S ACTION BAR (2026-10-04), the notebook cell toolbar's
+          look: one widget-surface rectangle with the editor widget's border
+          and shadow, `BAR_BTN` squares with no dividers, a codicon in each,
+          the toolbar's hover wash on the square under the pointer and its
+          active wash while pressed (theme.ts `[data-ptw-barbtn]:active`).
+          `w`/`h` are what the frame clamp measures, and what paints. */}
       <rect
         x={x0}
         y={y0}
@@ -252,6 +170,7 @@ export function NodeActionBar({
         height={h}
         rx={CHROME_RADIUS}
         fill={CHROME_UNDERLAY}
+        style={{ filter: `drop-shadow(0 0 3px ${WIDGET_SHADOW})` }}
       />
       <rect
         x={x0}
@@ -262,21 +181,6 @@ export function NodeActionBar({
         fill={CHROME_BG}
         stroke={CHROME_BORDER}
       />
-      {actions.slice(1).map((a, i) => {
-        const lx = x0 + BAR_PAD + (i + 1) * (BAR_BTN + BAR_GAP) - BAR_GAP / 2;
-        return (
-          <line
-            key={`div:${a.glyph}`}
-            x1={lx}
-            x2={lx}
-            y1={y0 + BAR_PAD + 4}
-            y2={y0 + h - BAR_PAD - 4}
-            stroke={CHROME_BORDER}
-            strokeWidth={1}
-            pointerEvents="none"
-          />
-        );
-      })}
       {actions.map((a, i) => {
         const bx = x0 + BAR_PAD + i * (BAR_BTN + BAR_GAP);
         const cx = bx + BAR_BTN / 2;
@@ -288,6 +192,7 @@ export function NodeActionBar({
         return (
           <g
             key={a.glyph}
+            data-ptw-barbtn=""
             onClick={(e) => {
               e.stopPropagation();
               if (a.disabled) return;
@@ -318,19 +223,25 @@ export function NodeActionBar({
               fill={hovered === i && !a.disabled ? CHROME_BTN : "transparent"}
               pointerEvents="all"
             />
-            {a.icon ? (
-              <g transform={`translate(${cx},${cy})`} color={ink}>
-                {a.icon}
-              </g>
+            {a.codicon ? (
+              <Codicon
+                name={a.codicon}
+                size={BAR_ICON}
+                x={cx - BAR_ICON / 2}
+                y={cy - BAR_ICON / 2}
+                color={ink}
+                style={{ pointerEvents: "none" }}
+              />
             ) : (
               <text
                 x={cx}
                 y={cy}
                 textAnchor="middle"
                 dominantBaseline="central"
-                fontSize={a.glyphPx ?? 13}
+                fontSize={13}
                 fontFamily="monospace"
                 fill={ink}
+                pointerEvents="none"
               >
                 {a.glyph}
               </text>
@@ -341,25 +252,6 @@ export function NodeActionBar({
     </g>
   );
 }
-
-/** A push-pin, filled when the move is on the bar. 12px, drawn in
- `currentColor` like every other icon here. */
-function PinIcon({ on }: { on: boolean }) {
-  return (
-    <svg width={12} height={12} viewBox="0 0 12 12" aria-hidden>
-      <path
-        d="M4 1.5h4M4.8 1.5v3.2L3 7h6L7.2 4.7V1.5M6 7v3.8"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={HOVER_ICON_SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {on && <path d="M4.8 1.5v3.2L3 7h6L7.2 4.7V1.5z" fill="currentColor" />}
-    </svg>
-  );
-}
-
 
 // The keyed row is drawn by its LIT FILL alone (`idx`); DOM focus still
 // follows it for assistive tech, but draws no ring — a ring on top of the fill
@@ -502,7 +394,9 @@ export function NodeMenu({
               display: "flex",
               alignItems: "center",
               borderRadius: CHROME_RADIUS,
-              background: i === idx ? CHROME_LIT : "transparent",
+              // The keyed row in the editor menus' selection pair.
+              background: i === idx ? MENU_SEL_BG : "transparent",
+              color: i === idx ? MENU_SEL_FG : undefined,
             }}
           >
             <button
@@ -527,8 +421,9 @@ export function NodeMenu({
               }}
               className="ptw-menu-row"
             >
-              {/* THE ICON — the bar's own glyph or drawn icon, so the menu
-                  is where the bar's icons are put into words. */}
+              {/* THE ICON — the bar's own codicon, so the menu is where the
+                  bar's icons are put into words; a chip's WORD where the
+                  move is a frontier chip. */}
               <span
                 aria-hidden
                 style={{
@@ -537,19 +432,14 @@ export function NodeMenu({
                   display: "inline-flex",
                   justifyContent: "center",
                   fontFamily: "monospace",
-                  fontSize: m.glyphPx ? m.glyphPx - 1 : 13,
+                  fontSize: 13,
                 }}
               >
-                {m.icon ? (
-                  <svg width={14} height={14} viewBox="-7 -7 14 14">
-                    <g color={m.danger ? DANGER_FILL : "currentColor"}>
-                      {m.icon}
-                    </g>
-                  </svg>
-                ) : m.menuIcon ? (
-                  <svg width={14} height={14} viewBox="-7 -7 14 14">
-                    {m.menuIcon}
-                  </svg>
+                {m.codicon ? (
+                  <Codicon
+                    name={m.codicon}
+                    color={m.danger ? DANGER_FILL : "currentColor"}
+                  />
                 ) : m.glyph.length <= 2 ? (
                   m.glyph
                 ) : m.chip ? (
@@ -626,7 +516,7 @@ export function NodeMenu({
                   cursor: "pointer",
                 }}
               >
-                <PinIcon on={pinOn} />
+                <Codicon name={pinOn ? "pinned" : "pin"} />
               </button>
             ) : (
               <span aria-hidden style={{ flex: "none", width: 22 }} />

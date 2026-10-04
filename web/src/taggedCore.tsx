@@ -6,7 +6,7 @@
 import type { ReactNode } from "react";
 import type { GoalInfo, Proof } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
-import { hypLine, TURNSTILE } from "./proofToTree";
+import { hypLine, isInaccessibleName, TURNSTILE } from "./proofToTree";
 import {
   flattenTaggedText,
   lineOffsets,
@@ -62,19 +62,34 @@ const TAGGED_CSS = [
     ".ptw-tagged span.inserted-text, .ptw-tagged span.removed-text" +
       " { border: 0; padding: 0; margin: 0; border-radius: 2pt; }",
     ".ptw-tagged span.inserted-text {" +
-      " background-color: var(--vscode-diffEditor-insertedTextBackground, var(--ptw-diff-ins));" +
-      " box-shadow: inset 0 0 0 1px var(--vscode-diffEditor-insertedTextBorder, transparent); }",
+      " background-color: var(--ptw-diff-ins);" +
+      " box-shadow: inset 0 0 0 1px var(--ptw-diff-ins-border); }",
     ".ptw-tagged span.removed-text {" +
-      " background-color: var(--vscode-diffEditor-removedTextBackground, var(--ptw-diff-del));" +
-      " box-shadow: inset 0 0 0 1px var(--vscode-diffEditor-removedTextBorder, transparent); }",
+      " background-color: var(--ptw-diff-del);" +
+      " box-shadow: inset 0 0 0 1px var(--ptw-diff-del-border); }",
 
     '[data-ptw-hypmark="underline"] .ptw-tagged span.inserted-text {' +
       " background-color: transparent;" +
-      " box-shadow: inset 0 -1px 0 var(--vscode-diffEditor-insertedTextBackground, var(--ptw-diff-ins)); }",
+      " box-shadow: inset 0 -1px 0 var(--ptw-diff-ins); }",
     '[data-ptw-hypmark="underline"] .ptw-tagged span.removed-text {' +
       " background-color: transparent;" +
-      " box-shadow: inset 0 -1px 0 var(--vscode-diffEditor-removedTextBackground, var(--ptw-diff-del)); }",
+      " box-shadow: inset 0 -1px 0 var(--ptw-diff-del); }",
+
+    // The infoview's own inks, one pane over (theme.ts `--ptw-hypname` & co):
+    // a hypothesis NAME, the turnstile, and an inaccessible `x✝` name, which
+    // the goal list draws italic at 0.7. Colour and style only — the code
+    // font's italic keeps the advance, so nothing measured moves.
+    ".ptw-hypname { color: var(--ptw-hypname); }",
+    ".ptw-turnstile { color: var(--ptw-turnstile); }",
+    ".ptw-inaccessible { color: var(--ptw-inaccessible); font-style: italic; opacity: 0.7; }",
 ].join("\n");
+
+/** A hypothesis name's classes: the infoview's ink (inaccessible or not),
+ plus the diff wash where the producing tactic minted it. */
+const hypNameClass = (name: string, diffCls?: string): string =>
+  [isInaccessibleName(name) ? "ptw-inaccessible" : "ptw-hypname", diffCls]
+    .filter(Boolean)
+    .join(" ");
 
 export function ensureTaggedStyle() {
   injectStyleOnce("proof-tree-tagged-style", TAGGED_CSS);
@@ -182,7 +197,7 @@ export function makeTaggedRenderersWith<T>(
     if (!nodes || !hasTurnstile) return nodes;
     return [
       <span key="turnstile-line">
-        {TURNSTILE}
+        <span className="ptw-turnstile">{TURNSTILE}</span>
         {nodes[0]}
       </span>,
       ...nodes.slice(1),
@@ -222,7 +237,7 @@ export function makeTaggedRenderersWith<T>(
       return (
         <span className="ptw-tagged">
 
-          {diffCls ? <span className={diffCls}>{h.username}</span> : h.username}
+          <span className={hypNameClass(h.username, diffCls)}>{h.username}</span>
           {" : "}
           {code(b.type)}
           {h.value != null && b.val ? (

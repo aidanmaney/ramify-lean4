@@ -26,8 +26,8 @@ import {
   DIM_OPACITY,
   TREE_INK_SW_BOLD,
 } from "./theme";
+import { Codicon } from "./codiconView";
 import {
-  BAR_GLYPH_SW,
   BARE_BTN,
   LANE_BTN_H,
   LANE_INSET,
@@ -190,7 +190,6 @@ export function LinkMark({
 
 function RailButton({
   glyph,
-  glyphPx,
   title,
   onClick,
   pressed,
@@ -198,7 +197,6 @@ function RailButton({
   disabled,
 }: {
   glyph: ReactNode;
-  glyphPx?: number;
   title: string;
   onClick: (e: React.MouseEvent) => void;
   pressed?: boolean;
@@ -213,8 +211,9 @@ function RailButton({
       {...tip.props(title)}
       onClick={onClick}
       disabled={disabled}
-      style={{
-        ...(disabled
+      data-ptw-baritem=""
+      style={
+        disabled
           ? { ...RAIL_BTN, opacity: DISABLED_OPACITY, cursor: "default" }
           : pressed
             ? {
@@ -223,9 +222,8 @@ function RailButton({
                 borderColor: ink,
                 color: ACCENT_TEXT,
               }
-            : RAIL_BTN),
-        ...(glyphPx === undefined ? null : { fontSize: glyphPx }),
-      }}
+            : RAIL_BTN
+      }
     >
       {glyph}
     </button>
@@ -316,9 +314,9 @@ export function TourTab({
   const ink = mine ? SEQ_STROKE : "var(--ptw-comment)";
   const text = on ? "var(--ptw-surface)" : ink;
   const cross = mine && alt && !inert;
-  // The × inks a square inside the pill's text box: half-arm 3 against the
-  // pill's 14px height, well inside the narrowest (one-digit) tab.
-  const arm = 3;
+  // The × is codicon `close` at 12px, centred: its ink (~6.5px) sits well
+  // inside the narrowest (one-digit) tab's 14px height.
+  const crossPx = 12;
   return (
     <g
       pointerEvents={inert ? "none" : undefined}
@@ -350,11 +348,12 @@ export function TourTab({
         stroke={ink}
       />
       {cross ? (
-        <path
-          d={`M${cx - arm},${cy - arm}L${cx + arm},${cy + arm}M${cx + arm},${cy - arm}L${cx - arm},${cy + arm}`}
-          stroke={text}
-          strokeWidth={BAR_GLYPH_SW}
-          strokeLinecap="round"
+        <Codicon
+          name="close"
+          size={crossPx}
+          x={cx - crossPx / 2}
+          y={cy - crossPx / 2}
+          color={text}
         />
       ) : (
         <text
@@ -373,10 +372,10 @@ export function TourTab({
   );
 }
 
-/** Whether ⌥ is held right now, from `altHeldStore`. The rail's `+`/`−` carry
-a SECOND gesture on the modifier (unfold-all / fold-all); while ⌥ is down the
-two swap their glyphs for `⊞`/`⊟`, the marks those gestures have always used,
-so the modifier announces itself on the control it applies to. The store's two
+/** Whether ⌥ is held right now, from `altHeldStore`. The rail's zoom buttons
+carry a SECOND gesture on the modifier (expand all / collapse all); while ⌥ is
+down the two swap their codicons for `expand-all`/`collapse-all`, so the
+modifier announces itself on the control it applies to. The store's two
 sources (key events while the webview has focus, `altKey` off every pointer
 move whatever holds focus) and its blur rule are why the rail needs no
 listeners of its own. A press repaints the subscribers — two buttons, the
@@ -481,7 +480,9 @@ export function TopCentre({
           >
             {modal.text}
           </span>
-          <span style={{ opacity: DIM_OPACITY, flexShrink: 0 }}>✕</span>
+          <span style={{ opacity: DIM_OPACITY, flexShrink: 0 }}>
+            <Codicon name="close" />
+          </span>
         </button>
       )}
       <div
@@ -594,22 +595,26 @@ export function ZoomRail({
       }}
     >
       {/* The two zoom buttons carry the two fold-ALL gestures on ⌥, the way
-          the tree's own nodes carry a second gesture there: + opens, − shuts,
-          and the modifier says "everything" rather than "here". While ⌥ is
-          held each wears the mark of what ⌥ would do — ⊞ and ⊟, the glyphs
-          expand-all and collapse-all have always used — so the modifier is
-          visible on the button it applies to rather than only in a tooltip. */}
+          the tree's own nodes carry a second gesture there: zoom in opens,
+          zoom out shuts, and the modifier says "everything" rather than
+          "here". While ⌥ is held each wears the codicon of what ⌥ would do
+          (`expand-all`, `collapse-all`), so the modifier is visible on the
+          button it applies to rather than only in a tooltip. */}
       <RailButton
-        glyph={alt ? "⊞" : "+"}
+        glyph={<Codicon name={alt ? "expand-all" : "zoom-in"} />}
         title={`Zoom in (${CMD}-scroll zooms at the cursor) — ⌥-click: Expand all, show every step: clear every fold and skip (Undo in the toast)`}
         onClick={(e) => (e.altKey ? onExpandAll() : onZoomIn())}
       />
       <RailButton
-        glyph={alt ? "⊟" : "−"}
+        glyph={<Codicon name={alt ? "collapse-all" : "zoom-out"} />}
         title="Zoom out — ⌥-click: Collapse to the outline, fold each branch where it leaves the trunk (Undo in the toast)"
         onClick={(e) => (e.altKey ? onCollapseAll() : onZoomOut())}
       />
-      <RailButton glyph="⛶" title="Fit width" onClick={onFit} />
+      <RailButton
+        glyph={<Codicon name="screen-full" />}
+        title="Fit width"
+        onClick={onFit}
+      />
     </div>
   );
 }

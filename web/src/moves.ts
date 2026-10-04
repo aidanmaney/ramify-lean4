@@ -39,9 +39,9 @@ export type MoveId = (typeof MOVE_IDS)[number];
 
 export type BarKind = "tactic" | "goal";
 
-/** The character each move is known by — on the bar where it has no drawn
- icon, and in prose (`describePreset`, INSTALL.md) everywhere. `skip` is `◌`
- here; the bar draws a `SkipIcon` and keys the button `skip` (moveSlots.ts). */
+/** The character each move is known by in PROSE (`describePreset`,
+ INSTALL.md, toasts). The bar and the `⋯` menu draw the move's codicon
+ (moveSlots.ts `MOVE_LOOK`); only the paint changed, never these. */
 export const MOVE_MARK: Record<MoveId, string> = {
   source: "»",
   focus: "◎",

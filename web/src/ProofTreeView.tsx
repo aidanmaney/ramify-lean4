@@ -233,7 +233,13 @@ import {
   PROSE_FILL,
   EDIT_BG,
   EDIT_TEXT,
-  HYP_LIT_FILL,
+  HYP_LIT_STRONG_FILL,
+  HOVER_BG,
+  HOVER_BORDER,
+  HOVER_FG,
+  chromeSurface,
+  GHOST_TEXT_FILL,
+  TURNSTILE_FILL,
   LINK_STROKE,
   LINK_STROKE_GOAL,
   LINK_STROKE_TACTIC,
@@ -295,13 +301,13 @@ import {
   CORNER_MINUS_W,
   STATUS_NAME_MAX,
 } from "./barMetrics";
-import { HeaderChevron } from "./barChrome";
-import { DiagGlyph } from "./diagBar";
+import { Codicon } from "./codiconView";
+import { DiagIcon } from "./diagBar";
 import { PillPlace } from "./selectionPill";
 import { pillCandidates } from "./pillPlace";
 import { Squiggle, SquigglePatterns } from "./squiggle";
 import { ringPath } from "./ringPath";
-import { SQUIGGLE_H, diagGlyphOf, diagInkOf, diagWordOf, squiggleHitW } from "./diagInk";
+import { SQUIGGLE_H, diagGlyphOf, diagWordOf, squiggleHitW } from "./diagInk";
 import { HopBreak, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
 import { StatusBar } from "./statusBar";
 import {
@@ -416,11 +422,9 @@ const HDR_REST_H = LINE_H + 13;
 // only where the resting line HIDES something (2026-09-22): where the whole
 // signature fits, there is nothing to open and the lane goes back to the
 // ordinary `HDR_PAD_X`. The box is the status bar's item height (20) — the
-// hit target — and the mark inside it a DRAWN chevron at `HDR_CHEVRON_W` ×
-// `HDR_CHEVRON_H` ink in the bar's `BAR_GLYPH_SW`: a quiet affordance at
-// about the header's lowercase x-height. (The `▾` text glyph inked ~5px and
-// read as "way too small"; 12 × 7 then read as too big, 2026-09-24.) The lane
-// reserves the BOX, so the ink can change without touching the measure.
+// hit target — and the mark inside it the codicon `chevron-down`/`-up`
+// (2026-10-04; it was a drawn 8×5 chevron). The lane reserves the BOX, so the
+// ink can change without touching the measure.
 const HDR_BTN_W = 20;
 const HDR_BTN_RIGHT = 6;
 const HDR_BTN_LANE = HDR_BTN_W + HDR_BTN_RIGHT + 8;
@@ -6155,7 +6159,7 @@ export default function ProofTreeView({
             cursor: "pointer",
           }}
         >
-          <HeaderChevron up={hdrOpen} />
+          <Codicon name={hdrOpen ? "chevron-up" : "chevron-down"} />
         </button>
       ) : null}
 
@@ -7179,7 +7183,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: anyRowClosed ? "+" : "−",
-                        menuIcon: anyRowClosed ? MENU_ICON.plus : MENU_ICON.minus,
+                        codicon: anyRowClosed ? MENU_ICON.plus : MENU_ICON.minus,
                         label: everyRowSaid,
                         title: everyRowSaid,
                         shortcut: "⌥-click a row",
@@ -7220,7 +7224,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: "+",
-                        menuIcon: MENU_ICON.plus,
+                        codicon: MENU_ICON.plus,
                         label: "Bring back what this box stands for",
                         title: "Bring back what this box stands for",
                         shortcut: "click",
@@ -7233,7 +7237,7 @@ export default function ProofTreeView({
                       folded
                         ? {
                             glyph: `+${nFold}`,
-                            menuIcon: MENU_ICON.plus,
+                            codicon: MENU_ICON.plus,
                             label: `Bring back the ${nFold} hidden step${nFold === 1 ? "" : "s"}`,
                             title: "Bring back the hidden steps",
                             shortcut: `click +${nFold}`,
@@ -7241,7 +7245,7 @@ export default function ProofTreeView({
                           }
                         : {
                             glyph: "−",
-                            menuIcon: MENU_ICON.minus,
+                            codicon: MENU_ICON.minus,
                             label: "Hide everything below this goal",
                             title: "Hide everything below this goal",
                             shortcut: "click −",
@@ -7253,7 +7257,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: "edit",
-                        menuIcon: MENU_ICON.edit,
+                        codicon: MENU_ICON.edit,
                         label: "Edit this tactic",
                         title: "Edit this tactic",
                         shortcut: "double-click",
@@ -7266,7 +7270,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: "comment",
-                        menuIcon: MENU_ICON.comment,
+                        codicon: MENU_ICON.comment,
                         label: "Edit the comment",
                         title: "Edit the comment",
                         shortcut: "double-click the strip",
@@ -7278,7 +7282,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: "unmark",
-                        menuIcon: MENU_ICON.unmark,
+                        codicon: MENU_ICON.unmark,
                         label: "Take your mark off",
                         title: "Take your mark off",
                         shortcut: "⌥-click its tab",
@@ -7289,7 +7293,7 @@ export default function ProofTreeView({
                     ? [
                         {
                           glyph: "mark",
-                          menuIcon: MENU_ICON.mark,
+                          codicon: MENU_ICON.mark,
                           label: "Drop a mark here",
                           title: "Drop a mark here",
                           shortcut: "click the corner",
@@ -7299,7 +7303,7 @@ export default function ProofTreeView({
                           ? [
                               {
                                 glyph: "writeMark",
-                                menuIcon: MENU_ICON.writeMark,
+                                codicon: MENU_ICON.writeMark,
                                 label: "Write a `.mark` into the source",
                                 title: "Write a `.mark` into the source",
                                 shortcut: "⌥-click the corner",
@@ -7311,7 +7315,7 @@ export default function ProofTreeView({
                     : []),
                 ...renameLabels.map(({ rn, label }) => ({
                   glyph: `rename:${label}`,
-                  menuIcon: MENU_ICON.edit,
+                  codicon: MENU_ICON.edit,
                   label,
                   title: label,
                   shortcut: "⌥-click the line",
@@ -7407,6 +7411,8 @@ export default function ProofTreeView({
                         id: k,
                         ...MOVE_LOOK.trace,
                         glyph: traceIsBusy ? "…" : MOVE_LOOK.trace.glyph,
+                        // While the RPC is out the button reads `loading`.
+                        codicon: traceIsBusy ? "loading" : MOVE_LOOK.trace.codicon,
                         label: said,
                         title: said,
                         onClick: () => toggleTrace(id),
@@ -7965,7 +7971,9 @@ export default function ProofTreeView({
                       fontSize={COMMENT_FONT_PX}
                       fontFamily={getCodeFontFamily()}
                       fontStyle="italic"
-                      fill={COMMENT_FILL}
+                      fill={
+                        node.data.commentGenerated ? GHOST_TEXT_FILL : COMMENT_FILL
+                      }
 
                       style={{ letterSpacing: 0 }}
                       visibility={
@@ -8223,7 +8231,7 @@ export default function ProofTreeView({
                       width={w}
                       height={h}
                       rx={boxRx}
-                      fill={HYP_LIT_FILL}
+                      fill={HYP_LIT_STRONG_FILL}
                       style={{ pointerEvents: "none" }}
                     />
                   )}
@@ -8564,7 +8572,19 @@ export default function ProofTreeView({
                           y={labelTop + (j + 0.5) * LINE_H}
                           dy="0.32em"
                         >
-                          {line.text}
+                          {/* The goal's `⊢` in the infoview's turnstile ink
+                              (colour only: the characters are unchanged). */}
+                          {j === 0 &&
+                          type === "goal" &&
+                          !isMarker &&
+                          line.text.startsWith(TURNSTILE) ? (
+                            <>
+                              <tspan fill={TURNSTILE_FILL}>{TURNSTILE.trim()}</tspan>
+                              {line.text.slice(TURNSTILE.trim().length)}
+                            </>
+                          ) : (
+                            line.text
+                          )}
                         </tspan>
                       ))}
                     </text>
@@ -8908,6 +8928,7 @@ export default function ProofTreeView({
                         ...barMoves,
                         {
                           glyph: "⋯",
+                          codicon: "ellipsis",
                           title: "More: every move on this node, what its icon means, and which ones sit on the bar",
                           onClick: (el?: Element) => openNodeMenu(id, el),
                         },
@@ -9178,7 +9199,10 @@ export default function ProofTreeView({
                   >
                     <div
                       style={{
+                        // The editor's own diagnostic hover: the hover
+                        // widget's surface, border and ink.
                         ...POPUP_CHROME,
+                        background: chromeSurface(HOVER_BG),
                         width: "max-content",
                         maxWidth: 460,
                         display: "flex",
@@ -9186,7 +9210,7 @@ export default function ProofTreeView({
                         gap: 6,
                         borderWidth: 1,
                         borderStyle: "solid",
-                        borderColor: diagInkOf(list[0].severity),
+                        borderColor: HOVER_BORDER,
                       }}
                     >
                       {list.map((d, i) => (
@@ -9194,26 +9218,18 @@ export default function ProofTreeView({
                           key={i}
                           style={{
                             display: "flex",
-                            gap: 7,
-                            alignItems: "baseline",
+                            gap: 6,
+                            alignItems: "flex-start",
                           }}
                         >
-                          <span
-                            style={{
-                              lineHeight: "15px",
-                              color: diagInkOf(d.severity),
-                            }}
-                          >
-                            <DiagGlyph sev={d.severity} />
-                          </span>
+                          <DiagIcon sev={d.severity} size={15} />
                           <span
                             style={{
                               fontFamily: getCodeFontFamily(),
                               fontSize: CHROME_TEXT_SM,
                               lineHeight: "15px",
                               whiteSpace: "pre-wrap",
-
-                              color: CHROME_INK,
+                              color: HOVER_FG,
                             }}
                           >
                             {d.message}

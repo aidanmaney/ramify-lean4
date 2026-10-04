@@ -2,7 +2,8 @@
 #
 #   web        typecheck + lint + offline probes (`npm test`), and the tracked
 #              widget bundle must equal a fresh build of the sources; the
-#              experience descriptions match experience.ts (gen-experience --check)
+#              experience descriptions match experience.ts (gen-experience --check);
+#              the codicon table matches @vscode/codicons (gen-codicons --check)
 #   lean       the installable, Mathlib-free package (dist/) builds; the manifest
 #              is unchanged; the tour elaborates
 #   extension  the .vsix packages, carries its licence, matches the tracked
@@ -55,6 +56,9 @@ jobs:
       - name: Experience descriptions match web/src/experience.ts
         working-directory: .
         run: node scripts/gen-experience.mjs --check
+      - name: Codicon table matches the pinned @vscode/codicons
+        working-directory: .
+        run: node scripts/gen-codicons.mjs --check
       - name: Rebuild the widget bundle
         run: npm run build:widget
       - name: Tracked widget bundle is current

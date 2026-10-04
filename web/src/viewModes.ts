@@ -3,6 +3,7 @@
 import { REFLOW_MAX_CHARS } from "./layout";
 import type { ReflowMode } from "./layout";
 import { type HypMode } from "./proofToTree";
+import { type CodiconName } from "./codicon";
 
 // The bar says every setting in WORDS: `Context: used ▾`, and `used ·
 // intro · diff · all` in the popover. Words are the bar's own vocabulary: a
@@ -25,11 +26,8 @@ import { type HypMode } from "./proofToTree";
 // 8×9 and `∀`'s 8×9, so it alone takes 19 (8×8) and the four then share a
 // width of 8 as well as a height.
 //
-// The four LAYOUT marks were levelled the same way (`☰ ⊦ || ⑃` at 14/14/8/15)
-// and have since left Unicode altogether: equal ink height did nothing about
-// equal ink WEIGHT, and three of the four drew at half the stroke of every
-// other mark in the row. They are drawn SVG now — see `LayoutGlyph`, which
-// carries the measurements.
+// The LAYOUT and COMMENT marks are codicons (`icon` below, 2026-10-04) — the
+// infoview's own vocabulary, levelled by design at 16px.
 //
 // `next` is the ⌥-CLICK cycle: plain click opens the list, ⌥-click advances to
 // the next value through the same toasting wrapper. One coding, read by the
@@ -83,30 +81,38 @@ export const LAYOUT_MODES: Record<
   LayoutMode,
   {
     name: string;
+    /** The glyph form's codicon (also the Layout panel row's icon). */
+    icon: CodiconName;
     next: LayoutMode;
     title: string;
   }
 > = {
   stacked: {
     name: "outline",
+    icon: "list-tree",
     next: "spine",
     title:
       "Layout: outline — a compact outline, every node on its own line off a left trunk",
   },
   spine: {
     name: "spine",
+    icon: "layout-sidebar-left",
     next: "tracks",
     title:
       "Layout: spine — a goal spine: two tracks, goals stacked tight on the left and each tactic beside its step in a right-hand track",
   },
   tracks: {
     name: "tracks",
+    // Not `split-horizontal` (side-by-side's, in the same panel): `layout`
+    // is a tall column beside a track of small boxes — goals, then tactics.
+    icon: "layout",
     next: "wide",
     title:
       "Layout: tracks — aligned tracks: the spine with goals wrapped to a modest width, so every tactic starts at the same x and the two tracks read as columns",
   },
   wide: {
     name: "wide",
+    icon: "type-hierarchy-super",
     next: "stacked",
     title:
       "Layout: wide — a wide layered tree, nodes at the same depth share one horizontal band",
@@ -131,15 +137,17 @@ export type CommentMode = "shown" | "hidden" | "instead" | "narrate";
 // the NAME lives here so bar label and toast cannot drift.
 export const COMMENT_MODES: Record<
   CommentMode,
-  { name: string; next: CommentMode; title: string }
+  { name: string; icon: CodiconName; next: CommentMode; title: string }
 > = {
   shown: {
     name: "show",
+    icon: "comment",
     next: "hidden",
     title: "Comments: show — comments drawn as strips above the box",
   },
   hidden: {
     name: "hide",
+    icon: "eye-closed",
     next: "instead",
     title: "Comments: hide — no comment strips; the room goes back to the tree",
   },
@@ -149,12 +157,14 @@ export const COMMENT_MODES: Record<
   // standing in INSTEAD of the tactic's own text.
   instead: {
     name: "in place",
+    icon: "comment-discussion",
     next: "narrate",
     title:
       "Comments: in place — a commented tactic's prose stands in for its label, inside the box",
   },
   narrate: {
     name: "narrate",
+    icon: "sparkle",
     next: "shown",
     title:
       "Comments: narrate — strips as above, and where the author wrote none a line generated from the step itself (∴); a folded goal's strip summarises what it hides",

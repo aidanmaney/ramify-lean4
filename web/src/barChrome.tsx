@@ -1,5 +1,5 @@
-// The status bar's small parts: buttons, checks, rows, panels and menus, the drawn glyphs (eye, comment,
-// chevron, layout marks), the glyph box, and the one dot under a bar item.
+// The status bar's small parts: buttons, checks, rows, panels and menus, the glyph box, and the one dot
+// under a bar item. Every mark is a codicon (codiconView.tsx).
 import {
   Fragment,
   useCallback,
@@ -7,7 +7,6 @@ import {
   useState,
   useRef,
   useLayoutEffect,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { plainTicks } from "./ticks";
@@ -22,18 +21,15 @@ import {
   DIM_OPACITY,
   CHROME_RADIUS,
 } from "./theme";
-import { type CommentMode, type LayoutMode } from "./viewModes";
+import { Codicon } from "./codiconView";
 import { focusFirstRow, panelKeys, useRestoreFocus } from "./panelKeys";
 import {
   BARE_BTN,
-  BAR_GLYPH_SW,
   BAR_ITEM,
   BAR_ITEM_H,
   BAR_ROW,
   type BarRowKind,
   GLYPH_BOX_W,
-  HDR_CHEVRON_H,
-  HDR_CHEVRON_W,
   MENU_PANEL,
   SLOT_GAP_PX,
   SLOT_PX,
@@ -42,59 +38,6 @@ import {
   statusParts,
   statusTip,
 } from "./barMetrics";
-
-/** The one `<svg>` every drawn chrome mark is: `currentColor`, fill-less, the
- chrome's own stroke (`BAR_GLYPH_SW`) with round caps and joins, hidden from
- assistive tech. `glyph` is a `data-ptw-glyph` hook for the harness; `block`
- drops the baseline gap an inline svg leaves (`style` says anything else). */
-export function BarSvg({
-  w,
-  h,
-  viewBox,
-  glyph,
-  block,
-  style,
-  children,
-}: {
-  w: number;
-  h: number;
-  viewBox?: string;
-  glyph?: string;
-  block?: boolean;
-  style?: CSSProperties;
-  children: ReactNode;
-}) {
-  return (
-    <svg
-      data-ptw-glyph={glyph}
-      width={w}
-      height={h}
-      viewBox={viewBox ?? `0 0 ${w} ${h}`}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={BAR_GLYPH_SW}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-      focusable="false"
-      style={style ?? (block ? { display: "block" } : undefined)}
-    >
-      {children}
-    </svg>
-  );
-}
-
-/** THE chevron, for every pager in the chrome (the Marks item's `‹ ›` and the
- message strip's `‹ 1/3 ›`): drawn, so it inks the same in every face — a text
- guillemet inked 5.4px at the bar's 12px and had to be sized to 18 to level with
- the other marks. 5×8 of ink at the chrome's `BAR_GLYPH_SW`, in `currentColor`. */
-export function ChevronGlyph({ dir }: { dir: "prev" | "next" }) {
-  return (
-    <BarSvg w={6} h={8}>
-      <path d={dir === "prev" ? "M4.5 1L1.5 4L4.5 7" : "M1.5 1L4.5 4L1.5 7"} />
-    </BarSvg>
-  );
-}
 
 export function GlyphBox({ children, w }: { children: ReactNode; w?: number }) {
   return (
@@ -372,38 +315,6 @@ export function StatusReadout({ info }: { info: StatusInfo }) {
   );
 }
 
-/** The toggle row's mark: a square at the chrome's glyph stroke
- (`BAR_GLYPH_SW`), outline at the radio's resting 0.45 when off, filled in the
- same `RAIL_PRESSED` the lit `●` uses with an `ACCENT_TEXT` tick when on —
- the radio's two states, squared. Drawn, so it inks the same in every face. */
-function BarCheck({ on }: { on: boolean }) {
-  return (
-    <svg width={10} height={10} viewBox="0 0 10 10" aria-hidden>
-      <rect
-        x={1.5}
-        y={1.5}
-        width={7}
-        height={7}
-        rx={1.5}
-        fill={on ? RAIL_PRESSED : "none"}
-        stroke={on ? RAIL_PRESSED : "currentColor"}
-        strokeOpacity={on ? 1 : DIM_OPACITY}
-        strokeWidth={BAR_GLYPH_SW}
-      />
-      {on && (
-        <path
-          d="M3.2 5.1 4.5 6.4 6.9 3.7"
-          fill="none"
-          stroke={ACCENT_TEXT}
-          strokeWidth={BAR_GLYPH_SW}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      )}
-    </svg>
-  );
-}
-
 export function BarRow({
   label,
   title,
@@ -418,7 +329,7 @@ export function BarRow({
   title: string;
   on?: boolean;
   kind?: BarRowKind;
-  /** A drawn mark in a fixed `ROW_ICON_W` box between the row's own mark and
+  /** A codicon in a fixed `ROW_ICON_W` box between the row's own mark and
    its word, so the words of a panel's rows align. `null` reserves the box and
    draws nothing (a row of the same panel with no mark of its own); omitted
    means the panel has no icon column. */
@@ -460,23 +371,21 @@ export function BarRow({
         background: "var(--ptw-bar-item-bg, transparent)",
       }}
     >
+      {/* THE ROW'S MARK, in one 16px column: a toggle is the infoview's
+          check menu (`check` when on, nothing when off); a pick keeps its
+          radio; an action has none. */}
       {kind === "toggle" ? (
-        <span
-          style={{
-            flex: "0 0 12px",
-            alignSelf: "center",
-            display: "inline-flex",
-          }}
-        >
-          <BarCheck on={!!on} />
+        <span style={{ flex: `0 0 ${ROW_MARK_W}px`, alignSelf: "center" }}>
+          <Codicon name={on ? "check" : "blank"} />
         </span>
       ) : kind === "action" ? (
-        <span aria-hidden style={{ flex: "0 0 12px" }} />
+        <span aria-hidden style={{ flex: `0 0 ${ROW_MARK_W}px` }} />
       ) : (
         <span
           style={{
-            flex: "0 0 12px",
+            flex: `0 0 ${ROW_MARK_W}px`,
             fontSize: 10,
+            textAlign: "center",
             color: on ? RAIL_PRESSED : "inherit",
             opacity: on ? 1 : DIM_OPACITY,
           }}
@@ -569,8 +478,10 @@ export function BarActionRow({
   );
 }
 
-/** The width of the icon column a panel's rows may share (`BarRow`'s `icon`). */
-export const ROW_ICON_W = 14;
+/** The width of the icon column a panel's rows may share (`BarRow`'s `icon`),
+ and of the row's own check/radio column: a codicon's 16. */
+export const ROW_ICON_W = 16;
+const ROW_MARK_W = 16;
 
 // The bar is ONE ROW, always — a popover parented to its own item would be
 // clipped by that row's `overflow: hidden`. So a menu item is only ever the
@@ -740,151 +651,5 @@ export function MenuDivider() {
         opacity: DIM_OPACITY,
       }}
     />
-  );
-}
-
-// The reading menu's head. An SVG, not an emoji or a font glyph: the bar has
-// exactly one pictorial mark and it must ink the same in every theme and on
-// every font stack. Cropped to the eye's own ink (the path spans y 4.1–11.9 of
-// a 16-unit box) so it is no taller than a line of the bar's text and every
-// item — and so every accent pill — is the same height.
-export function EyeGlyph() {
-  return (
-    <BarSvg w={14} h={10} viewBox="1 3 14 10" block>
-      <path d="M1.4 8C3 5.4 5.3 4.1 8 4.1S13 5.4 14.6 8C13 10.6 10.7 11.9 8 11.9S3 10.6 1.4 8Z" />
-      <circle cx={8} cy={8} r={1.9} />
-    </BarSvg>
-  );
-}
-
-/** The `▾` after `Reading`: a drawn chevron at the chrome's stroke, the
- header chevron's ink (8 × 5), so it reads the same in every face. */
-export function DisclosureGlyph() {
-  const w = HDR_CHEVRON_W;
-  const h = HDR_CHEVRON_H;
-  const m = BAR_GLYPH_SW / 2;
-  return (
-    <BarSvg w={w} h={h} glyph="disclosure" block>
-      <path d={`M${m} ${m}L${w / 2} ${h - m}L${w - m} ${m}`} />
-    </BarSvg>
-  );
-}
-
-// The comment switch's head, in the eye's own idiom: an inline SVG in
-// `currentColor`, cropped to its own ink and dropped into the same fixed
-// `GlyphBox`, so every item — and so every accent pill — is the same height
-// whichever form is showing. It replaced `❝`, a typographic mark that read as
-// punctuation the bar had accidentally left in. (Width's `word-wrap` mark went
-// with Width's bar item, 2026-09-24: the width is a row in the Layout panel.)
-//
-// It is the GLYPH form only: the word forms are `Comments: show` and `show`,
-// and this is what stands in their place when the row runs out of room.
-//
-// The bubble is codicon `comment` — a rounded rectangle with a small tail off
-// the bottom-LEFT corner. It inks ~11 × 10.
-export function CommentGlyph({ mode }: { mode: CommentMode }) {
-  return (
-    <BarSvg w={12} h={11} glyph={`comment-${mode}`} block>
-      {mode === "instead" ? (
-        // In place: a small bubble sitting inside the tactic's own box.
-        <>
-          <rect x={0.8} y={0.8} width={10.4} height={9.4} rx={1.6} />
-          <rect x={3} y={2.6} width={6} height={3.2} rx={1} />
-          <path d="M4.4 5.8v1.4l1.4-1.4" />
-        </>
-      ) : (
-        // The bubble and its tail, and what the mode puts with it: shown,
-        // two lines of prose; hidden, a strike through it; narrate, ∴ drawn
-        // as three dots.
-        <>
-          <rect x={1} y={1} width={10} height={7} rx={2} />
-          <path d={`M3.5 8v2.2l2.4-2.2${COMMENT_EXTRA[mode]}`} />
-          {mode === "narrate" && (
-            <g fill="currentColor" stroke="none">
-              <circle cx={6} cy={3} r={0.8} />
-              <circle cx={4.3} cy={5.6} r={0.8} />
-              <circle cx={7.7} cy={5.6} r={0.8} />
-            </g>
-          )}
-        </>
-      )}
-    </BarSvg>
-  );
-}
-
-const COMMENT_EXTRA = {
-  shown: "M3.7 3.4h4.6M3.7 5.6h2.6",
-  hidden: "M1.4 10.2 10.6 0.8",
-  narrate: "",
-} as const;
-
-/** The signature header's open/close mark: a drawn chevron (`▾` / `▴`) in the
-    status bar's stroke, so it reads as a control at any editor font. */
-export function HeaderChevron({ up }: { up: boolean }) {
-  const w = HDR_CHEVRON_W;
-  const h = HDR_CHEVRON_H;
-  const m = BAR_GLYPH_SW / 2;
-  return (
-    <BarSvg w={w} h={h} glyph={up ? "hdr-close" : "hdr-open"} block>
-      <path
-        d={
-          up
-            ? `M${m} ${h - m}L${w / 2} ${m}L${w - m} ${h - m}`
-            : `M${m} ${m}L${w / 2} ${h - m}L${w - m} ${m}`
-        }
-      />
-    </BarSvg>
-  );
-}
-
-export function LayoutGlyph({ mode }: { mode: LayoutMode }) {
-  return (
-    <BarSvg w={12} h={10} glyph={`layout-${mode}`} block>
-      {mode === "stacked" ? (
-        // The outline as an F: the trunk, with a step off it at the top and
-        // a shorter one below — an outliner's nesting, not a menu's ☰ (user
-        // direction; the shape matches the spine and wide marks' family).
-        <path d="M2.6 1.3v7.4M2.6 1.3h7.2M2.6 5h5" />
-      ) : mode === "spine" ? (
-        // `⊦`: the goal spine, with one tactic branching off it.
-        <path d="M2.2 1.3v7.4M2.2 5h6.3" />
-      ) : mode === "tracks" ? (
-        // `||`: the two aligned columns, as two bars of equal length.
-        <path d="M3.2 1.3v7.4M8.8 1.3v7.4" />
-      ) : (
-        // `⑃`: one stem forking into two, the layered tree seen head-on.
-        <path d="M6 1.3v2.9M6 4.2 2.2 8.7M6 4.2 9.8 8.7" />
-      )}
-    </BarSvg>
-  );
-}
-
-/** The Layout panel's two toggles and its width row wear drawn marks in the
-    layout glyphs' box (12×10, same ink band), so the icon column is full
-    down the panel. Their meaning is the old rail's: `⋮` columns for
-    side-by-side, one frame at a time for gallery, `¶` wrapped lines for
-    width. */
-export type LayoutExtraGlyphKind = "side-by-side" | "gallery" | "width";
-
-export function LayoutExtraGlyph({ kind }: { kind: LayoutExtraGlyphKind }) {
-  return (
-    <BarSvg w={12} h={10} glyph={`layout-${kind}`} block>
-      {kind === "side-by-side" ? (
-        // Two panes sharing one span: the split's subtrees as columns.
-        <>
-          <rect x={1.8} y={1.3} width={3.4} height={7.4} rx={0.6} />
-          <rect x={6.8} y={1.3} width={3.4} height={7.4} rx={0.6} />
-        </>
-      ) : kind === "gallery" ? (
-        // One frame shown, a chevron to each side: the pager's ‹ n/m ›.
-        <>
-          <rect x={3.6} y={1.3} width={4.8} height={7.4} rx={0.6} />
-          <path d="M1.9 3.6 0.8 5 1.9 6.4M10.1 3.6 11.2 5 10.1 6.4" />
-        </>
-      ) : (
-        // Lines wrapping at a budget: each shorter than the one above.
-        <path d="M1.5 2h9M1.5 5h6.4M1.5 8h3.4" />
-      )}
-    </BarSvg>
   );
 }

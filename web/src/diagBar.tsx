@@ -1,6 +1,5 @@
 // The status bar's diagnostics count item and the message strip above the strip: severity glyphs and
 // ink, the per-severity counts, and the strip with its pager.
-import { Fragment } from "react";
 import { type TreeDiagnostic } from "./diagnostics";
 import { useTip } from "./tipController";
 import {
@@ -13,40 +12,21 @@ import {
   CHROME_RADIUS,
   DIAG_EDGE,
   DIAG_WASH,
-  DIM_OPACITY,
+  MARKER_BG,
   CHROME_TEXT,
   CHROME_TEXT_SM,
 } from "./theme";
 import { BARE_BTN, DIAG_STRIP_GAP, PILL_BTN } from "./barMetrics";
-import { BarButton, BarSvg, ChevronGlyph } from "./barChrome";
-import { diagInkOf } from "./diagInk";
+import { BarButton } from "./barChrome";
+import { Codicon } from "./codiconView";
+import { DIAG_ICON, type Severity } from "./diagInk";
 
-/** The same three marks, DRAWN, for the HTML chrome (the bar's diagnostics
- item and a node's diagnostics popover). As text they came from three
- different fallback faces and inked at three sizes: in the bar's 11px UI face
- `⨯` was 3.7 × 3.8 px against `⚠` 9.0 × 8.2 and `◇` 10.5 (canvas, 8×) — the
- error, the one that matters most, was the smallest mark in the row. Drawn in
- `currentColor` at the chrome's `BAR_GLYPH_SW`, all three ink ~8 px. The text
- glyphs stay for native `<title>`s, which cannot hold an SVG. */
-export function DiagGlyph({ sev }: { sev: 1 | 2 | 3 }) {
-  return (
-    <BarSvg
-      w={10}
-      h={10}
-      style={{ display: "inline-block", verticalAlign: "-1px", flex: "none" }}
-    >
-      {sev === 1 ? (
-        <path d="M1.8 1.8L8.2 8.2M8.2 1.8L1.8 8.2" />
-      ) : sev === 2 ? (
-        <>
-          <path d="M5 1L9.2 8.8H0.8Z" />
-          <path d="M5 4v2" />
-        </>
-      ) : (
-        <path d="M5 0.9L9.1 5L5 9.1L0.9 5Z" />
-      )}
-    </BarSvg>
-  );
+/** A severity's codicon in its ink (`DIAG_ICON`): the problems count, the
+ message strip and a node's popover. The text glyphs stay for native
+ `<title>`s, which cannot hold an SVG. */
+export function DiagIcon({ sev, size = 16 }: { sev: Severity; size?: number }) {
+  const i = DIAG_ICON[sev];
+  return <Codicon name={i.name} size={size} color={i.ink} opacity={i.opacity} />;
 }
 
 export interface DiagBarProps {
@@ -78,23 +58,21 @@ function diagCountWords(counts: readonly [number, number, number]): string {
     .join(", ");
 }
 
-/** THE COUNT, never the message (2026-09-24). The bar's diagnostics item used
- to draw the first message's first line, truncated to whatever room the row
- left — `◇ This lin…` for Mathlib's `style.longLine` — with the words only in
- the tip: a sentence cut to a stub reads as nothing. Now the item says HOW
- MANY of each severity (`✕ 2 · ◇ 1`, the drawn `DiagGlyph`s in each
- severity's ink) and the words live in the message strip above the strip.
- Each count reserves TWO tabular digits (`minWidth: 2ch`), so 1 → 12 moves
- nothing; a severity appearing or going is a real change and does. The ghost
- measures this same element, so measurer and renderer cannot drift. */
+/** THE COUNT, never the message (2026-09-24), in the status bar's own
+ Problems idiom (2026-10-04): `[error] 2  [warning] 1  [info] 3` — each
+ severity's codicon in its ink, a 3px gap, the count in tabular figures, two
+ spaces' room between severities. A count's width follows its digits; a
+ severity appearing or going is a real change and moves what is beside it.
+ The ghost measures this same element, so measurer and renderer cannot
+ drift. */
 function DiagCounts({
   counts,
   compact,
 }: {
   counts: readonly [number, number, number];
-  /** The row's last resort before clipping: the WORST severity's glyph and
-   the total, `✕ 3` — chosen by `fit` only where even the all-glyph row
-   cannot hold every severity's count. */
+  /** The row's last resort before clipping: the WORST severity's icon and
+   the total — chosen by `fit` only where even the all-glyph row cannot hold
+   every severity's count. */
   compact?: boolean;
 }) {
   const present = ([1, 2, 3] as const).filter((s) => counts[s - 1] > 0);
@@ -105,31 +83,28 @@ function DiagCounts({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
+        gap: 8,
         fontSize: CHROME_TEXT_SM,
         fontVariantNumeric: "tabular-nums",
       }}
     >
-      {sevs.map((s, i) => (
-        <Fragment key={s}>
-          {i > 0 && <span style={{ opacity: DIM_OPACITY }}>·</span>}
-          <span style={{ color: diagInkOf(s), display: "inline-flex" }}>
-            <DiagGlyph sev={s} />
-          </span>
-          <span
-            style={{ display: "inline-block", minWidth: "2ch", textAlign: "left" }}
-          >
-            {compact ? total : counts[s - 1]}
-          </span>
-        </Fragment>
+      {sevs.map((s) => (
+        <span
+          key={s}
+          style={{ display: "inline-flex", alignItems: "center", gap: 3 }}
+        >
+          <DiagIcon sev={s} />
+          {compact ? total : counts[s - 1]}
+        </span>
       ))}
     </span>
   );
 }
 
 /** The bar's diagnostics ITEM: the counts, and a click that opens (or shuts)
- the message strip. Lit while the strip is up, as every bar item is while its
- own panel is (design rule 13) — the strip is this item's panel. */
+ the message strip. NOT lit while the strip is up (2026-10-04): VS Code's
+ Problems item never changes look, and the strip standing above it says the
+ state; the accent's dark block read as an alarm of its own. */
 export function DiagCountItem({
   counts,
   open,
@@ -145,7 +120,6 @@ export function DiagCountItem({
           ? `Problems: ${words} — click to close the messages (Esc)`
           : `Problems: ${words} — click for the messages`
       }
-      accent={open}
       onClick={(e) => {
         e.stopPropagation();
         onToggle();
@@ -208,7 +182,10 @@ export function DiagStrip({
         alignItems: "flex-start",
         gap: 6,
         padding: "4px 4px 4px 8px",
-        background: chromeSurface(DIAG_WASH[sev]),
+        // The marker-navigation widget's surface with its header tint over
+        // it, both over the opaque page (`chromeSurface`'s reason: a host
+        // colour may carry alpha).
+        background: `linear-gradient(${DIAG_WASH[sev]}, ${DIAG_WASH[sev]}), ${chromeSurface(MARKER_BG)}`,
         border: `1px solid ${CHROME_BORDER}`,
         borderLeft: `3px solid ${DIAG_EDGE[sev]}`,
         borderRadius: CHROME_RADIUS,
@@ -221,16 +198,8 @@ export function DiagStrip({
         textAlign: "left",
       }}
     >
-      <span
-        style={{
-          color: diagInkOf(sev),
-          display: "inline-flex",
-          alignItems: "center",
-          height: 16,
-          flex: "none",
-        }}
-      >
-        <DiagGlyph sev={sev} />
+      <span style={{ display: "inline-flex", flex: "none" }}>
+        <DiagIcon sev={sev} />
       </span>
       {/* The message is a BUTTON where a click does something (node + source),
           so the keyboard can reach it; the clamp lives on the span inside,
@@ -278,38 +247,47 @@ export function DiagStrip({
           fontVariantNumeric: "tabular-nums",
         }}
       >
+        {/* The marker-navigation widget's own order: where you are, then
+            Next (`arrow-down`) and Previous (`arrow-up`), then close. */}
         {count > 1 && (
           <>
-            <button
-              type="button"
-              style={PILL_BTN}
-              {...tip.props("Previous problem")}
-              onClick={() => onStep(-1)}
+            <span
+              style={{
+                color: MUTED_FILL,
+                fontSize: CHROME_TEXT_SM,
+                marginRight: 2,
+              }}
             >
-              <ChevronGlyph dir="prev" />
-            </button>
-            <span style={{ color: MUTED_FILL, fontSize: CHROME_TEXT_SM }}>
               {index + 1}/{count}
             </span>
             <button
               type="button"
+              data-ptw-baritem=""
               style={PILL_BTN}
               {...tip.props("Next problem")}
               onClick={() => onStep(1)}
             >
-              <ChevronGlyph dir="next" />
+              <Codicon name="arrow-down" />
+            </button>
+            <button
+              type="button"
+              data-ptw-baritem=""
+              style={PILL_BTN}
+              {...tip.props("Previous problem")}
+              onClick={() => onStep(-1)}
+            >
+              <Codicon name="arrow-up" />
             </button>
           </>
         )}
         <button
           type="button"
-          style={{ ...PILL_BTN, width: 16 }}
+          data-ptw-baritem=""
+          style={PILL_BTN}
           {...tip.props("Close the messages (Esc)")}
           onClick={onClose}
         >
-          <BarSvg w={8} h={8}>
-            <path d="M1 1L7 7M7 1L1 7" />
-          </BarSvg>
+          <Codicon name="close" />
         </button>
       </span>
     </div>

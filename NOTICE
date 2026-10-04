@@ -3,7 +3,7 @@
 Ramify is distributed under the MIT licence; see `LICENSE`. It builds on the
 work below. Nothing here is a Ramify licence — each item keeps its own.
 
-The three are not on the same footing, and the distinction matters for what
+They are not on the same footing, and the distinction matters for what
 this repository actually hands you:
 
 * **Paperproof** and **ProofWidgets** are *dependencies*. Lake fetches them
@@ -12,6 +12,9 @@ this repository actually hands you:
 * **@leanprover/unicode-input** is *redistributed*. Its table and state machine
   are compiled into `web/dist/proofTreeWidget.js`, which is a tracked file in
   this repository, so a copy of that code ships with Ramify.
+* **Codicons** (icons only) are *redistributed* the same way: the path data of
+  the icons Ramify draws is copied into `web/src/codicon.ts` and compiled into
+  the bundle.
 
 ---
 
@@ -78,6 +81,22 @@ host upstream does not target; the adaptation is Ramify's, the table and the
 state machine are upstream's. This code is bundled into the shipped renderer.
 
 The full licence text is reproduced at the end of this file.
+
+---
+
+## Codicons
+
+Creative Commons Attribution 4.0 International (CC-BY-4.0).
+Copyright (c) Microsoft Corporation.
+<https://github.com/microsoft/vscode-codicons> — licence text:
+<https://creativecommons.org/licenses/by/4.0/legalcode>
+
+Ramify's chrome draws Visual Studio Code's own product icons, so the tree reads
+in the editor's vocabulary. `scripts/gen-codicons.mjs` copies the SVG path data
+of the icons it lists from `@vscode/codicons` 0.0.40 (a build-time
+devDependency) into `web/src/codicon.ts`, unmodified apart from a `<rect>`
+being written as the equivalent path; the icons are drawn at their native
+16px grid. No font file is redistributed.
 
 ---
 

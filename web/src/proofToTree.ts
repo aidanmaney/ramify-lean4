@@ -98,6 +98,10 @@ export const tacticId = (goalId: string): string =>
 
 export const TURNSTILE = "⊢ ";
 
+/** An INACCESSIBLE hypothesis name (`x✝`): Lean minted it and the author
+ cannot write it, so the infoview draws it italic and faint. */
+export const isInaccessibleName = (name: string): boolean => name.includes("✝");
+
 export function hypLine(h: Hypothesis): string {
   return h.value != null
     ? `${h.username} : ${h.type} := ${h.value}`

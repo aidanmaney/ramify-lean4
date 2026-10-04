@@ -13,8 +13,11 @@ import {
 import type { HypLine } from "./types";
 import type { HypMarkStyle } from "./theme";
 import { HYP_MARK } from "./gestures";
+import { isInaccessibleName } from "./proofToTree";
 import {
   HYP_LIT_FILL,
+  HYP_NAME_FILL,
+  INACCESSIBLE_FILL,
   HYP_MARK_FILL,
   HYP_UNUSED_FILL,
   HYP_USED_FILL,
@@ -25,6 +28,36 @@ import {
 const UNDERLINE_DROP = 2.5;
 
 const HYP_LIT_PAD = 2;
+
+/** A plain line's text with its NAMES inked as the infoview inks them (one
+ pane over): `--ptw-hypname`, or italic and faint for an inaccessible `x✝`.
+ Colour and style only — the same characters in the same code font, whose
+ italic keeps the advance — so the measured width is untouched. A wrapped
+ continuation has no names; a dimmed (unused) line keeps its one dim ink and
+ only takes the inaccessible style. */
+function hypLineText(line: HypLine, dimmed: boolean): ReactNode {
+  const cut = line.cont ? -1 : line.text.indexOf(" : ");
+  if (cut <= 0) return line.text;
+  const names = line.text.slice(0, cut).split(" ");
+  return (
+    <>
+      {names.map((n, i) => {
+        const gone = isInaccessibleName(n);
+        return (
+          <tspan
+            key={i}
+            fill={dimmed ? undefined : gone ? INACCESSIBLE_FILL : HYP_NAME_FILL}
+            fontStyle={gone ? "italic" : undefined}
+            opacity={gone ? 0.7 : undefined}
+          >
+            {i > 0 ? ` ${n}` : n}
+          </tspan>
+        );
+      })}
+      {line.text.slice(cut)}
+    </>
+  );
+}
 
 export function HypBlock({
   lines,
@@ -209,7 +242,7 @@ export function HypBlock({
               dy="0.32em"
               fill={lineFill(line.used)}
             >
-              {line.text}
+              {hypLineText(line, anyUsed && !line.used)}
             </tspan>
           ))}
         </text>

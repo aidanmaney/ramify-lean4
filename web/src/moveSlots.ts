@@ -1,34 +1,30 @@
-// The slot a disabled hover-bar move keeps (2026-09-28): the same glyph and
-// size the live move uses, so a slot does not change look when it wakes.
-// A `.ts` file, not nodeBar.tsx — the icons are built with `createElement`,
-// and a component file must export only components (fast refresh).
-import { createElement } from "react";
+// The slot a disabled hover-bar move keeps (2026-09-28): the same codicon the
+// live move uses, so a slot does not change look when it wakes. A `.ts` file,
+// not nodeBar.tsx — a component file must export only components (fast
+// refresh).
 import { MOVE_MARK, type BarKind, type MoveId } from "./moves";
-import { InlineIcon, SkipIcon, TrashIcon, type NodeMove } from "./nodeBar";
-import { MENU_ICON } from "./menuIcons";
-import { PATH_GLYPH_PX, SOURCE_GLYPH_PX } from "./hoverBarMetrics";
+import { type NodeMove } from "./nodeBar";
 
 /** How each move LOOKS — one table, spread by `movesFor` (the live move) and
  `disabledSlot` (its greyed slot), so a slot does not change look when it
- wakes and the glyph is written once. `menuIcon` is the stroked mark the `⋯`
- menu draws for a row whose bar glyph is plain text. */
-export const MOVE_LOOK: Record<
-  MoveId,
-  Pick<NodeMove, "glyph" | "icon" | "glyphPx" | "menuIcon">
-> = {
-  source: { glyph: MOVE_MARK.source, glyphPx: SOURCE_GLYPH_PX },
-  focus: { glyph: MOVE_MARK.focus },
-  skip: { glyph: "skip", icon: createElement(SkipIcon) },
-  path: { glyph: MOVE_MARK.path, glyphPx: PATH_GLYPH_PX },
-  delete: { glyph: "delete", icon: createElement(TrashIcon) },
-  trace: { glyph: MOVE_MARK.trace },
-  collapse: { glyph: MOVE_MARK.collapse },
-  expand: { glyph: MOVE_MARK.expand },
-  inline: { glyph: MOVE_MARK.inline, icon: createElement(InlineIcon) },
-  extract: { glyph: MOVE_MARK.extract, icon: createElement(InlineIcon, { up: true }) },
-  lint: { glyph: MOVE_MARK.lint },
-  lens: { glyph: MOVE_MARK.lens },
-  goal: { glyph: MOVE_MARK.goal, menuIcon: MENU_ICON.plus },
+ wakes and the icon is written once. `glyph` is the button's key and the
+ move's mark in prose (`MOVE_MARK`); `codicon` is what is drawn, on the bar
+ and heading the move's `⋯` row (2026-10-04: VS Code's own icons, replacing
+ the per-glyph font sizes and the drawn skip/trash/inline marks). */
+export const MOVE_LOOK: Record<MoveId, Pick<NodeMove, "glyph" | "codicon">> = {
+  source: { glyph: MOVE_MARK.source, codicon: "go-to-file" },
+  focus: { glyph: MOVE_MARK.focus, codicon: "target" },
+  skip: { glyph: "skip", codicon: "debug-step-over" },
+  path: { glyph: MOVE_MARK.path, codicon: "filter" },
+  delete: { glyph: "delete", codicon: "trash" },
+  trace: { glyph: MOVE_MARK.trace, codicon: "references" },
+  collapse: { glyph: MOVE_MARK.collapse, codicon: "wand" },
+  expand: { glyph: MOVE_MARK.expand, codicon: "list-tree" },
+  inline: { glyph: MOVE_MARK.inline, codicon: "fold-down" },
+  extract: { glyph: MOVE_MARK.extract, codicon: "fold-up" },
+  lint: { glyph: MOVE_MARK.lint, codicon: "lightbulb-autofix" },
+  lens: { glyph: MOVE_MARK.lens, codicon: "split-horizontal" },
+  goal: { glyph: MOVE_MARK.goal, codicon: "add" },
 };
 
 /** The move's slot, greyed, its tip saying why it cannot be used here. */

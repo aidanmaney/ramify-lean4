@@ -4265,3 +4265,85 @@ shows the messages under the box — the editor's hover. Gone:
 art pass (Paperproof, the infoview, notebooks, xyflow, Alectryon) found no peer
 that encodes severity by dash pattern; the left edge, where peers use it, means
 "changed" or "focused".
+
+## 2026-10-04 — Codicons and host tokens
+
+The owner's direction: as VS Code-native, regular and economical in visual
+language as possible. The critique's verdict (batch 1, "no semantics change")
+found that no codicon was used anywhere while the infoview one pane over draws
+them, and that ~400 lines of chrome were hand-drawn copies of codicons, each
+levelled by ink with its own stroke constant.
+
+**What moved.**
+- One icon vocabulary: `Codicon` (codiconView.tsx) draws VS Code's codicons
+  from PATH DATA in `web/src/codicon.ts`, which `scripts/gen-codicons.mjs`
+  generates from an explicit name list out of the pinned devDependency
+  `@vscode/codicons` 0.0.40 (every `<path>` and its `fill-rule` kept, a
+  `<rect>` written as its path; `--check` in CI; CC-BY-4.0 attribution in
+  NOTICE). Paths, not the font: the same component nests inside the tree's
+  `<svg>` (`x`/`y`) and sits in HTML chrome, and the static viewer needs no
+  font. 16px everywhere (the size they are drawn for), so `GLYPH_BOX_W` and
+  `ROW_ICON_W` went 14 → 16 and `TEXT_GLYPH_BOX_W` is gone.
+- Deleted: `BarSvg`, `ChevronGlyph`, `DisclosureGlyph`, `HeaderChevron`,
+  `EyeGlyph`, `CommentGlyph`, `LayoutGlyph`, `LayoutExtraGlyph`, `BarCheck`,
+  `SkipIcon`, `TrashIcon`, `InlineIcon`, `PinIcon`, `DiagGlyph`, `MENU_ICON`'s
+  stroked paths (now codicon NAMES), `BAR_GLYPH_SW`, `HOVER_ICON_SW`,
+  `HDR_CHEVRON_W/H`, `PATH_GLYPH_PX`, `SOURCE_GLYPH_PX`, the rail's `glyphPx`,
+  the hover bar's hairline dividers, the count's reserved digits. Context's
+  `▸ λ Δ ∀` stay text in the code font (the verdict mapped no codicon for
+  them).
+- Mapping: layouts `list-tree`/`layout-sidebar-left`/`layout`/
+  `type-hierarchy-super` (in the mode tables, viewModes.ts `icon`); comments
+  `comment`/`eye-closed`/`comment-discussion`/`sparkle`; Reading `eye` +
+  `chevron-down`; Marks `bookmark` + `chevron-left/right`; `?` `question`;
+  toggles `check`/blank; side-by-side `split-horizontal`, gallery `window`,
+  width `word-wrap`; rail `zoom-in`/`zoom-out`/`screen-full` (⌥: `expand-all`
+  /`collapse-all`); moves (`MOVE_LOOK.codicon`) `go-to-file` `target`
+  `debug-step-over` `filter` `trash` `references` (busy: `loading`) `wand`
+  `list-tree` `fold-down` `fold-up` `lightbulb-autofix` `split-horizontal`
+  `add`, `⋯` `ellipsis`; menu-only rows `add remove edit comment bookmark
+  close`; pins `pin`/`pinned`; severities `error`/`warning`/`info`; closes
+  `close`. `MOVE_MARK` strings stay for prose (`probe rewrite` prints them).
+- Hover bar = VS Code's action bar: `BAR_BTN` 22 around a 16px codicon (the
+  measurer, hoverBarMetrics.ts, and the renderer, nodeBar.tsx, changed
+  together), no dividers, toolbar hover/active washes, the widget's surface,
+  border and shadow.
+- Problems count: `[error] 2  [warning] 1  [info] 3`, severity inks (a lint is
+  `info` in `--ptw-info` at `DIM_OPACITY`), tabular figures, and no accent
+  while the strip is up (VS Code's Problems item never changes look; the
+  dark block read as an alarm). Message strip: the marker-navigation widget's
+  tokens and order — `n/N`, `arrow-down`, `arrow-up`, `close`.
+- Host tokens, each inside a `--ptw-*` with today's ink as the fallback (so
+  the harness and viewer are unchanged without the host): hover widget (tips,
+  the diagnostic popover), menu (`⋯`, bar panels; the keyed row in
+  `menu-selection*`), toolbar, widget shadow, word highlight (+ Strong for the
+  B2 introducing step — read vs write), diff (taggedCore now reads only the
+  tokens), the infoview's `hypothesisName`/`turnstile`/`caseLabel`/
+  `inaccessibleHypothesisName` (names, `⊢` and case labels coloured on both
+  render paths; `x✝` italic 0.7 — colour and style only, the code font's
+  italic keeps the advance), marker navigation, folding (defined for batch 3),
+  ghost text for generated `∴`/`≈` strips, and the theme's comment token for
+  the AUTHOR's strips.
+
+**Deviations from the verdict, and why.**
+- The case badge's dim `case ` prefix is NOT drawn: `caseSize` feeds `caseW`
+  into the layout (wide spacing, ink extents), so the longer string moves
+  nodes — the batch's own gate says the fingerprint is unchanged. Colour only
+  now; the prefix waits for a batch that updates the baseline on purpose.
+- `--ptw-comment` keeps its neutral mix: it is the annotation voice of mark
+  tabs, hop captions, trace leaves and the lint squiggle, and turning all of
+  those green was not the point. The comment STRIP family (`COMMENT_FILL`)
+  takes the theme's comment token instead, and generated strips ghost text.
+- tracks is `layout`, not `split-horizontal`: side-by-side, in the same
+  Layout panel, is `split-horizontal`, and two rows with one icon read as a
+  bug.
+- Hover-bar items keep `CHROME_RADIUS` rather than `cornerRadius-medium`: the
+  verdict itself defers per-surface radii (A4), and one radius is the
+  2026-09-22 rule.
+- The strip's arrows are titled "Next problem" / "Previous problem" without
+  F8 — the keys land with batch 2.
+
+Gates: `npm test` green with `probe fingerprint` identical (1189 stage
+outputs), `overlap`/`order`/`hopgap` unchanged, `check-sync`,
+`check-settings`, `gen-codicons --check`. Screenshots (harness, light and
+dark, 1200 and 760): the hover bar reads as the notebook cell toolbar.

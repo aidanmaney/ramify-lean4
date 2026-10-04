@@ -1,9 +1,13 @@
-// The status bar's, the rail's and the hover icons' shared measures: lane and bar insets, item heights,
-// glyph boxes, stroke weights and the chrome button styles. Constants live here (not beside the components) so the
+// The status bar's and the rail's shared measures: lane and bar insets, item heights, glyph boxes and
+// the chrome button styles. Constants live here (not beside the components) so the
 // components' files export components alone, which fast refresh needs.
 import { type CSSProperties, type ReactNode } from "react";
 import {
   FLOATER_CHROME,
+  chromeSurface,
+  MENU_BG,
+  MENU_BORDER,
+  MENU_FG,
   CHROME_SURFACE,
   CHROME_BORDER,
   CHROME_INK,
@@ -19,11 +23,10 @@ export const RAIL_BTN: CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   padding: 0,
-  fontFamily: "monospace",
-  fontSize: 14,
   lineHeight: 1,
   cursor: "pointer",
-  background: CHROME_SURFACE,
+  // The toolbar's hover wash (`data-ptw-baritem`) over the opaque surface.
+  background: `linear-gradient(var(--ptw-bar-item-bg, transparent), var(--ptw-bar-item-bg, transparent)), ${CHROME_SURFACE}`,
 
   borderWidth: 1,
   borderStyle: "solid",
@@ -39,6 +42,11 @@ export const MENU_PANEL: CSSProperties = {
   boxSizing: "border-box",
   zIndex: Z.popup,
   ...FLOATER_CHROME,
+  // The editor's MENU surface (2026-10-04): the `⋯` menu and every bar panel
+  // are menus, so they wear VS Code's menu tokens over the opaque page.
+  background: chromeSurface(MENU_BG),
+  border: `1px solid ${MENU_BORDER}`,
+  color: MENU_FG,
   padding: 4,
   fontSize: CHROME_TEXT,
   lineHeight: 1.4,
@@ -57,16 +65,17 @@ export const BARE_BTN: CSSProperties = {
   cursor: "pointer",
 };
 
+/** A message strip's icon button: one codicon, its own 16px square, with
+ the toolbar's hover wash (`data-ptw-baritem`). */
 export const PILL_BTN: CSSProperties = {
   ...BARE_BTN,
-  width: 14,
+  width: 16,
   height: 16,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  fontFamily: "monospace",
-  fontSize: 12,
-  lineHeight: 1,
+  borderRadius: CHROME_RADIUS,
+  background: "var(--ptw-bar-item-bg, transparent)",
 };
 
 /* THE BOTTOM LANE — the strip the infoview's own floating "Restart File"
@@ -153,8 +162,8 @@ export const BAR_GROUP_GAP = 2 * STATUS_GAP;
 
 /* ONE HEIGHT. The card is a fixed `height: BAR_H` and every item a fixed
 `BAR_ITEM_H`, never a minimum and never a line box — because the row's content
-changes FONT: the compact glyphs are drawn in the tree's code font at their own
-`glyphPx` (up to 19 for `▸`), so an item sized by its line box grew and shrank
+changes FONT: Context's compact glyphs are drawn in the tree's code font at
+their own `glyphPx` (up to 19 for `▸`), so an item sized by its line box grew and shrank
 as the row compacted and as `used` was swapped for `narrate`. A status bar that
 changes height when you change a setting is the report this rule answers.
 
@@ -195,14 +204,13 @@ export const BAR_ITEM: CSSProperties = {
   cursor: "pointer",
 };
 
-// Every glyph in the bar — a compact mode mark in the code font, one of the
-// drawn SVG icons, `↺`, `?` — is painted inside a box of FIXED size, so its
-// font, its size and its own ink can never reach the item's box. That is what
-// makes both promises hold at once: ONE HEIGHT (the box is `BAR_ITEM_H` tall
-// whatever is in it) and a STABLE WIDTH (swapping `▸` for `λ` moves nothing).
-export const GLYPH_BOX_W = 14;
-
-export const TEXT_GLYPH_BOX_W = 10;
+// Every glyph in the bar — a codicon (16px, the size they are drawn for), or
+// Context's compact mark in the code font — is painted inside a box of FIXED
+// size, so its font, its size and its own ink can never reach the item's box.
+// That is what makes both promises hold at once: ONE HEIGHT (the box is
+// `BAR_ITEM_H` tall whatever is in it) and a STABLE WIDTH (swapping `▸` for
+// `λ` moves nothing).
+export const GLYPH_BOX_W = 16;
 
 export const BAR_ROW: CSSProperties = {
   boxSizing: "border-box",
@@ -241,47 +249,22 @@ export const SLOT_GAP_PX = 2;
 set — Layout's four, Context's four, Comments' four — and wears the `●/○`
 radio; a `toggle` row turns ONE thing on or off independently of its
 neighbours (the reading options, the two mark lists, the modifiers below a
-divider) and wears a drawn CHECK SQUARE (`BarCheck`); an `action` row does
-something once and wears neither. The look is what tells "pick one" from
-"turn on" before the reader has clicked anything. */
+divider) and wears the infoview's check-menu mark (codicon `check` when on,
+nothing when off, 2026-10-04); an `action` row does something once and wears
+neither. The look is what tells "pick one" from "turn on" before the reader
+has clicked anything. */
 export type BarRowKind = "pick" | "toggle" | "action";
 
-/* THE FOUR LAYOUT MARKS, in the eye's idiom and no longer in Unicode's.
-
-They were `☰ ⊦ || ⑃` in the tree's code font at a per-mark `glyphPx` chosen to
-level their ink HEIGHTS (14/14/8/15), and the heights were level — but height
-was never the complaint. Re-measured on an 8× supersampled raster in the
-harness's own code font, the STROKE each mark draws with (median run across
-its own strokes, in CSS px):
-
-    ☰  1.25    ⊦  0.88    ||  0.75    ⑃  0.63
-    eye 1.2 (its own `strokeWidth`)    comment/width glyphs 1.25    ⚑ 2.9 solid
-
-so three of the four drew at HALF to two-thirds the weight of every other mark
-in the row — the reported "too thin/small". A font glyph has no weight knob:
-its stems come with the face, they thin as `glyphPx` comes down (`||` is at 8
-precisely so two full-em bars do not tower), and they move with whatever
-editor font the user has set. So the four are drawn instead, in the idiom the
-eye and the comment/width glyphs already established: inline SVG, `currentColor`,
-ONE shared `BAR_GLYPH_SW`, cropped to their own ink, inside the same fixed
-`GlyphBox` — so nothing the ghost measures moves, and no user font reaches
-them. Ink, measured: 10.0 × 8.8, 7.7 × 8.8, 7.0 × 8.8, 9.0 × 8.8 — level in
-height as the `glyphPx` pass left them, and now level in weight as well.
-
-The OUTLINE mark keeps its SHAPE exactly: three full-width bars, `☰` as it
-stood. Only its weight moves, up to the shared stroke with the rest.
-
-2026-09-22 (taste pass): the eye (1.2) and the comment/width marks (1.25)
-now draw at this stroke too, as does the signature header's chevron — every
-drawn mark in the chrome shares ONE weight, so no item looks lighter than its
-neighbour. (The hover bar's in-tree icons keep their own `HOVER_ICON_SW`: they
-scale with the tree.) */
-export const BAR_GLYPH_SW = 1.4;
+/* THE MARKS ARE CODICONS (2026-10-04). They were drawn SVG at one shared
+chrome stroke (and, before that, Unicode in the code font at a per-mark
+`glyphPx` levelled by ink height); every mark in the chrome is now VS Code's
+own codicon at 16px, levelled by design, so the levelling code went with the
+drawn copies. See codiconView.tsx. */
 
 /** The goal corner's drawn `−`: its length and stroke, and the corner's hit
  height (the hit width is `CORNER_W`, the top line's reserve). The mark is
  in-tree ink, a quiet sign at about the weight of the `+N` it becomes — the
- chrome's `BAR_GLYPH_SW` at 8px read as the loudest thing on the box
+ chrome's 1.4 stroke at 8px read as the loudest thing on the box
  (2026-09-24); the hit rect, not the ink, is the target. */
 export const CORNER_MINUS_W = 6;
 
@@ -366,12 +349,3 @@ export function statusTip(i: StatusInfo): string {
 /** The longest declaration name the readout shows, in characters
  (`clipText`'s cap, `…` included) — and so what its ghost reserves. */
 export const STATUS_NAME_MAX = 24;
-
-/** The stroke every DRAWN hover-bar icon shares (skip, trash, inline/extract):
-the bar scales with the tree, so it keeps its own weight rather than the
-chrome's `BAR_GLYPH_SW`. */
-export const HOVER_ICON_SW = 0.9;
-
-// The header chevron's ink (`HeaderChevron`); the lane it sits in is ProofTreeView's `HDR_BTN_*`.
-export const HDR_CHEVRON_W = 8;
-export const HDR_CHEVRON_H = 5;

@@ -107,7 +107,7 @@ export function chipRows(d: ChipData): ChipRow[] {
               ? { chip: true }
               : glyph === HOLE_GLYPH
                 ? {}
-                : { menuIcon: MENU_ICON.plus }),
+                : { codicon: MENU_ICON.plus }),
             label: c.label,
             title: c.menuTitle,
             shortcut: "click the chip",
