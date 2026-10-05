@@ -206,11 +206,17 @@ const CHROME_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
   layout: layoutMark("M3.2 1.3v7.4M8.8 1.3v7.4"),
   "type-hierarchy-super": layoutMark("M6 1.3v2.9M6 4.2 2.2 8.7M6 4.2 9.8 8.7"),
   "split-horizontal": sideBySide,
+  // Side-by-side's own icon since 2026-10-05 (the lens keeps
+  // `split-horizontal`): the same classic mark.
+  "layout-centered": sideBySide,
   window: gallery,
   "word-wrap": drawn(12, 10, p("M1.5 2h9M1.5 5h6.4M1.5 8h3.4")),
   comment: bubble("M3.7 3.4h4.6M3.7 5.6h2.6"),
   "eye-closed": bubble("M1.4 10.2 10.6 0.8"),
   sparkle: bubble("", true),
+  // Narrate's own icon since 2026-10-05 (`sparkle` is the model's): the
+  // classic narrate bubble.
+  quote: bubble("", true),
   "comment-discussion": drawn(12, 11, [
     h("rect", { key: 1, x: 0.8, y: 0.8, width: 10.4, height: 9.4, rx: 1.6 }),
     h("rect", { key: 2, x: 3, y: 2.6, width: 6, height: 3.2, rx: 1 }),
@@ -244,6 +250,12 @@ const CHROME_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
   "screen-full": glyph("⛶", 14),
   "expand-all": glyph("⊞", 14),
   "collapse-all": glyph("⊟", 14),
+  // Restart File (2026-10-05): a drawn open circle with an arrowhead, in the
+  // chrome's stroke — the classic hand of the eye and the bubble.
+  "debug-restart": drawn(12, 12, [
+    p("M2.2 6A3.8 3.8 0 1 0 3.3 3.3", { key: 1 }),
+    p("M3.3 0.9V3.3H5.7", { key: 2 }),
+  ]),
 };
 
 // The hover bar's moves and the `⋯` menu's rows.
@@ -255,7 +267,7 @@ const NODE_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
     p("M0 -4.8 V-1.8 M0 1.8 V4.8", { key: 1 }),
     p("M-2.6 -0.6 L2.6 -3 M-2.6 3 L2.6 0.6", { key: 2 }),
   ),
-  filter: glyph("⊹", 15),
+  "git-commit": glyph("⊹", 15),
   // `TrashIcon`.
   trash: hover(
     p("M-4.3 -2.8 H4.3", { key: 1 }),
@@ -267,7 +279,7 @@ const NODE_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
   references: glyph("⁇"),
   loading: glyph("…"),
   wand: glyph("⇓"),
-  "list-tree": glyph("⇑"),
+  "list-unordered": glyph("⇑"),
   // `InlineIcon` (down) and its mirror (up).
   "fold-down": hover(
     p("M-3.8 -3.6 H-0.4 A2.6 2.6 0 0 1 2.2 -1 V3.6", { key: 1 }),
@@ -295,7 +307,10 @@ const NODE_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
   ellipsis: glyph("⋯"),
   // menuIcons.ts's stroked rows.
   add: hover(box, p("M-2 0H2M0 -2V2")),
-  remove: hover(box, p("M-2 0H2")),
+  // A ledger's "show / hide every step's goal" and a row's `+` (2026-10-05:
+  // `unfold`/`fold`, which `add`/`remove` stood in for).
+  unfold: hover(box, p("M-2 0H2M0 -2V2")),
+  fold: hover(box, p("M-2 0H2")),
   "chevron-down": hover(box, p("M-2 0H2")),
   "chevron-right": hover(box, p("M-2 0H2M0 -2V2")),
   edit: hover(p("M-3.5 4L-3 1.4L2.4 -4L4 -2.4L-1.4 3ZM1 -2.6L2.6 -1")),

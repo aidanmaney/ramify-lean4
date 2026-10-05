@@ -90,6 +90,35 @@ const EXPECT_EDIT_WINDOW_MS = 3000;
 
 const ORIGIN = { line: 0, character: 0 };
 
+/* RESTART FILE (2026-10-05). What the infoview exposes to a panel widget for
+progress, measured against vscode-lean4's source: NOTHING of its own — its
+`ProgressContext` (the per-file `$/lean/fileProgress` map that draws the
+editor's orange bar) is not exported — but `useServerNotificationEffect` IS,
+and the extension forwards `$/lean/fileProgress` to the webview for every
+open file (InfoProvider.sendProgress; the infoview subscribes to it itself,
+so a second subscriber costs nothing). `processing` is the list of ranges
+still being elaborated: non-empty (ignoring `kind: 2`, a fatal error's
+marker) means Lean is working on this file. The emitter keeps only the LAST
+notification of any method (`gotServerNotification.current`), so a widget
+mounted mid-elaboration may not know until the next one (they arrive many
+times a second while it works).
+
+OUT-OF-DATE IMPORTS: core v4.32.2 says it two ways (Lean/Server/FileWorker.lean)
+— "Imports are out of date and must be rebuilt; use the \"Restart File\"…"
+as an ERROR on the header when the worker starts against stale oleans (there
+is no snapshot then, so no tree), and "Imports are out of date and should be
+rebuilt; …" as a sticky INFORMATION diagnostic when a dependency goes stale
+while the file is open (the tree is still drawn). vscode-lean4 pops its own
+notification only for the first (error, 0:0–0:0); the band turns prominent
+for either. */
+const OUTDATED_RE = /Imports are out of date and (?:must|should) be rebuilt/;
+const FILE_PROGRESS = "$/lean/fileProgress";
+interface FileProgressParams {
+  textDocument: { uri: string };
+  processing: { kind?: number }[];
+}
+const busyOf = (p: FileProgressParams) => p.processing.some((x) => x.kind !== 2);
+
 /** A short stable hash of a proof's JSON: the client cache version. */
 const sigHash = (s: string): string => `${s.length}:${hashString(s)}`;
 
@@ -146,11 +175,9 @@ const MIN_FRAME_PX = 240;
 // it was only ever spending height nothing needed. The CLEARANCE (44px) kept
 // the frame's bottom out of the lane the infoview's own fixed "Restart File"
 // button owns — but it cost 44px of tree at every panel size to keep two
-// pieces of our own chrome off one button. The chrome now dodges that button
-// by PLACEMENT instead (ProofTreeView's LANE_* constants: the status card
-// sits IN the lane at the button's own inset and height and stops short of
-// its width, and the zoom rail moved up above it), which buys the whole 44px
-// back for the tree.
+// pieces of our own chrome off one button. Since 2026-10-05 the band OWNS
+// Restart File and hides the host's button while it is drawn (statusBar.tsx),
+// so there is no lane to dodge at all.
 
 /** How far down the VIEWPORT the widget's own root sits — the number the frame
 height is `100vh` minus.
@@ -473,10 +500,17 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
 
   const [pollRev, setPollRev] = useState(0);
   const revTimer = useRef<number | null>(null);
-  useServerNotificationEffect<{ uri: string }>(
+  // Out-of-date imports, read off the same notification (see OUTDATED_RE);
+  // null until one arrives, and then the payload's own list stands in.
+  const [outdatedNote, setOutdatedNote] = useState<{ uri: string; v: boolean } | null>(null);
+  useServerNotificationEffect<{ uri: string; diagnostics?: { message?: string }[] }>(
     "textDocument/publishDiagnostics",
     (params) => {
       if (params.uri !== pos.uri) return;
+      setOutdatedNote({
+        uri: params.uri,
+        v: (params.diagnostics ?? []).some((d) => OUTDATED_RE.test(d.message ?? "")),
+      });
       if (revTimer.current !== null) window.clearTimeout(revTimer.current);
       revTimer.current = window.setTimeout(() => {
         revTimer.current = null;
@@ -490,6 +524,30 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       if (revTimer.current !== null) window.clearTimeout(revTimer.current);
     },
     [],
+  );
+
+  // Lean elaborating THIS file (see FILE_PROGRESS). The initial value is the
+  // last progress notification the infoview saw, where it was this file's.
+  const [progress, setProgress] = useState<{ uri: string; busy: boolean } | null>(() => {
+    const cur = ec.events.gotServerNotification.current as
+      | [string, unknown]
+      | undefined;
+    if (!cur || cur[0] !== FILE_PROGRESS) return null;
+    const p = cur[1] as FileProgressParams;
+    return { uri: p.textDocument.uri, busy: busyOf(p) };
+  });
+  useServerNotificationEffect<FileProgressParams>(
+    FILE_PROGRESS,
+    (params) => {
+      if (params.textDocument.uri !== pos.uri) return;
+      const busy = busyOf(params);
+      setProgress((prev) =>
+        prev && prev.uri === params.textDocument.uri && prev.busy === busy
+          ? prev
+          : { uri: params.textDocument.uri, busy },
+      );
+    },
+    [pos.uri],
   );
 
   const {
@@ -518,6 +576,31 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       ),
     [rs, pos.uri, pos.line, pos.character, docRev, pollRev, counterfactual],
   );
+
+  /* RESTART FILE's state for the band. BUSY while Lean elaborates the file,
+  or after a click until a NEW payload resolves (the object the click saw is
+  kept; any other resolved value, or a rejection, ends it — derived, so there
+  is nothing to clear). OUTDATED off the last diagnostics notification, else
+  the payload's own list. */
+  const [restartFrom, setRestartFrom] = useState<{ v: unknown } | null>(null);
+  const restartPending =
+    restartFrom !== null &&
+    (st.state === "loading" ||
+      (st.state === "resolved" && st.value === restartFrom.v));
+  const outdated =
+    outdatedNote && outdatedNote.uri === pos.uri
+      ? outdatedNote.v
+      : st.state === "resolved" &&
+        (st.value.diagnostics ?? []).some((d) => OUTDATED_RE.test(d.message));
+  const restart = {
+    onRestart: () => {
+      setRestartFrom({ v: st.state === "resolved" ? st.value : null });
+      setOutdatedNote(null);
+      void ec.api.restartFile(pos.uri);
+    },
+    busy: restartPending || (!!progress && progress.uri === pos.uri && progress.busy),
+    outdated: !restartPending && outdated,
+  };
 
   const resolved =
     st.state === "resolved" &&
@@ -901,8 +984,15 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       () => setRelayError(null),
       (e: unknown) => {
         console.error(`[proof-tree] ${action} RPC failed:`, e);
-
-        setRelayError(`${action} failed: ${mapRpcError(e).message}`);
+        const msg = mapRpcError(e).message;
+        // A RESTART (the band's Restart File) retires the RPC session; the
+        // relay's housekeeping calls (a hover's `preview-clear`) that land
+        // on the old one say so, and the reader can do nothing about it —
+        // the infoview reconnects by itself (measured live 2026-10-05: a
+        // red "preview-clear failed: RpcNeedsReconnect" banner after every
+        // restart).
+        if (/RpcNeedsReconnect/.test(msg)) return;
+        setRelayError(`${action} failed: ${msg}`);
       },
     );
   };
@@ -1459,6 +1549,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         appearance={appearance}
         hoverBar={hoverBar}
         settings={viewSettings}
+        restart={restart}
       />
       </WidgetBoundary>
     </div>

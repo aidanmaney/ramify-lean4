@@ -36,3 +36,6 @@ export {
   parseViewSettings, settingValue, parseSettingsQuery, parseWidth,
 } from "../src/viewSettings";
 export { PRESETS, READING_OPTIONS, readingOn } from "../src/experience";
+// One codicon = one meaning (`probe icons`).
+export { ICON, SAME_MEANING } from "../src/icons";
+export { CODICONS } from "../src/codicon";

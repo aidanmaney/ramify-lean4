@@ -78,6 +78,8 @@ export type Caps = {
   /** C4 — a model can reword the generated narration (a companion with a
    key behind `onPolish`); without it no `≈` line can appear. */
   polish: boolean;
+  /** Restart File is in the band (the widget: `ec.api.restartFile`). */
+  restart: boolean;
 };
 
 export type GestureTarget =
@@ -264,6 +266,12 @@ export const GESTURES: Gesture[] = [
     unless: "flags",
   },
   { target: "background", input: `${CMD}-scroll`, says: "to zoom" },
+  {
+    target: "background",
+    input: "Restart File, the bar's last item",
+    says: "to restart the file and rebuild its outdated imports — it spins while Lean works and says so when the imports are out of date (Tab reaches it)",
+    needs: "restart",
+  },
   {
     target: "background",
     input: "chips on an open goal",

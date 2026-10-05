@@ -1,5 +1,6 @@
 // The floating chrome over the tree: the hop chip and link marks, the mark tabs (with the ⌥-held
 // store that turns a temporary tab into an ×), the top-centre toast, and the zoom rail.
+import { ICON } from "./icons";
 import { useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { useClassic } from "./appearance";
 import {
@@ -159,7 +160,7 @@ export function HopChip({
         fill="var(--ptw-bg)"
       />
       <Codicon
-        name="ellipsis"
+        name={ICON["hop.chip"]}
         size={HOP_CHIP_W}
         x={x - HOP_CHIP_W / 2}
         y={y - HOP_CHIP_W / 2}
@@ -424,7 +425,7 @@ export function TourTab({
       />
       {cross ? (
         <Codicon
-          name="close"
+          name={ICON["tab.remove"]}
           size={crossPx}
           x={cx - crossPx / 2}
           y={cy - crossPx / 2}
@@ -554,7 +555,7 @@ export function TopCentre({
             {modal.text}
           </span>
           <span style={{ opacity: DIM_OPACITY, flexShrink: 0 }}>
-            <Codicon name="close" />
+            <Codicon name={ICON["help.close"]} />
           </span>
         </button>
       )}
@@ -687,29 +688,29 @@ export function ZoomRail({
           is gone, and the Layout panel's Expand/Collapse buttons with it). */}
       <RailGroup>
         <RailButton
-          glyph={<Codicon name="zoom-in" />}
+          glyph={<Codicon name={ICON["rail.zoomIn"]} />}
           title={`Zoom in (${CMD}-scroll zooms at the cursor)`}
           onClick={onZoomIn}
         />
         <RailButton
-          glyph={<Codicon name="zoom-out" />}
+          glyph={<Codicon name={ICON["rail.zoomOut"]} />}
           title="Zoom out"
           onClick={onZoomOut}
         />
         <RailButton
-          glyph={<Codicon name="screen-full" />}
+          glyph={<Codicon name={ICON["rail.fit"]} />}
           title="Fit width"
           onClick={onFit}
         />
       </RailGroup>
       <RailGroup>
         <RailButton
-          glyph={<Codicon name="collapse-all" />}
+          glyph={<Codicon name={ICON["rail.collapseAll"]} />}
           title={`Collapse to the outline (${CHORD_FOLD_ALL}) — fold each branch where it leaves the trunk; Undo in the toast`}
           onClick={onCollapseAll}
         />
         <RailButton
-          glyph={<Codicon name="expand-all" />}
+          glyph={<Codicon name={ICON["rail.expandAll"]} />}
           title={`Expand all (${CHORD_UNFOLD_ALL}) — clear every fold and skip; Undo in the toast`}
           onClick={onExpandAll}
         />

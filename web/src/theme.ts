@@ -245,6 +245,10 @@ const PALETTE_CSS = `
   --ptw-statusbar-border: var(--vscode-statusBar-border, var(--ptw-chrome-border));
   --ptw-statusbar-hover: var(--vscode-statusBarItem-hoverBackground, var(--ptw-toolbar-hover));
   --ptw-statusbar-on: var(--vscode-textLink-foreground, var(--ptw-hue-goal));
+  /* A WARNING item (Restart File while imports are out of date, 2026-10-05):
+     VS Code's own \`statusBarItem.warningBackground/-Foreground\`. */
+  --ptw-statusbar-warn-bg: var(--vscode-statusBarItem-warningBackground, color-mix(in srgb, var(--ptw-warn) 60%, #000000));
+  --ptw-statusbar-warn-fg: var(--vscode-statusBarItem-warningForeground, #ffffff);
   /* TIPS are the editor's hover widget; the move menu and the bar's panels
      are its menus (2026-10-04). Each falls back to the chrome's own tokens. */
   --ptw-hover-bg: var(--vscode-editorHoverWidget-background, var(--ptw-chrome-bg));
@@ -413,6 +417,8 @@ const PALETTE_CSS = `
   --ptw-statusbar-border: var(--ptw-chrome-border);
   --ptw-statusbar-hover: var(--ptw-chrome-btn);
   --ptw-statusbar-on: var(--ptw-accent);
+  --ptw-statusbar-warn-bg: var(--ptw-warn);
+  --ptw-statusbar-warn-fg: var(--ptw-bg);
 }
 /* An inaccessible name drew like any other before the infoview's inks; the
    rule outranks the plain path's presentation attributes too. */
@@ -455,6 +461,14 @@ const PALETTE_CSS = `
 }
 [data-ptw-theme] [data-ptw-baritem]:not(:disabled):active {
   --ptw-bar-item-bg: var(--ptw-toolbar-active);
+}
+/* A codicon that spins (VS Code's \`~spin\` modifier: 1.5s, 30 steps). */
+@keyframes ptw-spin { to { transform: rotate(360deg); } }
+[data-ptw-theme] [data-ptw-spin] {
+  animation: ptw-spin 1.5s steps(30) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-ptw-theme] [data-ptw-spin] { animation: none; }
 }
 /* …in the band, with the status bar's own item hover. */
 [data-ptw-theme] [data-ptw-band] [data-ptw-baritem]:not(:disabled):hover {
@@ -566,6 +580,8 @@ export const STATUSBAR_BG = "var(--ptw-statusbar-bg)";
 export const STATUSBAR_FG = "var(--ptw-statusbar-fg)";
 export const STATUSBAR_BORDER = "var(--ptw-statusbar-border)";
 export const STATUSBAR_ON = "var(--ptw-statusbar-on)";
+export const STATUSBAR_WARN_BG = "var(--ptw-statusbar-warn-bg)";
+export const STATUSBAR_WARN_FG = "var(--ptw-statusbar-warn-fg)";
 export const CHROME_BORDER = "var(--ptw-chrome-border)";
 export const CHROME_INK = "var(--ptw-chrome-ink)";
 /** A toolbar button's hover wash (the hover bar's squares). */

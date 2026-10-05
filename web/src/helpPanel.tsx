@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 import { Fragment, useLayoutEffect, useRef, type CSSProperties } from "react";
 
 import {
@@ -141,7 +142,7 @@ export function HelpPanel({
             background: "var(--ptw-bar-item-bg, transparent)",
           }}
         >
-          <Codicon name="close" />
+          <Codicon name={ICON["help.close"]} />
         </button>
       </div>
       {/* START HERE (2026-10-04, batch 2): the three gestures that reach

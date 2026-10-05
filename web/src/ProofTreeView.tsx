@@ -1,3 +1,4 @@
+import { ICON } from "./icons";
 import {
   useEffect,
   useMemo,
@@ -152,12 +153,15 @@ import { renamesFor, type NameRule } from "./rename";
 import {
   attachDiagnostics,
   lintDiagnostics,
+  splitLinterName,
   type TreeDiagnostic,
 } from "./diagnostics";
+import { CodeText } from "./codeSpans";
 import {
   LINT_FIXES,
   firstLintFix,
   lintFixesFor,
+  lintName,
   lintsByNode,
   type Lint,
 } from "./lints";
@@ -280,6 +284,7 @@ import {
   WASH_OPACITY,
   TREE_INK_SW_BOLD,
   CHROME_TEXT_SM,
+  CHROME_TEXT,
   FOCUS_INK,
   LIGHTBULB_INK,
   LIGHTBULB_AUTOFIX_INK,
@@ -314,6 +319,7 @@ import {
   STATUS_NAME_MAX,
 } from "./barMetrics";
 import { Codicon } from "./codiconView";
+import { type CodiconName } from "./codicon";
 import { DiagIcon } from "./diagBar";
 import { PillPlace } from "./selectionPill";
 import { pillCandidates } from "./pillPlace";
@@ -326,7 +332,7 @@ import {
   type Appearance,
 } from "./appearance";
 import { HopChip, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
-import { type BandPlace, StatusBar } from "./statusBar";
+import { type BandPlace, type RestartInfo, StatusBar } from "./statusBar";
 import {
   CHIP_FONT_PX,
   CHIP_GAP,
@@ -665,6 +671,11 @@ export interface ProofTreeViewProps {
       `ramify.<key>` (`popoutEdit` action `setting`). Absent (no companion,
       the static viewer) a change is session-only, as before. */
   onSettingChange?: (id: SettingId, value: string | number | boolean) => void;
+  /** RESTART FILE (2026-10-05): the band's rightmost item, where the host can
+      restart the file (the widget: `ec.api.restartFile`). Absent (the
+      harness without `?restart-stub`, the static viewer), no item, and the
+      host's own button is left alone. */
+  restart?: RestartInfo;
 
   /** D6 — ASK AN AGENT to choose among the rewrites the primitives already
       offer. The view hands over the offered rewrites (never free text) and is
@@ -787,6 +798,7 @@ export default function ProofTreeView({
   onHoverBarChange,
   settings: viewSettings = NO_SETTINGS,
   onSettingChange,
+  restart,
   initialView,
   onViewState,
 }: ProofTreeViewProps) {
@@ -865,6 +877,7 @@ export default function ProofTreeView({
     restructure: !!onApplyRewrite && !!getTacticEdit && !!deleteSlots,
     undo: !!onUndo,
     polish: !!onPolish && polishReady,
+    restart: !!restart,
   };
 
   const forcedReflow =
@@ -4091,7 +4104,7 @@ export default function ProofTreeView({
   // tree's frame gives up (nothing paints under the band), and an open
   // message strip's height plus gap, which the zoom rail climbs over. Starts
   // at one plain row; `fit` answers in a layout effect, before paint.
-  const [band, setBand] = useState<BandPlace>({ band: BAR_H + 1, strip: 0 });
+  const [band, setBand] = useState<BandPlace>({ band: BAR_H, strip: 0 });
   const setBandIfChanged = (v: BandPlace) =>
     setBand((prev) =>
       prev.band === v.band && prev.strip === v.strip ? prev : v,
@@ -5141,6 +5154,8 @@ export default function ProofTreeView({
     | { do: "cancel" };
   type PillChip = {
     label: string;
+    /** Drawn as this codicon (the cancel chip's close); `label` sizes it. */
+    icon?: CodiconName;
     title: string;
     color: string;
 
@@ -5626,6 +5641,7 @@ export default function ProofTreeView({
             },
             {
               label: "×",
+              icon: ICON["chip.cancel"],
               title: "Leave the comments alone",
               color: SEQ_STROKE,
               act: { do: "cancel" },
@@ -5667,6 +5683,7 @@ export default function ProofTreeView({
               <FrontierChip
                 key={c.label}
                 glyph={c.label}
+                icon={c.icon}
                 title={c.title}
                 x={at}
                 width={w}
@@ -6288,8 +6305,13 @@ export default function ProofTreeView({
 
             {scopeKind && !hdrOpen && (
               <>
-                <span style={{ opacity: DIM_OPACITY, padding: "0 6px", flexShrink: 0 }}>
-                  ›
+                {/* The breadcrumb's separator: VS Code's own (a codicon
+                    chevron, 2026-10-05 — it was a text `›`). */}
+                <span
+                  aria-hidden
+                  style={{ opacity: DIM_OPACITY, padding: "0 4px", flexShrink: 0, display: "inline-flex" }}
+                >
+                  <Codicon name={ICON["scope.separator"]} size={14} />
                 </span>
                 <button
                   type="button"
@@ -6320,8 +6342,16 @@ export default function ProofTreeView({
                     cursor: "pointer",
                   }}
                 >
-                  <span style={{ flexShrink: 0 }}>
-                    {scopeKind === "focus" ? "◎" : "⊹ path ·"}
+                  {/* The move that scoped the view, as its codicon (the
+                      classic look keeps `◎` / `⊹` through the node set), and
+                      the path's word. */}
+                  <span style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Codicon
+                      name={scopeKind === "focus" ? ICON["scope.focus"] : ICON["scope.path"]}
+                      set="node"
+                      size={14}
+                    />
+                    {scopeKind === "focus" ? null : "path ·"}
                   </span>
                   <span
                     style={{
@@ -6333,7 +6363,9 @@ export default function ProofTreeView({
                   >
                     {scopeLabel}
                   </span>
-                  <span style={{ opacity: DIM_OPACITY, flexShrink: 0 }}>✕</span>
+                  <span style={{ opacity: DIM_OPACITY, flexShrink: 0, display: "inline-flex" }}>
+                    <Codicon name={ICON["scope.close"]} size={14} />
+                  </span>
                 </button>
               </>
             )}
@@ -6376,7 +6408,7 @@ export default function ProofTreeView({
             cursor: "pointer",
           }}
         >
-          <Codicon name={hdrOpen ? "chevron-up" : "chevron-down"} />
+          <Codicon name={hdrOpen ? ICON["header.close"] : ICON["header.open"]} />
         </button>
       ) : null}
 
@@ -6483,6 +6515,7 @@ export default function ProofTreeView({
         onHelpOpenChange={setHelpOpen}
         caps={caps}
         fontFamily={codeFont}
+        restart={restart}
         status={
           baseNodes.length === 0
             ? null
@@ -7437,7 +7470,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: anyRowClosed ? "+" : "−",
-                        codicon: anyRowClosed ? MENU_ICON.plus : MENU_ICON.minus,
+                        codicon: anyRowClosed ? MENU_ICON.showRows : MENU_ICON.hideRows,
                         label: everyRowSaid,
                         title: everyRowSaid,
                         shortcut: "⌥-click a row",
@@ -7480,7 +7513,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: "+",
-                        codicon: MENU_ICON.plus,
+                        codicon: MENU_ICON.unfold,
                         label: "Bring back what this box stands for",
                         title: "Bring back what this box stands for",
                         shortcut: "click",
@@ -7592,7 +7625,7 @@ export default function ProofTreeView({
                   ? [
                       {
                         glyph: "propose",
-                        codicon: "sparkle" as const,
+                        codicon: ICON["move.propose"],
                         label: proposeBusy
                           ? "Asking the model…"
                           : PROPOSE_MOVE_LABEL,
@@ -7702,7 +7735,7 @@ export default function ProofTreeView({
                         ...MOVE_LOOK.trace,
                         glyph: traceIsBusy ? "…" : MOVE_LOOK.trace.glyph,
                         // While the RPC is out the button reads `loading`.
-                        codicon: traceIsBusy ? "loading" : MOVE_LOOK.trace.codicon,
+                        codicon: traceIsBusy ? ICON.busy : MOVE_LOOK.trace.codicon,
                         label: said,
                         title: said,
                         onClick: () => toggleTrace(id),
@@ -7936,7 +7969,7 @@ export default function ProofTreeView({
                         ...MOVE_LOOK.fix,
                         ...(lintable
                           ? {
-                              codicon: "lightbulb-autofix" as const,
+                              codicon: ICON["move.fixAuto"],
                               ink: LIGHTBULB_AUTOFIX_INK,
                             }
                           : { ink: LIGHTBULB_INK }),
@@ -8752,7 +8785,7 @@ export default function ProofTreeView({
                           pointerEvents="none"
                         >
                           <Codicon
-                            name={folded ? "chevron-right" : "chevron-down"}
+                            name={folded ? ICON["goal.folded"] : ICON["goal.open"]}
                             size={FOLD_ICON}
                             x={w / 2 - CORNER_W}
                             y={
@@ -9323,7 +9356,7 @@ export default function ProofTreeView({
                         ...barMoves,
                         {
                           glyph: "⋯",
-                          codicon: "ellipsis",
+                          codicon: ICON["move.more"],
                           title: "More: every move on this node, what its icon means, and which ones sit on the bar",
                           onClick: (el?: Element) => openNodeMenu(id, el),
                         },
@@ -9426,6 +9459,7 @@ export default function ProofTreeView({
                     />
                     <FrontierChip
                       glyph="×"
+                      icon={ICON["chip.cancel"]}
                       title="Cancel"
                       x={x0 + wide + CHIP_GAP}
                       width={CHIP_W_ADD}
@@ -9545,6 +9579,7 @@ export default function ProofTreeView({
                     />
                     <FrontierChip
                       glyph="×"
+                      icon={ICON["chip.cancel"]}
                       title="Cancel"
                       x={x0 + wide + CHIP_GAP}
                       width={CHIP_W_ADD}
@@ -9611,29 +9646,64 @@ export default function ProofTreeView({
                           : HOVER_BORDER,
                       }}
                     >
-                      {list.map((d, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            display: "flex",
-                            gap: 6,
-                            alignItems: "flex-start",
-                          }}
-                        >
-                          <DiagIcon sev={d.severity} size={15} />
-                          <span
+                      {list.map((d, i) => {
+                        // A LINT reads as VS Code's hover does (2026-10-05):
+                        // the linter's sentence in the UI face with its
+                        // `code` spans in the code font (ticks.ts, the one
+                        // rule), and the linter's name moved OUT of the
+                        // sentence into a dim source line under it. Errors
+                        // and warnings are Lean's own text (goals and all),
+                        // kept as they are, in the code font.
+                        const lint = d.linter ? splitLinterName(d.message) : null;
+                        return (
+                          <div
+                            key={i}
                             style={{
-                              fontFamily: getCodeFontFamily(),
-                              fontSize: CHROME_TEXT_SM,
-                              lineHeight: "15px",
-                              whiteSpace: "pre-wrap",
-                              color: HOVER_FG,
+                              display: "flex",
+                              gap: 6,
+                              alignItems: "flex-start",
                             }}
                           >
-                            {d.message}
-                          </span>
-                        </div>
-                      ))}
+                            <DiagIcon sev={d.severity} size={15} />
+                            {lint ? (
+                              <span
+                                style={{
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: 4,
+                                  fontFamily: CHROME_FONT,
+                                  fontSize: CHROME_TEXT,
+                                  lineHeight: "16px",
+                                  whiteSpace: "pre-wrap",
+                                  color: HOVER_FG,
+                                }}
+                              >
+                                <span>
+                                  <CodeText text={lint.text} />
+                                </span>
+                                <span
+                                  data-ptw-diag-source=""
+                                  style={{ opacity: DIM_OPACITY, fontSize: CHROME_TEXT_SM }}
+                                >
+                                  {`Lean 4 · ${lint.name ?? lintName(d.linter!)}`}
+                                </span>
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  fontFamily: getCodeFontFamily(),
+                                  fontSize: CHROME_TEXT_SM,
+                                  lineHeight: "15px",
+                                  whiteSpace: "pre-wrap",
+                                  color: HOVER_FG,
+                                }}
+                              >
+                                {d.message}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </foreignObject>
                 );

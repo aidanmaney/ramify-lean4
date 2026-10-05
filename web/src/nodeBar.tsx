@@ -1,5 +1,6 @@
 // The node hover bar and its ⋯ move menu: the NodeAction/NodeMove shapes the tree hands it, the bar itself
 // (a VS Code action bar of codicons) and the icon-explainer menu.
+import { ICON } from "./icons";
 import { Fragment, useState, useRef, useLayoutEffect } from "react";
 import { type CodiconName } from "./codicon";
 import { Codicon } from "./codiconView";
@@ -733,7 +734,7 @@ function MenuPin({
         cursor: "pointer",
       }}
     >
-      <Codicon name={on ? "pinned" : "pin"} set="node" />
+      <Codicon name={on ? ICON["menu.pinned"] : ICON["menu.pin"]} set="node" />
     </button>
   );
 }

@@ -4792,3 +4792,165 @@ and package.json byte-identical inside). Screenshots /tmp/claude-0/batch5/:
 `intermediate-writes.png` (spine · all · narrate after the clicks;
 `__settings` held the five writes), `reading-panel-{beginner,intermediate,
 expert}.png`, `layout-panel-width.png`, `autoopen-{on,off}.png`.
+
+## 2026-10-05 — Restart File in the band; icon + value items
+
+Owner-approved (A–C), the batch-5 live check (D), and the owner's icon report
+folded in (E).
+
+**A. Restart File is the band's own.** The infoview's button
+(`<VscodeButton className="restart-file-button" onClick={_ =>
+ec.api.restartFile(curUri)}>`, `position: fixed; bottom: 10px; right: 10px`,
+vscode-lean4 main.tsx / index.css) is HIDDEN while a view that carries the
+item is mounted — `HOST_BUTTON_HIDE_CSS` (`display: none !important`), one
+counted `<style data-ptw-host-button>`, removed with the last view, so the
+host's button returns untouched whenever Ramify is not showing (the empty
+"No proof tree here" state mounts no view, so the host's button stands there).
+The band's RIGHTMOST item calls the same `ec.api.restartFile(pos.uri)`;
+widget-only (`ProofTreeView.restart`, `RestartInfo {onRestart, busy,
+outdated}`), so the static viewer and the plain harness have no item and hide
+nothing; `?restart-stub[=outdated|busy]` draws it offline and records clicks
+in `window.__restarts`.
+
+- *What the infoview exposes for progress, measured against its source.* Its
+  `ProgressContext` (the per-file `$/lean/fileProgress` map behind the
+  editor's orange bar) is NOT exported. `useServerNotificationEffect` IS, and
+  vscode-lean4 forwards `$/lean/fileProgress` for every open file
+  (`InfoProvider.sendProgress`); the infoview subscribes itself, so a second
+  subscriber is free. `processing` non-empty (ignoring `kind: 2`, the fatal
+  marker) = Lean is working on this file. `gotServerNotification.current`
+  holds only the last notification of ANY method, so a widget mounted
+  mid-elaboration learns at the next one (they arrive many times a second).
+  Busy is that, OR a click until a NEW payload resolves (the object the click
+  saw is kept; derived, nothing to clear). Request-in-flight was rejected as
+  a signal: every cursor move would spin the icon.
+- *Out-of-date imports: two messages in core v4.32.2* (Lean/Server/
+  FileWorker.lean): "Imports are out of date and MUST be rebuilt; use the
+  "Restart File" command…" — an ERROR on the header when a worker starts on
+  stale oleans (no snapshot, so usually no tree), which is the one
+  vscode-lean4's `checkForImportsOutdatedError` pops a notification for; and
+  "…SHOULD be rebuilt…" — a sticky INFORMATION diagnostic
+  (`handleStaleDependency`) when a dependency goes stale while the file is
+  open, the tree still drawn. The band matches both
+  (`/Imports are out of date and (?:must|should) be rebuilt/`), off
+  `publishDiagnostics` (the handler the widget already had), else the
+  payload's own list.
+- *Look.* Icon only at rest: codicon `debug-restart` (VS Code's Restart, the
+  debug toolbar's and Restart Extension Host's); `loading` spinning while busy
+  (`[data-ptw-spin]`, VS Code's `~spin`: 1.5s, 30 steps; off under
+  reduced motion) — `loading` and not `sync`, because `loading` already means
+  "in progress" on the `⁇` button (one meaning, E); PROMINENT where the
+  imports are out of date: VS Code's warning status item
+  (`--ptw-statusbar-warn-bg/-fg` = `statusBarItem.warningBackground/
+  -Foreground`, fallback the warning hue darkened to 60% with white) and the
+  words "Restart File". A real `<button>`, a tab stop; a `?` panel row
+  (`Caps.restart`); measured in the ghost as drawn (`data-g="restart"`; its
+  width depends on the prominent state, never on the stage). Classic: a drawn
+  open-circle arrow; the prominent tint is the warning hue on the page ink.
+- *The band drops to 22.* `BAR_H` with the top border drawn INSIDE (an inset
+  shadow — the workbench overlays `statusBar.border` the same way). Deleted:
+  the hole punch, `placeHostButton`, `hostButton`, `HOST_BUTTON_CSS`,
+  `BAND_PAD`, `BAND_SLOT_GAP`, `BAND_BORDER`, the `geom` state and the second
+  row (`twoRows`), and the harness's `?host-button` stub. The second row is
+  dead without a slot: at a 300px pane the all-glyph row (four icons, the
+  count, `?`, ↻) holds with room to spare (screenshot); narrower clips at the
+  row's ends, as before.
+- *Live (code-server, Dark Modern, 1600×900 @2x):* band 743×22 at the frame's
+  bottom, the host button `display: none`, ↻ at the right end. Making Ramify
+  stale under an open file (a comment appended to ProofTreeComments.lean +
+  `lake build Ramify`) turned the item prominent within one poll ("this
+  file's imports are out of date…"); clicking it restarted the file — the
+  editor's orange bar ran and the item spun ("Lean is working on this file").
+  Found on the way: the restart retires the RPC session, and the relay's next
+  `preview-clear` failed with `RpcNeedsReconnect` into a red banner; such
+  errors are now dropped (`callCompanion`), since the infoview reconnects by
+  itself.
+
+**B. `$(icon) value`.** In the VS Code look every band item is VS Code's
+status-item grammar: ONE CONSTANT icon per item and the value as a word —
+`[list-tree] outline · [filter] used · [comment] show · [eye] Reading`,
+`[bookmark] 2/5 ‹ ›`. The per-mode icons left the BAND (the Layout and
+Comments panels' rows keep them). Ladder: `[icon] value` → icon (the value in
+the tip, which already opens `Name: value — …`); the VALUE form is the FULL
+form there, so `fit` is unchanged and its name stage simply moves nothing, and
+the ghost carries exactly the drawn forms. Reading reads `[eye] Reading`, the
+constant word, not `[eye] brief · lints`: that list runs from nothing to seven
+names, so the item would swing in width with every toggle (and walk the whole
+ladder), and "all off" would be a value that says nothing; what is on is the
+emphasis ink plus the tip's first words, as before. Classic is untouched
+(`Name: value`, per-mode glyphs, `Reading ▾`).
+
+**C. The lint popover.** A lint's hover reads as VS Code's: the linter's
+sentence in the UI face with its `code` spans in the code font (`CodeText`,
+the one rule), and the ` (linter: style.show)` that `withLinterName` puts on
+the first line moved OUT into a dim source line under it, `Lean 4 ·
+style.show` (`splitLinterName`, diagnostics.ts — the pager and the `<title>`
+keep the suffix). Errors and warnings keep Lean's text in the code font (they
+carry goals). `style.show` became a Quick Fix: Mathlib's show linter logs at
+the whole `show t` (`tac.stx`) and fires only where `show` CHANGED the goal,
+so the fix is the keyword → `change` (lints.ts; `LINT_FIXES` "`show` changed
+the goal — write `change`"). New fixture `lint_show` at the END of
+lean/ProofTreeLints.lean (so the existing line numbers, and CLAUDE.md's `35
+2`, hold): `probe lsp ../lean/ProofTreeLints.lean 72 2 --lint` → `72:2-72:12
+style.show`, edit `72:2-72:6→"change"`, `checkRewrite` **benign** in 19 ms.
+That probe prints, it has no expectation table, so nothing was added to one.
+Live: the popover over `show n = n` (screenshot); the real mouse did not open
+it in the Playwright run (a dispatched `mouseover` on the squiggle's hit rect
+did) — not investigated.
+
+**D. Batch 5 live.** Installed the rebuilt companion (dist/ramify-1.0.0.vsix;
+the installed copy predated settingWrites.js). Layout → spine in the band:
+code-server's User settings.json gained `"ramify.view.layout": "spine"`; after
+a page reload the band read `Layout: spine` and the tree was in spine. (The
+key was removed again afterwards.)
+
+**E. One codicon = one meaning** (owner's report). `list-tree` meant both the
+outline layout and ⇑; `filter` was the path move (and would have been
+Context's band icon); `sparkle` meant both narrate and the model;
+`split-horizontal` both side-by-side and "open to the side"; `add` four things
+(insert a step, bring back a ghost, show every ledger row's goal, a ledger
+row's goal). And the scope chip still printed `⊹ path ·`, a text `›` and a
+text `✕` in the VS Code look; the pills' cancel chips and the gallery pager
+painted `×` / `‹ ›` as text.
+- web/src/icons.ts `ICON` is now the one table, by SLOT (band item, panel row,
+  move, menu row, rail, header, chip…); every component reads it; a name in
+  two slots must be one `SAME_MEANING` group with the reason (dismiss
+  `close`, the chevrons, a mark's `bookmark`, the scope chip naming its move,
+  the lightbulb's autofix state = the lint move, `ellipsis` for more-than-is-
+  drawn, which VS Code also uses for both).
+- New picks: ⇑ `list-unordered` (it writes out the LIST of lemmas — `simp
+  only [a, b, c]`; `unfold` was the other candidate and went to the ledger);
+  path `git-commit` (one line through one node — the single line of descent
+  to here; VS Code draws a history line with it; `type-hierarchy-sub` shows
+  branching, the opposite of a path, and `location` says "here" without the
+  path); Context `filter` (which hypotheses are shown is a filter; VS Code's
+  own filter icon); side-by-side `layout-centered` (columns); narrate `quote`
+  (words standing for the step; `sparkle` stays the model's); a ledger row's
+  goal and "show every step's goal" `unfold` / "hide" `fold` (VS Code's
+  Unfold/Fold); a ghost's "bring back" the fold corner's `chevron-right`;
+  `add` is only "insert text". `remove` left the generated set.
+- The scope chip, the breadcrumb separator, the pills' cancel and the gallery
+  pager go through `Codicon` (`FrontierChip.icon` — the `×` string still
+  SIZES the chip, so nothing measured moved); classic keeps `⊹`/`◎` through
+  the node set and a drawn cross.
+- `probe icons` (in `npm test`): (a) shared names only in `SAME_MEANING`, and
+  every group still shares; (b) no codicon name spelled in a `name=` /
+  `codicon:` / `icon:` position outside icons.ts (codicon.ts generated,
+  codiconView.tsx's classic tables); (c) no generated codicon unused; (d) no
+  classic glyph on a non-comment line of a render file unless allow-listed with
+  its reason (titles naming a move by `MOVE_MARK`, the classic radio branch,
+  strings that only size a chip, the harness). 78 slots, 55 codicons, 12
+  shared names, 0 literals.
+
+Gates: `npm test` green — fingerprint identical (1189: chrome only),
+`probe icons` new; `check-sync`, `check-settings`, `gen-codicons --check`
+(+7, −1: 55 icons), `gen-experience --check`; widget bundle rebuilt; `lake
+build Ramify`. Screenshots /tmp/claude-0/restart/: `h/g-{1200,760,420,300}-
+{light,dark}-{vscode,classic}(-band).png` (with `?diag-stub=ewl`),
+`h/o-1200-*` (outdated), `h/b-760-*` (busy); `before/` and `after/` (the `⋯`
+menu on a plain tactic and on odd_sums' `simp` — ⇑ `list-tree` →
+`list-unordered`, path `filter` → `git-commit` — the band and the scope chip,
+both skins); `lint-pop-{light,dark}-crop.png` (harness); real VS Code:
+`final-vscode-band-rest.png`, `final-vscode-band-crop.png`,
+`final-vscode-band-outdated-crop.png`, `live-restarted.png`,
+`final-vscode-lint-popup.png`, `live-reloaded.png` (spine held).

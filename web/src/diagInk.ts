@@ -1,5 +1,6 @@
 // The three diagnostic severities' ink, glyph and icon (error, warning, lint), shared by the tree's
 // squiggles and the status bar's diagnostics item.
+import { ICON } from "./icons";
 import { DANGER_FILL, DIM_OPACITY, INFO_FILL, WARN_FILL } from "./theme";
 import { type CodiconName } from "./codicon";
 
@@ -27,9 +28,9 @@ export const DIAG_ICON: Record<
   Severity,
   { name: CodiconName; ink: string; opacity?: number }
 > = {
-  1: { name: "error", ink: DANGER_FILL },
-  2: { name: "warning", ink: WARN_FILL },
-  3: { name: "info", ink: INFO_FILL, opacity: DIM_OPACITY },
+  1: { name: ICON["diag.error"], ink: DANGER_FILL },
+  2: { name: ICON["diag.warning"], ink: WARN_FILL },
+  3: { name: ICON["diag.info"], ink: INFO_FILL, opacity: DIM_OPACITY },
 };
 export const diagGlyphOf = (sev: Severity): string => DIAG[sev].glyph;
 export const diagWordOf = (sev: Severity): string => DIAG[sev].word;

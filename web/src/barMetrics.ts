@@ -80,45 +80,24 @@ export const PILL_BTN: CSSProperties = {
   background: "var(--ptw-bar-item-bg, transparent)",
 };
 
-/* THE STATUS BAND (2026-10-04) — one full-width band docked on the frame's
-bottom edge, VS Code's status bar, with a HOLE PUNCHED at its right end for the
-infoview's own "Restart File" button.
+/* THE STATUS BAND (2026-10-04; 2026-10-05) — one full-width band docked on the
+frame's bottom edge, VS Code's status bar, `BAR_H` (22) tall with its top
+border drawn INSIDE that height (VS Code draws `statusBar.border` as an
+overlay too).
 
-That button is the host's: `<vscode-button class="restart-file-button">`,
-`position: fixed; bottom: 10px; right: 10px` (vscode-lean4's `index.css`),
-13px system-ui at `line-height: 22px`, `padding: 1px 13px`, a 1px border —
-MEASURED in code-server 2026-10-04 (Linux, dpr 2): 26.0 tall, 100.6 wide
-(95 in the macOS UI font), right 10, bottom 10, radius 2. Being `fixed`, it
-hangs over the bottom right of the WEBVIEW VIEWPORT, which is where the frame
-ends (widget.tsx sizes it to the viewport's bottom).
+It used to punch a HOLE at its right end for the infoview's own "Restart
+File" button (`<vscode-button class="restart-file-button">`, `position:
+fixed; bottom: 10px; right: 10px`, 26 tall, measured in code-server
+2026-10-04) and grow to 31 to surround it. Since 2026-10-05 the band OWNS
+Restart File: while a view that can restart is mounted, the host's button is
+HIDDEN (`HOST_BUTTON_HIDE_CSS`, a counted `<style>` removed with the last
+view, so the host's button returns untouched whenever Ramify is not showing)
+and the band's rightmost item calls the same `ec.api.restartFile(uri)` the
+button did (statusBar.tsx `RestartItem`). No slot, no measurement of a host
+element, no second row. */
 
-While a view is mounted the band MOVES that button down into itself
-(`HOST_BUTTON_CSS`, `bottom/right: BAND_PAD`): docked where it stood, the band
-would have to be 10 + 26 + 2 = 38 tall to surround it, and the owner asked for
-"as close as we can get to the height of the Restart File button while still
-surrounding it". The band then MEASURES the button (`fit`), never assumes it:
-its slot is the button's left edge to the frame's right plus `BAND_SLOT_GAP`,
-and the button row is as tall as the frame's bottom to the button's top plus
-`BAND_PAD` — 2 + 26 + 2 = 30, plus the 1px top border. Where no button exists
-(the static viewer, the harness without `?host-button`) the band runs edge to
-edge, `BAR_H` tall, with no slot. */
-
-/** The clearance the band keeps round the host button (and the button's own
- inset once the band has moved it). */
-export const BAND_PAD = 2;
-
-/** The gap between the band's last item and the host button's slot. */
-export const BAND_SLOT_GAP = 6;
-
-/** The band's top border: its one edge, VS Code's `statusBar.border`. */
-export const BAND_BORDER = 1;
-
-/** The rule that sets the host's button into the band: injected while a view
- is mounted (statusBar.tsx), removed with the last one, and REWRITTEN by `fit`
- so the button stands `BAND_PAD` inside the frame's corner (the infoview pads
- its content, so the viewport's corner is not the frame's). The button keeps
- its own size, ink and behaviour — only its inset changes. */
-export const HOST_BUTTON_CSS = `.restart-file-button{bottom:${BAND_PAD}px !important;right:${BAND_PAD}px !important}`;
+/** Hides the host's own Restart File button while the band carries it. */
+export const HOST_BUTTON_HIDE_CSS = ".restart-file-button{display:none !important}";
 
 /** The zoom rail's corner: `RAIL_INSET` from the frame's right edge, and
  `RAIL_GAP` above the band (or above an open message strip). */
@@ -129,9 +108,8 @@ export const RAIL_GAP = 8;
 /** The gap between the band's top and the message strip's bottom. */
 export const DIAG_STRIP_GAP = 4;
 
-// One row of the band without the host button: VS Code's status bar, 22.
-// The SECOND row (a pane too thin for the all-glyph row beside the slot) is
-// this tall too. See BAR_ITEM_H for why every height here is fixed.
+// The band's one row: VS Code's status bar, 22, its top border included.
+// See BAR_ITEM_H for why every height here is fixed.
 export const BAR_H = 22;
 
 // The gap between items, and the band's own side padding.
@@ -151,8 +129,7 @@ as the row compacted and as `used` was swapped for `narrate`. A status bar that
 changes height when you change a setting is the report this rule answers.
 
 So height comes only from these numbers: an 18px item centred in a `BAR_H`
-row (the button row: the host button's measured height plus `BAND_PAD` each
-side). Vertical padding on the item is therefore ZERO — the
+row. Vertical padding on the item is therefore ZERO — the
 height and `alignItems: center` do that work — and every glyph sits inside a
 fixed-size box (`GlyphBox`) so no font size can reach the layout at all.
 `borderRadius` is `CHROME_RADIUS`: items are FLAT, like VS Code's own status-bar
@@ -227,13 +204,16 @@ drawn copies. See codiconView.tsx. */
 export const CORNER_HIT_H = 18;
 
 /** One of the bar's VALUE items (Layout, Context, Comments and — only where
-the proof has marks — Marks), as data: the three forms it can be drawn in and
-every value it could show. The FULL form is `Name: value` — `prefix` is the
-NAME, always a word, never an icon; the VALUE form drops the name (`outline`),
-which the item's tip still opens with (`Layout: outline — …`, the title's own
-first words); the GLYPH form is the icon alone. `value` is the half that
-changes, and `values` is every string it could be, which is what reserves its
-width in both word forms. */
+the proof has marks — Marks), as data: the forms it can be drawn in and every
+value it could show. CLASSIC: the FULL form is `Name: value` — `prefix` is the
+NAME — the VALUE form drops the name (`outline`), and the GLYPH form is the
+mode's icon alone. VS CODE (2026-10-05): VS Code's status-item grammar,
+`$(icon) value` — `prefix` is the item's ONE CONSTANT icon (icons.ts
+`band.*`), the full and value forms are the same `[icon] value`, and the
+glyph form is that icon alone; either way the item's tip opens `Name: value —
+…`, so what a form drops is the first thing its tip says. `value` is the half
+that changes, and `values` is every string it could be, which is what
+reserves its width in the word forms. */
 export type BarForm = "full" | "value" | "glyph";
 
 export interface BarValueItem {

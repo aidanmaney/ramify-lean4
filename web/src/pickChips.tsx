@@ -15,6 +15,13 @@ import {
   FOCUS_INK,
 } from "./theme";
 import { CHIP_GAP, CHIP_H, CHIP_W_ADD, chipWidth } from "./chipMetrics";
+import { Codicon } from "./codiconView";
+import { type CodiconName } from "./codicon";
+import { ICON } from "./icons";
+
+/** A chip's or the pager's codicon, px square (inside the chip's measured
+ width: the glyph string still sizes the chip, so nothing measured moves). */
+const CHIP_ICON = 12;
 
 const PICK_FONT_PX = 12;
 
@@ -44,12 +51,14 @@ export function PickerRow({
     title: string,
     color: string,
     onClick: () => void,
+    icon?: CodiconName,
   ) => {
     const width = chipWidth(glyph, PICK_FONT_PX);
     chips.push(
       <FrontierChip
         key={key}
         glyph={glyph}
+        icon={icon}
         title={title}
         x={cursor}
         width={width}
@@ -61,7 +70,7 @@ export function PickerRow({
     );
     cursor += width + CHIP_GAP;
   };
-  push("cancel", "×", "cancel", "var(--ptw-comment)", onCancel);
+  push("cancel", "×", "cancel", "var(--ptw-comment)", onCancel, ICON["chip.cancel"]);
   for (const o of options) {
     push(
       o.rel,
@@ -78,6 +87,7 @@ export function PickerRow({
 
 export function FrontierChip({
   glyph,
+  icon,
   title,
   x,
   width,
@@ -90,6 +100,9 @@ export function FrontierChip({
   keyboard,
 }: {
   glyph: string;
+  /** Draw this codicon instead of the glyph's text (a cancel chip's close):
+   the glyph still names the chip and still sizes it. */
+  icon?: CodiconName;
   title: string;
   x: number;
   width: number;
@@ -161,18 +174,28 @@ export function FrontierChip({
         strokeWidth={focused ? 2 : TREE_INK_SW}
         strokeDasharray={solid ? undefined : "3 2"}
       />
-      <text
-        x={width / 2}
-        y={CHIP_H / 2}
-        textAnchor="middle"
-        dy="0.32em"
-        fontSize={fontSize}
-        fontFamily={fontFamily}
-        fill={color}
-        style={{ userSelect: "none", letterSpacing: 0 }}
-      >
-        {glyph}
-      </text>
+      {icon ? (
+        <Codicon
+          name={icon}
+          size={CHIP_ICON}
+          x={width / 2 - CHIP_ICON / 2}
+          y={CHIP_H / 2 - CHIP_ICON / 2}
+          color={color}
+        />
+      ) : (
+        <text
+          x={width / 2}
+          y={CHIP_H / 2}
+          textAnchor="middle"
+          dy="0.32em"
+          fontSize={fontSize}
+          fontFamily={fontFamily}
+          fill={color}
+          style={{ userSelect: "none", letterSpacing: 0 }}
+        >
+          {glyph}
+        </text>
+      )}
     </g>
   );
 }
@@ -190,7 +213,7 @@ export function GalleryPager({
   x: number;
   onStep: (delta: number) => void;
 }) {
-  const arrow = (dx: number, glyph: string, at: number) => (
+  const arrow = (dx: number, icon: CodiconName, at: number) => (
     <g
       transform={`translate(${at},0)`}
       style={{ cursor: "pointer" }}
@@ -208,18 +231,13 @@ export function GalleryPager({
         height={PAGER_H}
         fill="transparent"
       />
-      <text
-        x={PAGER_ARROW_W / 2}
-        y={PAGER_H / 2}
-        textAnchor="middle"
-        dy="0.32em"
-        fontSize={11}
-        fontFamily="monospace"
-        fill={CHROME_INK}
-        style={{ userSelect: "none" }}
-      >
-        {glyph}
-      </text>
+      <Codicon
+        name={icon}
+        size={CHIP_ICON}
+        x={PAGER_ARROW_W / 2 - CHIP_ICON / 2}
+        y={PAGER_H / 2 - CHIP_ICON / 2}
+        color={CHROME_INK}
+      />
     </g>
   );
   return (
@@ -243,7 +261,7 @@ export function GalleryPager({
         stroke={CHROME_BORDER}
         strokeWidth={1}
       />
-      {arrow(-1, "‹", 0)}
+      {arrow(-1, ICON["gallery.prev"], 0)}
       <text
         x={PAGER_ARROW_W + PAGER_LABEL_W / 2}
         y={PAGER_H / 2}
@@ -256,7 +274,7 @@ export function GalleryPager({
       >
         {`${index + 1}/${count}`}
       </text>
-      {arrow(1, "›", PAGER_ARROW_W + PAGER_LABEL_W)}
+      {arrow(1, ICON["gallery.next"], PAGER_ARROW_W + PAGER_LABEL_W)}
     </g>
   );
 }

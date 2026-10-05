@@ -126,11 +126,14 @@ export const LINT_FIXES: Record<string, string> = {
   "linter.unnecessarySeqFocus": "write `;` for `<;>`",
   "linter.haveLet": "`have` binds a Type — write `let`",
   "linter.flexible": "write out what `simp` used, so later steps do not depend on it",
+  "linter.style.show": "`show` changed the goal — write `change`",
 };
 
 /** How long `have` is, in the one fix that replaces a keyword by position
  rather than by the linter's whole range. */
 const HAVE = "have".length;
+/** …and `show`, whose keyword is the start of the range the linter names. */
+const SHOW = "show".length;
 
 const no = (why: string): Proposal => ({ ok: false, why });
 
@@ -180,6 +183,15 @@ export function lintFix(
       return at("let", l.start, {
         line: l.start.line,
         character: l.start.character + HAVE,
+      });
+    case "linter.style.show":
+      // Mathlib's show linter points at the whole `show t` tactic (it logs at
+      // `tac.stx`) and fires only where `show` CHANGED the goal, which is
+      // `change`'s job; the keyword is the range's first four characters.
+      // A token edit — `checkRewrite` still has the last word.
+      return at("change", l.start, {
+        line: l.start.line,
+        character: l.start.character + SHOW,
       });
     case "linter.style.multiGoal": {
       // Focus the goal the linter says was left standing. One `· ` inserted

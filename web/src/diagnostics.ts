@@ -233,6 +233,17 @@ export function attachDiagnostics(
   };
 }
 
+/** A lint's message SPLIT for a hover (2026-10-05): the linter's own words
+ without the ` (linter: name)` that `withLinterName` put on the first line,
+ and the name, which the node's popover draws as a dim SOURCE line at the
+ bottom, VS Code's hover idiom (`Lean 4 · style.show`). A message without the
+ suffix comes back whole. */
+export function splitLinterName(msg: string): { text: string; name: string | null } {
+  const m = /^([^\n]*?) \(linter: ([^)\n]+)\)/.exec(msg);
+  if (!m) return { text: msg, name: null };
+  return { text: m[1] + msg.slice(m[0].length), name: m[2] };
+}
+
 /** `msg` with ` (linter: name)` at the end of its FIRST line. */
 function withLinterName(msg: string, name: string): string {
   const nl = msg.indexOf("\n");

@@ -4,6 +4,7 @@
 // refresh).
 import { MOVE_MARK, type BarKind, type MoveId } from "./moves";
 import { type NodeMove } from "./nodeBar";
+import { ICON } from "./icons";
 
 /** How each move LOOKS — one table, spread by `movesFor` (the live move) and
  `disabledSlot` (its greyed slot), so a slot does not change look when it
@@ -12,22 +13,22 @@ import { type NodeMove } from "./nodeBar";
  and heading the move's `⋯` row (2026-10-04: VS Code's own icons, replacing
  the per-glyph font sizes and the drawn skip/trash/inline marks). */
 export const MOVE_LOOK: Record<MoveId, Pick<NodeMove, "glyph" | "codicon">> = {
-  source: { glyph: MOVE_MARK.source, codicon: "go-to-file" },
-  focus: { glyph: MOVE_MARK.focus, codicon: "target" },
-  skip: { glyph: "skip", codicon: "debug-step-over" },
-  path: { glyph: MOVE_MARK.path, codicon: "filter" },
+  source: { glyph: MOVE_MARK.source, codicon: ICON["move.source"] },
+  focus: { glyph: MOVE_MARK.focus, codicon: ICON["move.focus"] },
+  skip: { glyph: "skip", codicon: ICON["move.skip"] },
+  path: { glyph: MOVE_MARK.path, codicon: ICON["move.path"] },
   // The lightbulb: `lightbulb-autofix` where the linter has a fix (the view
   // swaps the codicon and the ink, `--ptw-lightbulb(-autofix)`).
-  fix: { glyph: MOVE_MARK.fix, codicon: "lightbulb" },
-  delete: { glyph: "delete", codicon: "trash" },
-  trace: { glyph: MOVE_MARK.trace, codicon: "references" },
-  collapse: { glyph: MOVE_MARK.collapse, codicon: "wand" },
-  expand: { glyph: MOVE_MARK.expand, codicon: "list-tree" },
-  inline: { glyph: MOVE_MARK.inline, codicon: "fold-down" },
-  extract: { glyph: MOVE_MARK.extract, codicon: "fold-up" },
-  lint: { glyph: MOVE_MARK.lint, codicon: "lightbulb-autofix" },
-  lens: { glyph: MOVE_MARK.lens, codicon: "split-horizontal" },
-  goal: { glyph: MOVE_MARK.goal, codicon: "add" },
+  fix: { glyph: MOVE_MARK.fix, codicon: ICON["move.fix"] },
+  delete: { glyph: "delete", codicon: ICON["move.delete"] },
+  trace: { glyph: MOVE_MARK.trace, codicon: ICON["move.trace"] },
+  collapse: { glyph: MOVE_MARK.collapse, codicon: ICON["move.collapse"] },
+  expand: { glyph: MOVE_MARK.expand, codicon: ICON["move.expand"] },
+  inline: { glyph: MOVE_MARK.inline, codicon: ICON["move.inline"] },
+  extract: { glyph: MOVE_MARK.extract, codicon: ICON["move.extract"] },
+  lint: { glyph: MOVE_MARK.lint, codicon: ICON["move.lint"] },
+  lens: { glyph: MOVE_MARK.lens, codicon: ICON["move.lens"] },
+  goal: { glyph: MOVE_MARK.goal, codicon: ICON["move.goal"] },
 };
 
 /** The move's slot, greyed, its tip saying why it cannot be used here. */

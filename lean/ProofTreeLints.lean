@@ -65,3 +65,10 @@ theorem lint_cases (n : ℕ) (h : n = 0 ∨ n = 1) : n < 2 := by
 
 theorem lint_seqfocus (n : ℕ) (h : n = 1) : n + 0 = 1 := by
   simp <;> omega
+
+-- `lint_show` (2026-10-05) — `show` that CHANGES the goal (`n + 0 = n` to
+-- `n = n`, defeq), which Mathlib wants written `change`
+-- (`linter.style.show`). The fix replaces the keyword.
+theorem lint_show (n : ℕ) : n + 0 = n := by
+  show n = n
+  rfl

@@ -1,5 +1,6 @@
 // The status bar's diagnostics count item and the message strip above the strip: severity glyphs and
 // ink, the per-severity counts, and the strip with its pager.
+import { ICON } from "./icons";
 import { Fragment } from "react";
 import { type TreeDiagnostic } from "./diagnostics";
 import { useTip } from "./tipController";
@@ -298,7 +299,7 @@ export function DiagStrip({
               {...tip.props("Previous problem")}
               onClick={() => onStep(-1)}
             >
-              <Codicon name="arrow-up" />
+              <Codicon name={ICON["diag.prev"]} />
             </button>
             <span style={{ color: MUTED_FILL, fontSize: CHROME_TEXT_SM }}>
               {index + 1}/{count}
@@ -310,7 +311,7 @@ export function DiagStrip({
               {...tip.props("Next problem")}
               onClick={() => onStep(1)}
             >
-              <Codicon name="arrow-down" />
+              <Codicon name={ICON["diag.next"]} />
             </button>
           </>
         )}
@@ -332,7 +333,7 @@ export function DiagStrip({
               {...tip.props("Next problem")}
               onClick={() => onStep(1)}
             >
-              <Codicon name="arrow-down" />
+              <Codicon name={ICON["diag.next"]} />
             </button>
             <button
               type="button"
@@ -341,7 +342,7 @@ export function DiagStrip({
               {...tip.props("Previous problem")}
               onClick={() => onStep(-1)}
             >
-              <Codicon name="arrow-up" />
+              <Codicon name={ICON["diag.prev"]} />
             </button>
           </>
         )}
@@ -352,7 +353,7 @@ export function DiagStrip({
           {...tip.props("Close the messages (Esc)")}
           onClick={onClose}
         >
-          <Codicon name="close" />
+          <Codicon name={ICON["diag.close"]} />
         </button>
       </span>
     </div>

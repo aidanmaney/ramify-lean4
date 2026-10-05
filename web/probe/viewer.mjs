@@ -153,9 +153,9 @@ t.eq(JSON.stringify(parseLink("#file=a&layout=nonsense")), JSON.stringify({ file
 
 // The `?` panel in a reading-only session names no Lean-only move.
 {
-  const caps = { reveal: true, edit: false, add: false, popout: false, del: false, flags: false, restructure: false, undo: false, polish: false };
+  const caps = { reveal: true, edit: false, add: false, popout: false, del: false, flags: false, restructure: false, undo: false, polish: false, restart: false };
   const shown = GESTURES.filter((g) => gestureShown(g, caps)).map(gestureText);
-  const LEAN_ONLY = /\b(edit|flag|chip|undo|redo|model|reword|stub|add a tactic|lens)\b/i;
+  const LEAN_ONLY = /\b(edit|flag|chip|undo|redo|model|reword|stub|add a tactic|lens|restart)\b/i;
   for (const s of shown) t.ok(!LEAN_ONLY.test(s), `? panel, reading only: "${s}"`);
   t.ok(shown.some((s) => s.startsWith("drag")) && shown.some((s) => s.startsWith("⇧F10")), "? panel keeps drag and ⇧F10, in their reading wording");
   const all = { ...Object.fromEntries(Object.keys(caps).map((k) => [k, true])) };

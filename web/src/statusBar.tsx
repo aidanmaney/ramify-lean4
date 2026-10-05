@@ -1,7 +1,6 @@
-// The status band: VS Code's status bar docked on the frame's bottom edge, with a slot punched at its
-// right end for the host's "Restart File" button — settings (layout, context, comments) and Reading on the
-// left, the status readout, marks, the diagnostics count and `?` on the right — its three-form compaction,
-// its second row, and its panels.
+// The status band: VS Code's status bar docked on the frame's bottom edge — settings (layout, context,
+// comments) and Reading on the left, the status readout, marks, the diagnostics count, `?` and Restart File
+// on the right — its compaction ladder, and its panels.
 import {
   Fragment,
   useCallback,
@@ -27,6 +26,8 @@ import {
   STATUSBAR_BORDER,
   STATUSBAR_FG,
   STATUSBAR_ON,
+  STATUSBAR_WARN_BG,
+  STATUSBAR_WARN_FG,
 } from "./theme";
 import {
   COMMENT_MODES,
@@ -39,15 +40,12 @@ import {
   stopToReflow,
 } from "./viewModes";
 import {
-  BAND_BORDER,
-  BAND_PAD,
-  BAND_SLOT_GAP,
   BAR_GROUP_GAP,
   BAR_H,
   type BarForm,
   type BarValueItem,
   DIAG_STRIP_GAP,
-  HOST_BUTTON_CSS,
+  HOST_BUTTON_HIDE_CSS,
   STATUS_GAP,
   STATUS_PAD_X,
   type StatusInfo,
@@ -65,6 +63,7 @@ import {
 import { READING_OPTIONS, readingOn, type ReadingId, type ReadingState } from "./experience";
 import { type DiagBarProps, DiagCountItem, DiagStrip } from "./diagBar";
 import { Codicon } from "./codiconView";
+import { ICON } from "./icons";
 
 // One group of the band: its items in a flex row, one STATUS_GAP apart. The
 // groups never shrink; a row clips at its ends only as the last resort.
@@ -97,17 +96,35 @@ export interface BandPlace {
   strip: number;
 }
 
-/* THE HOST BUTTON'S RULE, injected while ANY view is mounted (the render
-matrix mounts many) and removed with the last: one `<style>`, counted. */
+/** RESTART FILE (2026-10-05), the band's rightmost item: what the infoview's
+ own button did — `ec.api.restartFile(uri)` — plus what the widget knows.
+ Widget-only: the harness (`?restart-stub`) and the static viewer pass none,
+ and then there is no item and the host's button (where there is one) is left
+ alone. */
+export interface RestartInfo {
+  onRestart: () => void;
+  /** Lean is elaborating this file (`$/lean/fileProgress` with ranges still
+   processing), or a restart was clicked and its payload has not arrived:
+   the icon spins. */
+  busy: boolean;
+  /** Lean said "Imports are out of date and must be rebuilt": the item turns
+   PROMINENT — VS Code's warning item, icon + "Restart File". */
+  outdated: boolean;
+}
+
+/* THE HOST BUTTON IS HIDDEN while ANY view that carries Restart File is
+mounted (the render matrix mounts many) and comes back with the last: one
+`<style>`, counted. A rule, not a DOM write to the host's element, so a host
+that re-renders its button re-hides it for free. */
 let hostRuleUsers = 0;
 let hostRuleEl: HTMLStyleElement | null = null;
-function useHostButtonRule() {
+function useHostButtonHidden(active: boolean) {
   useEffect(() => {
-    if (typeof document === "undefined") return;
+    if (!active || typeof document === "undefined") return;
     if (hostRuleUsers++ === 0) {
       hostRuleEl = document.createElement("style");
       hostRuleEl.setAttribute("data-ptw-host-button", "");
-      hostRuleEl.textContent = HOST_BUTTON_CSS;
+      hostRuleEl.textContent = HOST_BUTTON_HIDE_CSS;
       document.head.appendChild(hostRuleEl);
     }
     return () => {
@@ -116,36 +133,7 @@ function useHostButtonRule() {
         hostRuleEl = null;
       }
     };
-  }, []);
-}
-
-/* SET INTO THE FRAME'S CORNER, not the viewport's. The button is fixed to the
-webview, and the infoview pads its content (measured: the frame ran 28 to 771
-of a 795 viewport), so `right: 2px` left it hanging 22px past the band's end.
-The rule is rewritten so the button's box stands `BAND_PAD` inside the
-FRAME's bottom-right corner: its computed inset plus how far it is from where
-it should be — linear, so one write lands it, and a second pass writes
-nothing. A DOM write to our own `<style>`, never state. */
-function placeHostButton(btn: HTMLElement, fr: DOMRect) {
-  if (!hostRuleEl) return;
-  const cs = getComputedStyle(btn);
-  const b = btn.getBoundingClientRect();
-  const right = parseFloat(cs.right);
-  const bottom = parseFloat(cs.bottom);
-  if (!Number.isFinite(right) || !Number.isFinite(bottom)) return;
-  const dr = b.right - (fr.right - BAND_PAD);
-  const db = b.bottom - (fr.bottom - BAND_PAD);
-  if (Math.abs(dr) < 0.5 && Math.abs(db) < 0.5) return;
-  const r = Math.round((right + dr) * 100) / 100;
-  const bt = Math.round((bottom + db) * 100) / 100;
-  hostRuleEl.textContent = `.restart-file-button{bottom:${bt}px !important;right:${r}px !important}`;
-}
-
-/** The host's "Restart File" button, where the page has one with a box. */
-function hostButton(): HTMLElement | null {
-  if (typeof document === "undefined") return null;
-  const el = document.querySelector<HTMLElement>(".restart-file-button");
-  return el && el.getClientRects().length > 0 ? el : null;
+  }, [active]);
 }
 
 export function StatusBar({
@@ -195,6 +183,7 @@ export function StatusBar({
   onHelpOpenChange,
   caps,
   fontFamily,
+  restart,
 }: {
   /** The band's height and the open message strip's (see `fit`). */
   onPlace: (p: BandPlace) => void;
@@ -254,6 +243,8 @@ export function StatusBar({
   onHelpOpenChange: (v: boolean) => void;
   caps: Caps;
   fontFamily: string;
+  /** Restart File, where the host can restart (the widget); absent, no item. */
+  restart?: RestartInfo;
 }) {
   // Where the open panel hangs from: the x its own item reported. Held here
   // rather than in `barOpen` because it is geometry, not view state — and the
@@ -314,17 +305,30 @@ export function StatusBar({
     </GlyphBox>
   );
 
+  // VS CODE'S STATUS-ITEM GRAMMAR (2026-10-05): `$(icon) value`, ONE
+  // CONSTANT icon per item (icons.ts `band.*`) — the value is the word that
+  // changes, the icon says which item it is, so it never changes with the
+  // value (the per-mode icons stay on the PANELS' rows). The classic look
+  // keeps `Name: value` and the per-mode glyphs.
+  const bandIcon = (slot: "band.layout" | "band.context" | "band.comments" | "band.reading" | "band.marks") => (
+    <GlyphBox>
+      <Codicon name={ICON[slot]} />
+    </GlyphBox>
+  );
+
   // THE VALUE ITEMS, in row order — three, or four where there are marks.
-  // Each can be drawn `Name: value`, as the value alone, or as its glyph, and
-  // the row decides per item (see `fit`).
+  // Each can be drawn `[icon] value` (classic: `Name: value`, or the value
+  // alone) or as its icon alone, and the row decides per item (see `fit`).
   const valueItems: BarValueItem[] = [
     {
       id: "layout",
-      prefix: "Layout:",
-      glyph: (
+      prefix: classic ? "Layout:" : bandIcon("band.layout"),
+      glyph: classic ? (
         <GlyphBox>
           <Codicon name={LAYOUT_MODES[layout].icon} />
         </GlyphBox>
+      ) : (
+        bandIcon("band.layout")
       ),
       value: LAYOUT_MODES[layout].name,
       values: Object.values(LAYOUT_MODES).map((m) => m.name),
@@ -337,8 +341,10 @@ export function StatusBar({
     },
     {
       id: "context",
-      prefix: "Context:",
-      glyph: glyph(HYP_MODES[hypMode].glyph, HYP_MODES[hypMode].glyphPx),
+      prefix: classic ? "Context:" : bandIcon("band.context"),
+      glyph: classic
+        ? glyph(HYP_MODES[hypMode].glyph, HYP_MODES[hypMode].glyphPx)
+        : bandIcon("band.context"),
       value: HYP_MODES[hypMode].name,
       values: Object.values(HYP_MODES).map((m) => m.name),
       title: `${HYP_MODES[hypMode].title}${hypGroup ? " · data & props split" : ""}. ⌥-click: next breadth`,
@@ -349,11 +355,13 @@ export function StatusBar({
     },
     {
       id: "comments",
-      prefix: "Comments:",
-      glyph: (
+      prefix: classic ? "Comments:" : bandIcon("band.comments"),
+      glyph: classic ? (
         <GlyphBox>
           <Codicon name={COMMENT_MODES[commentMode].icon} />
         </GlyphBox>
+      ) : (
+        bandIcon("band.comments")
       ),
       value: commentName,
       values: Object.values(COMMENT_MODES).map((m) => m.name),
@@ -361,26 +369,42 @@ export function StatusBar({
       onAlt: () => onCommentModeChange(COMMENT_MODES[commentMode].next),
     },
     // READING, the last of the LEFT group: how much of each node you are asked
-    // to read, named for what it opens (`Reading ▾`), then `Reading`, then the
-    // eye alone. It is a menu and not a setting, so it has no value — `words`
-    // stands in for the two word forms.
+    // to read. It is a menu of independent toggles, not a setting, so it has
+    // no value — `words` stands in for the word forms. VS Code: `[eye]
+    // Reading`, a CONSTANT word, not the list of what is on (`brief ·
+    // lints`): that list runs from nothing to seven names, so the item's
+    // width would swing with every toggle and walk the whole ladder, and
+    // "all off" would be a value that says nothing; what is on is the
+    // emphasis ink and the tip's first words. Classic: `Reading ▾`, then
+    // `Reading`, then the eye.
     {
       id: "reading",
       prefix: "Reading",
-      glyph: (
-        <GlyphBox>
-          <Codicon name="eye" />
-        </GlyphBox>
-      ),
-      words: {
-        full: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-            Reading
-            <Codicon name="chevron-down" />
-          </span>
-        ),
-        value: "Reading",
-      },
+      glyph: bandIcon("band.reading"),
+      words: classic
+        ? {
+            full: (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                Reading
+                <Codicon name={ICON["reading.disclose"]} />
+              </span>
+            ),
+            value: "Reading",
+          }
+        : {
+            full: (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                {bandIcon("band.reading")}
+                Reading
+              </span>
+            ),
+            value: (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                {bandIcon("band.reading")}
+                Reading
+              </span>
+            ),
+          },
       value: "",
       values: [],
       title: `Reading options: ${readingNames.length > 0 ? readingNames.join(" · ") : "all off"} — click to change`,
@@ -396,12 +420,8 @@ export function StatusBar({
     // (`hasMarks`).
     ...(!hasMarks ? [] : [{
       id: "tour",
-      prefix: "Marks:",
-      glyph: (
-        <GlyphBox>
-          <Codicon name="bookmark" />
-        </GlyphBox>
-      ),
+      prefix: classic ? "Marks:" : bandIcon("band.marks"),
+      glyph: bandIcon("band.marks"),
       value: tourValue,
       // Every value it could show: the widest is what the row reserves, so
       // stepping from 2/5 to 3/5 moves nothing to its right.
@@ -428,7 +448,7 @@ export function StatusBar({
             // every other mark, so nothing the row measured moves.
             label={
               <GlyphBox>
-                <Codicon name="chevron-left" />
+                <Codicon name={ICON["marks.prev"]} />
               </GlyphBox>
             }
             title={
@@ -442,7 +462,7 @@ export function StatusBar({
           <BarButton
             label={
               <GlyphBox>
-                <Codicon name="chevron-right" />
+                <Codicon name={ICON["marks.next"]} />
               </GlyphBox>
             }
             title={
@@ -501,20 +521,8 @@ export function StatusBar({
     names: 99,
     words: 99,
   });
-  /* THE BAND'S GEOMETRY, decided in `fit` from the FRAME, the GHOST and the
-  HOST BUTTON alone — never from the band's own drawn box — so it can no more
-  oscillate than the stage can. `slot` is the width punched out at the right
-  end for the host button (0 where there is none), `rowH` the button row's
-  height (`BAR_H` without a button), and `twoRows` the one fallback: where
-  even the all-glyph row cannot fit beside the slot, the LEFT group moves to a
-  second row ABOVE the button row — the band grows by `BAR_H` and the frame
-  gives that up, rather than the bar lifting into the tree. */
-  const [geom, setGeom] = useState<{ slot: number; rowH: number; twoRows: boolean }>({
-    slot: 0,
-    rowH: BAR_H,
-    twoRows: false,
-  });
-  useHostButtonRule();
+  // Restart File hides the host's own button while this band carries it.
+  useHostButtonHidden(!!restart);
   // Reached through a ref so `fit` (a stable callback) need not re-create
   // on every render of the parent; written in an effect, never in render.
   const onPlaceRef = useRef(onPlace);
@@ -541,40 +549,10 @@ export function StatusBar({
     const host = card.offsetParent as HTMLElement | null;
     if (!host) return;
     const frame = host.clientWidth;
-    const fr = host.getBoundingClientRect();
-
-    /* THE HOLE PUNCH. The host button is MEASURED: where one stands over the
-    frame's bottom-right corner, the slot runs from its left edge to the
-    frame's right plus a gap, and the button row is the frame's bottom to the
-    button's top plus `BAND_PAD` — 2 + 26 + 2 once `HOST_BUTTON_CSS` has set
-    it 2px in; 38 if a host ever kept it at 10 (the band still surrounds it).
-    Read in the frame's own px (the rect over the frame's scale), so a CSS
-    zoom on an ancestor does not change the answer. */
-    let slot = 0;
-    let rowH = BAR_H;
-    const btn = hostButton();
-    if (btn && fr.width > 0) {
-      const k = frame / fr.width;
-      let b = btn.getBoundingClientRect();
-      const overCorner =
-        b.width > 0 &&
-        b.right > fr.left &&
-        b.left < fr.right &&
-        b.bottom > fr.bottom - 4 * BAR_H &&
-        b.top < fr.bottom;
-      if (overCorner) {
-        placeHostButton(btn, fr);
-        b = btn.getBoundingClientRect();
-        slot = Math.ceil((fr.right - b.left) * k) + BAND_SLOT_GAP;
-        rowH = Math.max(BAR_H, Math.ceil((fr.bottom - b.top) * k) + BAND_PAD);
-      }
-    }
 
     const chrome = 2 * STATUS_PAD_X;
-    // Beside the slot, and (the second row) the whole frame.
-    const lane = frame - slot - chrome;
-    const full = frame - chrome;
-    if (full <= 0) return;
+    const lane = frame - chrome;
+    if (lane <= 0) return;
 
     const pick = (k: string) =>
       Array.from(ghost.querySelectorAll<HTMLElement>(`[data-g="${k}"]`));
@@ -600,6 +578,9 @@ export function StatusBar({
     // The short form exists only where the readout carries a name (no
     // signature header); without one the readout IS its short form.
     const statusShortW = wide(pick("status-short")) || statusW;
+    // Restart File, where there is one: its width depends on whether it is
+    // prominent (out-of-date imports), never on the stage.
+    const restartW = wide(pick("restart"));
 
     setResv((prev) =>
       Object.keys(prev).length === n &&
@@ -639,21 +620,20 @@ export function StatusBar({
       if (tIdx >= 0) right.push(itemW(tIdx, names, words));
       if (dw > 0) right.push(dw);
       right.push(helpW);
+      if (restartW > 0) right.push(restartW);
       return { l: rowW(left), r: rowW(right) };
     };
-    // Whether a stage fits: ONE row — both groups beside the slot, at least
-    // `BAR_GROUP_GAP` apart — or, in the second-row placement, the left group
-    // across the whole frame and the right group beside the slot.
-    const fitsWith = (two: boolean, names: number, words: number, dw: number, sw = 0) => {
+    // Whether a stage fits: both groups on the one row, at least
+    // `BAR_GROUP_GAP` apart. ONE ROW ALWAYS (2026-10-05): with no host
+    // button to set beside, the all-glyph floor holds at 300px; a frame
+    // narrower still clips at the row's ends (`ROW_STYLE`).
+    const fitsWith = (names: number, words: number, dw: number, sw = 0) => {
       const g = groups(names, words, dw, sw);
-      return two ? g.l <= full && g.r <= lane : g.l + g.r + BAR_GROUP_GAP <= lane;
+      return g.l + g.r + BAR_GROUP_GAP <= lane;
     };
-    /* ONE ROW while the all-glyph floor fits beside the slot; else the SECOND
-    ROW. The test is the floor, from the ghost and the frame alone. */
-    const twoRows = !fitsWith(false, 0, 0, diagShort);
     // The diagnostics COUNT compacts LAST: every value item goes to its glyph
     // before the per-severity counts fold into the worst glyph and a total.
-    const diagCompact = diagFull > 0 && !fitsWith(twoRows, 0, 0, diagFull);
+    const diagCompact = diagFull > 0 && !fitsWith(0, 0, diagFull);
     setDiagCompact(diagCompact);
     const dw = diagCompact ? diagShort : diagFull;
 
@@ -666,13 +646,13 @@ export function StatusBar({
     // holds it, else the nameless one, else none — a readout that cannot fit
     // at all must not walk the settings down to glyphs for nothing (on the
     // second row it would have stripped the LEFT group for the right's sake).
-    const swLadder = fitsWith(twoRows, 0, 0, dw, statusW)
+    const swLadder = fitsWith(0, 0, dw, statusW)
       ? statusW
-      : statusShortW > 0 && fitsWith(twoRows, 0, 0, dw, statusShortW)
+      : statusShortW > 0 && fitsWith(0, 0, dw, statusShortW)
         ? statusShortW
         : 0;
     let st = 0;
-    while (st < 2 * n && !fitsWith(twoRows, at(st).names, at(st).words, dw, swLadder))
+    while (st < 2 * n && !fitsWith(at(st).names, at(st).words, dw, swLadder))
       st++;
     const got = at(st);
     setStage((prev) =>
@@ -684,20 +664,15 @@ export function StatusBar({
     and only where even the all-glyph floor cannot hold it does it shed its
     name (where it has one), then go to nothing. */
     const fits = (sw: number) =>
-      sw > 0 && fitsWith(twoRows, got.names, got.words, dw, sw);
+      sw > 0 && fitsWith(got.names, got.words, dw, sw);
     setStatusForm(fits(statusW) ? 2 : fits(statusShortW) ? 1 : 0);
-    setGeom((prev) =>
-      prev.slot === slot && prev.rowH === rowH && prev.twoRows === twoRows
-        ? prev
-        : { slot, rowH, twoRows },
-    );
     /* What the view needs: the band's height (the frame gives it up) and the
     open message strip's, which floats above the band across the frame and
     which the rail climbs over. Its height is read off its drawn box: it wraps
     with the frame, and `fit` runs on every render and every resize. */
     const stripH = stripRef.current?.offsetHeight ?? 0;
     onPlaceRef.current({
-      band: rowH + (twoRows ? BAR_H : 0) + BAND_BORDER,
+      band: BAR_H,
       strip: stripH > 0 ? stripH + DIAG_STRIP_GAP : 0,
     });
   }, []);
@@ -705,23 +680,23 @@ export function StatusBar({
   // After EVERY render, because a setting's own label changes width…
   useLayoutEffect(fit);
 
-  // …and when the frame resizes without a render of ours, or the host button
-  // does (its label's font arrives late).
+  // …and when the frame resizes without a render of ours.
   useEffect(() => {
     const card = cardRef.current;
     const host = card?.offsetParent as HTMLElement | null;
     if (!card) return;
     const ro = new ResizeObserver(fit);
     ro.observe(host ?? card);
-    const btn = hostButton();
-    if (btn) ro.observe(btn);
     return () => ro.disconnect();
   }, [fit]);
 
   // One value item. `form` picks the form; `value` overrides what it shows
   // (the ghost's chrome copies pass the empty string, so what they measure is
   // everything BUT the value, the value span still there to carry its gap).
-  const valueMenu = (it: BarValueItem, form: BarForm, value?: string) => {
+  const valueMenu = (it: BarValueItem, form0: BarForm, value?: string) => {
+    // VS Code has ONE word form, `[icon] value`: the value form IS the full
+    // form, so the ladder's name stage changes nothing there.
+    const form: BarForm = !classic && form0 === "value" ? "full" : form0;
     const shown = value ?? it.value;
     const valueSpan = (
       <span
@@ -815,7 +790,7 @@ export function StatusBar({
     <BarButton
       label={
         <GlyphBox>
-          <Codicon name="question" />
+          <Codicon name={ICON["band.help"]} />
         </GlyphBox>
       }
       title="What you can do here (?)"
@@ -845,12 +820,52 @@ export function StatusBar({
     </>
   );
 
+  /* RESTART FILE (2026-10-05), the band's RIGHTMOST item — where the host's
+  own button stood, which the band now hides. At rest an icon (codicon
+  `debug-restart`, VS Code's Restart); while Lean elaborates the file, or
+  after a click until the next payload, the spinner (`loading`, VS Code's
+  `~spin`); where Lean says the imports are out of date it turns PROMINENT —
+  VS Code's warning item, icon + "Restart File" — since that is the one state
+  in which nothing else will help. A real `<button>`, so a tab stop. Drawn
+  as-is in the ghost (`data-g="restart"`). */
+  const restartBtn = restart ? (
+    <BarButton
+      label={
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <GlyphBox>
+            <span
+              data-ptw-spin={restart.busy ? "" : undefined}
+              style={{ display: "inline-flex", transformOrigin: "50% 50%" }}
+            >
+              <Codicon name={restart.busy ? ICON.busy : ICON["band.restart"]} />
+            </span>
+          </GlyphBox>
+          {restart.outdated ? "Restart File" : null}
+        </span>
+      }
+      title={
+        restart.outdated
+          ? "Restart File — this file's imports are out of date and must be rebuilt; restarts it, rebuilding all of its outdated dependencies"
+          : restart.busy
+            ? "Restart File — Lean is working on this file; restarts it, rebuilding all of its outdated dependencies"
+            : "Restart File — restarts this file, rebuilding all of its outdated dependencies"
+      }
+      style={
+        restart.outdated
+          ? { background: STATUSBAR_WARN_BG, color: STATUSBAR_WARN_FG }
+          : undefined
+      }
+      onClick={() => restart.onRestart()}
+    />
+  ) : null;
+
   return (
     // THE STATUS BAND (2026-10-04): VS Code's status bar, docked on the
-    // frame's bottom edge, edge to edge, opaque, one top border, no radius,
-    // no shadow. The tree's frame ends above it (the view gives up `band`),
-    // so nothing paints under it. Its right end is a SLOT for the host's
-    // "Restart File" button, which sits set into the band.
+    // frame's bottom edge, edge to edge, opaque, no radius, no shadow, and
+    // since 2026-10-05 VS Code's 22px with its top border drawn inside (an
+    // inset shadow, as the workbench overlays `statusBar.border`). The
+    // tree's frame ends above it (the view gives up `band`), so nothing
+    // paints under it. Restart File is its own rightmost item.
     <div
       ref={cardRef}
       data-ptw-band=""
@@ -859,7 +874,7 @@ export function StatusBar({
         left: 0,
         right: 0,
         bottom: 0,
-        height: geom.rowH + (geom.twoRows ? BAR_H : 0) + BAND_BORDER,
+        height: BAR_H,
         zIndex: Z.chrome,
         boxSizing: "border-box",
         display: "flex",
@@ -872,34 +887,26 @@ export function StatusBar({
         // ticking over moves nothing beside it.
         fontVariantNumeric: "tabular-nums",
         background: STATUSBAR_BG,
-        borderTop: `${BAND_BORDER}px solid ${STATUSBAR_BORDER}`,
+        boxShadow: `inset 0 1px 0 ${STATUSBAR_BORDER}`,
         color: STATUSBAR_FG,
         textAlign: "left",
         cursor: "default",
       }}
     >
-      {/* THE SECOND ROW, above the button row, only where the all-glyph row
-          cannot fit beside the slot: the left group across the whole band. */}
-      {geom.twoRows && (
-        <div style={{ ...ROW_STYLE, height: BAR_H, padding: `0 ${STATUS_PAD_X}px` }}>
-          <div style={GROUP_STYLE}>{leftGroup}</div>
-        </div>
-      )}
       <div
         style={{
           ...ROW_STYLE,
-          height: geom.rowH,
-          // The slot: the host button stands in the band's last `slot` px.
-          padding: `0 ${STATUS_PAD_X + geom.slot}px 0 ${STATUS_PAD_X}px`,
+          height: BAR_H,
+          padding: `0 ${STATUS_PAD_X}px`,
         }}
       >
         {/* LEFT, left-aligned: how the tree is drawn, then what you are asked
-            to read (on the second row instead, where there is one). */}
-        {!geom.twoRows && <div style={GROUP_STYLE}>{leftGroup}</div>}
+            to read. */}
+        <div style={GROUP_STYLE}>{leftGroup}</div>
 
-        {/* RIGHT, right-aligned and so FLUSH against the host's button
-            whatever the left group carries: the readout and the marks at its
-            left end (their arrival moves nothing), the count, `?`. */}
+        {/* RIGHT, right-aligned and so FLUSH against the band's end whatever
+            the left group carries: the readout and the marks at its left end
+            (their arrival moves nothing), the count, `?`, Restart File. */}
         <div style={{ ...GROUP_STYLE, marginLeft: "auto" }}>
           {statusForm > 0 && status && (
             <StatusReadout info={statusForm === 2 ? status : { ...status, name: "" }} />
@@ -911,6 +918,7 @@ export function StatusBar({
             </div>
           )}
           {helpBtn}
+          {restartBtn}
         </div>
       </div>
 
@@ -971,6 +979,11 @@ export function StatusBar({
         <span data-g="help" style={{ display: "inline-flex" }}>
           {helpBtn}
         </span>
+        {restartBtn && (
+          <span data-g="restart" style={{ display: "inline-flex" }}>
+            {restartBtn}
+          </span>
+        )}
         {/* The status readout as it will be drawn, in both forms: its actual
             text, so the strip never reserves more than it shows. */}
         {status && (
@@ -1041,7 +1054,7 @@ export function StatusBar({
                 : "Side-by-side needs a compact layout; the wide tree lays branches out itself"
             }
             on={sbsEnabled && sideBySide}
-            icon={<Codicon name="split-horizontal" />}
+            icon={<Codicon name={ICON["layout.sideBySide"]} />}
             disabled={!sbsEnabled}
             onClick={() => onSideBySideChange(!sideBySide)}
           />
@@ -1050,7 +1063,7 @@ export function StatusBar({
             label="gallery"
             title="Show one subtree at a time, with a pager"
             on={gallery}
-            icon={<Codicon name="window" />}
+            icon={<Codicon name={ICON["layout.gallery"]} />}
             onClick={() => onGalleryChange(!gallery)}
           />
           <BarRow
@@ -1101,7 +1114,7 @@ export function StatusBar({
                 justifyContent: "center",
               }}
             >
-              <Codicon name="word-wrap" />
+              <Codicon name={ICON["layout.width"]} />
             </span>
             <span>width</span>
             <input

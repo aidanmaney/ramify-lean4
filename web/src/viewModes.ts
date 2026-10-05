@@ -1,5 +1,6 @@
 // The status bar's vocabulary: the words, glyphs and ⌥-cycles for the context, layout and
 // comment settings, and the reflow slider's stop coding. Read by the bar, its toasts and the view.
+import { ICON } from "./icons";
 import { REFLOW_MAX_CHARS } from "./layout";
 import type { ReflowMode } from "./layout";
 import { type HypMode } from "./proofToTree";
@@ -81,7 +82,7 @@ export const LAYOUT_MODES: Record<
   LayoutMode,
   {
     name: string;
-    /** The glyph form's codicon (also the Layout panel row's icon). */
+    /** The Layout panel row's icon (and the classic look's glyph form). */
     icon: CodiconName;
     next: LayoutMode;
     title: string;
@@ -89,30 +90,30 @@ export const LAYOUT_MODES: Record<
 > = {
   stacked: {
     name: "outline",
-    icon: "list-tree",
+    icon: ICON["layout.outline"],
     next: "spine",
     title:
       "Layout: outline — a compact outline, every node on its own line off a left trunk",
   },
   spine: {
     name: "spine",
-    icon: "layout-sidebar-left",
+    icon: ICON["layout.spine"],
     next: "tracks",
     title:
       "Layout: spine — a goal spine: two tracks, goals stacked tight on the left and each tactic beside its step in a right-hand track",
   },
   tracks: {
     name: "tracks",
-    // Not `split-horizontal` (side-by-side's, in the same panel): `layout`
-    // is a tall column beside a track of small boxes — goals, then tactics.
-    icon: "layout",
+    // `layout` is a tall column beside a track of small boxes — goals,
+    // then tactics.
+    icon: ICON["layout.tracks"],
     next: "wide",
     title:
       "Layout: tracks — aligned tracks: the spine with goals wrapped to a modest width, so every tactic starts at the same x and the two tracks read as columns",
   },
   wide: {
     name: "wide",
-    icon: "type-hierarchy-super",
+    icon: ICON["layout.wide"],
     next: "stacked",
     title:
       "Layout: wide — a wide layered tree, nodes at the same depth share one horizontal band",
@@ -141,13 +142,13 @@ export const COMMENT_MODES: Record<
 > = {
   shown: {
     name: "show",
-    icon: "comment",
+    icon: ICON["comments.show"],
     next: "hidden",
     title: "Comments: show — comments drawn as strips above the box",
   },
   hidden: {
     name: "hide",
-    icon: "eye-closed",
+    icon: ICON["comments.hide"],
     next: "instead",
     title: "Comments: hide — no comment strips; the room goes back to the tree",
   },
@@ -157,14 +158,14 @@ export const COMMENT_MODES: Record<
   // standing in INSTEAD of the tactic's own text.
   instead: {
     name: "in place",
-    icon: "comment-discussion",
+    icon: ICON["comments.inPlace"],
     next: "narrate",
     title:
       "Comments: in place — a commented tactic's prose stands in for its label, inside the box",
   },
   narrate: {
     name: "narrate",
-    icon: "sparkle",
+    icon: ICON["comments.narrate"],
     next: "shown",
     title:
       "Comments: narrate — strips as above, and where the author wrote none a line generated from the step itself (∴); a folded goal's strip summarises what it hides",

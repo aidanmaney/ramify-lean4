@@ -1,4 +1,5 @@
 // The status band's small parts: buttons, checks, rows, panels and menus, and the glyph box. Every mark is a codicon (codiconView.tsx).
+import { ICON } from "./icons";
 import { useRef, useLayoutEffect, type ReactNode } from "react";
 import { plainTicks } from "./ticks";
 import { useTip } from "./tipController";
@@ -61,9 +62,12 @@ export function BarButton({
   expanded,
   onClick,
   onHover,
+  style,
 }: {
   label: ReactNode;
   title: string;
+  /** Paint over the item's own (Restart File's warning tint). */
+  style?: React.CSSProperties;
   accent?: boolean;
   muted?: boolean;
   disabled?: boolean;
@@ -107,6 +111,7 @@ export function BarButton({
             ? { background: RAIL_PRESSED, color: ACCENT_TEXT }
             : { background: "var(--ptw-toolbar-active)" }
           : null),
+        ...style,
       }}
     >
       {label}
@@ -312,7 +317,7 @@ export function BarRow({
             </span>
           )
         ) : (
-          <Codicon name={kind !== "action" && on ? "check" : "blank"} />
+          <Codicon name={kind !== "action" && on ? ICON["row.on"] : ICON["row.off"]} />
         )}
       </span>
       {icon !== undefined && (

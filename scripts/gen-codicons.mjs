@@ -34,8 +34,12 @@ const NAMES = [
   "zoom-in", "zoom-out", "screen-full", "expand-all", "collapse-all",
   // the hover bar and the `⋯` menu
   "go-to-file", "target", "debug-step-over", "filter", "trash", "references",
-  "wand", "fold-down", "fold-up", "lightbulb", "lightbulb-autofix", "add", "remove",
+  "wand", "fold-down", "fold-up", "lightbulb", "lightbulb-autofix", "add",
   "ellipsis", "edit", "pin", "pinned", "loading",
+  // one codicon = one meaning (web/src/icons.ts, 2026-10-05): the moves and
+  // rows that had borrowed another slot's icon, and Restart File
+  "git-commit", "list-unordered", "unfold", "fold", "quote", "layout-centered",
+  "debug-restart",
 ];
 
 const version = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version;
