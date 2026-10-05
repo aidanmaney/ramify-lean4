@@ -81,20 +81,36 @@ elaborate, behind the existing seam `answer(goalKey, tactic)` in
   (`chrome-rss.txt`) — probably the olean tar held beside its unpacked MEMFS
   copy plus the debug/unstripped module; trimming is the next investigation.
 
-**Not yet done** (the spike agent may have finished some of this — check
-`git log` for a commit adding `docs/wasm-spike.md`): the write-up
-`docs/wasm-spike.md` with the go/no-go; the memory investigation; wiring a
-`wasmEngine` into `makeAnswer` behind an opt-in "Unlock live Lean (~45 MB)"
-button (desktop only, cached by a service worker in Cache Storage); deciding
-hosting (pre-compressed `.br` on a host that serves brotli, or accept gzip on
-Pages); keeping the live engine's answers byte-compatible with the baker's
-(state ids keyed by `ppGoal`, canonical naming — see CLAUDE.md "Playground").
+**Verdict: GO WITH CAVEATS** — the full write-up is `docs/wasm-spike.md`
+(commit `965e0bc`); read it before touching this. Summary:
 
-The build tree itself (`/tmp/claude-0/wasm/`, ~6 GB: emsdk, lean4 clone, build)
-did NOT survive; to reproduce: clone emsdk, `./emsdk install 3.1.44 && ./emsdk
-activate 3.1.44`, clone lean4 at `v4.32.2`, configure with the cache excerpt's
-settings (it needs a 32-bit host toolchain: `gcc-multilib`/`libc6-dev-i386`),
-`make -C build stage1 -j4` (`recipe/run-stage.sh`), then `link-live.sh`.
+- Lean's Emscripten target still exists but is unmaintained; the recipe is its
+  commented-out CI job. It needed **12 patches** — committed as
+  `scripts/wasm/recipe/lean4-v4.32.2-wasm.patch` (three are real 32-bit bugs:
+  static name hashes truncated to 32 bits, a 1 GB default thread stack, eight
+  C++ externs whose calling convention disagrees with the new compiler and trap
+  the olean loader in wasm). The stock link exports 231k symbols (> V8's 100k),
+  hence the static link + a generated 20k-symbol `Init` table for `dlsym`.
+  Build: ~12 min stage0, ~32 min stage1, 12–22 min per optimised link.
+- 42/42 requests answered identically by wasm, native and the baked table
+  (AndSwap's goal keys match exactly). Per tactic: node median 12 ms / p90 122 /
+  max 467; browser median 18 ms / p90 151 / max 0.8 s; a whole browser session
+  6.1 s end to end on localhost.
+- Download: `live.wasm` 6.7 MB br + `Init` without `.olean.private` 22.8 MB br
+  ≈ **30 MB br / ≈ 45 MB gz**.
+- Memory: tab peak ~1.41 GB → 1.14 GB with MEMFS `canOwn` (no second copy of the
+  archive). The wasm heap holds every olean (no `mmap` in wasm). A small Lean
+  patch to skip `.olean.private` (187 of the 275 MB) would save ~370 MB RSS
+  (costs a ~40 min rebuild).
+- Caveats: threads need COOP/COEP headers → GitHub Pages needs a
+  `coi-serviceworker` shim; one `.ir` file fails to read, which blocks
+  `import Lean` in the engine (needed for tagged prints of new goals); we would
+  own the patch set and the build.
+- Effort to ship the opt-in desktop tier: **~1.5–2 weeks**. Next steps: the
+  `.olean.private` skip, fix the `.ir` read, a `wasmEngine` in `makeAnswer`
+  behind an opt-in "Unlock live Lean" button (desktop only, Cache Storage via a
+  service worker that also supplies COOP/COEP), hosting decision (gzip on Pages
+  vs pre-compressed brotli elsewhere).
 
 ## 3. Open items and known rough edges
 
