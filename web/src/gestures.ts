@@ -80,6 +80,9 @@ export type Caps = {
   polish: boolean;
   /** Restart File is in the band (the widget: `ec.api.restartFile`). */
   restart: boolean;
+  /** The playground: a tactic typed under an open goal is answered from the
+   baked table (`onTryTactic`); nothing is written. */
+  play: boolean;
 };
 
 export type GestureTarget =
@@ -277,6 +280,12 @@ export const GESTURES: Gesture[] = [
     input: "chips on an open goal",
     says: "to add a tactic there (`+`), stub it with `sorry` or start a `calc`",
     needs: "add",
+  },
+  {
+    target: "background",
+    input: "`+` on an open goal",
+    says: "to try a tactic there — Lean's answer was computed in advance",
+    needs: "play",
   },
 
   { target: "keys", input: "? / F1", says: "to open or close this panel" },

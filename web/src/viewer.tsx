@@ -54,13 +54,8 @@ import {
   type ViewerPayload,
   type ViewerProof,
 } from "./viewerPayload";
-import {
-  TOKEN_PALETTE,
-  applyTheme,
-  storeTheme,
-  storedTheme,
-  systemTheme,
-} from "./viewerTheme";
+import { useNarrow, useTheme } from "./viewerHooks";
+import { TOKEN_PALETTE } from "./viewerTheme";
 
 type LspPos = { line: number; character: number };
 
@@ -248,44 +243,6 @@ body {
 function inlinePayload(): unknown | null {
   const el = document.getElementById("ramify-payload");
   return el?.textContent ? JSON.parse(el.textContent) : null;
-}
-
-function useNarrow(): boolean {
-  const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_PX);
-  useEffect(() => {
-    const on = () => setNarrow(window.innerWidth < NARROW_PX);
-    window.addEventListener("resize", on);
-    return () => window.removeEventListener("resize", on);
-  }, []);
-  return narrow;
-}
-
-function useTheme(): [ThemeKind, () => void] {
-  const [picked, setPicked] = useState<ThemeKind | null>(storedTheme);
-  const [system, setSystem] = useState<ThemeKind>(systemTheme);
-  useEffect(() => {
-    let mq: MediaQueryList | null = null;
-    try {
-      mq = window.matchMedia("(prefers-color-scheme: dark)");
-    } catch {
-      return;
-    }
-    const on = () => setSystem(mq!.matches ? "dark" : "light");
-    mq.addEventListener("change", on);
-    return () => mq!.removeEventListener("change", on);
-  }, []);
-  const kind = picked ?? system;
-  // Before paint would be nicer, but the view re-resolves on the attribute
-  // change (`observeThemeChange`), so an effect is enough.
-  useEffect(() => applyTheme(kind), [kind]);
-  const toggle = () => {
-    const next: ThemeKind = kind === "dark" ? "light" : "dark";
-    // Back to following the system when the pick would equal it.
-    const stored = next === system ? null : next;
-    storeTheme(stored);
-    setPicked(stored);
-  };
-  return [kind, toggle];
 }
 
 /** The declaration whose range holds `p`, if any. */
@@ -509,7 +466,7 @@ function ViewerBody({
 export default function Viewer() {
   injectStyleOnce("ptw-viewer-page", PAGE_CSS);
   const [kind, toggleTheme] = useTheme();
-  const narrow = useNarrow();
+  const narrow = useNarrow(NARROW_PX);
   const [link, setLink] = useState<ViewerLink>(() => parseLink(location.hash));
   const [paneOpen, setPaneOpen] = useState(() => window.innerWidth >= NARROW_PX);
   const [state, setState] = useState<

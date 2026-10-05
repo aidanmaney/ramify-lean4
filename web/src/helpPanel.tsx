@@ -149,7 +149,10 @@ export function HelpPanel({
           everything else, before any explanation. */}
       <div style={{ display: "grid", rowGap: 2 }}>
         <div style={{ ...SECTION_HEAD, marginTop: 0 }}>Start here</div>
-        <div>Click a tactic to show it in the source.</div>
+        {caps.reveal && <div>Click a tactic to show it in the source.</div>}
+        {caps.play && (
+          <div>Click the + under an open goal to try a tactic there.</div>
+        )}
         <div>Click the chevron at a goal's top-right to fold what is below it.</div>
         <div>Right-click a box for every move on it.</div>
       </div>

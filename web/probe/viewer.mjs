@@ -153,7 +153,7 @@ t.eq(JSON.stringify(parseLink("#file=a&layout=nonsense")), JSON.stringify({ file
 
 // The `?` panel in a reading-only session names no Lean-only move.
 {
-  const caps = { reveal: true, edit: false, add: false, popout: false, del: false, flags: false, restructure: false, undo: false, polish: false, restart: false };
+  const caps = { reveal: true, edit: false, add: false, popout: false, del: false, flags: false, restructure: false, undo: false, polish: false, restart: false, play: false };
   const shown = GESTURES.filter((g) => gestureShown(g, caps)).map(gestureText);
   const LEAN_ONLY = /\b(edit|flag|chip|undo|redo|model|reword|stub|add a tactic|lens|restart)\b/i;
   for (const s of shown) t.ok(!LEAN_ONLY.test(s), `? panel, reading only: "${s}"`);

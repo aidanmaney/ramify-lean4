@@ -569,6 +569,18 @@ export interface ProofTreeViewProps {
 
   deleteSlots?: TacticSlot[];
 
+  /** THE PLAYGROUND (playground.tsx) — try a tactic under an OPEN goal and let
+      the host answer it; nothing is written anywhere. The frontier `+` chip
+      opens the same in-place editor `onAddTactic`'s does, and its commit hands
+      the goal's id and the typed text here. Narrower than `onAddTactic` by
+      construction: only the `+` chip is offered (no `sorry`, `calc` or
+      `step`, which write source), on a goal with an `addSpec`; the `play`
+      capability gates its `?` row. */
+  onTryTactic?: (goalId: string, text: string) => void;
+  /** The editor's completion list for one goal (the playground: what is baked
+      under it). Absent, the list is `proof.tacticNames`. */
+  getGoalTactics?: (goalId: string) => string[];
+
   /** B4 — the automation traces already in hand. In the WIDGET this is the
       RPC's answers, held by the caller and passed as a sibling (the payload
       does not carry them: a proof with ten `simp`s must not re-elaborate on
@@ -771,6 +783,8 @@ export default function ProofTreeView({
   renderTaggedHyps,
   renderTaggedTactic,
   onAddTactic,
+  onTryTactic,
+  getGoalTactics,
   onHoverTactic,
   deleteSlots,
   automationTraces,
@@ -878,6 +892,7 @@ export default function ProofTreeView({
     undo: !!onUndo,
     polish: !!onPolish && polishReady,
     restart: !!restart,
+    play: !!onTryTactic,
   };
 
   const forcedReflow =
@@ -1595,9 +1610,11 @@ export default function ProofTreeView({
     }
     if (cur.add) {
       if (cur.value.trim() !== "") {
-        const at = onAddTactic?.(cur.add, cur.value);
+        if (onAddTactic) {
+          const at = onAddTactic(cur.add, cur.value);
 
-        if (at?.fill) setPendingFill(at.fill);
+          if (at?.fill) setPendingFill(at.fill);
+        } else onTryTactic?.(cur.id, cur.value);
       }
     } else if (
       cur.value.trim() !== "" &&
@@ -3507,7 +3524,10 @@ export default function ProofTreeView({
         .filter((n) => n && n !== "⊢"),
 
       terms: goalId && getGoalTerms ? getGoalTerms(goalId) : [],
-      tactics: proof.tacticNames ?? [],
+      tactics:
+        goalId && getGoalTactics
+          ? getGoalTactics(goalId)
+          : (proof.tacticNames ?? []),
     };
   };
 
@@ -7407,8 +7427,9 @@ export default function ProofTreeView({
                 (type === "goal" ||
                   !!node.data.synthetic ||
                   (type === "tactic" && !!node.data.addLink)) &&
-                !!(node.data.addSpec || node.data.addLink) &&
-                !!onAddTactic &&
+                (onAddTactic
+                  ? !!(node.data.addSpec || node.data.addLink)
+                  : !!onTryTactic && !!node.data.addSpec) &&
                 !isEditing;
               const chips = chipCopy(node.data);
               const chipAdd = () => {
@@ -7487,7 +7508,9 @@ export default function ProofTreeView({
               };
               const chipMoves: NodeMove[] =
                 menuFor === id && chipsOffered
-                  ? chipRows(node.data).map(({ kind, ...row }) => ({
+                  ? chipRows(node.data)
+                      .filter((row) => !!onAddTactic || row.kind === "add")
+                      .map(({ kind, ...row }) => ({
                       ...row,
                       slot: "chip" as const,
                       onClick: chipHandlers[kind],
@@ -9131,12 +9154,7 @@ export default function ProofTreeView({
                     </g>
                   )}
 
-                  {(type === "goal" ||
-                    node.data.synthetic ||
-                    (type === "tactic" && node.data.addLink)) &&
-                    (node.data.addSpec || node.data.addLink) &&
-                    onAddTactic &&
-                    !isEditing && (
+                  {chipsOffered && (
                       <g
                         transform={`translate(${
                           -w / 2 +
@@ -9170,6 +9188,7 @@ export default function ProofTreeView({
                                   color={NODE_STYLES.tactic.stroke}
                                   onPick={chipAdd}
                                 />
+                                {onAddTactic && (
                                 <FrontierChip
                                   glyph="sorry"
                                   title={chips.sorry!.title}
@@ -9180,10 +9199,11 @@ export default function ProofTreeView({
 
                                   onPick={chipSorry}
                                 />
+                                )}
                               </>
                             )}
 
-                            {node.data.calcRels && (
+                            {node.data.calcRels && onAddTactic && (
                               <FrontierChip
                                 glyph="calc"
 
@@ -9196,7 +9216,7 @@ export default function ProofTreeView({
                               />
                             )}
 
-                            {node.data.addLink && (
+                            {node.data.addLink && onAddTactic && (
                               <FrontierChip
                                 glyph="step"
                                 title={chips.step!.title}
