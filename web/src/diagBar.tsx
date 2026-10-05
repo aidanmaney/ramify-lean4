@@ -18,7 +18,7 @@ import {
   CHROME_TEXT_SM,
   DIM_OPACITY,
 } from "./theme";
-import { BARE_BTN, DIAG_STRIP_GAP, PILL_BTN } from "./barMetrics";
+import { BARE_BTN, DIAG_STRIP_GAP, PILL_BTN, STATUS_PAD_X } from "./barMetrics";
 import { BarButton } from "./barChrome";
 import { Codicon } from "./codiconView";
 import { DIAG_ICON, diagInkOf, type Severity } from "./diagInk";
@@ -210,10 +210,10 @@ export function DiagStrip({
       onClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
-        // The status strip's OUTER edges (its 1px border sits outside the
-        // padding box these resolve against), so the two read as one column.
-        left: -1,
-        right: -1,
+        // Floating above the docked band (2026-10-04), inset from the
+        // frame's sides by the band's own padding; the rail climbs over it.
+        left: STATUS_PAD_X,
+        right: STATUS_PAD_X,
         bottom: "100%",
         marginBottom: DIAG_STRIP_GAP,
         boxSizing: "border-box",

@@ -682,12 +682,67 @@ function ProofPicker({
 // ordinary harness neither installs its `window.__ptw` driver nor pays for it.
 const Matrix = lazy(() => import("./matrix"));
 
+// `?host-button` — a stand-in for the infoview's own "Restart File" button,
+// so the status band's slot can be checked offline: vscode-lean4's
+// `.restart-file-button` as MEASURED in code-server (2026-10-04) — fixed at
+// bottom 10 / right 10, 26 tall, `padding: 1px 13px`, 22px line, a 1px
+// border, radius 2, 13px system-ui, the button blue. The band moves it into
+// its slot exactly as it moves the real one (`HOST_BUTTON_CSS`). The host's
+// button is fixed to the WEBVIEW, whose right edge is the frame's; the
+// harness's `#root` is 90% wide, so the stub is fixed inside a transformed
+// box over `#root`'s columns (a transform makes it the containing block).
+const HOST_BUTTON = QUERY.has("host-button");
+function HostButtonStub() {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        bottom: 0,
+        left: "5%",
+        right: "5%",
+        transform: "translateZ(0)",
+        pointerEvents: "none",
+        zIndex: 100,
+      }}
+    >
+    <button
+      type="button"
+      className="restart-file-button"
+      title="Harness stand-in for the infoview's Restart File button"
+      style={{
+        position: "fixed",
+        bottom: 10,
+        right: 10,
+        zIndex: 100,
+        boxSizing: "border-box",
+        height: 26,
+        padding: "1px 13px",
+        lineHeight: "22px",
+        border: "1px solid transparent",
+        borderRadius: 2,
+        font: '13px system-ui, Ubuntu, "Droid Sans", sans-serif',
+        background: "rgb(0, 120, 212)",
+        color: "#fff",
+        cursor: "pointer",
+        pointerEvents: "auto",
+      }}
+    >
+      Restart File
+    </button>
+    </div>
+  );
+}
+
 export default function App() {
   return QUERY.has("matrix") ? (
     <Suspense fallback={null}>
       <Matrix />
     </Suspense>
   ) : (
-    <ProofHarness />
+    <>
+      <ProofHarness />
+      {HOST_BUTTON && <HostButtonStub />}
+    </>
   );
 }

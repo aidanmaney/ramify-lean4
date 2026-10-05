@@ -234,6 +234,17 @@ const PALETTE_CSS = `
   --ptw-toolbar-active: var(--vscode-toolbar-activeBackground, color-mix(in srgb, var(--ptw-fg) 14%, transparent));
   --ptw-chrome-btn: var(--ptw-toolbar-hover);
   --ptw-widget-shadow: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.16));
+  /* THE STATUS BAND (2026-10-04) is VS Code's status bar: its background,
+     foreground, top border and item hover; \`-on\` is the ink an item wears
+     while something in its panel is on (the link blue — the status bar's own
+     prominent foreground is its plain one in most themes, so it says
+     nothing). Fallbacks are the chrome's, so the harness and the viewer read
+     as before. */
+  --ptw-statusbar-bg: var(--vscode-statusBar-background, var(--ptw-chrome-bg));
+  --ptw-statusbar-fg: var(--vscode-statusBar-foreground, var(--ptw-chrome-ink));
+  --ptw-statusbar-border: var(--vscode-statusBar-border, var(--ptw-chrome-border));
+  --ptw-statusbar-hover: var(--vscode-statusBarItem-hoverBackground, var(--ptw-toolbar-hover));
+  --ptw-statusbar-on: var(--vscode-textLink-foreground, var(--ptw-hue-goal));
   /* TIPS are the editor's hover widget; the move menu and the bar's panels
      are its menus (2026-10-04). Each falls back to the chrome's own tokens. */
   --ptw-hover-bg: var(--vscode-editorHoverWidget-background, var(--ptw-chrome-bg));
@@ -396,6 +407,12 @@ const PALETTE_CSS = `
   /* The bar's marks were all chrome ink before the lightbulb. */
   --ptw-lightbulb: var(--ptw-chrome-ink);
   --ptw-lightbulb-autofix: var(--ptw-chrome-ink);
+  /* The band in the old chrome's inks, its emphasis the accent. */
+  --ptw-statusbar-bg: var(--ptw-chrome-bg);
+  --ptw-statusbar-fg: var(--ptw-chrome-ink);
+  --ptw-statusbar-border: var(--ptw-chrome-border);
+  --ptw-statusbar-hover: var(--ptw-chrome-btn);
+  --ptw-statusbar-on: var(--ptw-accent);
 }
 /* An inaccessible name drew like any other before the infoview's inks; the
    rule outranks the plain path's presentation attributes too. */
@@ -438,6 +455,10 @@ const PALETTE_CSS = `
 }
 [data-ptw-theme] [data-ptw-baritem]:not(:disabled):active {
   --ptw-bar-item-bg: var(--ptw-toolbar-active);
+}
+/* …in the band, with the status bar's own item hover. */
+[data-ptw-theme] [data-ptw-band] [data-ptw-baritem]:not(:disabled):hover {
+  --ptw-bar-item-bg: var(--ptw-statusbar-hover);
 }
 
 /* A primary button (a toast's Undo): VS Code's button and its hover. */
@@ -540,6 +561,11 @@ export const chromeSurface = (c: string = CHROME_BG) =>
 export const CHROME_SURFACE = chromeSurface();
 /** The opaque fill an SVG chrome rect sits on (see `chromeSurface`). */
 export const CHROME_UNDERLAY = "var(--ptw-bg)";
+/** The status band's surface, ink, top border and "something is on" ink. */
+export const STATUSBAR_BG = "var(--ptw-statusbar-bg)";
+export const STATUSBAR_FG = "var(--ptw-statusbar-fg)";
+export const STATUSBAR_BORDER = "var(--ptw-statusbar-border)";
+export const STATUSBAR_ON = "var(--ptw-statusbar-on)";
 export const CHROME_BORDER = "var(--ptw-chrome-border)";
 export const CHROME_INK = "var(--ptw-chrome-ink)";
 /** A toolbar button's hover wash (the hover bar's squares). */

@@ -1,6 +1,7 @@
-// The status bar: the one-row strip across the host button's lane — settings (layout, context, comments)
-// and Reading on the left, the status readout, marks, the diagnostics count and `?` on the right — its three-form compaction
-// and its panels.
+// The status band: VS Code's status bar docked on the frame's bottom edge, with a slot punched at its
+// right end for the host's "Restart File" button — settings (layout, context, comments) and Reading on the
+// left, the status readout, marks, the diagnostics count and `?` on the right — its three-form compaction,
+// its second row, and its panels.
 import {
   Fragment,
   useCallback,
@@ -19,12 +20,13 @@ import { type TourLists } from "./tour";
 import {
   CHROME_TEXT,
   Z,
-  POPUP_CHROME,
-  CHROME_BORDER,
   CHROME_INK,
   CHROME_FONT,
-  CHROME_RADIUS,
   DIM_OPACITY,
+  STATUSBAR_BG,
+  STATUSBAR_BORDER,
+  STATUSBAR_FG,
+  STATUSBAR_ON,
 } from "./theme";
 import {
   COMMENT_MODES,
@@ -37,20 +39,17 @@ import {
   stopToReflow,
 } from "./viewModes";
 import {
+  BAND_BORDER,
+  BAND_PAD,
+  BAND_SLOT_GAP,
   BAR_GROUP_GAP,
   BAR_H,
-  BAR_ITEM_H,
-  BAR_LANE_BOTTOM,
-  BAR_LIFT,
-  BAR_RIGHT_RESERVE,
   type BarForm,
   type BarValueItem,
   DIAG_STRIP_GAP,
-  LANE_GAP,
-  LANE_INSET,
+  HOST_BUTTON_CSS,
   STATUS_GAP,
   STATUS_PAD_X,
-  STATUS_PAD_Y,
   type StatusInfo,
 } from "./barMetrics";
 import {
@@ -67,8 +66,21 @@ import { READING_OPTIONS, readingOn, type ReadingId, type ReadingState } from ".
 import { type DiagBarProps, DiagCountItem, DiagStrip } from "./diagBar";
 import { Codicon } from "./codiconView";
 
-// One group of the strip: its items in a flex row, one STATUS_GAP apart. The
-// groups never shrink; the strip clips at its ends only as the last resort.
+// One group of the band: its items in a flex row, one STATUS_GAP apart. The
+// groups never shrink; a row clips at its ends only as the last resort.
+// One row of the band: the groups in a flex row, centred on the row's
+// height; a frame too narrow even for the all-glyph row clips at the sides
+// (a clip-path, which leaves the vertical axis alone) rather than spill.
+const ROW_STYLE = {
+  boxSizing: "border-box",
+  display: "flex",
+  flexWrap: "nowrap",
+  alignItems: "center",
+  flex: "none",
+  minWidth: 0,
+  clipPath: "inset(-4px 0 -4px 0)",
+} as const;
+
 const GROUP_STYLE = {
   display: "flex",
   flexWrap: "nowrap",
@@ -76,6 +88,65 @@ const GROUP_STYLE = {
   gap: STATUS_GAP,
   flex: "none",
 } as const;
+
+/** What the band reports to the view (`onPlace`): its own height, which the
+ tree's frame gives up, and the open message strip's height plus its gap,
+ which the zoom rail climbs over (0 while it is shut). */
+export interface BandPlace {
+  band: number;
+  strip: number;
+}
+
+/* THE HOST BUTTON'S RULE, injected while ANY view is mounted (the render
+matrix mounts many) and removed with the last: one `<style>`, counted. */
+let hostRuleUsers = 0;
+let hostRuleEl: HTMLStyleElement | null = null;
+function useHostButtonRule() {
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (hostRuleUsers++ === 0) {
+      hostRuleEl = document.createElement("style");
+      hostRuleEl.setAttribute("data-ptw-host-button", "");
+      hostRuleEl.textContent = HOST_BUTTON_CSS;
+      document.head.appendChild(hostRuleEl);
+    }
+    return () => {
+      if (--hostRuleUsers === 0) {
+        hostRuleEl?.remove();
+        hostRuleEl = null;
+      }
+    };
+  }, []);
+}
+
+/* SET INTO THE FRAME'S CORNER, not the viewport's. The button is fixed to the
+webview, and the infoview pads its content (measured: the frame ran 28 to 771
+of a 795 viewport), so `right: 2px` left it hanging 22px past the band's end.
+The rule is rewritten so the button's box stands `BAND_PAD` inside the
+FRAME's bottom-right corner: its computed inset plus how far it is from where
+it should be — linear, so one write lands it, and a second pass writes
+nothing. A DOM write to our own `<style>`, never state. */
+function placeHostButton(btn: HTMLElement, fr: DOMRect) {
+  if (!hostRuleEl) return;
+  const cs = getComputedStyle(btn);
+  const b = btn.getBoundingClientRect();
+  const right = parseFloat(cs.right);
+  const bottom = parseFloat(cs.bottom);
+  if (!Number.isFinite(right) || !Number.isFinite(bottom)) return;
+  const dr = b.right - (fr.right - BAND_PAD);
+  const db = b.bottom - (fr.bottom - BAND_PAD);
+  if (Math.abs(dr) < 0.5 && Math.abs(db) < 0.5) return;
+  const r = Math.round((right + dr) * 100) / 100;
+  const bt = Math.round((bottom + db) * 100) / 100;
+  hostRuleEl.textContent = `.restart-file-button{bottom:${bt}px !important;right:${r}px !important}`;
+}
+
+/** The host's "Restart File" button, where the page has one with a box. */
+function hostButton(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  const el = document.querySelector<HTMLElement>(".restart-file-button");
+  return el && el.getClientRects().length > 0 ? el : null;
+}
 
 export function StatusBar({
   onPlace,
@@ -125,8 +196,8 @@ export function StatusBar({
   caps,
   fontFamily,
 }: {
-  /** How far the zoom rail must climb over this strip's chrome (see `fit`). */
-  onPlace: (lift: number) => void;
+  /** The band's height and the open message strip's (see `fit`). */
+  onPlace: (p: BandPlace) => void;
   /** Whether the editor cursor exists (`up to cursor` needs it). */
   upToEnabled: boolean;
   /** The reading options as they stand, and the one way to change one
@@ -219,8 +290,7 @@ export function StatusBar({
     : tourAt === null
       ? `–/${tourCount}`
       : `${Math.min(tourAt + 1, tourCount)}/${tourCount}`;
-  // ONE dot under the eye, with the absolute meaning every other slot has:
-  // lit when ANY reading option is on; the tip names which.
+  // The reading options that are on: the item's emphasis and its tip.
   const readingNames = readingOn(reading);
   // Layout's panel options that are ON: side-by-side only where it is
   // effective (wide draws nothing), and the width while labels wrap.
@@ -258,12 +328,11 @@ export function StatusBar({
       ),
       value: LAYOUT_MODES[layout].name,
       values: Object.values(LAYOUT_MODES).map((m) => m.name),
-      title: `${layoutHead}${layoutOn.length > 0 ? ` · ${layoutOn.join(" · ")}` : ""}${layoutRest}${layoutOn.length > 0 ? " (a dot means a panel option is on)" : ""}. ⌥-click: next layout`,
-      // No accent: the four layouts are a CHOICE AMONG EQUALS, and the item
-      // already says which one is up. It lights only while its panel is open.
-      // ONE dot, lit when any panel option is on (`layoutOn`, which the tip
-      // lists): side-by-side, gallery, or labels wrapping narrower than full.
-      dot: layoutOn.length > 0,
+      title: `${layoutHead}${layoutOn.length > 0 ? ` · ${layoutOn.join(" · ")}` : ""}${layoutRest}. ⌥-click: next layout`,
+      // The four layouts are a CHOICE AMONG EQUALS, so the layout itself
+      // never wears the emphasis; a panel option that is ON does (`layoutOn`,
+      // which the tip lists): side-by-side, gallery, or a narrower width.
+      on: layoutOn.length > 0,
       onAlt: () => onLayoutChange(LAYOUT_MODES[layout].next),
     },
     {
@@ -272,10 +341,10 @@ export function StatusBar({
       glyph: glyph(HYP_MODES[hypMode].glyph, HYP_MODES[hypMode].glyphPx),
       value: HYP_MODES[hypMode].name,
       values: Object.values(HYP_MODES).map((m) => m.name),
-      title: `${HYP_MODES[hypMode].title}${hypGroup ? " · data & props split (a dot means a panel option is on)" : ""}. ⌥-click: next breadth`,
+      title: `${HYP_MODES[hypMode].title}${hypGroup ? " · data & props split" : ""}. ⌥-click: next breadth`,
       // `split data & props` is the OPT-IN extra — Lean's own binder order is
-      // the default — so the one slot is lit when the split is SET.
-      dot: hypGroup,
+      // the default — so the item wears the emphasis when the split is SET.
+      on: hypGroup,
       onAlt: () => onHypModeChange(HYP_MODES[hypMode].next),
     },
     {
@@ -294,8 +363,7 @@ export function StatusBar({
     // READING, the last of the LEFT group: how much of each node you are asked
     // to read, named for what it opens (`Reading ▾`), then `Reading`, then the
     // eye alone. It is a menu and not a setting, so it has no value — `words`
-    // stands in for the two word forms — and keeps its one dot (lit when ANY
-    // reading option is on; the tip names which).
+    // stands in for the two word forms.
     {
       id: "reading",
       prefix: "Reading",
@@ -316,9 +384,9 @@ export function StatusBar({
       value: "",
       values: [],
       title: `Reading options: ${readingNames.length > 0 ? readingNames.join(" · ") : "all off"} — click to change`,
-      // No standing accent: its toggles take the SLOT instead, which says
-      // that at least one is up. Lit only while its panel is open.
-      dot: readingNames.length > 0,
+      // In the emphasis ink while any reading option is on; the tip names
+      // which.
+      on: readingNames.length > 0,
     },
     // THE MARKS, last in the ladder and so the first to compact at each
     // stage — it is the newest and the most transient of the five, and the
@@ -350,7 +418,7 @@ export function StatusBar({
               authorCount === 1 ? "" : "s"
             } (\`.mark\` in the source), ${myCount} temporary (the corner nub drops one, kept for this session); \`<\` and \`>\` start it. Click for the two lists. ⌥-click: next list`
           : `Marks: ${tourValue} — \`<\` and \`>\` step, Esc lets go of the current mark. Click for the two lists. ⌥-click: next list`,
-      // NO ACCENT, NO DOT (user direction): the marks are a READING, not a
+      // NO EMPHASIS (user direction): the marks are a READING, not a
       // mode that is on, and the value already says how far into it you are
       // and, as `off`, whether the lists are in.
       after: (
@@ -391,13 +459,13 @@ export function StatusBar({
     } satisfies BarValueItem]),
   ];
 
-  /* THE ROW NEVER WRAPS, NEVER LOSES AN ITEM AND NEVER JUMPS FROM WORDS TO
-  GLYPHS ALL AT ONCE. The first two were tried and reported: clipping
-  (`overflow: hidden` alone) silently dropped everything past `Comments` at a
-  432px frame, and wrapping bought that back by growing a second row over the
-  tree, which is the one thing a bar living INSIDE the tree's own canvas must
-  not do. The third — one boolean, so every word in the row vanished on the
-  same pixel — was the reported "abrupt transition".
+  /* A ROW NEVER WRAPS ITS ITEMS, NEVER LOSES ONE AND NEVER JUMPS FROM WORDS TO
+  GLYPHS ALL AT ONCE. Clipping (`overflow: hidden` alone) silently dropped
+  everything past `Comments` at a 432px frame; free wrapping grew rows over the
+  tree; one boolean made every word vanish on the same pixel (the "abrupt
+  transition"). The band's one SECOND ROW (2026-10-04) is a placement, not a
+  wrap: the whole left group moves above the button row, and the frame gives
+  that row up, so it is never over the tree.
 
   So compaction is PER ITEM, in THREE FORMS and TWO STAGES (2026-09-24):
   `Layout: outline` → `outline` → the glyph. Every item gives up its NAME
@@ -433,11 +501,20 @@ export function StatusBar({
     names: 99,
     words: 99,
   });
-  // Whether the strip has left the host button's lane for the row above it
-  // (the one fallback: the lane cannot hold even the all-glyph row). Decided
-  // in `fit` from the FRAME and the GHOST alone — never from the strip's own
-  // drawn box — so it can no more oscillate than the stage can.
-  const [lifted, setLifted] = useState(false);
+  /* THE BAND'S GEOMETRY, decided in `fit` from the FRAME, the GHOST and the
+  HOST BUTTON alone — never from the band's own drawn box — so it can no more
+  oscillate than the stage can. `slot` is the width punched out at the right
+  end for the host button (0 where there is none), `rowH` the button row's
+  height (`BAR_H` without a button), and `twoRows` the one fallback: where
+  even the all-glyph row cannot fit beside the slot, the LEFT group moves to a
+  second row ABOVE the button row — the band grows by `BAR_H` and the frame
+  gives that up, rather than the bar lifting into the tree. */
+  const [geom, setGeom] = useState<{ slot: number; rowH: number; twoRows: boolean }>({
+    slot: 0,
+    rowH: BAR_H,
+    twoRows: false,
+  });
+  useHostButtonRule();
   // Reached through a ref so `fit` (a stable callback) need not re-create
   // on every render of the parent; written in an effect, never in render.
   const onPlaceRef = useRef(onPlace);
@@ -459,20 +536,44 @@ export function StatusBar({
     // A measurement with no boxes is declined for the reason `useFrameOffset`
     // declines one: a 0 there is the ABSENCE of an answer, not a width.
     if (card.getClientRects().length === 0) return;
-    // The strip spans the LANE, so its width is a fact about the frame: what
-    // the words have to fit inside is the frame, less the strip's inset and
-    // the host button's reserve, less the strip's own padding and border.
-    // `offsetParent` is the containing block the strip's `left`/`right`
-    // resolve against, so this is that arithmetic read back.
+    // The band spans the FRAME (its `offsetParent`), so its width is a fact
+    // about the frame.
     const host = card.offsetParent as HTMLElement | null;
-    const frame = host?.clientWidth ?? 0;
-    const chrome = 2 * STATUS_PAD_X + 2;
-    // TWO answers to "how much width has the row got", and which one holds is
-    // itself measured (below, once the glyph row's width is known):
-    //   lane  — beside the host button, the recorded placement
-    //   full  — the frame between the strip's own two insets, one lane up
-    const lane = frame - (LANE_INSET + BAR_RIGHT_RESERVE) - chrome;
-    const full = frame - 2 * LANE_INSET - chrome;
+    if (!host) return;
+    const frame = host.clientWidth;
+    const fr = host.getBoundingClientRect();
+
+    /* THE HOLE PUNCH. The host button is MEASURED: where one stands over the
+    frame's bottom-right corner, the slot runs from its left edge to the
+    frame's right plus a gap, and the button row is the frame's bottom to the
+    button's top plus `BAND_PAD` — 2 + 26 + 2 once `HOST_BUTTON_CSS` has set
+    it 2px in; 38 if a host ever kept it at 10 (the band still surrounds it).
+    Read in the frame's own px (the rect over the frame's scale), so a CSS
+    zoom on an ancestor does not change the answer. */
+    let slot = 0;
+    let rowH = BAR_H;
+    const btn = hostButton();
+    if (btn && fr.width > 0) {
+      const k = frame / fr.width;
+      let b = btn.getBoundingClientRect();
+      const overCorner =
+        b.width > 0 &&
+        b.right > fr.left &&
+        b.left < fr.right &&
+        b.bottom > fr.bottom - 4 * BAR_H &&
+        b.top < fr.bottom;
+      if (overCorner) {
+        placeHostButton(btn, fr);
+        b = btn.getBoundingClientRect();
+        slot = Math.ceil((fr.right - b.left) * k) + BAND_SLOT_GAP;
+        rowH = Math.max(BAR_H, Math.ceil((fr.bottom - b.top) * k) + BAND_PAD);
+      }
+    }
+
+    const chrome = 2 * STATUS_PAD_X;
+    // Beside the slot, and (the second row) the whole frame.
+    const lane = frame - slot - chrome;
+    const full = frame - chrome;
     if (full <= 0) return;
 
     const pick = (k: string) =>
@@ -490,8 +591,7 @@ export function StatusBar({
     const helpW = wide(pick("help"));
     if (helpW <= 0) return;
     // The diagnostics COUNT item, where there is one: its ghost is the very
-    // element the row draws (two tabular digits reserved per count), so what
-    // is measured is what is painted.
+    // element the row draws, so what is measured is what is painted.
     const diagFull = wide(pick("d"));
     const diagShort = wide(pick("dc"));
     // The status readout at its ACTUAL width, in its two forms (with and
@@ -522,19 +622,13 @@ export function StatusBar({
       parts.length === 0
         ? 0
         : parts.reduce((a, b) => a + b, 0) + (parts.length - 1) * STATUS_GAP;
-    /* TWO GROUPS, one gap between them and NO DIVIDERS (2026-10-04: VS
-    Code's status bar has none; the gap between the groups is the grouping).
-    LEFT: the value items and Reading. RIGHT: the readout, the marks (when
-    there are any), the diagnostics count (when there is one) and `?`. Marks is the LAST item of
-    the ladder (it sheds first) and the left end of the right group. The
-    least room kept between the groups is `BAR_GROUP_GAP`. */
+    /* TWO GROUPS, one gap between them and NO DIVIDERS (VS Code's status bar
+    has none; the slack between the groups is the grouping). LEFT: the value
+    items and Reading. RIGHT: the readout, the marks (when there are any), the
+    diagnostics count (when there is one) and `?`. Marks is the LAST item of
+    the ladder (it sheds first) and the left end of the right group. */
     const tIdx = ids.indexOf("tour");
-    const needWith = (
-      names: number,
-      words: number,
-      dw: number,
-      sw = 0,
-    ) => {
+    const groups = (names: number, words: number, dw: number, sw = 0) => {
       const left: number[] = [];
       ids.forEach((_, i) => {
         if (i !== tIdx) left.push(itemW(i, names, words));
@@ -545,76 +639,82 @@ export function StatusBar({
       if (tIdx >= 0) right.push(itemW(tIdx, names, words));
       if (dw > 0) right.push(dw);
       right.push(helpW);
-      return rowW(left) + rowW(right) + BAR_GROUP_GAP;
+      return { l: rowW(left), r: rowW(right) };
     };
-    /* THE STRIP FILLS THE LANE, and leaving the lane is the one fallback.
-    `need(0, 0)` is the row's FLOOR — every item at its glyph, the gaps — and where the lane beside the button cannot hold even that,
-    the row would be clipped down to whatever fits, with the button's 110px
-    of canvas left empty beside it. That is what a thin panel reported (a
-    ~280px frame). So the strip goes one lane UP and takes the frame between
-    its insets (`lifted`), and the rail climbs over it. The test is the floor
-    against the lane, from the ghost and the frame alone. */
-    const dodge = lane >= needWith(0, 0, diagShort);
-    const avail = dodge ? lane : full;
+    // Whether a stage fits: ONE row — both groups beside the slot, at least
+    // `BAR_GROUP_GAP` apart — or, in the second-row placement, the left group
+    // across the whole frame and the right group beside the slot.
+    const fitsWith = (two: boolean, names: number, words: number, dw: number, sw = 0) => {
+      const g = groups(names, words, dw, sw);
+      return two ? g.l <= full && g.r <= lane : g.l + g.r + BAR_GROUP_GAP <= lane;
+    };
+    /* ONE ROW while the all-glyph floor fits beside the slot; else the SECOND
+    ROW. The test is the floor, from the ghost and the frame alone. */
+    const twoRows = !fitsWith(false, 0, 0, diagShort);
     // The diagnostics COUNT compacts LAST: every value item goes to its glyph
     // before the per-severity counts fold into the worst glyph and a total.
-    const diagCompact = diagFull > 0 && needWith(0, 0, diagFull) > avail;
+    const diagCompact = diagFull > 0 && !fitsWith(twoRows, 0, 0, diagFull);
     setDiagCompact(diagCompact);
-    const need = (names: number, words: number, sw = 0) =>
-      needWith(names, words, diagCompact ? diagShort : diagFull, sw);
+    const dw = diagCompact ? diagShort : diagFull;
 
     // The ladder, most words first: every name goes (right to left) before
     // any word does (right to left). Stage `n` is the all-value row; `2n`
     // the all-glyph floor, taken whether or not it fits.
     const at = (st: number) =>
       st <= n ? { names: n - st, words: n } : { names: 0, words: 2 * n - st };
+    // The readout the ladder makes room for: the full one where even the floor
+    // holds it, else the nameless one, else none — a readout that cannot fit
+    // at all must not walk the settings down to glyphs for nothing (on the
+    // second row it would have stripped the LEFT group for the right's sake).
+    const swLadder = fitsWith(twoRows, 0, 0, dw, statusW)
+      ? statusW
+      : statusShortW > 0 && fitsWith(twoRows, 0, 0, dw, statusShortW)
+        ? statusShortW
+        : 0;
     let st = 0;
-    while (st < 2 * n && need(at(st).names, at(st).words, statusW) > avail)
+    while (st < 2 * n && !fitsWith(twoRows, at(st).names, at(st).words, dw, swLadder))
       st++;
     const got = at(st);
     setStage((prev) =>
       prev.names === got.names && prev.words === got.words ? prev : got,
     );
-    /* THE STATUS READOUT IS THE LAST ITEM TO GO (2026-10-02, revised). It is
-    state, not a setting, so it keeps its place until the settings have
-    compacted as far as they go: the ladder above is walked with the readout
-    at its full ACTUAL width, and only where even the all-glyph floor cannot
-    hold it does it shed its name (where it has one: only without a
-    signature header), then go to nothing. Its width depends on the proof
-    and its cuts, never on the stage, so it cannot oscillate. */
-    const dw = diagCompact ? diagShort : diagFull;
+    /* THE STATUS READOUT IS THE LAST ITEM TO GO. It is state, not a setting,
+    so it keeps its place until the settings have compacted as far as they
+    go: the ladder above is walked with the readout at its full ACTUAL width,
+    and only where even the all-glyph floor cannot hold it does it shed its
+    name (where it has one), then go to nothing. */
     const fits = (sw: number) =>
-      sw > 0 && needWith(got.names, got.words, dw, sw) <= avail;
+      sw > 0 && fitsWith(twoRows, got.names, got.words, dw, sw);
     setStatusForm(fits(statusW) ? 2 : fits(statusShortW) ? 1 : 0);
-    setLifted(!dodge);
-    /* The rail's climb. In the lane the strip and its message strip keep
-    clear of the rail's column by the button's reserve, so the rail stays
-    where it stands. A LIFTED strip spans the frame under the rail, one lane
-    up — and its message strip spans it too, one strip higher — so the rail
-    climbs over both. The message strip's height is read off its drawn box:
-    it wraps with the frame, and `fit` runs on every render and every
-    resize. */
-    const stripH = stripRef.current?.offsetHeight ?? 0;
-    onPlaceRef.current(
-      dodge
-        ? 0
-        : BAR_H + LANE_GAP + (stripH > 0 ? stripH + DIAG_STRIP_GAP : 0),
+    setGeom((prev) =>
+      prev.slot === slot && prev.rowH === rowH && prev.twoRows === twoRows
+        ? prev
+        : { slot, rowH, twoRows },
     );
+    /* What the view needs: the band's height (the frame gives it up) and the
+    open message strip's, which floats above the band across the frame and
+    which the rail climbs over. Its height is read off its drawn box: it wraps
+    with the frame, and `fit` runs on every render and every resize. */
+    const stripH = stripRef.current?.offsetHeight ?? 0;
+    onPlaceRef.current({
+      band: rowH + (twoRows ? BAR_H : 0) + BAND_BORDER,
+      strip: stripH > 0 ? stripH + DIAG_STRIP_GAP : 0,
+    });
   }, []);
 
   // After EVERY render, because a setting's own label changes width…
   useLayoutEffect(fit);
 
-  // …and when the frame resizes without a render of ours.
+  // …and when the frame resizes without a render of ours, or the host button
+  // does (its label's font arrives late).
   useEffect(() => {
     const card = cardRef.current;
     const host = card?.offsetParent as HTMLElement | null;
     if (!card) return;
-    // The strip's width is the frame's less two constants, so the frame is
-    // what has to be watched — with the strip kept as a fallback for a mount
-    // where it has no offsetParent yet.
     const ro = new ResizeObserver(fit);
     ro.observe(host ?? card);
+    const btn = hostButton();
+    if (btn) ro.observe(btn);
     return () => ro.disconnect();
   }, [fit]);
 
@@ -627,14 +727,16 @@ export function StatusBar({
       <span
         style={{
           display: "inline-block",
-          // The VALUE form centres its text in the reserved width: the item's
-          // dot centres under the whole box, and a left-set `–/2` in a box
-          // sized for `99/99` stood well left of the dot meant to sit
-          // under it (user report, 2026-09-24). The full form keeps the value
-          // left-set against its name — `Layout: outline` is one phrase.
+          // The VALUE form centres its text in the reserved width (a left-set
+          // `–/2` in a box sized for `99/99` read as off-centre, 2026-09-24).
+          // The full form keeps the value left-set against its name —
+          // `Layout: outline` is one phrase.
           textAlign: form === "value" ? "center" : "left",
           width: value === "" ? 0 : resv[it.id] || undefined,
           opacity: it.dim ? DIM_OPACITY : 1,
+          // Something in its panel is ON: the value wears the band's emphasis
+          // ink (it replaced the dot, 2026-10-04). Paint only.
+          color: it.on ? STATUSBAR_ON : undefined,
         }}
       >
         {shown}
@@ -645,13 +747,21 @@ export function StatusBar({
         key={it.id}
         label={
           it.words ? (
-            form === "full" ? (
-              it.words.full
-            ) : form === "value" ? (
-              it.words.value
-            ) : (
-              it.glyph
-            )
+            // A menu with no value (Reading): the whole label is what wears
+            // the emphasis.
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                color: it.on ? STATUSBAR_ON : undefined,
+              }}
+            >
+              {form === "full"
+                ? it.words.full
+                : form === "value"
+                  ? it.words.value
+                  : it.glyph}
+            </span>
           ) : form === "full" ? (
             <span
               style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
@@ -662,7 +772,14 @@ export function StatusBar({
           ) : form === "value" ? (
             valueSpan
           ) : (
-            it.glyph
+            <span
+              style={{
+                display: "inline-flex",
+                color: it.on ? STATUSBAR_ON : undefined,
+              }}
+            >
+              {it.glyph}
+            </span>
           )
         }
         title={it.title}
@@ -670,7 +787,6 @@ export function StatusBar({
         // item the panel hangs from says so — and nothing else lights it.
         accent={barOpen === it.id}
         open={barOpen === it.id}
-        dot={it.dot}
         onToggle={(x) => toggle(it.id, x)}
         onAlt={it.onAlt}
       />
@@ -720,35 +836,34 @@ export function StatusBar({
     return i < 0 ? null : valueMenu(valueItems[i], formOf(i));
   };
 
+  const leftGroup = (
+    <>
+      {drawItem("layout")}
+      {drawItem("context")}
+      {drawItem("comments")}
+      {drawItem("reading")}
+    </>
+  );
+
   return (
-    // A STRIP ACROSS THE HOST BUTTON'S LANE (2026-10-02), flat — no shadow, a
-    // hairline all round — from `LANE_INSET` to the button's reserve, so
-    // the strip and the "Restart File" button read as one row of chrome. It
-    // spans the lane because the lane is where the room is: the slack sits
-    // BETWEEN the two groups (settings left, reading position and
-    // diagnostics right) like every status bar's, and nothing in it moves
-    // when a setting lengthens a value. `fit` measures the words against that
-    // lane.
+    // THE STATUS BAND (2026-10-04): VS Code's status bar, docked on the
+    // frame's bottom edge, edge to edge, opaque, one top border, no radius,
+    // no shadow. The tree's frame ends above it (the view gives up `band`),
+    // so nothing paints under it. Its right end is a SLOT for the host's
+    // "Restart File" button, which sits set into the band.
     <div
       ref={cardRef}
+      data-ptw-band=""
       style={{
         position: "absolute",
-        /* ONE PLACEMENT, and one fallback. In the lane: `left: LANE_INSET`,
-        `right: BAR_RIGHT_RESERVE`, centred on the button (`BAR_LANE_BOTTOM`;
-        22px, VS Code's status bar, against its 26). The
-        fallback is where the lane cannot hold even the all-glyph row (`fit`):
-        the strip goes one lane UP — the button, the host's, draws over
-        whatever is in its lane, and it hid `?` in a 424px pane — spans the
-        frame between its insets, and the rail climbs over it (`lifted`). */
-        left: LANE_INSET,
-        right: lifted ? LANE_INSET : BAR_RIGHT_RESERVE,
-        bottom: lifted ? BAR_LIFT : BAR_LANE_BOTTOM,
-        // A fixed `height`, never a minimum: see BAR_ITEM_H.
-        height: BAR_H,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: geom.rowH + (geom.twoRows ? BAR_H : 0) + BAND_BORDER,
         zIndex: Z.chrome,
         boxSizing: "border-box",
         display: "flex",
-        alignItems: "center",
+        flexDirection: "column",
         fontFamily: CHROME_FONT,
         fontSize: CHROME_TEXT,
         lineHeight: 1,
@@ -756,53 +871,38 @@ export function StatusBar({
         // Figures at one width, as VS Code's status bar draws them: a count
         // ticking over moves nothing beside it.
         fontVariantNumeric: "tabular-nums",
-        ...POPUP_CHROME,
-        padding: `${STATUS_PAD_Y}px ${STATUS_PAD_X}px`,
-        borderRadius: CHROME_RADIUS,
-        border: `1px solid ${CHROME_BORDER}`,
-        // FLAT: the popovers' shadow is for things that float over the tree;
-        // the strip is a row of chrome in a lane, and the hairline is its edge.
-        boxShadow: "none",
-        color: CHROME_INK,
+        background: STATUSBAR_BG,
+        borderTop: `${BAND_BORDER}px solid ${STATUSBAR_BORDER}`,
+        color: STATUSBAR_FG,
+        textAlign: "left",
+        cursor: "default",
       }}
     >
+      {/* THE SECOND ROW, above the button row, only where the all-glyph row
+          cannot fit beside the slot: the left group across the whole band. */}
+      {geom.twoRows && (
+        <div style={{ ...ROW_STYLE, height: BAR_H, padding: `0 ${STATUS_PAD_X}px` }}>
+          <div style={GROUP_STYLE}>{leftGroup}</div>
+        </div>
+      )}
       <div
         style={{
-          display: "flex",
-          flexWrap: "nowrap",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flex: "1 1 auto",
-          minWidth: 0,
-          height: BAR_ITEM_H,
-          // The last resort under the all-glyph row, which is itself the last
-          // resort under the words: a frame too narrow even for the glyphs
-          // clips rather than spilling out of the strip. A clip-path, NOT
-          // `overflow: hidden`: the EXTRAS SLOTS hang 1px below the 20px item
-          // (`bottom: -1`, into the strip's padding), and overflow clips both
-          // axes — measured in the real infoview, the marks drew 1.9px tall
-          // against 2.9 wide, the reported "not squares", while every rect
-          // measurement said 2.9 × 2.9. The inset clips the sides only.
-          clipPath: "inset(-4px 0 -4px 0)",
+          ...ROW_STYLE,
+          height: geom.rowH,
+          // The slot: the host button stands in the band's last `slot` px.
+          padding: `0 ${STATUS_PAD_X + geom.slot}px 0 ${STATUS_PAD_X}px`,
         }}
       >
         {/* LEFT, left-aligned: how the tree is drawn, then what you are asked
-            to read. */}
-        <div style={GROUP_STYLE}>
-          {drawItem("layout")}
-          {drawItem("context")}
-          {drawItem("comments")}
-          {drawItem("reading")}
-        </div>
+            to read (on the second row instead, where there is one). */}
+        {!geom.twoRows && <div style={GROUP_STYLE}>{leftGroup}</div>}
 
         {/* RIGHT, right-aligned and so FLUSH against the host's button
             whatever the left group carries: the readout and the marks at its
             left end (their arrival moves nothing), the count, `?`. */}
         <div style={{ ...GROUP_STYLE, marginLeft: "auto" }}>
           {statusForm > 0 && status && (
-            <>
-              <StatusReadout info={statusForm === 2 ? status : { ...status, name: "" }} />
-            </>
+            <StatusReadout info={statusForm === 2 ? status : { ...status, name: "" }} />
           )}
           {drawItem("tour")}
           {diag && (

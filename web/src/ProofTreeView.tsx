@@ -309,6 +309,7 @@ import {
   type LayoutMode,
 } from "./viewModes";
 import {
+  BAR_H,
   CORNER_HIT_H,
   STATUS_NAME_MAX,
 } from "./barMetrics";
@@ -325,7 +326,7 @@ import {
   type Appearance,
 } from "./appearance";
 import { HopChip, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
-import { StatusBar } from "./statusBar";
+import { type BandPlace, StatusBar } from "./statusBar";
 import {
   CHIP_FONT_PX,
   CHIP_GAP,
@@ -455,9 +456,10 @@ const HDR_PAD_X = 10;
 // The resting text's right-edge fade where it is wider than the band.
 const HDR_FADE = "linear-gradient(to right, #000 calc(100% - 24px), transparent)";
 
-/** Screen px the card, its lane and an open message strip need below the last
- node (the strip's own height rides `barLift`). */
-const BOTTOM_CLEAR = 96;
+/** Screen px the zoom rail stands in at the frame's bottom right (its two
+ groups and its gap above the band): the least padding below the last node,
+ zoomed far out, so it can always be scrolled clear of the rail. */
+const RAIL_CLEAR = 140;
 
 /** How far LEFT of both boxes the provenance connector's vertical run sits,
  so the elbow clears the node it leaves and the node it arrives at. */
@@ -4020,16 +4022,15 @@ export default function ProofTreeView({
   };
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
-  // The status card reports when it FILLS the frame (a thin pane): it then
-  // sits one lane above the host button, and the zoom rail climbs over it.
-  // How far the zoom rail must climb to clear the status card's chrome: 0
-  // while the card sits in the host button's lane beside the rail, one lane
-  // for a FILLING card, and the message strip's own height on top of that
-  // when it is open (the filling card and its strip span the frame, under the
-  // rail's column). Reported by the bar's `fit`, which measures both.
-  const [barLift, setBarLift] = useState(0);
-  const setBarLiftIfChanged = (v: number) =>
-    setBarLift((prev) => (prev === v ? prev : v));
+  // THE STATUS BAND's report (`StatusBar.onPlace`): its height, which the
+  // tree's frame gives up (nothing paints under the band), and an open
+  // message strip's height plus gap, which the zoom rail climbs over. Starts
+  // at one plain row; `fit` answers in a layout effect, before paint.
+  const [band, setBand] = useState<BandPlace>({ band: BAR_H + 1, strip: 0 });
+  const setBandIfChanged = (v: BandPlace) =>
+    setBand((prev) =>
+      prev.band === v.band && prev.strip === v.strip ? prev : v,
+    );
 
   const PAD_X = viewport.w;
   const PAD_Y = viewport.h;
@@ -4214,14 +4215,11 @@ export default function ProofTreeView({
   };
   const exitPath = () => setPathId(null);
 
-  // The bar FLOATS and costs the tree NOTHING: the scroll container runs to
-  // the bottom of the frame and the tree flows under the card, which is an
-  // overlay like every other floater. Reserving `BAR_H + 16` for it was the
-  // one thing that made the bar's height a layout fact — and it is what made
-  // wrapping expensive, since a second row was then paid for out of the tree.
-  // Scrolling the last node clear of the card costs nothing either: `PAD_Y`
-  // is a full viewport of padding below the content, so anything can be
-  // scrolled up past the card.
+  // The status band is DOCKED (2026-10-04): the scroll frame ends above it
+  // (`band.band`), so the tree never flows under it — the floating strip it
+  // replaced was the owner's "the tree flows under it". `PAD_Y` is still a
+  // full viewport of padding below the content, so anything can be scrolled
+  // clear of the rail.
 
   const hdrRef = useRef<HTMLDivElement | null>(null);
   const [hdrRaw, setHdrRaw] = useState(0);
@@ -5041,11 +5039,12 @@ export default function ProofTreeView({
 
   const svgW = extent.width + MARGIN.left + MARGIN.right + 2 * PAD_X;
   // The padding BELOW the content is a full viewport, so the last node scrolls
-  // clear of the status card and an open message strip at any usual zoom. Zoomed
-  // far out that viewport shrinks (it is scaled by `zoom`), so it is floored at
-  // the card + strip's screen height. Only the area below the content grows —
-  // never a shift of anything drawn, and never a change of `scrollTop`.
-  const padBottom = Math.max(PAD_Y, Math.ceil((BOTTOM_CLEAR + barLift) / zoom));
+  // clear of the rail and an open message strip at any usual zoom (the band
+  // is outside the frame, so it needs none). Zoomed far out that viewport
+  // shrinks (it is scaled by `zoom`), so it is floored at the rail's and the
+  // strip's screen height. Only the area below the content grows — never a
+  // shift of anything drawn, and never a change of `scrollTop`.
+  const padBottom = Math.max(PAD_Y, Math.ceil((RAIL_CLEAR + band.strip) / zoom));
   const svgH = extent.height + MARGIN.top + MARGIN.bottom + PAD_Y + padBottom;
 
   type SelVerb = { doc: SelVerbDocKey } & (
@@ -6342,7 +6341,7 @@ export default function ProofTreeView({
       />
 
       <ZoomRail
-        lift={barLift}
+        bottom={band.band + band.strip}
         onZoomIn={() => zoomBy(1.25)}
         onZoomOut={() => zoomBy(1 / 1.25)}
         onExpandAll={expandAll}
@@ -6351,7 +6350,7 @@ export default function ProofTreeView({
       />
 
       <StatusBar
-        onPlace={setBarLiftIfChanged}
+        onPlace={setBandIfChanged}
         upToEnabled={upToEnabled}
         reading={readingState}
         onReadingChange={applyReading}
@@ -6501,7 +6500,11 @@ export default function ProofTreeView({
         style={{
           width: "100%",
 
-          height: `calc(100% - ${hdrH}px)`,
+          // The frame ENDS ABOVE THE STATUS BAND (2026-10-04): it gives up
+          // the band's height, so no node paints under it; a change of that
+          // height is a viewport change, anchored like any (the `padRef`
+          // effect keeps every node where it stood relative to the top).
+          height: `calc(100% - ${hdrH + band.band}px)`,
           marginTop: hdrH,
           overflow: "auto",
           // A pan that reaches the tree's edge stops there rather than

@@ -4599,3 +4599,85 @@ classic: `bar-*`, `bulb-tip-*`, `menu-*` (Refactor), `pill-*`,
 `goal-quickfix-light-vscode.png` (a folded goal's ⇓)). Not verified live:
 whether VS Code takes ⌘. before the webview (batch 2's open question), and a
 rename row through the bulb (the corpus's drawn goals offered none).
+
+## 2026-10-04 — The status band
+
+Owner: "This bar has been and remains the weakest part of the app… it looks
+bad especially because the tree flows under it. Can we have it take up the
+whole bottom bit and we have a hole-punch for Restart File? Claim that whole
+band." And: "We really need it NOT to take up too much height. As close as we
+can get to matching the height of the Restart File button while still
+surrounding it." And earlier: "inscrutable dots."
+
+**The host button, measured** (code-server, Dark Modern, 1600×900 @2x,
+`page.frames()` → the frame holding "Restart File"):
+`<vscode-button class="restart-file-button">`, `position: fixed; bottom: 10px;
+right: 10px`, 26.0 tall, 100.6 wide in Linux system-ui (the record's ~95 on a
+Mac), `padding: 1px 13px`, `line-height: 22px`, 1px border, radius 2,
+`rgb(0, 120, 212)`. The webview viewport was 795 × 829 and Ramify's frame ran
+x 28 → 771: the infoview PADS its content, so the viewport's corner is not the
+frame's.
+
+**What changed.**
+- ONE band docked on the frame's bottom edge (`[data-ptw-band]`, statusBar.tsx):
+  edge to edge of the frame, opaque `--ptw-statusbar-bg` (`statusBar-
+  background`, fallback the chrome surface), `-fg`, a 1px top border in
+  `-border`, `-hover` for its items (`statusBarItem-hoverBackground`); no
+  radius, no shadow. Classic maps all four back to the chrome inks.
+- THE FRAME ENDS ABOVE IT: the scroll frame is `calc(100% − hdrH − band)`.
+  The band's height reaches the view through `onPlace({band, strip})`. A change
+  is a viewport change, which the existing `padRef` effect already anchors
+  (`PAD_Y` is the viewport, and the effect moves `scrollTop` by the delta).
+  Measured: node rects against the scroll frame's top are byte-identical to
+  HEAD at 1200 (25 nodes; HEAD's frame 800 tall, the band's 777), and stay
+  identical across a live 520 → 300 → 520 resize that grows the band from 31
+  to 53 and back, in outline and in wide.
+- HOLE PUNCH, not a docked band 38 tall: docked where the host leaves the
+  button (bottom 10), surrounding it would cost 10 + 26 + 2 = 38. So, while a
+  view is mounted, the band MOVES the button down into itself — a counted
+  `<style data-ptw-host-button>` (`HOST_BUTTON_CSS`, `!important` over the
+  host's rule), removed with the last view — and `placeHostButton` rewrites
+  it from the button's computed inset so the box stands `BAND_PAD` (2) inside
+  the FRAME's corner (live: `right: 26px` = the 24px infoview padding + 2).
+  Then `fit` MEASURES the button, never assumes it: slot = its left edge to the
+  frame's right + `BAND_SLOT_GAP` (6); the button row = frame bottom to its
+  top + `BAND_PAD` = 30, and the band 31 with its border. A host that kept
+  the button at 10 would get a 38px row — still surrounding it. No button
+  (static viewer, harness without `?host-button`): one `BAR_H` 22 row, band
+  23, no slot. The harness stub (`?host-button`, App.tsx) is the measured
+  button, fixed inside a transformed box over `#root`'s 90% columns.
+- The rail stands `RAIL_GAP` (8) above the band, never over it, and climbs over
+  an open message strip, which floats above the band inset `STATUS_PAD_X`.
+  The bottom scroll pad is `max(PAD_Y, (RAIL_CLEAR 140 + strip)/zoom)`.
+- NARROW: `fit`'s ladder is unchanged in kind (names → glyphs, right to left;
+  the readout sheds last). Where even the all-glyph row cannot fit beside the
+  slot, the band grows a SECOND ROW — the left group across the band above
+  the button row — instead of lifting into the tree. `lifted`, `BAR_LIFT`,
+  `BAR_LANE_BOTTOM`, `BAR_RIGHT_RESERVE`, `LANE_INSET/GAP/BTN_H/BTN_W`,
+  `RAIL_LANE_GAP` and `STATUS_PAD_Y` are deleted. On the second row the
+  ladder no longer walks the left group to glyphs for a readout that cannot
+  fit beside the slot even at the floor (`swLadder`): measured at a 340 pane
+  the second row reads `Layout: outline · used · show · Reading` rather than
+  four glyphs.
+- DOTS GO: `ExtraSlots`, `SLOT_PX`/`SLOT_GAP_PX`, `useDevicePixelRatio` and
+  every `dot` prop are deleted. An item whose panel has something on wears
+  `--ptw-statusbar-on` on its value / glyph / Reading's words
+  (`BarValueItem.on`), the link blue (`textLink-foreground`; classic: the
+  accent) — the status bar's own `prominentForeground` equals its foreground
+  in most themes and would say nothing. The tips already named what is on;
+  the "(a dot means…)" clauses went. Kept lesson from the dot: a layout
+  effect that writes state off a sub-pixel measurement needs a write budget
+  (React #185 at dpr 3); the band's own writes are all integer and
+  frame-derived, so `fit` cannot loop.
+
+Gates: `npm test` green, `probe fingerprint` identical (1189), `probe viewer`;
+`check-sync`, `check-settings`, `gen-codicons --check`, `gen-experience
+--check`; widget bundle rebuilt, `lake build Ramify`. Screenshots in
+/tmp/claude-0/band/: harness `g-{1200,760,420}-{,hb}-{light,dark}-{vscode,
+classic}.png` (+ `n*-crop.png`: 1200/760/420 with the stub, 340 and 300 on
+two rows), `phone-{light,dark}.png` (static viewer, iPhone 13: band 23 at
+the frame's bottom, nothing under it, no boundary, no console error),
+`vscode-band.png` + `vscode-band-corner.png` (real VS Code, Restart File in
+its slot). Not done: VS Code's real status bar in a theme where it is
+saturated (Dark+'s blue) was not looked at — the band then wears that blue
+around the blue button.

@@ -1,17 +1,8 @@
-// The status bar's small parts: buttons, checks, rows, panels and menus, the glyph box, and the one dot
-// under a bar item. Every mark is a codicon (codiconView.tsx).
-import {
-  useCallback,
-  useEffect,
-  useState,
-  useRef,
-  useLayoutEffect,
-  type ReactNode,
-} from "react";
+// The status band's small parts: buttons, checks, rows, panels and menus, and the glyph box. Every mark is a codicon (codiconView.tsx).
+import { useRef, useLayoutEffect, type ReactNode } from "react";
 import { plainTicks } from "./ticks";
 import { useTip } from "./tipController";
 import {
-  CHROME_INK,
   DISABLED_OPACITY,
   DIM_OPACITY,
   CHROME_RADIUS,
@@ -35,8 +26,6 @@ import {
   type BarRowKind,
   GLYPH_BOX_W,
   MENU_PANEL,
-  SLOT_GAP_PX,
-  SLOT_PX,
   type StatusInfo,
   STATUS_GAP,
   statusParts,
@@ -62,148 +51,12 @@ export function GlyphBox({ children, w }: { children: ReactNode; w?: number }) {
   );
 }
 
-/* THE DEVICE-PIXEL RATIO, live. It is not a constant even on one screen: the
-editor's own zoom multiplies it (measured in the infoview at 2.4 = retina 2 ×
-zoom 1.2), and a zoom change fires `resize`. */
-function useDevicePixelRatio(): number {
-  const [dpr, setDpr] = useState(() =>
-    typeof window === "undefined" ? 1 : window.devicePixelRatio || 1,
-  );
-  useEffect(() => {
-    const read = () => setDpr(window.devicePixelRatio || 1);
-    window.addEventListener("resize", read);
-    return () => window.removeEventListener("resize", read);
-  }, []);
-  return dpr;
-}
-
-/* A 3×3 CSS square is only a square on screen when it lands on WHOLE DEVICE
-PIXELS, and in the infoview it routinely does neither: at dpr 2.4 a 3px side
-is 7.2 device px, and the group is centred under an item of fractional width,
-so its left edge falls mid-pixel too. The renderer then antialiases one axis
-and not the other and the mark reads as a RECTANGLE — reported as exactly
-that.
-
-So both halves are snapped. The SIZE (and the gap, or marks 2 and 3 drift off
-the grid however well mark 1 is placed) is rounded to whole device pixels and
-expressed back in CSS px; the POSITION is corrected by a `transform` carrying
-the sub-device-pixel remainder of the FIRST mark's own rect — the first mark,
-not the group, because `justifyContent: center` is what makes the offset
-fractional in the first place. The rect already carries the nudge in force, so
-it is taken back out before the remainder is read, which is what makes the
-correction converge in one pass instead of chasing itself.
-
-A transform on an absolutely-positioned span reaches no layout, so both
-standing promises hold untouched: ONE HEIGHT and STABLE WIDTH. */
-/** How many state writes in a row `ExtraSlots` may make before it stops chasing a sub-pixel. */
-const SNAP_BUDGET = 4;
-
-function ExtraSlots({ on }: { on: boolean }) {
-  const dpr = useDevicePixelRatio();
-  const ref = useRef<HTMLSpanElement | null>(null);
-  // The nudge in force, held twice: as STATE (what the render draws) and in a
-  // ref (what the next measurement takes back out). The pair is what lets the
-  // effect run after EVERY render — which is when the row's own layout can
-  // have moved the group — without listing itself in its deps; it is `fit`'s
-  // shape exactly, and it converges in one pass because taking the applied
-  // nudge back out leaves the same raw position it was computed from.
-  const applied = useRef({ dx: 0, dy: 0 });
-  const [nudge, setNudge] = useState({ dx: 0, dy: 0 });
-
-  /* THE SECOND HALF OF THE RATIO, and it has to be MEASURED. A webview's own
-  zoom moves `devicePixelRatio` (that is the infoview's case: retina 2 × zoom
-  1.2 = 2.4), but an ancestor CSS `zoom` does NOT — measured, the ratio still
-  reads 2 under `zoom: 1.2` — so the scale in force is read off a box whose
-  CSS size we KNOW and never touch: the item this group is absolutely
-  positioned inside, `BAR_ITEM_H` tall by construction. Reading it off one of
-  our own marks would feed the snapped size back into the scale that computed
-  it, and the layout's 1/64px quantization then makes the pair oscillate. */
-  const [scale, setScale] = useState(1);
-  const ratio = dpr * scale;
-
-  const size = Math.max(1, Math.round(SLOT_PX * ratio)) / ratio;
-  const gap = Math.max(1, Math.round(SLOT_GAP_PX * ratio)) / ratio;
-
-  // A BUDGET of consecutive state writes (2026-10-04). Snapping is meant to
-  // converge in one pass, but at a 3× device-pixel ratio (iPhone 13/15 Pro)
-  // the layout's rounding sent the nudge back and forth between two values
-  // forever — React error #185, the whole view replaced by the boundary. A
-  // pass that writes nothing refills the budget; once it runs out the dot
-  // stays where it is, at worst a fraction of a device pixel off.
-  const budget = useRef(SNAP_BUDGET);
-  const snap = useCallback(() => {
-    const el = ref.current;
-    const first = el?.firstElementChild as HTMLElement | null;
-    if (!el || !first) return;
-    const r = first.getBoundingClientRect();
-    // A measurement with no box is the ABSENCE of an answer, not a position
-    // (`useFrameOffset`'s rule) — a hidden webview lays the row out at zero.
-    if (r.width === 0 && r.height === 0) return;
-    const host = el.parentElement?.getBoundingClientRect();
-    const s = host && host.height > 0 ? host.height / BAR_ITEM_H : 1;
-    if (Math.abs(s - scale) > 1e-3) {
-      if (budget.current <= 0) return;
-      budget.current--;
-      setScale(s);
-      return;
-    }
-    // Everything below is in DEVICE pixels of the rect's own (already scaled)
-    // coordinate space; the nudge itself is written in the element's CSS px,
-    // which the ancestor scale multiplies — hence the `s` on the way in and
-    // the `ratio` on the way out.
-    const cur = applied.current;
-    const rawL = (r.left - cur.dx * s) * dpr;
-    const rawT = (r.top - cur.dy * s) * dpr;
-    const dx = (Math.round(rawL) - rawL) / ratio;
-    const dy = (Math.round(rawT) - rawT) / ratio;
-    if (Math.abs(dx - cur.dx) > 1e-4 || Math.abs(dy - cur.dy) > 1e-4) {
-      if (budget.current <= 0) return;
-      budget.current--;
-      applied.current = { dx, dy };
-      setNudge({ dx, dy });
-    } else budget.current = SNAP_BUDGET;
-  }, [dpr, ratio, scale]);
-  useLayoutEffect(snap);
-
-  // ONE dot, drawn only while lit: an unlit square on every item is chrome
-  // that says nothing.
-  if (!on) return null;
-  return (
-    <span
-      ref={ref}
-      aria-hidden
-      style={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: -1,
-        display: "flex",
-        justifyContent: "center",
-        gap,
-        pointerEvents: "none",
-        lineHeight: 0,
-        transform: `translate(${nudge.dx}px, ${nudge.dy}px)`,
-      }}
-    >
-      <span
-        style={{
-          width: size,
-          height: size,
-          flex: `0 0 ${size}px`,
-          background: CHROME_INK,
-        }}
-      />
-    </span>
-  );
-}
-
 export function BarButton({
   label,
   title,
   accent,
   muted,
   disabled,
-  dot,
   popup,
   expanded,
   onClick,
@@ -214,8 +67,6 @@ export function BarButton({
   accent?: boolean;
   muted?: boolean;
   disabled?: boolean;
-  // Lit when something in this item's panel is switched on; see `ExtraSlots`.
-  dot?: boolean;
   /** What the button opens, for assistive tech; `expanded` is whether it is up. */
   popup?: "menu" | "dialog";
   expanded?: boolean;
@@ -259,13 +110,12 @@ export function BarButton({
       }}
     >
       {label}
-      <ExtraSlots on={!!dot} />
     </button>
   );
 }
 
 /** THE STATUS READOUT (2026-10-02): `tour_reading · 5 steps · 1 open · 4 hidden`
- — a readout, not a setting, so no `Name:` and no dot. One `<span>` so the
+ — a readout, not a setting, so no `Name:` and no emphasis. One `<span>` so the
  ghost measures one unit; its two counts that can be acted on are real
  `<button>`s styled as text (`BARE_BTN`) — `open` goes to the next open goal,
  `hidden` expands everything — and the name and the step count are inert.
@@ -498,7 +348,6 @@ export function BarMenu({
   title,
   accent,
   open,
-  dot,
   onToggle,
   onAlt,
 }: {
@@ -507,7 +356,6 @@ export function BarMenu({
   accent?: boolean;
   /** Its panel is up (`aria-expanded`). */
   open?: boolean;
-  dot?: boolean;
   onToggle: (x: number) => void;
   // ⌥-click advances the setting to its next value instead of opening the
   // list — the same wrapper the list's own rows call, so it toasts and
@@ -524,7 +372,6 @@ export function BarMenu({
       label={label}
       title={title}
       accent={accent}
-      dot={dot}
       popup="menu"
       expanded={open}
       onClick={(e) => {

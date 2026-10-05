@@ -35,13 +35,11 @@ import {
 import { Codicon } from "./codiconView";
 import {
   BARE_BTN,
-  LANE_BTN_H,
-  LANE_INSET,
   RAIL_BTN,
   RAIL_GROUP_GAP,
   RAIL_GROUP_PAD,
   RAIL_INSET,
-  RAIL_LANE_GAP,
+  RAIL_GAP,
 } from "./barMetrics";
 
 /** Width of an ANCHORED toast (a mark jump's `n/N · caption`): fixed, so the
@@ -651,15 +649,16 @@ export function TopCentre({
 }
 
 export function ZoomRail({
-  lift,
+  bottom,
   onZoomIn,
   onZoomOut,
   onExpandAll,
   onCollapseAll,
   onFit,
 }: {
-  /** Extra px to climb over the status strip's chrome (`StatusBar.onPlace`). */
-  lift: number;
+  /** The px below the rail that belong to the band and an open message
+   strip (`StatusBar.onPlace`): the rail stands `RAIL_GAP` above them. */
+  bottom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onExpandAll: () => void;
@@ -668,22 +667,13 @@ export function ZoomRail({
 }) {
   return (
     <div
-      // THE BOTTOM-RIGHT CORNER, beside the canvas these verbs act on. It
-      // needs no `hdrH`: the header hangs at the TOP, so the one measurement
-      // the rail used to depend on (and once latched at 0, putting the rail on
-      // top of the header) cannot reach it. Its bottom sits one lane UP — the
-      // host's "Restart File" button owns the corner itself, and with the
-      // frame now taking all the room there is (widget.tsx) the rail has to
-      // clear that button by placement rather than by the frame stopping
-      // short of it.
+      // THE BOTTOM-RIGHT CORNER, beside the canvas these verbs act on, ABOVE
+      // the status band (2026-10-04) — never over it — and over an open
+      // message strip, which floats above the band across the frame.
       style={{
         position: "absolute",
         right: RAIL_INSET,
-        bottom:
-          LANE_INSET +
-          LANE_BTN_H +
-          RAIL_LANE_GAP +
-          lift,
+        bottom: bottom + RAIL_GAP,
         zIndex: Z.chrome,
         display: "flex",
         flexDirection: "column",
