@@ -24,3 +24,10 @@ Every file elaborates against the dev package's Mathlib (`cd lean && lake env
 lean ../demos/<file>.lean`); `ReadingTour.lean` has one error, on purpose.
 Each file's leading `/-! # Title … -/` block is its heading and blurb on the
 index.
+
+## The playground's theorems
+
+`playground/*.lean`, listed by `playground.txt`, are the baked playground's
+theorems (`docs/viewer.md`, "The playground"): core Lean only (each elaborates
+with plain `lean`, no Mathlib), one theorem with a worked solution, and
+`-- @try` / `-- @depth` directive comments for the baker.

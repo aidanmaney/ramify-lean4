@@ -1,0 +1,17 @@
+# The baked playground's theorems, in the order its picker lists them:
+# `cd web && npm run publish:site` (publish.mjs --playground ../demos/playground.txt).
+# Each file is core Lean (no imports) with ONE theorem and a worked solution;
+# `-- @try <tactic>` lines add candidates (routes and mistakes), `-- @depth N`
+# moves the cap (default 4; `intro` steps are free). See lean/PlaygroundBake.lean.
+playground/ZeroAdd.lean
+playground/Double.lean
+playground/AndSwap.lean
+playground/OrSwap.lean
+playground/ZeroOrPos.lean
+playground/SquareParity.lean
+playground/AppendLength.lean
+playground/SevenSquared.lean
+playground/NoLargest.lean
+playground/RewriteChain.lean
+playground/Absurd.lean
+playground/NoSqrtTwo.lean

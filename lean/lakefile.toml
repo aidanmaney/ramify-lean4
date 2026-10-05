@@ -89,10 +89,11 @@ name = "ppharness"
 root = "Main"
 supportInterpreter = true
 
-# --- Playground baker spike (file: PlaygroundBake.lean) ----------------------
-# Core-only BFS over (goal, tactic) answers for a static "baked playground";
-# see docs/playground-spike.md. Not a default target, imports nothing of ours.
-# `lake exe playgroundbake OUTDIR [DEPTH] [canon]`
+# --- The baked playground's baker (file: PlaygroundBake.lean) -----------------
+# BFS over (goal, tactic) answers for site/playground.html, baked through the
+# real `ProofTree.bakeGoal` (so it imports ProofTreeHarvest); the theorems are
+# core Lean and bake in an `Init` environment. docs/viewer.md "The playground".
+# Not a default target. `lake exe playgroundbake OUT.json FILE.lean`
 [[lean_exe]]
 name = "playgroundbake"
 root = "PlaygroundBake"
