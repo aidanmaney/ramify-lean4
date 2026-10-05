@@ -1,0 +1,96 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Lean (wasm) — Ramify spike demo</title>
+<style>
+  :root { color-scheme: light dark; --dim: #8b949e; --line: #8b949e55; --ok: #3fb950; --err: #f85149; --sel: #388bfd33; }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 0; padding: 16px; max-width: 980px; }
+  code, pre, input, .goal { font-family: ui-monospace, "JuliaMono", Menlo, Consolas, monospace; font-size: 13px; }
+  header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  #status { color: var(--dim); }
+  .goal { white-space: pre-wrap; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin: 6px 0; cursor: pointer; }
+  .goal.sel { background: var(--sel); border-color: #388bfd; }
+  .goal.done { opacity: .55; cursor: default; }
+  .step { margin-left: 22px; border-left: 1px solid var(--line); padding-left: 12px; }
+  .tac { font-family: ui-monospace, Menlo, monospace; color: #a371f7; margin: 4px 0; }
+  .ms { color: var(--dim); font-size: 12px; }
+  .err { color: var(--err); white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .closed { color: var(--ok); }
+  form { display: flex; gap: 8px; margin: 10px 0; }
+  input { flex: 1; padding: 6px 8px; }
+</style>
+<header>
+  <strong>Live Lean in your browser</strong>
+  <select id="pick"></select>
+  <span id="status">loading Lean…</span>
+</header>
+<p class="ms">Real Lean v4.32.2 compiled to WebAssembly, running in a Web Worker. Click an open goal, type a tactic, press Enter. Nothing is precomputed.</p>
+<form id="f"><input id="tac" placeholder="tactic, e.g. intro p q h" autocomplete="off" disabled><button id="go" disabled>Try</button></form>
+<div id="err" class="err"></div>
+<div id="tree"></div>
+<script>
+const THEOREMS = __THEOREMS__;           // [{name, file, theorem}] filled by setup
+const w = new Worker("worker-live.js");
+let pending = null;
+w.onmessage = (e) => { const p = pending; pending = null; p && p(e.data); };
+const ask = (msg) => new Promise((ok) => { pending = ok; w.postMessage(msg); });
+const $ = (id) => document.getElementById(id);
+let cur, root, sel;
+function goalNode(text, path) { return { text, path, tactic: null, children: null, ms: null }; }
+function render() {
+  const draw = (g) => {
+    const d = document.createElement("div");
+    const box = document.createElement("div");
+    box.className = "goal" + (g === sel ? " sel" : "") + (g.children ? " done" : "");
+    box.textContent = g.text;
+    if (!g.children) box.onclick = () => { sel = g; render(); $("tac").focus(); };
+    d.append(box);
+    if (g.children) {
+      const s = document.createElement("div"); s.className = "step";
+      const t = document.createElement("div"); t.className = "tac";
+      t.innerHTML = ""; t.textContent = g.tactic + "  ";
+      const ms = document.createElement("span"); ms.className = "ms"; ms.textContent = `${Math.round(g.ms)} ms`; t.append(ms);
+      s.append(t);
+      if (g.children.length === 0) { const c = document.createElement("div"); c.className = "closed"; c.textContent = "✓ goal closed"; s.append(c); }
+      for (const c of g.children) s.append(draw(c));
+      d.append(s);
+    }
+    return d;
+  };
+  $("tree").replaceChildren(draw(root));
+}
+function start(i) {
+  cur = THEOREMS[i];
+  const m = cur.file.match(new RegExp("theorem\\s+" + cur.theorem.replace(/[.*+?^${}()|[\]\\']/g, "\\$&") + "\\s*([\\s\\S]*?):=\\s*by"));
+  root = goalNode("⊢ " + (m ? m[1].replace(/^:\s*/, "").replace(/\s+/g, " ").trim() : cur.theorem), []);
+  sel = root; $("err").textContent = ""; render();
+}
+$("f").onsubmit = async (e) => {
+  e.preventDefault();
+  const tactic = $("tac").value.trim();
+  if (!tactic || !sel || sel.children) return;
+  $("go").disabled = true; $("err").textContent = "";
+  const t0 = performance.now();
+  const r = await ask({ answer: JSON.stringify({ file: cur.file, theorem: cur.theorem, path: sel.path, tactic }) });
+  $("go").disabled = false;
+  const a = r.answer;
+  if (a.error) { $("err").textContent = `Lean: ${a.error}`; return; }
+  const g = sel;
+  g.tactic = tactic; g.ms = performance.now() - t0;
+  g.children = a.goals.map((txt, i) => goalNode(txt, [...g.path, [tactic, i]]));
+  sel = g.children[0] ?? null;
+  if (!sel) { const stack = [root]; while (stack.length) { const n = stack.pop(); if (!n.children) { sel = n; break; } stack.push(...n.children); } }
+  $("tac").value = ""; render();
+};
+for (const [i, t] of THEOREMS.entries()) $("pick").append(new Option(t.name, i));
+$("pick").onchange = (e) => start(+e.target.value);
+(async () => {
+  const t0 = performance.now();
+  const r = await ask({ init: { tar: "init.tar", trim: true } });
+  $("status").textContent = r.init.ok
+    ? `Lean ready in ${((performance.now() - t0) / 1000).toFixed(1)} s · ${r.init.constants.toLocaleString()} constants · heap ${Math.round(r.heapMB)} MB`
+    : "Lean failed to start";
+  $("tac").disabled = $("go").disabled = !r.init.ok;
+  start(0);
+})();
+</script>

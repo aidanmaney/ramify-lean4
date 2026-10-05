@@ -7,7 +7,9 @@ const dir = path.resolve(process.argv[2] || ".");
 const port = Number(process.argv[3] || 8137);
 const types = { ".js": "text/javascript", ".wasm": "application/wasm", ".html": "text/html", ".tar": "application/x-tar" };
 http.createServer((req, res) => {
-  const p = path.join(dir, decodeURIComponent(new URL(req.url, "http://x").pathname));
+  let rel = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  if (rel.endsWith("/")) rel += "index.html";
+  const p = path.join(dir, rel);
   if (!p.startsWith(dir) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
   res.writeHead(200, {
     "Content-Type": types[path.extname(p)] || "application/octet-stream",
