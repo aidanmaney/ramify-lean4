@@ -10,6 +10,8 @@
 //                                      wide layout (stacked where wide is wider
 //                                      than WIDE_MAX), cropped to its ink, at most
 //                                      CARD_W pixels wide (2× a card)
+//   <site>/thumbs/playground-<theme>.webp  the playground page a few tactics
+//                                      into `Double` (when publish wrote one)
 //   <site>/thumbs/hero-<theme>.webp    the hero: demos/hero-<theme>.png where it
 //                                      exists (a VS Code screenshot — the
 //                                      extension is the product; dark falls back
@@ -149,6 +151,25 @@ async function treeShot(page, url, out) {
   await webp(page, await page.screenshot({ clip }), CARD_W, out);
 }
 
+/** The playground's card: the page itself, a few tactics into a proof, typed
+ through its own input (so the picture is what a visitor gets). */
+const PLAYGROUND_SCRIPT = ["intro n", "induction n", "rfl", "rename_i k ih", "rw [double]"];
+async function playgroundShot(page, url, out) {
+  // narrow, so the card (~320 css px) is readable: the phone layout
+  await page.setViewportSize({ width: 560, height: 720 });
+  await page.goto(url);
+  await page.waitForSelector("[data-ptw-scroll] svg");
+  const input = 'input[aria-label="A tactic for this goal"]';
+  for (const t of PLAYGROUND_SCRIPT) {
+    await page.fill(input, t);
+    await page.click("button[type=submit]");
+    await page.waitForTimeout(500);
+  }
+  await page.fill(input, "omega");
+  await page.waitForTimeout(1200);
+  await webp(page, await page.screenshot(), CARD_W, out);
+}
+
 /** The author's own hero picture for `theme`, if there is one. */
 const HERO_DIR = path.join(web, "../demos");
 function heroFile(theme) {
@@ -174,7 +195,7 @@ async function heroShot(page, url, out, theme) {
 
 const pw = await loadPlaywright();
 const { chromium } = pw.chromium ? pw : pw.default;
-const { hero, cards } = JSON.parse(fs.readFileSync(path.join(site, "cards.json"), "utf8"));
+const { hero, cards, playground } = JSON.parse(fs.readFileSync(path.join(site, "cards.json"), "utf8"));
 fs.mkdirSync(path.join(site, "thumbs"), { recursive: true });
 const server = await serve(site);
 const base = `http://127.0.0.1:${server.address().port}/`;
@@ -197,13 +218,19 @@ try {
     const link = (c, extra = "") =>
       `${base}view.html#file=${encodeURIComponent(c.file)}&proof=${encodeURIComponent(c.proof)}${extra}`;
     await shoot(heroShot, link(hero), path.join(site, "thumbs", `hero-${theme}.webp`));
+    if (playground)
+      await shoot(
+        playgroundShot,
+        `${base}playground.html#t=${encodeURIComponent(playground.theorem)}`,
+        path.join(site, "thumbs", `playground-${theme}.webp`),
+      );
     for (const c of cards) {
       await shoot(treeShot, link(c), path.join(site, "thumbs", `${c.file}-${theme}.webp`));
       process.stdout.write(".");
     }
     await ctx.close();
   }
-  console.log(`\nwrote ${path.relative(process.cwd(), path.join(site, "thumbs"))}/ (${cards.length * 2 + 2} pictures)`);
+  console.log(`\nwrote ${path.relative(process.cwd(), path.join(site, "thumbs"))}/ (${(cards.length + 1 + (playground ? 1 : 0)) * 2} pictures)`);
 } finally {
   await browser.close();
   server.close();

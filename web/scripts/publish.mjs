@@ -32,13 +32,21 @@
 //                     reuse it while it is newer than the source (iteration)
 //   --ndjson F=SRC    use an existing ppharness --widget-data output F for the
 //                     source SRC instead of running Lean (tests, CI)
+//   --playground LIST also bake the playground's theorems (demos/playground.txt)
+//                     with `playgroundbake` into <out>/playground/<name>.json,
+//                     write <out>/playground.html and put a Playground card at
+//                     the top of the index; fails over PLAYGROUND_BUDGET (2 MB
+//                     gzipped). With no source files, ONLY the playground is
+//                     (re)written. `--cache DIR` keeps the bakes too.
 //
 // Lean must be built: `cd lean && lake build ppharness` (this script runs it,
 // too). A file that `import Mathlib`s needs Mathlib's oleans (`lake exe cache
 // get`), exactly as gen.sh does.
 import { execFileSync } from "node:child_process";
+import zlib from "node:zlib";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -68,6 +76,8 @@ function parseArgs(argv) {
     featured: new Map(),
     /** The file (by published name) whose viewer the index opens with. */
     hero: null,
+    /** The playground's theorem list (`--playground`), else null. */
+    playground: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -82,6 +92,7 @@ function parseArgs(argv) {
     else if (a === "--no-traces") o.traces = false;
     else if (a === "--no-lint") o.lint = false;
     else if (a === "--cache") o.cache = path.resolve(val());
+    else if (a === "--playground") o.playground = path.resolve(val());
     else if (a === "--list") {
       // One source per line, relative to the list; `#` starts a comment.
       const list = path.resolve(val());
@@ -114,7 +125,7 @@ function parseArgs(argv) {
     } else if (a.startsWith("--")) throw new Error(`unknown option ${a}`);
     else o.files.push(path.resolve(a));
   }
-  if (o.files.length === 0)
+  if (o.files.length === 0 && !o.playground)
     throw new Error("usage: publish.mjs [options] <file.lean>...");
   return o;
 }
@@ -228,14 +239,14 @@ const BOOT_CSS = `
 :root[data-theme="dark"] { --page-bg: #1b1d22; --page-fg: #d5d8dd; }
 html, body { background: var(--page-bg); color: var(--page-fg); }`;
 
-function viewerPage({ title, script, payload }) {
+function viewerPage({ title, script, payload, description = "A Lean proof drawn as a tree with Ramify." }) {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
-<meta name="description" content="A Lean proof drawn as a tree with Ramify.">
+<meta name="description" content="${esc(description)}">
 ${payload ? "" : '<link rel="icon" type="image/svg+xml" href="favicon.svg">\n'}${THEME_BOOT}
 <style>${BOOT_CSS}</style>
 </head>
@@ -285,7 +296,7 @@ function featuredProof(payload, named, display) {
 const viewHref = (file, proof) =>
   `view.html#file=${encodeURIComponent(file)}&amp;proof=${encodeURIComponent(proof)}`;
 
-function indexPage(entries, hero) {
+function indexPage(entries, hero, pg = null) {
   const pic = (base, alt) =>
     `<img class="lt" src="thumbs/${base}-light.webp" alt="${esc(alt)}" loading="lazy" onerror="this.parentNode.classList.add('none')"><img class="dk" src="thumbs/${base}-dark.webp" alt="" loading="lazy">`;
   const card = (e) => {
@@ -306,7 +317,14 @@ function indexPage(entries, hero) {
     if (e.group || groups.length === 0) groups.push({ head: e.group ?? null, items: [] });
     groups.at(-1).items.push(e);
   }
-  const body = groups
+  // The playground leads the cards: the one page where the reader writes.
+  const play = pg
+    ? `<h2>Try it</h2>\n<div class="grid">\n<div class="card">
+<a class="go" href="playground.html" title="Pick a small theorem and type tactics under its goals: the tree grows, and every goal and error is what Lean said (computed in advance — no server)"><span class="thumb">${pic("playground", "The playground: a proof tree growing as tactics are typed")}</span>
+<span class="cap"><span class="t">Playground — type a tactic, watch the tree grow</span><span class="n">${pg.count} theorems</span></span></a>
+</div>\n</div>\n`
+    : "";
+  const body = play + groups
     .map(
       (g) =>
         `${g.head ? `<h2>${inlineMd(g.head)}</h2>\n` : ""}<div class="grid">\n${g.items.map(card).join("\n")}\n</div>`,
@@ -401,11 +419,11 @@ const kb = (n) => `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
 
 // ------------------------------------------------------------------ bundle
 
-async function bundleViewer() {
+async function bundleViewer(entry = "src/viewerMain.tsx") {
   const req = createRequire(path.join(web, "package.json"));
   const { build } = await import(pathToFileURL(req.resolve("esbuild")).href);
   const res = await build({
-    entryPoints: [path.join(web, "src/viewerMain.tsx")],
+    entryPoints: [path.join(web, entry)],
     bundle: true,
     format: "esm",
     jsx: "automatic",
@@ -418,9 +436,151 @@ async function bundleViewer() {
   return res.outputFiles[0].text;
 }
 
+// -------------------------------------------------------------- playground
+
+/** The bake format this script writes; `web/src/playgroundAnswer.ts` reads
+ exactly this (`PLAYGROUND_VERSION`) — bump both together. */
+export const PLAYGROUND_VERSION = 1;
+/** The playground's data, gzipped, may not exceed this. */
+export const PLAYGROUND_BUDGET = 2 * 1024 * 1024;
+
+let bakerBuilt = false;
+function runBaker(file, out) {
+  if (!bakerBuilt) {
+    console.log("building playgroundbake…");
+    execFileSync("lake", ["build", "playgroundbake"], { cwd: leanDir, stdio: "inherit" });
+    bakerBuilt = true;
+  }
+  console.log(`baking ${path.relative(repo, file)}…`);
+  execFileSync("lake", ["env", path.join(leanDir, ".lake/build/bin/playgroundbake"), out, file], {
+    cwd: leanDir,
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+}
+
+/** One theorem's bake: from the cache while it is newer than the source and
+ the baker, else from `playgroundbake`. */
+function bakeOf(file, name, o) {
+  const bin = path.join(leanDir, ".lake/build/bin/playgroundbake");
+  if (o.cache) {
+    const c = path.join(o.cache, `playground-${name}.json`);
+    const fresh =
+      fs.existsSync(c) &&
+      fs.statSync(c).mtimeMs > fs.statSync(file).mtimeMs &&
+      (!fs.existsSync(bin) || fs.statSync(c).mtimeMs > fs.statSync(bin).mtimeMs);
+    if (!fresh) {
+      fs.mkdirSync(o.cache, { recursive: true });
+      runBaker(file, c);
+    }
+    return JSON.parse(fs.readFileSync(c, "utf8"));
+  }
+  const tmp = path.join(fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "ramify-pg-")), "bake.json");
+  runBaker(file, tmp);
+  return JSON.parse(fs.readFileSync(tmp, "utf8"));
+}
+
+/** The theorem's OWN solution, typed line by line as the file writes it
+ (`·` dropped, each line on the first open goal — Lean's main goal), must
+ close the proof in the page's own client (`playgroundAnswer.ts`, through the
+ probes' bundle): a bake that cannot replay its worked proof is a broken demo.
+ Returns null, or what went wrong. */
+async function replaySolution(lib, bake, source) {
+  const at = source.indexOf(":= by");
+  const lines = source
+    .slice(at + 5)
+    .split("\n")
+    .map((l) => l.replace(/--.*$/, "").replace(/^\s*·\s*/, "").trim())
+    .filter(Boolean);
+  const t = lib.loadTable(lib.checkBake(bake));
+  const answer = lib.makeAnswer([lib.bakedEngine(t)]);
+  const attempts = [];
+  let built = lib.buildProof(t, attempts, bake.theorem);
+  for (const line of lines) {
+    const g = built.open[0];
+    if (!g) return `no goal left for \`${line}\``;
+    const r = await lib.play(t, answer, g.state, g.aliases, line);
+    if (r.kind !== "ok") return `\`${line}\` is ${r.kind}${r.error ? `: ${r.error.split("\n")[0]}` : ""}`;
+    attempts.push({ occ: g.occ, play: r });
+    built = lib.buildProof(t, attempts, bake.theorem);
+  }
+  return built.closed ? null : `${built.open.length} goal(s) left open`;
+}
+
+/** `--playground LIST`: every theorem's bake → `<out>/playground/`, its index,
+ the page and its bundle. Returns what the index card needs. */
+async function publishPlayground(o) {
+  const files = fs
+    .readFileSync(o.playground, "utf8")
+    .split("\n")
+    .map((l) => l.replace(/#.*/, "").trim())
+    .filter(Boolean)
+    .map((f) => path.resolve(path.dirname(o.playground), f));
+  const dir = path.join(o.out, "playground");
+  fs.mkdirSync(dir, { recursive: true });
+  const gz = (b) => zlib.gzipSync(b, { level: 9 }).length;
+  const { ensureLib } = await import(pathToFileURL(path.join(web, "probe/bundle.mjs")).href);
+  const lib = await import(pathToFileURL(await ensureLib()).href);
+  const theorems = [];
+  const rows = [];
+  let dataGz = 0;
+  for (const file of files) {
+    const name = path.basename(file, ".lean");
+    const bake = bakeOf(file, name, o);
+    if (bake.playgroundVersion !== PLAYGROUND_VERSION)
+      throw new Error(`${name}: bake format ${bake.playgroundVersion}, this script writes ${PLAYGROUND_VERSION}`);
+    const source = fs.readFileSync(file, "utf8");
+    const broken = await replaySolution(lib, bake, source);
+    if (broken) throw new Error(`${name}: its own solution does not replay in the page — ${broken}`);
+    const doc = fileDoc(source);
+    const title = doc?.title ?? bake.theorem;
+    const blurb = doc?.blurb ?? "";
+    const json = JSON.stringify({ ...bake, title, blurb, file: path.relative(repo, file).split(path.sep).join("/") });
+    fs.writeFileSync(path.join(dir, `${name}.json`), json);
+    const z = gz(json);
+    dataGz += z;
+    theorems.push({ name, theorem: bake.theorem, title, blurb, statement: bake.statement });
+    const ok = bake.steps.filter((r) => Array.isArray(r[2])).length;
+    rows.push(
+      `  ${`playground/${name}.json`.padEnd(32)} ${String(bake.goals.length).padStart(4)} states  ${String(bake.steps.length).padStart(5)} steps (${ok} ok)  ${kb(Buffer.byteLength(json)).padStart(8)}  gz ${kb(z)}`,
+    );
+  }
+  const index = JSON.stringify({ version: PLAYGROUND_VERSION, theorems });
+  fs.writeFileSync(path.join(dir, "index.json"), index);
+  dataGz += gz(index);
+  // A stale bake of a theorem the list dropped goes.
+  const keep = new Set([...theorems.map((t) => `${t.name}.json`), "index.json"]);
+  for (const f of fs.readdirSync(dir)) if (!keep.has(f)) fs.rmSync(path.join(dir, f));
+
+  const js = await bundleViewer("src/playgroundMain.tsx");
+  const hash = crypto.createHash("sha256").update(js).digest("hex").slice(0, 10);
+  const jsName = `playground-${hash}.js`;
+  for (const f of fs.readdirSync(o.out))
+    if (/^playground-[0-9a-f]+\.js$/.test(f) && f !== jsName) fs.rmSync(path.join(o.out, f));
+  fs.writeFileSync(path.join(o.out, jsName), js);
+  fs.copyFileSync(path.join(web, "public/favicon.svg"), path.join(o.out, "favicon.svg"));
+  fs.writeFileSync(
+    path.join(o.out, "playground.html"),
+    viewerPage({
+      title: "Ramify playground",
+      script: `<script type="module" src="${jsName}"></script>`,
+      description: "Type Lean tactics and watch the proof tree grow — every answer computed by Lean in advance.",
+    }),
+  );
+  const jsGz = gz(js);
+  console.log(`\nplayground: ${theorems.length} theorems`);
+  for (const r of rows) console.log(r);
+  console.log(`  data, gzipped: ${kb(dataGz)} (budget ${kb(PLAYGROUND_BUDGET)});  ${jsName} ${kb(Buffer.byteLength(js))}, gz ${kb(jsGz)};  total gz ${kb(dataGz + jsGz)}`);
+  if (dataGz > PLAYGROUND_BUDGET)
+    throw new Error(`the playground's data is ${kb(dataGz)} gzipped, over the ${kb(PLAYGROUND_BUDGET)} budget — lower a theorem's @depth or drop @try lines`);
+  return { count: theorems.length, dataGz };
+}
+
 // -------------------------------------------------------------------- main
 
 export async function publish(o) {
+  const pg = o.playground ? await publishPlayground(o) : null;
+  // `--playground` alone: the playground is rewritten, nothing else is.
+  if (o.files.length === 0) return [];
   const js = await bundleViewer();
   const hash = crypto.createHash("sha256").update(js).digest("hex").slice(0, 10);
   const jsName = `viewer-${hash}.js`;
@@ -480,12 +640,13 @@ export async function publish(o) {
   }
   const hero = entries.find((e) => e.name === o.hero) ?? entries[0];
   if (o.hero && hero.name !== o.hero) console.warn(`@hero ${o.hero}: no such file — using ${hero.name}`);
-  fs.writeFileSync(path.join(o.out, "index.html"), indexPage(entries, hero));
+  fs.writeFileSync(path.join(o.out, "index.html"), indexPage(entries, hero, pg));
   fs.writeFileSync(
     path.join(o.out, "cards.json"),
     JSON.stringify({
       hero: { file: hero.name, proof: hero.featured },
       cards: entries.map((e) => ({ file: e.name, proof: e.featured })),
+      ...(pg ? { playground: { theorem: "Double" } } : {}),
     }),
   );
 
