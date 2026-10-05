@@ -4681,3 +4681,114 @@ the frame's bottom, nothing under it, no boundary, no console error),
 its slot). Not done: VS Code's real status bar in a theme where it is
 saturated (Dark+'s blue) was not looked at — the band then wears that blue
 around the blue button.
+
+## 2026-10-04 — Settings behind the band; presets retuned (batch 5)
+
+Batch 5 of `docs/vscode-idioms/verdict.md` §3 (rulings D7, D8, D11), with the
+owner's approval of the key names and the preset retune (strategic Q3).
+
+**The settings** (ext/ramify/package.json, all `scope: resource`, INSTALL.md):
+
+| key | domain | default |
+| --- | --- | --- |
+| `ramify.view.layout` | `outline` `spine` `tracks` `wide` (the band's words; code `stacked` = `outline`) | `outline` |
+| `ramify.view.sideBySide`, `.gallery`, `.hypGroup` | boolean | false |
+| `ramify.view.width` | `"full"` or an integer 20–100 (the slider; `anyOf`) | `"full"` |
+| `ramify.view.context` | `used` `intro` `diff` `all` (the band's words; code `new`/`delta`/`full`) | `null` = unset |
+| `ramify.view.comments` | `shown` `hidden` `instead` `narrate` (code ids — the band's `in place` has a space; the enumDescriptions use the words) | `null` = unset |
+| `ramify.reading.brief`, `.lints`, `.hypOrigins` | boolean | `null` = unset |
+| `ramify.reading.merge`, `.upToCursor` | boolean | false |
+| `ramify.diagnostics.autoOpen` | boolean | true |
+
+**Unset vs default.** Only the five rows the preset fills are nullable
+(`["string","null"]` / `["boolean","null"]`, default `null`, description
+"Unset: follows `ramify.experience`"). Declaring `false` there would have
+been a lie the settings UI tells; declaring no default at all is worse,
+because VS Code's registry then MINTS one from the type (`false`, `""`). The
+rows the preset does not touch keep a plain default equal to the view's own,
+since unset and default read the same there. Either way the companion reads
+`explicitValue(cfg.inspect(key))`, never `cfg.get`, so the declared default
+never reaches the widget and "unset" is a fact, not a value.
+
+**Layers**, top wins: the session override → the setting where SET → the
+preset → the view's own default. `web/src/viewSettings.ts` is the vocabulary
+(setting word ↔ code id, `parseViewSettings`: junk, null and absence are all
+unset, `settingValue` for the write). Every row's `useOverride` default is
+`viewSettings.x ?? preset.x` (`initialView` — the viewer's hash — ahead of
+both). Converted from `useState` to `useOverride`: `layout`, `sideBySide`,
+`gallery`, `reflow`, `hypGroup`, `combine` (merge), `upToCursor`; new:
+`autoOpen`.
+
+**The collapse needed one change to `useOverride`.** The verdict said the
+equal-to-default→null rule collapses the layers by itself; it does not — that
+rule runs at SET time, so the override `spine` set over `stacked` stays
+stored after the written `spine` comes back, and a later settings.json edit
+to `wide` would be shadowed by a stale session value. The override now
+remembers the default it was set over (`{v, over}`) and holds only while the
+default is still that value. Without a companion the default never moves, so
+nothing changes there; the one behaviour that changed is that a preset or
+setting change now replaces a session override (which is what CLAUDE.md
+already claimed: "a later preset or setting change applies again"). The
+viewer's hash round trip (`initialView` follows `onViewState`) reads the same.
+
+**Writes.** A band/panel change calls `persist(id, v)` → `onSettingChange`
+(companion-gated in widget.tsx's `companionProps`) → `popoutEdit` action
+`setting` with `setting` (the key under `ramify.`) and `value`
+(`PopoutEditParams.value : Option Json`, new) → `settings-request.json` (the
+pin's file, for the pin's reason) → `handleSettings`, which now takes
+`hoverbar` and `setting`. The allow-list is ext/ramify/settingWrites.js
+`SETTING_WRITES`: exactly the 13 keys above plus `appearance`, each with its
+domain, checked by `validSetting` (own-property test, so `__proto__` /
+`constructor` are refused) before `ownsUri`, then written through
+`writeTarget`. It is a separate pure CommonJS module so node can load it:
+`probe settings` (now in `npm test`) runs it against viewSettings.ts (same
+keys, same domains, every band value round-trips through the validator, 25
+refused writes), and `check-sync` compares it with package.json (keys,
+enums, scope, the width range). CI's `node --check` and the tracked-.vsix
+`cmp` loop include it. The Width slider fires per tick, so its write waits
+for 500 ms of rest (a timer in the handler; the harness recorded one write,
+44, for a 40 → 44 drag); the tracks seam writes on mouseup. Not written:
+marks, cuts and folds, the reading position, `polish` (already a session
+override of `ramify.narration.polish`) and `suggest a rewrite`. Internal
+resets (Reset tree, expand/collapse all clearing up-to-cursor) stay session
+only; the scope chip's Esc goes through `applyReading` and so writes.
+
+**Publish.** `ramifySettings` adds `prefs: readPrefs(...)` — each key where
+SET and valid, else `null` — to the top level and every `byFolder` entry; the
+Output channel's theme line lists the set ones (`prefs layout=wide` or
+`(preset)`). `ThemeColors.prefs : ViewPrefs` (Ramify.lean; every field an
+`Option`, `width : Option Json` since it is a string or a number) passes it
+through, checked with a scratch `#eval`: a junk `autoOpen` decodes to `none`,
+and a `popoutEdit` call without `value` still decodes. ThemeColors is not on
+the `probe lsp --wire` wire (that compares the proof payload), so that probe
+was not rerun; the proof payload is untouched.
+
+**`errors open the message strip`** (`ramify.diagnostics.autoOpen`): the last
+Reading row; off, `diagStripOpen` drops its error clause and only the count
+item opens the strip (measured with `?diag-stub=ewl`: open by default, shut
+with `?settings=autoOpen:false`). It is `quiet` in `READING_OPTIONS` — left
+out of `readingOn` — because a default-ON option would light the Reading item
+for everyone.
+
+**Preset retune** (experience.ts `PRESETS`, `gen-experience` rewrote the
+enumDescriptions, the quick pick and INSTALL.md): beginner Context `used`
+(was `all`), Comments `show` (was `narrate`), origins and `⁇` unchanged;
+intermediate unchanged; expert `brief` off (was on). The three presets now
+differ only in lints, origins, the auto trace, `⁇` and `⇓`.
+
+**Not done.** `hypMarkStyle: none` (verdict D9, "accept with D7") was not in
+the brief and was left. Two setting writes inside the watcher's read window
+can still lose the first (the same shared-file race the pin has always had);
+a reader cannot click two rows that fast. Not verified in a live VS Code: the
+settings.json write and reload (the harness and the offline handler test
+stand in).
+
+Gates: `npm test` green — fingerprint identical (1189; no preset reaches a
+fingerprinted stage), `probe settings` ALL OK; `check-sync`, `check-settings`
+(30 settings), `gen-codicons --check`, `gen-experience --check`; `node
+--check` on both extension files; widget bundle rebuilt; `lake build Ramify`;
+`package.sh` rebuilt dist/ramify-1.0.0.vsix (extension.js, settingWrites.js
+and package.json byte-identical inside). Screenshots /tmp/claude-0/batch5/:
+`intermediate-writes.png` (spine · all · narrate after the clicks;
+`__settings` held the five writes), `reading-panel-{beginner,intermediate,
+expert}.png`, `layout-panel-width.png`, `autoopen-{on,off}.png`.

@@ -137,7 +137,7 @@ jobs:
         with:
           node-version: 22
       - name: Syntax check
-        run: node --check ext/ramify/extension.js
+        run: node --check ext/ramify/extension.js && node --check ext/ramify/settingWrites.js
       - name: Package the .vsix
         working-directory: ext/ramify
         run: npx --yes @vscode/vsce@${{ env.VSCE_VERSION }} package --out ramify-ci.vsix
@@ -155,12 +155,12 @@ jobs:
           echo "tracked vsix:         $tracked"
           [ "$tracked" = "dist/ramify-$v.vsix" ] \
             || { echo "::error::ext/ramify/package.json is $v but the tracked .vsix is '$tracked' (exactly one dist/ramify-<version>.vsix must be tracked) — run package.sh"; exit 1; }
-      - name: The tracked .vsix carries the current extension.js and package.json
+      - name: The tracked .vsix carries the current extension.js, settingWrites.js and package.json
         run: |
           v=$(node -p "require('./ext/ramify/package.json').version")
           vsix="dist/ramify-$v.vsix"
           [ -f "$vsix" ] || { echo "::error::$vsix is not in the tree — run package.sh"; exit 1; }
-          for f in extension.js package.json; do
+          for f in extension.js settingWrites.js package.json; do
             unzip -p "$vsix" "extension/$f" | cmp - "ext/ramify/$f" \
               || { echo "::error::extension/$f inside $vsix differs from ext/ramify/$f — the .vsix is stale, run package.sh and commit it"; exit 1; }
           done

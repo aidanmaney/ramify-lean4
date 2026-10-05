@@ -341,6 +341,7 @@ import { MENU_ICON } from "./menuIcons";
 import { clipText } from "./clipText";
 import { injectStyleOnce } from "./taggedCore";
 import { useOverride } from "./useOverride";
+import { settingValue, type SettingId, type ViewSettings } from "./viewSettings";
 import { addChipGlyph, chipCopy, chipRows, HOLE_GLYPH } from "./chipMoves";
 import { NodeActionBar, NodeMenu, type NodeMove } from "./nodeBar";
 
@@ -654,6 +655,17 @@ export interface ProofTreeViewProps {
   hoverBar?: { tactic?: readonly MoveId[] | null; goal?: readonly MoveId[] | null };
   onHoverBarChange?: (kind: BarKind, ids: MoveId[]) => void;
 
+  /** The SETTINGS BEHIND THE BAND (viewSettings.ts, batch 5): `ramify.view.*`,
+      `ramify.reading.*`, `ramify.diagnostics.autoOpen`, each present only
+      where the reader SET it. Each row's default is the setting, else the
+      preset's, else the view's own; the row the reader changes is a session
+      override on top (`useOverride`). */
+  settings?: ViewSettings;
+  /** Persist a band / panel change: the widget asks the companion to write
+      `ramify.<key>` (`popoutEdit` action `setting`). Absent (no companion,
+      the static viewer) a change is session-only, as before. */
+  onSettingChange?: (id: SettingId, value: string | number | boolean) => void;
+
   /** D6 — ASK AN AGENT to choose among the rewrites the primitives already
       offer. The view hands over the offered rewrites (never free text) and is
       handed back one node id, one kind and a one-line reason; the choice then
@@ -695,9 +707,11 @@ export interface ProofTreeViewProps {
 
   /** The reading state to START in, where a caller has one to restore (the
       static viewer's deep links): the layout, the context mode and the
-      comment mode. Read at mount only; each is the same session state the
-      status bar changes, so the reader's own choice wins from then on.
-      Absent, the defaults (outline; the preset's context and comments). */
+      comment mode. Each is the DEFAULT of the same session state the status
+      bar changes (`useOverride`), ahead of the setting and the preset, so the
+      reader's own choice wins over it and a caller that follows the reader
+      (the viewer's hash, via `onViewState`) only moves it to what is shown.
+      Absent, the defaults (the setting, else outline / the preset's). */
   initialView?: {
     layout?: LayoutMode;
     context?: HypMode;
@@ -712,6 +726,11 @@ export interface ProofTreeViewProps {
     comments: CommentMode;
   }) => void;
 }
+
+/** No setting set: every row reads the preset / the view's own default. */
+const NO_SETTINGS: ViewSettings = {};
+/** How long the Width slider must rest before its value is written. */
+const PERSIST_SETTLE_MS = 500;
 
 export default function ProofTreeView({
   proof,
@@ -766,6 +785,8 @@ export default function ProofTreeView({
   appearance: appearanceDefault = DEFAULT_APPEARANCE,
   hoverBar,
   onHoverBarChange,
+  settings: viewSettings = NO_SETTINGS,
+  onSettingChange,
   initialView,
   onViewState,
 }: ProofTreeViewProps) {
@@ -795,30 +816,38 @@ export default function ProofTreeView({
   // of the pointer over a context. A reading option; the line's `<title>`
   // says where the hypothesis came from either way.
   // A preset row (beginner ON) with the session override on top.
-  const [hypOriginsOn, setHypOriginsOn] = useOverride(preset.hypOrigins);
-  const [upToCursor, setUpToCursor] = useState(false);
+  const [hypOriginsOn, setHypOriginsOn] = useOverride(
+    viewSettings.hypOrigins ?? preset.hypOrigins,
+  );
+  const [upToCursor, setUpToCursor] = useOverride(
+    viewSettings.upToCursor ?? false,
+  );
 
   // The rows `ramify.experience` fills are OVERRIDES of the preset
   // (`useOverride`): a preset that arrives late — the companion's theme file
   // is read after mount — needs no effect, and a row the reader has set keeps
   // the reader's value.
   const [hypMode, setHypMode] = useOverride<HypMode>(
-    initialView?.context ?? preset.context,
+    initialView?.context ?? viewSettings.context ?? preset.context,
   );
 
   // Lean's own binder order is the DEFAULT; `Split data & props` is the
   // opt-in extra (and `proofToTree`'s option default matches, so module and
   // bar cannot drift).
-  const [hypGroup, setHypGroup] = useState(false);
+  const [hypGroup, setHypGroup] = useOverride(viewSettings.hypGroup ?? false);
 
-  const [layout, setLayout] = useState<LayoutMode>(
-    initialView?.layout ?? "stacked",
+  const [layout, setLayout] = useOverride<LayoutMode>(
+    initialView?.layout ?? viewSettings.layout ?? "stacked",
   );
   const { compact, aside } = layoutArgs(layout);
 
-  const [reflow, setReflow] = useState<ReflowMode>("off");
+  const [reflow, setReflow] = useOverride<ReflowMode>(
+    viewSettings.width ?? "off",
+  );
 
   const [barOpen, setBarOpen] = useState<string | null>(null);
+  // The Width slider's pending setting write (`persistLater`).
+  const persistTimer = useRef<number | undefined>(undefined);
 
   const [helpOpen, setHelpOpen] = useState(false);
 
@@ -841,19 +870,19 @@ export default function ProofTreeView({
   const forcedReflow =
     layout === "tracks" && reflow === "off" ? REFLOW_CHARS : undefined;
 
-  const [brief, setBrief] = useOverride(preset.brief);
+  const [brief, setBrief] = useOverride(viewSettings.brief ?? preset.brief);
 
   const [briefHover, setBriefHover] = useState(false);
   const briefPreviewOn = briefHover && !brief;
 
-  const [combine, setCombine] = useState(false);
+  const [combine, setCombine] = useOverride(viewSettings.merge ?? false);
 
   // D4 — the LINTS reading option. OFF by default and off until the reader
   // asks: the answer costs the server one re-elaboration of the declaration,
   // exactly as B4's traces do, so nothing fires it on arrival. The lints
   // themselves live with the caller (a sibling prop) and fall back to the
   // NDJSON's own field; this is only whether they are being read.
-  const [lintsOn, setLintsOn] = useOverride(preset.lints);
+  const [lintsOn, setLintsOn] = useOverride(viewSettings.lints ?? preset.lints);
 
   // C4 — the POLISH reading option. The setting (`ramify.narration.polish`,
   // off by default) is the DEFAULT and the row overrides it for this session,
@@ -875,7 +904,7 @@ export default function ProofTreeView({
   const [combineOff, setCombineOff] = useState<Set<string>>(new Set());
 
   const [commentMode, setCommentMode] = useOverride<CommentMode>(
-    initialView?.comments ?? preset.comments,
+    initialView?.comments ?? viewSettings.comments ?? preset.comments,
   );
   // The caller's link follows the reading state (no state here: a callback
   // out to an external system, the page's URL).
@@ -941,9 +970,11 @@ export default function ProofTreeView({
 
   const [chainOpen, setChainOpen] = useState<Set<string>>(new Set());
 
-  const [sideBySide, setSideBySide] = useState(false);
+  const [sideBySide, setSideBySide] = useOverride(
+    viewSettings.sideBySide ?? false,
+  );
 
-  const [gallery, setGallery] = useState(false);
+  const [gallery, setGallery] = useOverride(viewSettings.gallery ?? false);
   const [pick, setPick] = useState<Record<string, number>>({});
 
   const [zoom, setZoom] = useState(1);
@@ -3333,6 +3364,10 @@ export default function ProofTreeView({
   correct) open it only through the count item. */
   // The reader's own opening is held as the PROOF it was made on (a proof
   // change closes everything, design rule 10 — by derivation, not a reset).
+  // `ramify.diagnostics.autoOpen` (batch 5), the reading option `errors open
+  // the message strip`: off, an error opens the strip only through the count
+  // item, as a warning always has.
+  const [autoOpen, setAutoOpen] = useOverride(viewSettings.autoOpen ?? true);
   const [diagStripPinnedOn, setDiagStripPinned] = useState<string | null>(
     null,
   );
@@ -3356,7 +3391,8 @@ export default function ProofTreeView({
   if (diagList.length === 0 && diagStripPinned) setDiagStripPinned(null);
   const diagStripOpen =
     diagList.length > 0 &&
-    (diagStripPinned || diagErrorKeys.some((k) => !diagDismissed.has(k)));
+    (diagStripPinned ||
+      (autoOpen && diagErrorKeys.some((k) => !diagDismissed.has(k))));
   const closeDiagStrip = () => {
     setDiagStripPinned(null);
     if (diagErrorKeys.length > 0)
@@ -3552,19 +3588,39 @@ export default function ProofTreeView({
     hypOrigins: hypOriginsOn,
     upToCursor: upToCursor && upToEnabled,
     polish: polishOn && polishShown,
+    autoOpen,
   };
 
+  // PERSIST a band / panel change (batch 5): the session override is set by
+  // the applier as before; this asks the companion to write the setting
+  // behind it (viewSettings.ts), so the choice survives a reload and syncs.
+  // Absent `onSettingChange` (no companion, the viewer) it is session-only.
+  // The Width slider fires on every tick, so its write waits for the slider
+  // to rest (a timer in a handler; nothing reads it in render).
+  const persist = (id: SettingId, v: unknown) =>
+    onSettingChange?.(id, settingValue(id, v));
+  const persistLater = (id: SettingId, v: unknown) => {
+    if (!onSettingChange) return;
+    window.clearTimeout(persistTimer.current);
+    persistTimer.current = window.setTimeout(
+      () => persist(id, v),
+      PERSIST_SETTLE_MS,
+    );
+  };
   const applyLayout = (v: LayoutMode) => {
     setLayout(v);
+    persist("layout", v);
     showToast(`Layout: ${LAYOUT_MODES[v].name}`);
   };
   const applyHypMode = (v: HypMode) => {
     anchorRoot();
     setHypMode(v);
+    persist("context", v);
     showToast(`Context: ${HYP_MODES[v].name}`);
   };
   const applyCommentMode = (v: CommentMode) => {
     setCommentMode(v);
+    persist("comments", v);
     showToast(`Comments: ${COMMENT_MODES[v].name}`);
   };
   // ONE applier for every reading option (the table is experience.ts's
@@ -3596,7 +3652,13 @@ export default function ProofTreeView({
       case "upToCursor":
         setUpToCursor(v);
         break;
+      case "autoOpen":
+        setAutoOpen(v);
+        break;
     }
+    // Every reading option is a setting but `polish`, which is key-gated and
+    // already a session override of `ramify.narration.polish`.
+    if (id !== "polish") persist(id, v);
     showToast(`${readingName(id)}: ${v ? "on" : "off"}`);
   };
   // Both live in the Layout popover: they are layouts, not view toggles, and a
@@ -3604,15 +3666,18 @@ export default function ProofTreeView({
   const applySideBySide = (v: boolean) => {
     anchorRoot();
     setSideBySide(v);
+    persist("sideBySide", v);
     showToast(`Side-by-side: ${v ? "on" : "off"}`);
   };
   const applyGallery = (v: boolean) => {
     setGallery(v);
+    persist("gallery", v);
     showToast(`Gallery: ${v ? "on" : "off"}`);
   };
   const applyReflow = (v: ReflowMode) => {
     if ((v === "off") !== (reflow === "off")) anchorRoot();
     setReflow(v);
+    persistLater("width", v);
     showToast(v === "off" ? "Width: full" : `Width: ${v} col`);
   };
 
@@ -5256,7 +5321,10 @@ export default function ProofTreeView({
       document.removeEventListener("mouseup", stop);
       seamStop.current = null;
       setSeamDrag(null);
-      if (cols !== base) showToast(`Width: ${cols} col`);
+      if (cols !== base) {
+        persist("width", cols);
+        showToast(`Width: ${cols} col`);
+      }
     };
     seamStop.current = stop;
     document.addEventListener("mousemove", onMove);
@@ -6363,6 +6431,7 @@ export default function ProofTreeView({
         classic={classic}
         onClassicChange={(v) => {
           setAppearance(v ? "classic" : "vscode");
+          persist("appearance", v ? "classic" : "vscode");
           showToast(`Classic look: ${v ? "on" : "off"}`);
         }}
         onReset={resetToSource}
@@ -6398,6 +6467,7 @@ export default function ProofTreeView({
         onHypGroupChange={(v) => {
           anchorRoot();
           setHypGroup(v);
+          persist("hypGroup", v);
           showToast(`Split data & props: ${v ? "on" : "off"}`);
         }}
         tourLists={tourLists}

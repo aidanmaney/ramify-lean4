@@ -9,6 +9,13 @@ import type { Lint } from "./lints";
 import type { TreeDiagnostic } from "./diagnostics";
 import { parseExperience } from "./experience";
 import { parseAppearance } from "./appearance";
+import {
+  parseViewSettings,
+  parseSettingsQuery,
+  SETTING_KEY,
+  type SettingId,
+  type ViewSettings,
+} from "./viewSettings";
 import { parseBarList, type BarKind, type MoveId } from "./moves";
 import type { PolishLine } from "./narrate";
 import { proofTitle } from "./proofToTree";
@@ -122,6 +129,15 @@ const HOVER_BAR = {
 const recordHoverBar = (kind: BarKind, ids: MoveId[]) =>
   record("__hoverBar", { kind, ids });
 
+/** The settings behind the band (viewSettings.ts) without a companion:
+ `?settings=layout:wide,context:all,brief:true,width:44` — the theme file's
+ `prefs`, in the setting's own words. A band / panel change records
+ `{key, value}` in `window.__settings` where the widget would ask the
+ companion to write `ramify.<key>`, and is ECHOED back as the new setting, as
+ the companion's write would come back through the theme file — so the
+ harness shows the override collapsing into the setting. `?no-extension`:
+ neither (session only, as the view is without a companion). */
+const SETTINGS_STUB = parseSettingsQuery(QUERY.get("settings"));
 const CF_STUB = (() => {
   const v = QUERY.get("cf-stub");
   if (v === null) return null;
@@ -354,6 +370,15 @@ function ProofHarness() {
   const [error, setError] = useState<string | null>(null);
 
   const [cursor, setCursor] = useState(CURSOR_STUB);
+  const [settingsEcho, setSettingsEcho] = useState<ViewSettings>(SETTINGS_STUB);
+  const recordSetting = (id: SettingId, value: string | number | boolean) => {
+    record("__settings", { key: `ramify.${SETTING_KEY[id]}`, value });
+    if (id !== "appearance")
+      setSettingsEcho((prev) => ({
+        ...prev,
+        ...parseViewSettings({ [id]: value }),
+      }));
+  };
   // The harness DRIVER: `window.__ptw`, a small DOM-level API so a probe run
   // through the browser tools can select a proof, find a node by what it
   // shows, click it (with modifiers) and count what is drawn — in one
@@ -424,6 +449,8 @@ function ProofHarness() {
       appearance={APPEARANCE}
       hoverBar={HOVER_BAR}
       onHoverBarChange={recordHoverBar}
+      settings={settingsEcho}
+      {...(NO_EXTENSION ? {} : { onSettingChange: recordSetting })}
 
       {...(STUB_EDIT
         ? {

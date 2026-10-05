@@ -1368,6 +1368,10 @@ structure PopoutEditParams where
   a `⋯`-menu pin asking the companion to write `ramify.hoverBar.<setting>`. -/
   setting : Option String := none
   values : Option (Array String) := none
+  /-- `setting` only (batch 5): the value to write to `ramify.<setting>` — a
+  band / panel change persisted. A string, a boolean or a number, so JSON;
+  the companion allow-lists the key and validates the value. -/
+  value : Option Json := none
   deriving FromJson, ToJson
 
 /-! ## The companion's request directory
@@ -1447,7 +1451,8 @@ def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
       ("action", toJson params.action),
       ("annotations", toJson (params.annotations.getD #[])),
       ("setting", toJson (params.setting.getD "")),
-      ("values", toJson (params.values.getD #[]))
+      ("values", toJson (params.values.getD #[])),
+      ("value", params.value.getD Json.null)
     ]
     -- `rename` (the D1 extract's follow-up) gets a file of its own: it is
     -- written as the pointer leaves the accepted pill, so a hover `clear` or
@@ -1455,10 +1460,13 @@ def popoutEdit (params : PopoutEditParams) : RequestM (RequestTask String) := do
     -- overwrite it before the companion's watcher read it.
     -- `hoverbar` (a `⋯`-menu pin → `ramify.hoverBar.*`) likewise: the pin is
     -- clicked with the pointer on its way back to the tree, whose hover
-    -- `highlight`/`clear` would overwrite a shared file first.
+    -- `highlight`/`clear` would overwrite a shared file first. `setting` (a
+    -- band / panel change → `ramify.view.*` etc., batch 5) rides the same
+    -- file for the same reason.
     let file :=
       if params.action == "rename" then "rename-request.json"
-      else if params.action == "hoverbar" then "settings-request.json"
+      else if params.action == "hoverbar" || params.action == "setting" then
+        "settings-request.json"
       else "popout-request.json"
     sendCompanionRequest file payload
     return "ok"
@@ -1675,6 +1683,53 @@ instance : FromJson AiConfig where
           ready := jsonField j "ready" false,
           why := jsonField j "why" "" }
 
+/-- `j[k]` decoded as `α`, or `none` where it is absent, `null` or the wrong
+type — what a new optional theme-file field reads through. -/
+private def optField {α : Type} [FromJson α] (j : Json) (k : String) : Option α :=
+  (j.getObjVal? k).toOption.bind fun v => (fromJson? v : Except String α).toOption
+
+/-- The settings behind the band (batch 5): `ramify.view.*`,
+`ramify.reading.*` and `ramify.diagnostics.autoOpen`, in the SETTING's own
+words (`layout` is `outline`/`spine`/…, `width` is `"full"` or a column
+count). Each is `some` only where the reader SET it (`inspect()`), so an
+unset key leaves the client on the experience preset's default. Passed
+through; the client validates every value and owns the vocabulary
+(web/src/viewSettings.ts). Every field an `Option`: a new optional wire
+field. -/
+structure ViewPrefs where
+  layout : Option String := none
+  sideBySide : Option Bool := none
+  gallery : Option Bool := none
+  /-- `"full"` or an integer: a string OR a number, so passed as JSON. -/
+  width : Option Json := none
+  context : Option String := none
+  hypGroup : Option Bool := none
+  comments : Option String := none
+  brief : Option Bool := none
+  merge : Option Bool := none
+  lints : Option Bool := none
+  hypOrigins : Option Bool := none
+  upToCursor : Option Bool := none
+  autoOpen : Option Bool := none
+  deriving ToJson
+
+instance : FromJson ViewPrefs where
+  fromJson? j :=
+    .ok { layout := optField j "layout",
+          sideBySide := optField j "sideBySide",
+          gallery := optField j "gallery",
+          width := (j.getObjVal? "width").toOption.bind
+            fun v => if v.isNull then none else some v,
+          context := optField j "context",
+          hypGroup := optField j "hypGroup",
+          comments := optField j "comments",
+          brief := optField j "brief",
+          merge := optField j "merge",
+          lints := optField j "lints",
+          hypOrigins := optField j "hypOrigins",
+          upToCursor := optField j "upToCursor",
+          autoOpen := optField j "autoOpen" }
+
 structure ThemeColors where
 
   theme  : String := ""
@@ -1706,6 +1761,9 @@ structure ThemeColors where
   /-- `ramify.hoverBar.{tactic,goal}` where the reader SET them (`inspect()`),
   else absent. Passed through; the client owns the move ids. -/
   hoverBar : Json := Json.null
+  /-- The settings behind the band (`ViewPrefs`); `{}` where the file
+  predates them. -/
+  prefs : ViewPrefs := {}
   /-- `{version, pid, at}` stamped by a LIVE companion on every publish; absent
   where the file is left over from an extension that is gone (or predates the
   stamp). The client's only answer to "is there a companion". Passed through. -/
@@ -1729,6 +1787,7 @@ instance : FromJson ThemeColors where
           appearance := (j.getObjVal? "appearance").toOption.bind
             fun v => (fromJson? v : Except String String).toOption,
           hoverBar := (j.getObjVal? "hoverBar").toOption.getD Json.null,
+          prefs := jsonField j "prefs" {},
           companion := (j.getObjVal? "companion").toOption.getD Json.null,
           colors := jsonField j "colors" #[] }
 

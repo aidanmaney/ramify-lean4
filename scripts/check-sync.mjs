@@ -11,9 +11,13 @@
 //   AUTOMATION_CANDIDATES  web/src/rewrite.ts  ==  `closingCandidates` in lean/Ramify.lean
 //   traceable / opaque / suggestion heads
 //                       web/src/trace.ts  ==  lean/ProofTreeRecover.lean
+//   SETTING_WRITES      ext/ramify/settingWrites.js  ==  package.json's
+//                       ramify.view.* / reading.* / diagnostics.autoOpen /
+//                       appearance (keys, enums, scope, width range)
 //
 //     node scripts/check-sync.mjs
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -65,6 +69,34 @@ same("AUTOMATION_CANDIDATES (rewrite.ts) vs closingCandidates (Ramify.lean), sam
 // ── trace heads ──────────────────────────────────────────────────────────
 for (const [ts, lean] of [["TRACEABLE_HEADS", "traceableHeads"], ["OPAQUE_HEADS", "opaqueHeads"], ["SUGGESTION_HEADS", "suggestionHeads"]])
   same(`${ts} (trace.ts) vs ${lean} (ProofTreeRecover.lean), same order`, list("web/src/trace.ts", ts), list("lean/ProofTreeRecover.lean", lean), "trace.ts", "ProofTreeRecover.lean");
+
+// ── settings behind the band (batch 5) ───────────────────────────────────
+// ext/ramify/settingWrites.js (the companion's allow-list and domains) vs
+// package.json: every allow-listed key is contributed, every enum agrees, and
+// every `prefs` key names an allow-listed setting. (web/src/viewSettings.ts vs
+// settingWrites.js is `probe settings`, which can load TypeScript.)
+{
+  const require = createRequire(import.meta.url);
+  const sw = require(resolve(root, "ext/ramify/settingWrites.js"));
+  for (const [key, dom] of Object.entries(sw.SETTING_WRITES)) {
+    const p = props[`ramify.${key}`];
+    if (!p) {
+      failures.push(`settingWrites.js allows ramify.${key}, which package.json does not contribute`);
+      continue;
+    }
+    if (p.scope !== "resource") failures.push(`ramify.${key}: scope is not "resource"`);
+    if (Array.isArray(dom)) same(`ramify.${key} enum (settingWrites.js vs package.json)`, dom, p.enum ?? [], "settingWrites.js", "package.json");
+    else if (dom === "boolean" && ![].concat(p.type).includes("boolean"))
+      failures.push(`ramify.${key}: settingWrites.js says boolean, package.json says ${p.type}`);
+    else if (dom === "width") {
+      const int = (p.anyOf ?? []).find((x) => x.type === "integer");
+      if (!int || int.minimum !== sw.WIDTH_MIN || int.maximum !== sw.WIDTH_MAX)
+        failures.push(`ramify.${key}: the integer range is not ${sw.WIDTH_MIN}..${sw.WIDTH_MAX}`);
+    }
+  }
+  for (const [name, key] of Object.entries(sw.PREF_KEYS))
+    if (!(key in sw.SETTING_WRITES)) failures.push(`settingWrites.js PREF_KEYS.${name} → ${key}, not on the allow-list`);
+}
 
 if (failures.length) {
   console.error(`${failures.length} list(s) out of step:\n`);

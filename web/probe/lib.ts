@@ -30,3 +30,9 @@ export { lexPaint } from "../src/sourceLex";
 export { GESTURES, gestureShown, gestureText } from "../src/gestures";
 export { flattenTaggedText } from "../src/taggedText";
 export { HYP_MODES, LAYOUT_MODES, COMMENT_MODES } from "../src/viewModes";
+// The settings behind the band (`probe settings`).
+export {
+  SETTING_KEY, SETTING_DOMAIN, LAYOUT_SETTING, CONTEXT_SETTING, COMMENTS_SETTING,
+  parseViewSettings, settingValue, parseSettingsQuery, parseWidth,
+} from "../src/viewSettings";
+export { PRESETS, READING_OPTIONS, readingOn } from "../src/experience";

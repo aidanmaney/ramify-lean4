@@ -1056,7 +1056,7 @@ export function StatusBar({
           <BarRow
             kind="toggle"
             label="classic look"
-            title="Draw the tree and its chrome in Ramify's classic skin (the ramify.appearance setting is the default; this row overrides it for the session)"
+            title="Draw the tree and its chrome in Ramify's classic skin — kept in the ramify.appearance setting where the Ramify extension is installed"
             on={classic}
             icon={null}
             onClick={() => onClassicChange(!classic)}

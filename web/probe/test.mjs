@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PROBES = ["counts", "narrate", "overlap", "order", "hopgap", "rewrite", "fingerprint", "viewer"];
+const PROBES = ["counts", "narrate", "overlap", "order", "hopgap", "rewrite", "fingerprint", "viewer", "settings"];
 
 const npmStep = (name) => ({ name, cmd: "npm", args: ["run", "-s", name] });
 const probeStep = (p) => ({ name: `probe ${p}`, cmd: process.execPath, args: [path.join("probe", "run.mjs"), p] });

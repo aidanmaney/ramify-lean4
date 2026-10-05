@@ -2,6 +2,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { validSetting, readPrefs } = require("./settingWrites");
 
 let log = null;
 function say(msg) {
@@ -155,9 +156,9 @@ const idsFor = (kind, list) =>
   [...new Set(list)].filter((x) => MOVE_IDS_FOR[kind].includes(x));
 // gen-experience:start (scripts/gen-experience.mjs — do not edit by hand)
 const EXPERIENCE_DETAIL = {
-  beginner: "Comments: narrate · Context: all · Brief: off · Lints: on · Hypothesis origins: on · Automation trace: opens by itself for the step under the cursor · Tactic hover bar: default, plus ⁇ · Replace with automation (⇓): not offered",
+  beginner: "Comments: show · Context: used · Brief: off · Lints: on · Hypothesis origins: on · Automation trace: opens by itself for the step under the cursor · Tactic hover bar: default, plus ⁇ · Replace with automation (⇓): not offered",
   intermediate: "Comments: show · Context: used · Brief: off · Lints: on · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered",
-  expert: "Comments: show · Context: used · Brief: on · Lints: off · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered",
+  expert: "Comments: show · Context: used · Brief: off · Lints: off · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered",
 };
 // gen-experience:end
 const CHROME_BACKUP = path.join(REQUEST_DIR, "chrome-backup.json");
@@ -806,28 +807,39 @@ const handleRename = makeHandler({
   run: (req, ctx) => renameAfterHoist(ctx.target, ctx.range, req.nonce),
 });
 
-// A `⋯`-menu pin: write the list where the value that wins already lives (a
-// Workspace value would shadow a User-scope write), as the experience pick
-// does. The config listener then republishes the theme file.
+// Two writes ride `settings-request.json`, each to where the value that wins
+// already lives (a Workspace value would shadow a User-scope write), as the
+// experience pick does; the config listener then republishes the theme file.
+//   hoverbar  a `⋯`-menu pin → `ramify.hoverBar.tactic|goal` (`values`).
+//   setting   a band / panel change (batch 5) → `ramify.<setting>` = `value`,
+//             ONLY for a key on settingWrites.js's allow-list and a value in
+//             that key's domain (`validSetting`); anything else is ignored.
 const handleSettings = makeHandler({
   tag: "settings",
   file: SETTINGS_REQUEST,
   check: (req) => {
+    const target = requestUri(req);
+    if (req.action === "setting") {
+      if (!validSetting(req.setting, req.value)) return "setting or value not allowed";
+      if (!target) return "bad uri";
+      return { target, key: req.setting, value: req.value };
+    }
     if (req.action !== "hoverbar") return "unknown action";
     const kind = req.setting;
     if (kind !== "tactic" && kind !== "goal") return "unknown setting";
-    const target = requestUri(req);
     if (!target) return "bad uri";
     if (!Array.isArray(req.values)) return "values is not an array";
-    return { target, kind, ids: idsFor(kind, req.values) };
+    return { target, key: `hoverBar.${kind}`, value: idsFor(kind, req.values) };
   },
   owns: (ctx) => ownsUri(ctx.target),
-  run: async (req, { target, kind, ids }) => {
-    const key = `hoverBar.${kind}`;
+  run: async (req, { target, key, value }) => {
     await vscode.workspace
       .getConfiguration("ramify", target)
-      .update(key, ids, writeTarget(key, target));
-    say(`settings ${req.nonce}: ramify.${key} = [${ids.join(", ")}]`);
+      .update(key, value, writeTarget(key, target));
+    say(
+      `settings ${req.nonce}: ramify.${key} = ` +
+        (Array.isArray(value) ? `[${value.join(", ")}]` : JSON.stringify(value)),
+    );
   },
 });
 
@@ -859,7 +871,9 @@ const explicitValue = (info) => {
  window's own view). `experience` is a NAME (the widget owns the table and
  fills only defaults from it); `hoverBar` lists are sent ONLY where the reader
  set them, each cut down to the ids its kind can draw, so an unset list leaves
- the widget on the preset's default. `experienceSet` is for the log alone. */
+ the widget on the preset's default. `prefs` are the settings behind the band
+ (settingWrites.js `PREF_KEYS`), likewise only where SET and in their domain,
+ else `null`. `experienceSet` is for the log alone. */
 function ramifySettings(resource) {
   const cfg = vscode.workspace.getConfiguration("ramify", resource);
   const expInfo = cfg.inspect("experience");
@@ -878,6 +892,7 @@ function ramifySettings(resource) {
     appearance: cfg.get("appearance") === "classic" ? "classic" : "vscode",
     experienceSet: explicitValue(expInfo) !== undefined,
     hoverBar: { tactic: explicitBar("tactic"), goal: explicitBar("goal") },
+    prefs: readPrefs((key) => explicitValue(cfg.inspect(key))),
   };
 }
 
@@ -978,7 +993,13 @@ function publishThemeColors() {
         `hyp mark ${top.hypMarkStyle || "highlight"}, ` +
         `experience ${top.experience}${experienceSet ? "" : " (default)"}, ` +
         `hover bar tactic=${hoverBar.tactic ? hoverBar.tactic.join(",") : "(preset)"} ` +
-        `goal=${hoverBar.goal ? hoverBar.goal.join(",") : "(preset)"}): ` +
+        `goal=${hoverBar.goal ? hoverBar.goal.join(",") : "(preset)"}, ` +
+        `prefs ${
+          Object.entries(top.prefs)
+            .filter(([, v]) => v !== null)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(",") || "(preset)"
+        }): ` +
         Object.keys(colors)
           .map((t) => `${t}=${colors[t]}`)
           .join(" "),

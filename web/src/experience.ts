@@ -11,9 +11,9 @@
  * | automation trace      | auto (cursor) | on click      | on click   |
  * | replace with auto (⇓) | hidden        | offered       | offered    |
  * | lints                 | on            | on            | off        |
- * | comments              | narrate       | show          | show       |
- * | context               | all           | used          | used       |
- * | brief                 | off           | off           | on         |
+ * | comments              | show          | show          | show       |
+ * | context               | used          | used          | used       |
+ * | brief                 | off           | off           | off        |
  * | hypothesis origins    | on            | off           | off        |
  *
  * The hover bar is ICONS ONLY at every level (2026-09-22: words on the bar
@@ -31,6 +31,14 @@
  * The hypothesis → origin connector (hovering a context line) is a preset
  * row since 2026-09-28: ON for a beginner, who is asking where a hypothesis
  * came from, OFF elsewhere; the reading option overrides it for the session.
+ *
+ * RETUNED 2026-10-04 (batch 5, owner-approved; verdict Q3): the beginner
+ * preset gave the reader least able to filter the most — Context `all` and
+ * narration on — so a beginner now starts at Context `used` and Comments
+ * `show` (origins and `⁇` stay); expert's `brief` is off (it dropped a
+ * `have`'s statement, the expert's own complaint). Every row is also a VS
+ * Code setting now (viewSettings.ts): the preset fills only what the reader
+ * has not SET.
  *
  * Pure: the widget (settings from the companion's theme file) and the harness
  * (`?experience=`) both read it. */
@@ -74,8 +82,8 @@ export const PRESETS: Record<Experience, Preset> = {
     autoTrace: true,
     offerCollapse: false,
     lints: true,
-    comments: "narrate",
-    context: "full",
+    comments: "shown",
+    context: "used",
     brief: false,
     hypOrigins: true,
   },
@@ -96,7 +104,7 @@ export const PRESETS: Record<Experience, Preset> = {
     lints: false,
     comments: "shown",
     context: "used",
-    brief: true,
+    brief: false,
     hypOrigins: false,
   },
 };
@@ -121,7 +129,8 @@ export type ReadingId =
   | "lints"
   | "hypOrigins"
   | "polish"
-  | "upToCursor";
+  | "upToCursor"
+  | "autoOpen";
 
 export interface ReadingOption {
   id: ReadingId;
@@ -129,6 +138,9 @@ export interface ReadingOption {
   title: string;
   /** The `Preset` field that is this option's default, where a preset has one. */
   presetKey?: "brief" | "lints" | "hypOrigins";
+  /** Left out of `readingOn` (the Reading item's emphasis and tip): an
+   option that is ON by default would light the item for everyone. */
+  quiet?: boolean;
 }
 
 export const READING_OPTIONS: readonly ReadingOption[] = [
@@ -159,6 +171,15 @@ export const READING_OPTIONS: readonly ReadingOption[] = [
     label: "up to cursor",
     title: "Draw only down to the editor cursor",
   },
+  {
+    // `ramify.diagnostics.autoOpen` (batch 5): the owner's derived-open rule
+    // (a NEW error opens the message strip) as an option, default ON.
+    id: "autoOpen",
+    label: "errors open the message strip",
+    title:
+      "A new error opens the message strip above the band by itself; off, only the problems count opens it",
+    quiet: true,
+  },
 ];
 
 const readingLabel = (id: ReadingId) =>
@@ -180,7 +201,7 @@ export type ReadingState = Record<ReadingId, boolean>;
  * (which read as a contradiction beside a "defaults (changed)" tip).
  * `suggest a rewrite` is an action and never counts. */
 export const readingOn = (s: ReadingState): string[] =>
-  READING_OPTIONS.filter((o) => s[o.id]).map((o) => o.label);
+  READING_OPTIONS.filter((o) => !o.quiet && s[o.id]).map((o) => o.label);
 
 /** What a preset does, as `[name, value]` rows in one fixed order — the one
  * source for the extension's `ramify.experience` descriptions, its quick pick

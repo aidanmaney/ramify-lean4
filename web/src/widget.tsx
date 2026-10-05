@@ -35,6 +35,12 @@ import {
   type Experience,
 } from "./experience";
 import { DEFAULT_APPEARANCE, parseAppearance, type Appearance } from "./appearance";
+import {
+  parseViewSettings,
+  SETTING_KEY,
+  type SettingId,
+  type ViewSettings,
+} from "./viewSettings";
 import { parseBarList, type BarKind, type MoveId } from "./moves";
 import type { PolishLine } from "./narrate";
 import {
@@ -296,6 +302,10 @@ interface Settings {
   /** `ramify.hoverBar.{tactic,goal}` — `null` where the reader has not set
    it (the companion reads it with `inspect()`), so the preset's list stands. */
   hoverBar: { tactic: MoveId[] | null; goal: MoveId[] | null };
+  /** `ramify.view.*` / `ramify.reading.*` / `ramify.diagnostics.autoOpen`
+   (viewSettings.ts), each present only where the reader SET it — the
+   companion publishes `null` for an unset key, so the preset decides. */
+  view: ViewSettings;
   /** A LIVE companion stamped the theme file (`companion.version`). A file an
    uninstalled extension left behind carries no stamp — or an older one, since
    the stamp postdates 1.0 — so it reads as absent. Multiple windows share the
@@ -344,6 +354,7 @@ const DEFAULT_SETTINGS: Settings = {
   experience: DEFAULT_EXPERIENCE,
   appearance: DEFAULT_APPEARANCE,
   hoverBar: { tactic: null, goal: null },
+  view: {},
   companion: false,
 };
 
@@ -365,6 +376,7 @@ interface ThemeColorsResponse {
   experience?: string;
   appearance?: string | null;
   hoverBar?: { tactic?: unknown; goal?: unknown } | null;
+  prefs?: unknown;
   companion?: { version?: unknown } | null;
   colors?: { type: string; color: string }[];
 }
@@ -406,6 +418,7 @@ function parseSettings(r: ThemeColorsResponse, prev: Settings): Settings {
       tactic: parseBarList(r.hoverBar?.tactic),
       goal: parseBarList(r.hoverBar?.goal),
     },
+    view: parseViewSettings(r.prefs),
     companion:
       typeof r.companion?.version === "string" && r.companion.version !== "",
   };
@@ -493,6 +506,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     experience,
     appearance,
     hoverBar,
+    view: viewSettings,
     companion,
   } = useSettings(rs, docRev, pos.uri);
 
@@ -742,7 +756,9 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   // nothing, which is the whole reason these are not on the payload.
   // The preset's `lints` row is the DEFAULT; the reader's toggle overrides it
   // (the view holds the same override, so the two agree without syncing).
-  const [lintsWanted, wantLints] = useOverride(PRESETS[experience].lints);
+  const [lintsWanted, wantLints] = useOverride(
+    viewSettings.lints ?? PRESETS[experience].lints,
+  );
   // The requester is memoised on the cursor and so is a fresh closure on
   // every move; the effect must not be. A ref written in an effect is the
   // `toastRef` pattern — nothing reads it during render.
@@ -1288,6 +1304,22 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     );
   };
 
+  // A band / panel change (batch 5): the view has already applied it for the
+  // session; this asks the companion to write `ramify.<key>` (allow-listed
+  // and validated there), through the pin's own file. One way, best-effort.
+  const setSetting = (id: SettingId, value: string | number | boolean) => {
+    rs.call("ProofTree.popoutEdit", {
+      uri: pos.uri,
+      start: ORIGIN,
+      stop: ORIGIN,
+      action: "setting",
+      setting: SETTING_KEY[id],
+      value,
+    }).catch((e: unknown) =>
+      console.error("[proof-tree] setting RPC failed:", e),
+    );
+  };
+
   const popoutEdit = (p: ProofStepPosition) => {
     lensOpened.current = true;
     callCompanion("popout", p, lensGoals);
@@ -1301,7 +1333,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
   }, [lensGoals]);
 
   // THE ONE GATE on everything only the companion answers (the lens, the undo
-  // relay, the hover highlight, the range previews, the pin write-back): its
+  // relay, the hover highlight, the range previews, the pin and setting write-backs): its
   // handlers reach the view only where it is there, and the view omits each
   // feature by the handler's absence.
   const companionProps = companion
@@ -1311,6 +1343,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onPreviewRange: previewRange,
         onUndo: undo,
         onHoverBarChange: setHoverBar,
+        onSettingChange: setSetting,
       }
     : {};
 
@@ -1425,6 +1458,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         experience={experience}
         appearance={appearance}
         hoverBar={hoverBar}
+        settings={viewSettings}
       />
       </WidgetBoundary>
     </div>

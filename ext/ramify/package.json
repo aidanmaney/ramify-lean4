@@ -64,25 +64,173 @@
         "ramify.experience": {
           "type": "string",
           "scope": "resource",
-          "enum": ["beginner", "intermediate", "expert"],
+          "enum": [
+            "beginner",
+            "intermediate",
+            "expert"
+          ],
           "enumDescriptions": [
-            "Comments: narrate · Context: all · Brief: off · Lints: on · Hypothesis origins: on · Automation trace: opens by itself for the step under the cursor · Tactic hover bar: default, plus ⁇ · Replace with automation (⇓): not offered",
+            "Comments: show · Context: used · Brief: off · Lints: on · Hypothesis origins: on · Automation trace: opens by itself for the step under the cursor · Tactic hover bar: default, plus ⁇ · Replace with automation (⇓): not offered",
             "Comments: show · Context: used · Brief: off · Lints: on · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered",
-            "Comments: show · Context: used · Brief: on · Lints: off · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered"
+            "Comments: show · Context: used · Brief: off · Lints: off · Hypothesis origins: off · Automation trace: on click · Tactic hover bar: default · Replace with automation (⇓): offered"
           ],
           "default": "intermediate",
-          "markdownDescription": "How much the proof tree explains itself. A preset: it only fills the defaults of the tree's reading options (the hover bar's buttons where `ramify.hoverBar.*` is not set, the automation trace, `Comments`, `Context`, `lints`, `brief`, `hypothesis origins`) — anything you switch in the tree itself keeps your choice for the session. Also: `Ramify: Set experience level`."
+          "markdownDescription": "How much the proof tree explains itself. A preset: it only fills the defaults of the tree's reading options (the hover bar's buttons where `ramify.hoverBar.*` is not set, the automation trace, and `Comments`, `Context`, `lints`, `brief`, `hypothesis origins` where `ramify.view.*` / `ramify.reading.*` are not set) — a setting you set wins, and anything you switch in the tree itself is written to its setting. Also: `Ramify: Set experience level`."
         },
         "ramify.appearance": {
           "type": "string",
           "scope": "resource",
-          "enum": ["vscode", "classic"],
+          "enum": [
+            "vscode",
+            "classic"
+          ],
           "enumDescriptions": [
             "VS Code's own look: codicons, the editor's hover, menu and notification colours, a squiggle under a line with a problem, fold chevrons, a ⋯ chip on a skipped run",
             "Ramify's classic skin: drawn glyphs, a coloured ribbon down a box with a problem, the corner − and +N, the slanted break on a skipped run, § on the author's own cuts"
           ],
           "default": "vscode",
-          "markdownDescription": "How the proof tree and its chrome are drawn. Paint only: the tree's layout is the same in both. The Layout panel's `classic look` row switches it for the session."
+          "markdownDescription": "How the proof tree and its chrome are drawn. Paint only: the tree's layout is the same in both. The Layout panel's `classic look` row writes this setting."
+        },
+        "ramify.view.layout": {
+          "type": "string",
+          "scope": "resource",
+          "enum": [
+            "outline",
+            "spine",
+            "tracks",
+            "wide"
+          ],
+          "enumDescriptions": [
+            "outline — a compact outline, every node on its own line off a left trunk",
+            "spine — goals stacked tight on the left, each tactic beside its step in a right-hand track",
+            "tracks — the spine with goals wrapped to a modest width, so tactics and goals read as two columns",
+            "wide — a wide layered tree, nodes at the same depth share one horizontal band"
+          ],
+          "default": "outline",
+          "markdownDescription": "The proof tree's layout (the band's `Layout`). The band's `Layout` panel writes this setting (to where its value already lives — the folder, the workspace, else your user settings)."
+        },
+        "ramify.view.sideBySide": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "Draw a split's subtrees as columns, in the compact layouts (the `Layout` panel's `side-by-side` row, which writes this setting)."
+        },
+        "ramify.view.gallery": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "Show one subtree of a split at a time, with a pager (the `Layout` panel's `gallery` row, which writes this setting)."
+        },
+        "ramify.view.width": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "full"
+              ]
+            },
+            {
+              "type": "integer",
+              "minimum": 20,
+              "maximum": 100
+            }
+          ],
+          "scope": "resource",
+          "default": "full",
+          "markdownDescription": "How wide a node's text may run before it wraps: `\"full\"` (no wrapping) or a column budget from `20` to `100` (the `Layout` panel's `width` slider, which writes this setting once you let go)."
+        },
+        "ramify.view.context": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "scope": "resource",
+          "enum": [
+            "used",
+            "intro",
+            "diff",
+            "all"
+          ],
+          "enumDescriptions": [
+            "used — only hypotheses the rest of the proof below actually uses",
+            "intro — only hypotheses the preceding tactic introduced as a binding",
+            "diff — hypotheses this goal introduced, plus any its tactic uses",
+            "all — every hypothesis in scope"
+          ],
+          "default": null,
+          "markdownDescription": "Which hypotheses a goal shows (the band's `Context`). Unset: follows `ramify.experience`. The band's `Context` panel writes this setting (to where its value already lives — the folder, the workspace, else your user settings)."
+        },
+        "ramify.view.hypGroup": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "Draw each goal's context as data first, then propositions, with a divider, instead of Lean's own binder order (the `Context` panel's `split data & props` row, which writes this setting)."
+        },
+        "ramify.view.comments": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "scope": "resource",
+          "enum": [
+            "shown",
+            "hidden",
+            "instead",
+            "narrate"
+          ],
+          "enumDescriptions": [
+            "show — comments drawn as strips above the box",
+            "hide — no comment strips; the room goes back to the tree",
+            "in place — a commented tactic's prose stands in for its label, inside the box",
+            "narrate — strips as above, and where the author wrote none a line generated from the step itself (∴)"
+          ],
+          "default": null,
+          "markdownDescription": "How the proof's comments are drawn (the band's `Comments`: show · hide · in place · narrate). Unset: follows `ramify.experience`. The band's `Comments` panel writes this setting (to where its value already lives — the folder, the workspace, else your user settings)."
+        },
+        "ramify.reading.brief": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "scope": "resource",
+          "default": null,
+          "markdownDescription": "The `brief` reading option: hide boilerplate inside each tactic's own text. Unset: follows `ramify.experience`. The `Reading` panel's row writes this setting."
+        },
+        "ramify.reading.merge": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "The `merge` reading option: one node per straight run of tactics. The `Reading` panel's row writes this setting."
+        },
+        "ramify.reading.lints": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "scope": "resource",
+          "default": null,
+          "markdownDescription": "The `lints` reading option: show Mathlib's own style linters on the steps they object to (the declaration is re-elaborated once to ask). Unset: follows `ramify.experience`. The `Reading` panel's row writes this setting."
+        },
+        "ramify.reading.hypOrigins": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "scope": "resource",
+          "default": null,
+          "markdownDescription": "The `hypothesis origins` reading option: hovering a context line points at the step that introduced it. Unset: follows `ramify.experience`. The `Reading` panel's row writes this setting."
+        },
+        "ramify.reading.upToCursor": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "The `up to cursor` reading option: draw the proof only down to the editor cursor. The `Reading` panel's row writes this setting."
+        },
+        "ramify.diagnostics.autoOpen": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "markdownDescription": "A new error opens the message strip above the tree's band by itself; off, only the problems count opens it (warnings and lints never open it by themselves). The `Reading` panel's `errors open the message strip` row writes this setting."
         },
         "ramify.hoverBar.tactic": {
           "type": "array",
