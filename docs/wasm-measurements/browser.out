@@ -1,0 +1,46 @@
+[page] [lean] [live] runtime + module init 289 ms
+{"init":{"constants":65273,"ms":742,"ok":true},"ms":{"fetch":922.660000000149,"runtimeAndUnpack":1058.734999999404,"importInit":745.4050000011921},"heapMB":374.86592}
+{"answer":{"goals":["n : Nat\nh : n + 1 = 0\n⊢ 2 + 2 = 5"],"ms":789,"uses":[]},"wallMs":792.3549999985844,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":9,"uses":["h"]},"wallMs":10,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":58,"uses":["h"]},"wallMs":59.20499999821186,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":30,"uses":["h"]},"wallMs":30.40000000037253,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":83,"uses":["h"]},"wallMs":83.54999999888241,"heapMB":374.86592}
+{"answer":{"goals":["case nil\nys : List Nat\n⊢ ([] ++ ys).length = [].length + ys.length","case cons\nys : List Nat\nhead✝ : Nat\ntail✝ : List Nat\ntail_ih✝ : (tail✝ ++ ys).length = tail✝.length + ys.length\n⊢ (head✝ :: tail✝ ++ ys).length = (head✝ :: tail✝).length + ys.length"],"ms":151,"uses":["xs"]},"wallMs":151.32000000029802,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":6,"uses":[]},"wallMs":5.995000001043081,"heapMB":374.86592}
+{"answer":{"goals":["case cons\nys : List Nat\nhead✝ : Nat\ntail✝ : List Nat\ntail_ih✝ : (tail✝ ++ ys).length = tail✝.length + ys.length\n⊢ tail✝.length + ys.length + 1 = tail✝.length + 1 + ys.length"],"ms":21,"uses":[]},"wallMs":22.029999999329448,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":26,"uses":[]},"wallMs":26.469999998807907,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":37,"uses":[]},"wallMs":38.06000000052154,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":400,"uses":[]},"wallMs":400.30000000074506,"heapMB":374.86592}
+{"answer":{"goals":["case succ\nn✝ : Nat\na✝ : double n✝ = 2 * n✝\n⊢ double n✝ + 2 = 2 * (n✝ + 1)"],"ms":690,"uses":[]},"wallMs":690.234999999404,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":20,"uses":["a✝"]},"wallMs":20.175000000745058,"heapMB":374.86592}
+{"answer":{"error":"parse: <input>:1:13: expected end of input","ms":1},"wallMs":0.9799999985843897,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":23,"uses":["n"]},"wallMs":23.25,"heapMB":374.86592}
+{"answer":{"goals":["n : Nat\n⊢ n < n + 1"],"ms":40,"uses":["n"]},"wallMs":39.57000000029802,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":21,"uses":["n"]},"wallMs":21,"heapMB":374.86592}
+{"answer":{"error":"omega could not prove the goal:\nNo usable constraints found. You may need to unfold definitions so `omega` can see linear arithmetic facts about `Nat` and `Int`, which may also involve multiplication, division, and modular remainder by constants.","ms":3},"wallMs":2.419999999925494,"heapMB":374.86592}
+{"answer":{"goals":["n : Nat\n⊢ n < n + 1"],"ms":26,"uses":["n"]},"wallMs":26.344999998807907,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":77,"uses":[]},"wallMs":77.07000000029802,"heapMB":374.86592}
+{"answer":{"goals":["x : Fin 5\n⊢ x * x ≠ 2"],"ms":2,"uses":[]},"wallMs":1.8300000000745058,"heapMB":374.86592}
+{"answer":{"error":"parse: <input>:1:1: unknown tactic","ms":0},"wallMs":0.4550000000745058,"heapMB":374.86592}
+{"answer":{"error":"parse: <input>:1:8: expected end of input","ms":1},"wallMs":0.2599999997764826,"heapMB":374.86592}
+{"answer":{"goals":["⊢ 7 * 7 = 49"],"ms":16,"uses":[]},"wallMs":16.72499999962747,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":3,"uses":[]},"wallMs":2.8049999997019768,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":2,"uses":[]},"wallMs":2.3149999994784594,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":7,"uses":[]},"wallMs":6.189999999478459,"heapMB":374.86592}
+{"answer":{"goals":["⊢ 6 * 6 = 49"],"ms":4,"uses":[]},"wallMs":3.994999999180436,"heapMB":374.86592}
+{"answer":{"goals":["case inl\nn : Nat\nh : n % 2 = 0\n⊢ n * n % 2 = n % 2","case inr\nn : Nat\nh : n % 2 = 1\n⊢ n * n % 2 = n % 2"],"ms":75,"uses":["n"]},"wallMs":74.94500000029802,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":6,"uses":["h"]},"wallMs":5.869999999180436,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":9,"uses":["h"]},"wallMs":9.509999999776483,"heapMB":374.86592}
+{"answer":{"error":"omega could not prove the goal:\na possible counterexample may satisfy the constraints\n  c ≥ 0\n  0 ≤ c - 2*d ≤ 1\n  a ≥ 0\n  0 ≤ a - 2*b ≤ 1\n  a - 2*b - c + 2*d ≥ 1\nwhere\n a := ↑n\n b := ↑n / 2\n c := ↑n * ↑n\n d := ↑(n * n) / 2","ms":16},"wallMs":15.830000000074506,"heapMB":374.86592}
+{"answer":{"error":"`grind` failed\ncase grind\nn : Nat\nh : ¬n * n % 2 = n % 2\n⊢ False\n[grind] Goal diagnostics\n  [facts] Asserted facts\n    [prop] ¬n * n % 2 = n % 2\n    [prop] ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n % 2) ≤ 0\n    [prop] -1 * ↑n + 2 * (↑n / 2) + ↑n % 2 = 0\n    [prop] ↑n * ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n * ↑n % 2) ≤ 0\n    [prop] 2 * (↑n * ↑n / 2) + ↑n * ↑n % 2 + -1 * (↑n * ↑n) = 0\n  [eqc] True propositions\n    [prop] ↑n % 2 + -1 ≤ 0\n    [prop] ↑n * ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n % 2) ≤ 0\n    [prop] -1 * (↑n * ↑n % 2) ≤ 0\n  [eqc] False propositions\n    [prop] n * n % 2 = n % 2\n  [eqc] Equivalence classes\n    [eqc] others\n      [eqc] {0,\n          -1 * ↑n + 2 * (↑n / 2) + ↑n % 2,\n          -1 * ↑n ^ 2 + ↑n * ↑n % 2 + 2 * (↑n * ↑n / 2),\n          2 * (↑n * ↑n / 2) + ↑n * ↑n % 2 + -1 * (↑n * ↑n)}\n  [ematch] E-matching patterns\n    [thm] Nat.pow_pos: [@HPow.hPow `[Nat] `[Nat] `[Nat] `[instHPow] #2 #1]\n    [thm] Nat.div_pow_of_pos: [@HPow.hPow `[Nat] `[Nat] `[Nat] `[instHPow] #2 #1]\n  [cutsat] Assignment satisfying linear constraints\n    [assign] n := 0\n    [assign] 「↑n ^ 2」 := 1\n  [ring] Ring `Int`\n    [basis] Basis\n      [_] (↑n % 2) ^ 2 + 4 * (↑n % 2 * (↑n / 2)) + 4 * (↑n / 2) ^ 2 + -1 * (↑n * ↑n % 2) + -2 * (↑n * ↑n / 2) = 0\n      [_] ↑n + -1 * (↑n % 2) + -2 * (↑n / 2) = 0","ms":423},"wallMs":424.0800000000745,"heapMB":374.86592}
+{"answer":{"goals":["n : Nat\n⊢ 0 + n = n"],"ms":45,"uses":[]},"wallMs":44.76500000059605,"heapMB":374.86592}
+{"answer":{"goals":["case zero\n⊢ 0 + 0 = 0","case succ\nn✝ : Nat\na✝ : 0 + n✝ = n✝\n⊢ 0 + (n✝ + 1) = n✝ + 1"],"ms":6,"uses":["n"]},"wallMs":6.224999999627471,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":10,"uses":[]},"wallMs":9.71000000089407,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":2,"uses":[]},"wallMs":2.224999999627471,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":10,"uses":[]},"wallMs":9.230000000447035,"heapMB":374.86592}
+{"answer":{"goals":["case zero\n⊢ 0 = 0 ∨ 0 < 0","case succ\nn✝ : Nat\n⊢ n✝ + 1 = 0 ∨ 0 < n✝ + 1"],"ms":71,"uses":["n"]},"wallMs":71.375,"heapMB":374.86592}
+{"answer":{"goals":["case succ\nn✝ : Nat\n⊢ 0 < n✝ + 1"],"ms":3,"uses":[]},"wallMs":2.974999999627471,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":6,"uses":[]},"wallMs":6.080000000074506,"heapMB":374.86592}
+{"answer":{"goals":[],"ms":29,"uses":[]},"wallMs":28.39500000141561,"heapMB":374.86592}
+total wall ms 6076
+page memory {"usedJSHeapMB":10}

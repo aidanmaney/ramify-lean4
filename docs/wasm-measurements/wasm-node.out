@@ -1,0 +1,47 @@
+[node] MEMFS: 2404 files, 273.1 MB, 1133 ms since start
+[lean] [live] runtime + module init 286 ms
+[node] runtime + Lean init: 1517 ms
+[init] {"constants":65273,"ms":742,"ok":true} 745 ms
+[answer 364 ms] {"goals":["n : Nat\nh : n + 1 = 0\n⊢ 2 + 2 = 5"],"ms":361,"uses":[]}
+[answer 15 ms] {"goals":[],"ms":15,"uses":["h"]}
+[answer 47 ms] {"goals":[],"ms":47,"uses":["h"]}
+[answer 11 ms] {"goals":[],"ms":10,"uses":["h"]}
+[answer 72 ms] {"goals":[],"ms":71,"uses":["h"]}
+[answer 122 ms] {"goals":["case nil\nys : List Nat\n⊢ ([] ++ ys).length = [].length + ys.length","case cons\nys : List Nat\nhead✝ : Nat\ntail✝ : List Nat\ntail_ih✝ : (tail✝ ++ ys).length = tail✝.length + ys.length\n⊢ (head✝ :: tail✝ ++ ys).length = (head✝ :: tail✝).length + ys.length"],"ms":122,"uses":["xs"]}
+[answer 5 ms] {"goals":[],"ms":4,"uses":[]}
+[answer 14 ms] {"goals":["case cons\nys : List Nat\nhead✝ : Nat\ntail✝ : List Nat\ntail_ih✝ : (tail✝ ++ ys).length = tail✝.length + ys.length\n⊢ tail✝.length + ys.length + 1 = tail✝.length + 1 + ys.length"],"ms":13,"uses":[]}
+[answer 18 ms] {"goals":[],"ms":18,"uses":[]}
+[answer 11 ms] {"goals":[],"ms":11,"uses":[]}
+[answer 200 ms] {"goals":[],"ms":199,"uses":[]}
+[answer 467 ms] {"goals":["case succ\nn✝ : Nat\na✝ : double n✝ = 2 * n✝\n⊢ double n✝ + 2 = 2 * (n✝ + 1)"],"ms":464,"uses":[]}
+[answer 24 ms] {"goals":[],"ms":24,"uses":["a✝"]}
+[answer 6 ms] {"error":"parse: <input>:1:13: expected end of input","ms":6}
+[answer 33 ms] {"goals":[],"ms":33,"uses":["n"]}
+[answer 28 ms] {"goals":["n : Nat\n⊢ n < n + 1"],"ms":28,"uses":["n"]}
+[answer 4 ms] {"goals":[],"ms":4,"uses":["n"]}
+[answer 6 ms] {"error":"omega could not prove the goal:\nNo usable constraints found. You may need to unfold definitions so `omega` can see linear arithmetic facts about `Nat` and `Int`, which may also involve multiplication, division, and modular remainder by constants.","ms":6}
+[answer 10 ms] {"goals":["n : Nat\n⊢ n < n + 1"],"ms":9,"uses":["n"]}
+[answer 41 ms] {"goals":[],"ms":41,"uses":[]}
+[answer 2 ms] {"goals":["x : Fin 5\n⊢ x * x ≠ 2"],"ms":1,"uses":[]}
+[answer 0 ms] {"error":"parse: <input>:1:1: unknown tactic","ms":0}
+[answer 0 ms] {"error":"parse: <input>:1:8: expected end of input","ms":0}
+[answer 11 ms] {"goals":["⊢ 7 * 7 = 49"],"ms":11,"uses":[]}
+[answer 6 ms] {"goals":[],"ms":5,"uses":[]}
+[answer 1 ms] {"goals":[],"ms":1,"uses":[]}
+[answer 7 ms] {"goals":[],"ms":6,"uses":[]}
+[answer 2 ms] {"goals":["⊢ 6 * 6 = 49"],"ms":1,"uses":[]}
+[answer 44 ms] {"goals":["case inl\nn : Nat\nh : n % 2 = 0\n⊢ n * n % 2 = n % 2","case inr\nn : Nat\nh : n % 2 = 1\n⊢ n * n % 2 = n % 2"],"ms":45,"uses":["n"]}
+[answer 9 ms] {"goals":[],"ms":8,"uses":["h"]}
+[answer 16 ms] {"goals":[],"ms":15,"uses":["h"]}
+[answer 27 ms] {"error":"omega could not prove the goal:\na possible counterexample may satisfy the constraints\n  c ≥ 0\n  0 ≤ c - 2*d ≤ 1\n  a ≥ 0\n  0 ≤ a - 2*b ≤ 1\n  a - 2*b - c + 2*d ≥ 1\nwhere\n a := ↑n\n b := ↑n / 2\n c := ↑n * ↑n\n d := ↑(n * n) / 2","ms":27}
+[answer 180 ms] {"error":"`grind` failed\ncase grind\nn : Nat\nh : ¬n * n % 2 = n % 2\n⊢ False\n[grind] Goal diagnostics\n  [facts] Asserted facts\n    [prop] ¬n * n % 2 = n % 2\n    [prop] ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n % 2) ≤ 0\n    [prop] -1 * ↑n + 2 * (↑n / 2) + ↑n % 2 = 0\n    [prop] ↑n * ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n * ↑n % 2) ≤ 0\n    [prop] 2 * (↑n * ↑n / 2) + ↑n * ↑n % 2 + -1 * (↑n * ↑n) = 0\n  [eqc] True propositions\n    [prop] ↑n % 2 + -1 ≤ 0\n    [prop] ↑n * ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n % 2) ≤ 0\n    [prop] -1 * (↑n * ↑n % 2) ≤ 0\n  [eqc] False propositions\n    [prop] n * n % 2 = n % 2\n  [eqc] Equivalence classes\n    [eqc] others\n      [eqc] {0,\n          -1 * ↑n + 2 * (↑n / 2) + ↑n % 2,\n          -1 * ↑n ^ 2 + ↑n * ↑n % 2 + 2 * (↑n * ↑n / 2),\n          2 * (↑n * ↑n / 2) + ↑n * ↑n % 2 + -1 * (↑n * ↑n)}\n  [ematch] E-matching patterns\n    [thm] Nat.pow_pos: [@HPow.hPow `[Nat] `[Nat] `[Nat] `[instHPow] #2 #1]\n    [thm] Nat.div_pow_of_pos: [@HPow.hPow `[Nat] `[Nat] `[Nat] `[instHPow] #2 #1]\n  [cutsat] Assignment satisfying linear constraints\n    [assign] n := 0\n    [assign] 「↑n ^ 2」 := 1\n  [ring] Ring `Int`\n    [basis] Basis\n      [_] (↑n % 2) ^ 2 + 4 * (↑n % 2 * (↑n / 2)) + 4 * (↑n / 2) ^ 2 + -1 * (↑n * ↑n % 2) + -2 * (↑n * ↑n / 2) = 0\n      [_] ↑n + -1 * (↑n % 2) + -2 * (↑n / 2) = 0","ms":180}
+[answer 41 ms] {"goals":["n : Nat\n⊢ 0 + n = n"],"ms":41,"uses":[]}
+[answer 5 ms] {"goals":["case zero\n⊢ 0 + 0 = 0","case succ\nn✝ : Nat\na✝ : 0 + n✝ = n✝\n⊢ 0 + (n✝ + 1) = n✝ + 1"],"ms":5,"uses":["n"]}
+[answer 12 ms] {"goals":[],"ms":12,"uses":[]}
+[answer 2 ms] {"goals":[],"ms":2,"uses":[]}
+[answer 3 ms] {"goals":[],"ms":3,"uses":[]}
+[answer 73 ms] {"goals":["case zero\n⊢ 0 = 0 ∨ 0 < 0","case succ\nn✝ : Nat\n⊢ n✝ + 1 = 0 ∨ 0 < n✝ + 1"],"ms":73,"uses":["n"]}
+[answer 3 ms] {"goals":["case succ\nn✝ : Nat\n⊢ 0 < n✝ + 1"],"ms":3,"uses":[]}
+[answer 5 ms] {"goals":[],"ms":5,"uses":[]}
+[answer 42 ms] {"goals":[],"ms":42,"uses":[]}
+[node] wasm heap MB: 375  rss MB: 991

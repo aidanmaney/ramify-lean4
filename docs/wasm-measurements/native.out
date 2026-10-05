@@ -1,0 +1,44 @@
+[live] runtime + module init 79 ms
+{"constants":65273,"ms":395,"ok":true}
+{"goals":["n : Nat\nh : n + 1 = 0\n⊢ 2 + 2 = 5"],"ms":44,"uses":[]}
+{"goals":[],"ms":3,"uses":["h"]}
+{"goals":[],"ms":2,"uses":["h"]}
+{"goals":[],"ms":1,"uses":["h"]}
+{"goals":[],"ms":509,"uses":["h"]}
+{"goals":["case nil\nys : List Nat\n⊢ ([] ++ ys).length = [].length + ys.length","case cons\nys : List Nat\nhead✝ : Nat\ntail✝ : List Nat\ntail_ih✝ : (tail✝ ++ ys).length = tail✝.length + ys.length\n⊢ (head✝ :: tail✝ ++ ys).length = (head✝ :: tail✝).length + ys.length"],"ms":32,"uses":["xs"]}
+{"goals":[],"ms":2,"uses":[]}
+{"goals":["case cons\nys : List Nat\nhead✝ : Nat\ntail✝ : List Nat\ntail_ih✝ : (tail✝ ++ ys).length = tail✝.length + ys.length\n⊢ tail✝.length + ys.length + 1 = tail✝.length + 1 + ys.length"],"ms":6,"uses":[]}
+{"goals":[],"ms":9,"uses":[]}
+{"goals":[],"ms":2,"uses":[]}
+{"goals":[],"ms":407,"uses":[]}
+{"goals":["case succ\nn✝ : Nat\na✝ : double n✝ = 2 * n✝\n⊢ double n✝ + 2 = 2 * (n✝ + 1)"],"ms":163,"uses":[]}
+{"goals":[],"ms":8,"uses":["a✝"]}
+{"error":"parse: <input>:1:13: expected end of input","ms":1}
+{"goals":[],"ms":10,"uses":["n"]}
+{"goals":["n : Nat\n⊢ n < n + 1"],"ms":15,"uses":["n"]}
+{"goals":[],"ms":3,"uses":["n"]}
+{"error":"omega could not prove the goal:\nNo usable constraints found. You may need to unfold definitions so `omega` can see linear arithmetic facts about `Nat` and `Int`, which may also involve multiplication, division, and modular remainder by constants.","ms":0}
+{"goals":["n : Nat\n⊢ n < n + 1"],"ms":4,"uses":["n"]}
+{"goals":[],"ms":13,"uses":[]}
+{"goals":["x : Fin 5\n⊢ x * x ≠ 2"],"ms":1,"uses":[]}
+{"error":"parse: <input>:1:1: unknown tactic","ms":0}
+{"error":"parse: <input>:1:8: expected end of input","ms":0}
+{"goals":["⊢ 7 * 7 = 49"],"ms":8,"uses":[]}
+{"goals":[],"ms":1,"uses":[]}
+{"goals":[],"ms":0,"uses":[]}
+{"goals":[],"ms":2,"uses":[]}
+{"goals":["⊢ 6 * 6 = 49"],"ms":2,"uses":[]}
+{"goals":["case inl\nn : Nat\nh : n % 2 = 0\n⊢ n * n % 2 = n % 2","case inr\nn : Nat\nh : n % 2 = 1\n⊢ n * n % 2 = n % 2"],"ms":16,"uses":["n"]}
+{"goals":[],"ms":3,"uses":["h"]}
+{"goals":[],"ms":4,"uses":["h"]}
+{"error":"omega could not prove the goal:\na possible counterexample may satisfy the constraints\n  c ≥ 0\n  0 ≤ c - 2*d ≤ 1\n  a ≥ 0\n  0 ≤ a - 2*b ≤ 1\n  a - 2*b - c + 2*d ≥ 1\nwhere\n a := ↑n\n b := ↑n / 2\n c := ↑n * ↑n\n d := ↑(n * n) / 2","ms":6}
+{"error":"`grind` failed\ncase grind\nn : Nat\nh : ¬n * n % 2 = n % 2\n⊢ False\n[grind] Goal diagnostics\n  [facts] Asserted facts\n    [prop] ¬n * n % 2 = n % 2\n    [prop] ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n % 2) ≤ 0\n    [prop] -1 * ↑n + 2 * (↑n / 2) + ↑n % 2 = 0\n    [prop] ↑n * ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n * ↑n % 2) ≤ 0\n    [prop] 2 * (↑n * ↑n / 2) + ↑n * ↑n % 2 + -1 * (↑n * ↑n) = 0\n  [eqc] True propositions\n    [prop] ↑n % 2 + -1 ≤ 0\n    [prop] ↑n * ↑n % 2 + -1 ≤ 0\n    [prop] -1 * (↑n % 2) ≤ 0\n    [prop] -1 * (↑n * ↑n % 2) ≤ 0\n  [eqc] False propositions\n    [prop] n * n % 2 = n % 2\n  [eqc] Equivalence classes\n    [eqc] others\n      [eqc] {0,\n          -1 * ↑n + 2 * (↑n / 2) + ↑n % 2,\n          -1 * ↑n ^ 2 + ↑n * ↑n % 2 + 2 * (↑n * ↑n / 2),\n          2 * (↑n * ↑n / 2) + ↑n * ↑n % 2 + -1 * (↑n * ↑n)}\n  [ematch] E-matching patterns\n    [thm] Nat.pow_pos: [@HPow.hPow `[Nat] `[Nat] `[Nat] `[instHPow] #2 #1]\n    [thm] Nat.div_pow_of_pos: [@HPow.hPow `[Nat] `[Nat] `[Nat] `[instHPow] #2 #1]\n  [cutsat] Assignment satisfying linear constraints\n    [assign] n := 0\n    [assign] 「↑n ^ 2」 := 1\n  [ring] Ring `Int`\n    [basis] Basis\n      [_] (↑n % 2) ^ 2 + 4 * (↑n % 2 * (↑n / 2)) + 4 * (↑n / 2) ^ 2 + -1 * (↑n * ↑n % 2) + -2 * (↑n * ↑n / 2) = 0\n      [_] ↑n + -1 * (↑n % 2) + -2 * (↑n / 2) = 0","ms":127}
+{"goals":["n : Nat\n⊢ 0 + n = n"],"ms":22,"uses":[]}
+{"goals":["case zero\n⊢ 0 + 0 = 0","case succ\nn✝ : Nat\na✝ : 0 + n✝ = n✝\n⊢ 0 + (n✝ + 1) = n✝ + 1"],"ms":2,"uses":["n"]}
+{"goals":[],"ms":6,"uses":[]}
+{"goals":[],"ms":1,"uses":[]}
+{"goals":[],"ms":2,"uses":[]}
+{"goals":["case zero\n⊢ 0 = 0 ∨ 0 < 0","case succ\nn✝ : Nat\n⊢ n✝ + 1 = 0 ∨ 0 < n✝ + 1"],"ms":16,"uses":["n"]}
+{"goals":["case succ\nn✝ : Nat\n⊢ 0 < n✝ + 1"],"ms":2,"uses":[]}
+{"goals":[],"ms":3,"uses":[]}
+{"goals":[],"ms":12,"uses":[]}

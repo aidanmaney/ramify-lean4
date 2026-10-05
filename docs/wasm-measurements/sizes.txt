@@ -1,0 +1,6 @@
+init-noprivate.tar           raw   87.5 MB  gz   33.1 MB  br   22.8 MB
+stat: cannot statx 'live.js': No such file or directory
+gzip: live.js: No such file or directory
+failed to open input file [live.js]: No such file or directory
+(standard_in) 1: syntax error
+live.js                      raw    0.0 MB  gz    0.0 MB  br    0.0 MB
