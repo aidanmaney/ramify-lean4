@@ -1,6 +1,3 @@
+live.stripped.wasm           raw   66.9 MB  gz   12.1 MB  br    6.7 MB
+init-all.tar                 raw  275.0 MB  gz  117.0 MB  br   85.9 MB
 init-noprivate.tar           raw   87.5 MB  gz   33.1 MB  br   22.8 MB
-stat: cannot statx 'live.js': No such file or directory
-gzip: live.js: No such file or directory
-failed to open input file [live.js]: No such file or directory
-(standard_in) 1: syntax error
-live.js                      raw    0.0 MB  gz    0.0 MB  br    0.0 MB

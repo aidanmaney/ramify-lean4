@@ -1,0 +1,6 @@
+base: chromium summed RSS peak 349 MB
+debug: chromium summed RSS peak 1419 MB
+stripped: chromium summed RSS peak 1409 MB
+stripped-trim: chromium summed RSS peak 1414 MB
+owned: chromium summed RSS peak 1140 MB
+owned-trim: chromium summed RSS peak 1139 MB

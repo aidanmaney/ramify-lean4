@@ -1,0 +1,233 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 55ac3c1..d4a9ab7 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -860,11 +860,10 @@ set(
+   Init
+   Std
+   Lean
+-  Leanc
+   LeanIR
+ )
+ if(NOT CMAKE_SYSTEM_NAME MATCHES "Emscripten")
+-  list(APPEND STDLIBS Lake LeanChecker)
++  list(APPEND STDLIBS Leanc Lake LeanChecker)
+ endif()
+ 
+ add_custom_target(
+@@ -1087,7 +1086,13 @@ string(REPLACE "ROOT" "${CMAKE_BINARY_DIR}" LEANC_INTERNAL_FLAGS "${LEANC_INTERN
+ string(REPLACE "ROOT" "${CMAKE_BINARY_DIR}" LEANC_INTERNAL_LINKER_FLAGS "${LEANC_INTERNAL_LINKER_FLAGS}")
+ 
+ toml_escape("${LEAN_EXTRA_OPTS}" LEAN_EXTRA_OPTS_TOML)
+-toml_escape("${LEANC_INTERNAL_FLAGS} ${LEANC_INTERNAL_LINKER_FLAGS}" LEAN_MORE_LEANC_ARGS_TOML)
++if(CMAKE_SYSTEM_NAME MATCHES "Emscripten")
++  # wasm-spike: Lake compiles the stdlib's C with LEAN_CC directly, so the Emscripten flags
++  # (-pthread => atomics/bulk-memory, required by --shared-memory at link) must ride moreLeancArgs.
++  toml_escape("${LEANC_INTERNAL_FLAGS} ${LEANC_INTERNAL_LINKER_FLAGS} ${LEANC_EXTRA_CC_FLAGS}" LEAN_MORE_LEANC_ARGS_TOML)
++else()
++  toml_escape("${LEANC_INTERNAL_FLAGS} ${LEANC_INTERNAL_LINKER_FLAGS}" LEAN_MORE_LEANC_ARGS_TOML)
++endif()
+ 
+ if(CMAKE_BUILD_TYPE MATCHES "Debug|Release|RelWithDebInfo|MinSizeRel")
+   set(CMAKE_BUILD_TYPE_TOML "${CMAKE_BUILD_TYPE}")
+diff --git a/src/include/lean/lean.h b/src/include/lean/lean.h
+index bdac8b8..1b52399 100644
+--- a/src/include/lean/lean.h
++++ b/src/include/lean/lean.h
+@@ -3260,7 +3260,7 @@ static inline lean_obj_res lean_runtime_hold(b_lean_obj_arg a) {
+     return lean_box(0);
+ }
+ 
+-#ifdef LEAN_EMSCRIPTEN
++#if defined(LEAN_EMSCRIPTEN) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4) /* wasm-spike: any 32-bit target */
+ #define LEAN_SCALAR_PTR_LITERAL(b1, b2, b3, b4, b5, b6, b7, b8) (lean_object*)((uint32_t)b1 | ((uint32_t)b2 << 8) | ((uint32_t)b3 << 16) | ((uint32_t)b4 << 24)), (lean_object*)((uint32_t)b5 | ((uint32_t)b6 << 8) | ((uint32_t)b7 << 16) | ((uint32_t)b8 << 24))
+ #else
+ #define LEAN_SCALAR_PTR_LITERAL(b1, b2, b3, b4, b5, b6, b7, b8) (lean_object*)((uint64_t)b1 | ((uint64_t)b2 << 8) | ((uint64_t)b3 << 16) | ((uint64_t)b4 << 24) | ((uint64_t)b5 << 32) | ((uint64_t)b6 << 40) | ((uint64_t)b7 << 48) | ((uint64_t)b8 << 56))
+diff --git a/src/lakefile.toml.in b/src/lakefile.toml.in
+index 21e59a9..1c62237 100644
+--- a/src/lakefile.toml.in
++++ b/src/lakefile.toml.in
+@@ -8,7 +8,7 @@
+ name = "lean4"
+ bootstrap = true
+ 
+-defaultTargets = ["Init", "Std", "Lean", "Lake", "LakeMain", "LeanIR", "Leanc", "LeanChecker"]
++defaultTargets = ["Init", "Std", "Lean", "Lake", "LakeMain", "LeanIR", "LeanChecker"]
+ 
+ # Have Lake use CMake's build type (e.g., `Release`, `Debug`) where possible
+ buildType = "${CMAKE_BUILD_TYPE_TOML}"
+diff --git a/src/library/ir_interpreter.cpp b/src/library/ir_interpreter.cpp
+index 63a0857..aa78ce5 100644
+--- a/src/library/ir_interpreter.cpp
++++ b/src/library/ir_interpreter.cpp
+@@ -338,8 +338,14 @@ void print_value(tout const & ios, value const & v, type t) {
+   return print_value(const_cast<tout &>(ios), v, t);
+ }
+ 
++#ifdef LEAN_EMSCRIPTEN
++// wasm-spike: a static wasm link has no dlsym; a generated table (scripts/wasm/gen-symtab.py) stands in.
++extern "C" void * lean_wasm_lookup_symbol(char const * sym);
++#endif
+ void * lookup_symbol_in_cur_exe(char const * sym) {
+-#ifdef LEAN_WINDOWS
++#if defined(LEAN_EMSCRIPTEN)
++    return lean_wasm_lookup_symbol(sym);
++#elif defined(LEAN_WINDOWS)
+     std::vector<HMODULE> hmods(128);
+     DWORD bytes_needed;
+     lean_always_assert(EnumProcessModules(GetCurrentProcess(), &hmods[0], hmods.size() * sizeof(HMODULE), &bytes_needed));
+@@ -1206,7 +1212,7 @@ extern "C" LEAN_EXPORT obj_res lean_run_mod_init_core(b_obj_arg  sym) {
+     }
+ }
+ 
+-extern "C" LEAN_EXPORT object * lean_run_init(object * env, object * opts, object * decl, object * init_decl, object *) {
++extern "C" LEAN_EXPORT object * lean_run_init(object * env, object * opts, object * decl, object * init_decl) {
+     return interpreter::with_interpreter<object *>(TO_REF(elab_environment, env), TO_REF(options, opts), TO_REF(name, decl), [&](interpreter & interp) {
+         return interp.run_init(TO_REF(name, decl), TO_REF(name, init_decl));
+     });
+diff --git a/src/library/module.cpp b/src/library/module.cpp
+index 0672935..34582b9 100644
+--- a/src/library/module.cpp
++++ b/src/library/module.cpp
+@@ -267,7 +267,7 @@ static std::vector<std::pair<size_t, ptrdiff_t>> read_lib_table_from_buffer(char
+ 
+ extern "C" LEAN_EXPORT object * lean_compacted_region_save(b_obj_arg ofname, b_obj_arg mod, b_obj_arg odata,
+                                                            b_obj_arg odep_regions, obj_arg oprev,
+-                                                           uint8 allow_closures_u8, object *) {
++                                                           uint8 allow_closures_u8) {
+     // `mmap` addresses must be page-aligned. The default (non-huge) page size on x86-64 is 4KB;
+     // `MapViewOfFileEx` addresses must be aligned to the "memory allocation granularity" (64KB).
+     const size_t ALIGN = 1LL<<16;
+@@ -451,7 +451,7 @@ static object * mk_compacted_region(b_obj_arg ofname, object * root,
+ // root to be interpreted as — the C side does no type checking and the caller is responsible for
+ // using a type compatible with what was saved (see `CompactedRegion.read`).
+ // Supports both `v2` and `v3` formats.
+-extern "C" LEAN_EXPORT object * lean_compacted_region_read(b_obj_arg ofname, b_obj_arg odep_regions, object *) {
++extern "C" LEAN_EXPORT object * lean_compacted_region_read(b_obj_arg ofname, b_obj_arg odep_regions) {
+     std::string olean_fn(lean_string_cstr(ofname));
+     try {
+         std::vector<region_view> dep_regions = extract_dep_regions(odep_regions);
+@@ -607,7 +607,7 @@ extern "C" LEAN_EXPORT object * lean_compacted_region_read(b_obj_arg ofname, b_o
+     }
+ }
+ 
+-extern "C" LEAN_EXPORT obj_res lean_compacted_region_free(obj_arg region, object *) {
++extern "C" LEAN_EXPORT obj_res lean_compacted_region_free(obj_arg region) {
+     char * buffer = region_buffer(region);
+     size_t full_sz = region_size(region);
+     bool is_mmap = lean_ctor_get_uint8(region, sizeof(void*) * 5) != 0;
+diff --git a/src/runtime/interrupt.cpp b/src/runtime/interrupt.cpp
+index 3e34dd5..fea1b9d 100644
+--- a/src/runtime/interrupt.cpp
++++ b/src/runtime/interrupt.cpp
+@@ -17,7 +17,7 @@ namespace lean {
+ LEAN_THREAD_VALUE(size_t, g_max_heartbeat, 0);
+ LEAN_THREAD_VALUE(size_t, g_heartbeat, 0);
+ 
+-extern "C" LEAN_EXPORT obj_res lean_internal_get_default_max_heartbeat() {
++extern "C" LEAN_EXPORT obj_res lean_internal_get_default_max_heartbeat(lean_object *) {
+ #ifdef LEAN_DEFAULT_MAX_HEARTBEAT
+     return lean_box(LEAN_DEFAULT_MAX_HEARTBEAT);
+ #else
+diff --git a/src/runtime/io.cpp b/src/runtime/io.cpp
+index a4cac03..c305da4 100644
+--- a/src/runtime/io.cpp
++++ b/src/runtime/io.cpp
+@@ -1246,7 +1246,7 @@ extern "C" LEAN_EXPORT obj_res lean_io_hard_link(b_obj_arg orig, b_obj_arg link)
+ }
+ 
+ /* createTempFile : IO (Handle × FilePath) */
+-extern "C" LEAN_EXPORT obj_res lean_io_create_tempfile(lean_object * /* w */) {
++extern "C" LEAN_EXPORT obj_res lean_io_create_tempfile() {
+     char path[PATH_MAX];
+     size_t base_len = PATH_MAX;
+     int ret = uv_os_tmpdir(path, &base_len);
+@@ -1292,7 +1292,7 @@ extern "C" LEAN_EXPORT obj_res lean_io_create_tempfile(lean_object * /* w */) {
+ }
+ 
+ /* createTempDir : IO FilePath */
+-extern "C" LEAN_EXPORT obj_res lean_io_create_tempdir(lean_object * /* w */) {
++extern "C" LEAN_EXPORT obj_res lean_io_create_tempdir() {
+     char path[PATH_MAX];
+     size_t base_len = PATH_MAX;
+     int ret = uv_os_tmpdir(path, &base_len);
+@@ -1385,7 +1385,8 @@ extern "C" LEAN_EXPORT obj_res lean_io_app_path() {
+         return pathOnWasmHeap;
+     }));
+     if (appPath == nullptr) {
+-        return io_result_mk_error("no Lean executable file exists in WASM outside of Node.js");
++        // wasm-spike: in a browser worker the toolchain lives in MEMFS at /bin, /lib/lean
++        return io_result_mk_ok(mk_string("/bin/lean"));
+     }
+ 
+     object * appPathLean = mk_string(appPath);
+diff --git a/src/runtime/memory.cpp b/src/runtime/memory.cpp
+index 0a72369..8217994 100644
+--- a/src/runtime/memory.cpp
++++ b/src/runtime/memory.cpp
+@@ -114,7 +114,7 @@ namespace lean {
+ static size_t g_max_memory = 0;
+ LEAN_THREAD_VALUE(size_t, g_counter, 0);
+ 
+-extern "C" LEAN_EXPORT lean_obj_res lean_internal_get_default_max_memory() {
++extern "C" LEAN_EXPORT lean_obj_res lean_internal_get_default_max_memory(lean_object *) {
+ #ifdef LEAN_DEFAULT_MAX_MEMORY
+     return lean_box(LEAN_DEFAULT_MAX_MEMORY);
+ #else
+diff --git a/src/runtime/uv/event_loop.cpp b/src/runtime/uv/event_loop.cpp
+index fa85439..bd373c1 100644
+--- a/src/runtime/uv/event_loop.cpp
++++ b/src/runtime/uv/event_loop.cpp
+@@ -146,8 +146,8 @@ extern "C" LEAN_EXPORT lean_obj_res lean_uv_event_loop_configure(b_obj_arg optio
+ }
+ 
+ /* Std.Internal.UV.Loop.alive : BaseIO UInt64 */
+-extern "C" LEAN_EXPORT lean_obj_res lean_uv_event_loop_alive() {
+-    return io_result_mk_error("lean_uv_event_loop_alive is not supported");
++extern "C" LEAN_EXPORT uint8_t lean_uv_event_loop_alive() { /* wasm-spike: match the header */
++    return 0;
+ }
+ 
+ #endif
+diff --git a/src/runtime/uv/system.cpp b/src/runtime/uv/system.cpp
+index 3ac95b6..9b7dab9 100644
+--- a/src/runtime/uv/system.cpp
++++ b/src/runtime/uv/system.cpp
+@@ -634,7 +634,7 @@ extern "C" LEAN_EXPORT lean_obj_res lean_uv_os_get_passwd() {
+ }
+ 
+ // Std.Internal.UV.System.osGetGroup : IO (Option GroupInfo)
+-extern "C" LEAN_EXPORT lean_obj_res lean_uv_os_get_group() {
++extern "C" LEAN_EXPORT lean_obj_res lean_uv_os_get_group(uint64_t gid) /* wasm-spike: match the header */ {
+     lean_always_assert(
+         false && ("Please build a version of Lean4 with libuv to invoke this.")
+     );
+diff --git a/src/util/shell.cpp b/src/util/shell.cpp
+index 2784996..4775635 100644
+--- a/src/util/shell.cpp
++++ b/src/util/shell.cpp
+@@ -288,8 +288,9 @@ extern "C" LEAN_EXPORT int lean_main(int argc, char ** argv) {
+     // When running in command-line mode under Node.js, we make system directories available in the virtual filesystem.
+     // This mode is used to compile 32-bit oleans.
+     EM_ASM(
+-        if ((typeof process === "undefined") || (process.release.name !== "node")) {
+-            throw new Error("The Lean command-line driver can only run under Node.js. For the embeddable WASM library, see lean_wasm.cpp.");
++        if ((typeof process === "undefined") || !process.release || (process.release.name !== "node")) {
++            // wasm-spike: in a browser worker the host pre-populates MEMFS (/lib/lean/...) and sets ENV.
++            return;
+         }
+ 
+         var lean_path = process.env["LEAN_PATH"];
+diff --git a/stage0/src/include/lean/lean.h b/stage0/src/include/lean/lean.h
+index de2ef66..a525cca 100644
+--- a/stage0/src/include/lean/lean.h
++++ b/stage0/src/include/lean/lean.h
+@@ -3260,7 +3260,7 @@ static inline lean_obj_res lean_runtime_hold(b_lean_obj_arg a) {
+     return lean_box(0);
+ }
+ 
+-#ifdef LEAN_EMSCRIPTEN
++#if defined(LEAN_EMSCRIPTEN) || (defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4) /* wasm-spike: any 32-bit target */
+ #define LEAN_SCALAR_PTR_LITERAL(b1, b2, b3, b4, b5, b6, b7, b8) (lean_object*)((uint32_t)b1 | ((uint32_t)b2 << 8) | ((uint32_t)b3 << 16) | ((uint32_t)b4 << 24)), (lean_object*)((uint32_t)b5 | ((uint32_t)b6 << 8) | ((uint32_t)b7 << 16) | ((uint32_t)b8 << 24))
+ #else
+ #define LEAN_SCALAR_PTR_LITERAL(b1, b2, b3, b4, b5, b6, b7, b8) (lean_object*)((uint64_t)b1 | ((uint64_t)b2 << 8) | ((uint64_t)b3 << 16) | ((uint64_t)b4 << 24) | ((uint64_t)b5 << 32) | ((uint64_t)b6 << 40) | ((uint64_t)b7 << 48) | ((uint64_t)b8 << 56))

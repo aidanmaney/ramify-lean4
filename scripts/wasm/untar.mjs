@@ -13,7 +13,10 @@ export function untarInto(FS, buf, root) {
     if (type === 48 || type === 0) {
       const path = `${root}/${name}`;
       mkdirp(FS, path.slice(0, path.lastIndexOf("/")));
-      FS.writeFile(path, buf.subarray(off, off + size));
+      // canOwn: MEMFS keeps a VIEW of the tar's bytes instead of copying them (one copy, not two)
+      const st = FS.open(path, "w");
+      FS.write(st, buf, off, size, 0, /* canOwn */ true);
+      FS.close(st);
       files++; bytes += size;
     }
     off += Math.ceil(size / 512) * 512;
