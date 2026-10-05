@@ -1,5 +1,12 @@
 # Baked playground — feasibility spike (2026-10-04)
 
+> **Shipped as v1 on 2026-10-05** — see `docs/viewer.md` ("The playground") and
+> the design record's "2026-10-05 — The baked playground (v1)". The baker below
+> was productionised in place (`lean/PlaygroundBake.lean`, now reading a theorem
+> FILE and baking through the real `ProofTree.bakeGoal`); the viewer sketch
+> `web/scratch/playground.mjs` was replaced by `web/src/playgroundAnswer.ts` and
+> removed. What follows is the spike as it was.
+
 **Question.** Can a static page let a visitor *type* tactics under a goal of a
 tiny core-Lean proof and watch the Ramify tree grow, with no Lean server, in a
 few MB — every `(goal, tactic)` answer pre-computed by real Lean and shipped as

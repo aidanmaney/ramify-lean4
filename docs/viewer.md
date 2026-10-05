@@ -153,3 +153,100 @@ Measured 2026-10-03 over the whole corpus (`proofs/*.lean`, Mathlib) and the Tou
 | smallest single-file export, `export/openblock.html` | 663 KB | — |
 
 A single-file export is the bundle plus one payload, so it never falls below ~650 KB; payloads compress about 13:1 (repeated goal text), and a host serving gzip delivers a page for the bundle's 215 KB plus a few tens of KB per file.
+
+## The playground
+
+`playground.html` lets a visitor **type** a tactic under any open goal of a
+small core-Lean theorem and watch the tree grow, with no Lean server: every
+`(goal, tactic)` answer was computed by real Lean when the site was published.
+What a visitor sees — goals, errors (as squiggles), hovers — is what Lean said.
+The design and its measurements are `docs/playground-spike.md` and the design
+record's "2026-10-05 — The baked playground (v1)".
+
+```
+demos/playground/*.lean ──playgroundbake──▶ playground/<name>.json ──play()──▶ attempts ──buildProof()──▶ records ──▶ ProofTreeView
+  (Lean, once, locally)   (BFS over goals)     (playgroundVersion 1)   (typed text → baked step)            (the same view)
+```
+
+```bash
+cd lean && lake build playgroundbake
+cd ../web && node scripts/publish.mjs --playground ../demos/playground.txt --cache /tmp/pg   # only the playground
+npm run publish:site                                                                       # everything, cards first
+```
+
+`--playground LIST` bakes each theorem (`--cache DIR` keeps `playground-<name>.json`
+while it is newer than the source and the baker), checks that the theorem's
+**own solution**, typed line by line as written, closes the proof in the page's
+client, writes `playground/<name>.json`, `playground/index.json`,
+`playground.html` and its bundle `playground-<hash>.js`, prints the sizes and
+**fails over 2 MB gzipped** (the data; the bundle is printed beside it). With
+no source files it rewrites only the playground; with them the index gets a
+**Try it** card above every group (its picture: `thumbs.mjs` types five
+tactics into `Double` through the page's own input).
+
+### A theorem file
+
+```lean
+/-! # Zero plus n
+On `Nat`, addition recurses on its SECOND argument, … -/   -- the picker's title and the blurb
+-- @try exact rfl                                         -- another candidate on every goal
+-- @depth 5                                               -- the cap (default 4; `intro` is free)
+theorem zero_add_nat : ∀ n : Nat, 0 + n = n := by         -- ONE theorem, core Lean, no imports
+  intro n                                                  -- a worked solution: its tactics are
+  induction n                                              -- candidates, and publish replays it
+  · rfl
+  · omega
+```
+
+Write the statement with every binder AFTER the colon (the root goal is the
+theorem's type), name arrow hypotheses in the statement where the solution uses
+them (`(hab : a = b) → …`), and spell the solution with the canonical names
+(below) so its lines are the baked ones.
+
+### Names
+
+The bake is **canonical**: one spelling per binder, or the visitor's choice of
+names multiplies the states (up to 30× in the spike). `intro` names each binder
+as the statement does (an anonymous one `h`, then `h_1`… — Lean's
+`getUnusedName`), `rename_i` names `x✝` as `x` and a proof `a✝` as `ih`. The
+page then **aliases**: any name a step introduces (present in a goal it leaves,
+absent from the goal it starts from) may be typed differently — `intro a b hab`
+is the baked `intro p q h` — and the subtree shows the visitor's names (renamed
+on the tagged print, so the plain and tagged prints agree; Lean's error texts
+and the popups' strings are renamed word by word). A respelling that would show
+two hypotheses alike is refused. Not aliased in v1: a pattern whose
+alternatives bind the same canonical name in different goals
+(`rcases h with hp | hq` against the baked `h | h`) — the completions show the
+baked spelling.
+
+### Typed text → a step
+
+`play()` (`web/src/playgroundAnswer.ts`): expand `\` abbreviations (the
+editor's own table, `@leanprover/unicode-input`), collapse whitespace, read the
+visitor's names back through the aliases, then match the goal's baked tactics
+**token by token** (`n+1` = `n + 1`); failing that, the same tactic with its
+introduced names respelled. The outcome comes from `answer(goalKey, tactic)` —
+THE seam, one async function; goals are named by their print, so a later live
+engine (WASM Lean) whose goals print the same joins the baked graph. A miss is
+"not in this demo" with the goal's baked successes as completions (and "the
+demo was not explored past this goal" on a frontier state). An error is Lean's
+own: the attempt draws as a failed step (recovery's `failed` kind) with the
+message as its diagnostic, and the goal stays open in a copy below it; the next
+attempt on that goal replaces the failure. Undo drops the last attempt; Reset
+drops them all.
+
+### What the page passes the view
+
+Exactly the viewer's inputs (`BakedCode`, `BakedPopups` — the bake's popups
+plus renamed copies — the viewer theme) and ONE narrow hook, `onTryTactic`
+(+ `getGoalTactics`, the in-place editor's completion pool): the `+` chip on an
+open goal opens the in-place editor and its commit comes to the page; `sorry`,
+`calc` and `step` are not offered (they write source). Every Lean-only move is
+absent through `caps`/`availability` as on the viewer; `caps.play` gates the
+`?` panel's row. The page starts in the `all` context (an open goal has no
+consumer, so `used` would show nothing) and follows the newest step as the
+editor's caret would (`highlightPos`). A bar under the tree — goal picker,
+input, Try, Hints — is the same question for a phone. Phones are baked-only.
+
+Measured 2026-10-05 (12 theorems): 105 KB gzipped of data (2.4–23 KB each),
+the bundle 696 KB / 235 KB gz, baking ~40 s.

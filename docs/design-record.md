@@ -4954,3 +4954,162 @@ both skins); `lint-pop-{light,dark}-crop.png` (harness); real VS Code:
 `final-vscode-band-rest.png`, `final-vscode-band-crop.png`,
 `final-vscode-band-outdated-crop.png`, `live-restarted.png`,
 `final-vscode-lint-popup.png`, `live-reloaded.png` (spine held).
+
+## 2026-10-05 — The baked playground (v1)
+
+The spike (docs/playground-spike.md, GO) built out: `site/playground.html`, a
+visitor picks a small core-Lean theorem and types tactics under any open goal;
+the tree grows from answers real Lean computed at publish time. Owner
+direction: lead with the baked approach, phones baked-only, a few MB max.
+
+**Theorems** (`demos/playground/*.lean`, `demos/playground.txt`; each a real
+file — elaborates with plain `lean` — with ONE theorem, a worked solution, a
+`/-! # Title -/` blurb and `-- @try` / `-- @depth` directives). Measured:
+
+| file | theorem | states | steps (ok) | raw | gz |
+| --- | --- | --: | --: | --: | --: |
+| ZeroAdd | `∀ n : Nat, 0 + n = n` (induction) | 40 | 229 (118) | 80 KB | 5.7 KB |
+| Double | `double n = 2 * n`, own recursive def (@depth 5) | 170 | 1370 (443) | 606 KB | 23 KB |
+| AndSwap | `p ∧ q → q ∧ p` | 24 | 210 (49) | 29 KB | 3.9 KB |
+| OrSwap | `p ∨ q → q ∨ p` | 24 | 234 (48) | 28 KB | 3.8 KB |
+| ZeroOrPos | `n = 0 ∨ 0 < n` (cases) | 36 | 284 (104) | 59 KB | 6.6 KB |
+| SquareParity | `n * n % 2 = n % 2` (omega fails: nonlinear) | 170 | 600 (244) | 314 KB | 14 KB |
+| AppendLength | `(xs ++ ys).length = …` (List induction) | 231 | 794 (292) | 648 KB | 23 KB |
+| SevenSquared | `∃ n, n * n = 49` (witness) | 4 | 53 (17) | 10 KB | 2.4 KB |
+| NoLargest | `∀ n, ∃ m, n < m` | 20 | 93 (28) | 27 KB | 3.9 KB |
+| RewriteChain | `a = b → b = c → a + 0 = c` | 144 | 437 (202) | 214 KB | 11 KB |
+| Absurd | `n + 1 = 0 → 2 + 2 = 5` | 18 | 119 (39) | 28 KB | 3.8 KB |
+| NoSqrtTwo | `∀ x : Fin 5, x * x ≠ 2` (decide) | 9 | 85 (26) | 14 KB | 3.1 KB |
+
+Total data **105 KB gzipped** (budget 2 MB, enforced by publish); the page's
+bundle 696 KB / 235 KB gz; baking ~40 s for the set, Double the slowest (6 s).
+
+**Baker.** Productionised in place: reads the FILE (frontend elaboration,
+the `theorem` command found by syntax KIND, its type is the root), the
+solution's tactics read off its syntax by KIND (`tacticSeq1Indented` items,
+into `Lean.cdot`). Tagged goals go through the REAL `ProofTree.bakeGoal`
+(the module now imports `ProofTreeHarvest`, so it is no longer core-only to
+BUILD — it still bakes in an `Init` environment); 0 tagged/plain print
+mismatches over the set. `kinds` per hypothesis is Paperproof's `mayBeProof`.
+`uses` (the step's `tacticDependsOn`) = PROOF hyps the term the step built
+mentions (so `omega` names the `ih` it used) + any hyp the tactic's text
+names; data the term mentions only because the goal does is not a use (first
+cut used every fvar of the term: every step "used" `n`).
+
+- **Candidate generation needs its own heartbeat budget.** The first run died
+  with an uncaught `whnf` timeout: `forallBoundedTelescope`/`whnfR` in the
+  candidate generators ran on the CUMULATIVE count; each generator now runs
+  under `withCurrHeartbeats` + `tryCatchRuntimeEx`.
+- **The theorem is found by syntax, not by `ConstantInfo`.** Scanning the
+  environment for theorems found `double`'s equation lemmas and `omega`'s aux
+  lemmas ("more than one theorem").
+- **Guided vs probe.** Expanding every candidate exploded: AppendLength 1 763
+  states / 5.6 MB, RewriteChain still running at 10 minutes (data
+  `induction`/`cases` on every variable, `exfalso`, `simp at h`, `rename_i`
+  compounding). Now only GUIDED steps are explored — the canonical
+  `intro`s/`rename_i`s, the solution, the `@try` lines, `constructor`, `left`,
+  `right` — and every other candidate is a PROBE: its answer (goals or error)
+  is baked, its goals interned but marked `frontier` unless a guided path
+  reaches them. AppendLength 231 states / 23 KB gz, the whole set 105 KB. A
+  visitor who walks into a frontier state is told "the demo was not explored
+  past this goal" (an honest stop, not a wrong answer).
+- **Depth does not count `intro`** (`intro`-family steps keep the parent's
+  depth); the shallowest path wins a re-met state's depth.
+- **Canonical `intro` covers up to SIX binders.** At four, RewriteChain's
+  own `intro a b c hab hbc` was not baked — caught by replaying every
+  solution, which is now a publish gate.
+- A step whose goals mention another goal's metavariable (`constructor` on
+  `∃`) is not baked (treated as independent goals it would be wrong).
+
+**Naming rule** (decided). Bake canonical names; ALIAS in the client. Any
+identifier a step INTRODUCES — a (name, type) in a goal it leaves that its own
+goal lacks — may be spelled differently; the alias (canonical → shown) rides
+that subtree, later text is read back through it, and the tree renames on the
+TAGGED print (a tag whose popup `expr` is the bare name is a local: its text is
+renamed; popups whose strings mention a renamed word get a renamed COPY
+appended to the page's popup table) with the plain print read off the renamed
+tagged one, so the view's text-equality guard always holds (probe: every
+goal of the typed proof). Error texts are word-renamed (they are plain text). Refused: a
+respelling that would show two hypotheses alike (`intro p p h`). Not handled
+in v1: one canonical name bound in several goals by one pattern
+(`rcases h with hp | hq` vs the baked `h | h`) — aliases are per step, not per
+goal; the completions show the baked spelling.
+
+**Typed input → a step.** `normalise` (the editor's own `\` abbreviation table
+through `AbbreviationProvider.getReplacementText`, longest prefix; whitespace
+collapsed), then a TOKEN match (identifier runs incl. `.`/`!`/`?`/`✝`/
+subscripts, else single characters — so `n+1` = `n + 1`, `[ h ]` = `[h]`), then
+the introduced-name match; the outcome from `answer(goalKey, tactic)`, the ONE
+seam (`Engine`; `makeAnswer` tries engines in order; keys are the print —
+case tag, grouped hyps, `⊢ target` — so a live engine's goals join the
+table). Records: goal and hypothesis ids per OCCURRENCE (a hyp keeps its id
+from parent to child while its shown name and type do), positions numbered in
+the tree's PREORDER (the visitor may finish the second case first; numbering
+by typing order put the second case's subtree first — layout ranks siblings
+by subtree-min position), a failed attempt as recovery's `failed` step with
+Lean's message as a severity-1 diagnostic and a RETRY COPY of its goal
+(`<occ>~`) below it as the open goal (the recovery shape alone leaves the goal
+consumed, so no `+` chip), the next attempt on that goal replacing the
+failure; B2 `hypOrigins` as the server's post-pass; `openBlock` while nothing
+has been typed (that is what gives the root its `addSpec`).
+
+**The view's one new hook.** `onTryTactic(goalId, text)` + `getGoalTactics
+(goalId)`: `chipsOffered` admits a goal with an `addSpec` when only
+`onTryTactic` is passed, the chip row draws `+` alone (sorry/calc/step stay
+`onAddTactic`'s), the `⋯` menu's chip rows are filtered to `add`, the editor's
+commit goes to `onTryTactic` when `onAddTactic` is absent, the completion
+pool's `tactics` reads `getGoalTactics(goalId)` before `proof.tacticNames`.
+`Caps.play` gates a `?` row ("`+` on an open goal — to try a tactic there"),
+and the help panel's "Start here" line "Click a tactic to show it in the
+source" is now gated on `caps.reveal` (the playground has no source pane — the
+rule "a leak is a gate to fix" applied) with a `caps.play` line in its place.
+Fingerprint unchanged (1189).
+
+**The page.** Header (Ramify · Playground · theorem picker · Undo · Reset ·
+Get Ramify · theme), the blurb, the tree, and a bar: the target goal (a
+picker when several are open; after a step, the first open goal — Lean's main
+goal), the input (16 px fields on a phone — iOS zooms into smaller ones), Try,
+Hints (the goal's baked successes as chips; tapping one runs it), and the
+answer line (Lean's first error line — the whole message is on the squiggle
+and the message strip — "not in this demo" with the completions, or "Proof
+complete"). Starts in context `full`: `used` shows what the NEXT step used,
+and an open goal has none, so the visitor saw no hypotheses to use (found in
+the classic screenshot of OrSwap). `highlightPos` = the newest step, so the
+view follows it as it follows the editor's caret. `?appearance=classic` and
+`?experience=` as on the viewer. `viewer.tsx`'s `useTheme`/`useNarrow` moved
+to `viewerHooks.ts` (shared, `useNarrow(px)`).
+
+**Publish.** `--playground LIST` (bake with cache, solution-replay gate
+through the probes' bundle, 2 MB gz budget, `playground/index.json`,
+`playground-<hash>.js`, `playground.html`); alone it rewrites only the
+playground; with files the index leads with a **Try it** card;
+`cards.json.playground` makes `thumbs.mjs` shoot the page five tactics into
+`Double` at 560 px (the narrow layout reads at card size; 960 px did not).
+
+**Probe** `playground` (in `npm test`, fixture `web/probe/playground/
+AndSwap.json` = real baker output): version enforced; the seam answers keys;
+normalisation; a proof typed in the visitor's names (`intro a b hab`,
+`obtain ⟨x, y⟩ := hab`) closes; a mistake is Lean's error, renamed, one
+diagnostic, a `failed` step, the goal open; undo restores the tree exactly;
+an untabled tactic is NOT_BAKED with completions in the visitor's names; the
+tagged/plain guard holds for every goal; `hypOrigins`; `tacticDependsOn`.
+
+Gates: `npm test` green (fingerprint 1189 identical), `check-sync`,
+`check-settings`, `gen-codicons --check`, `gen-experience --check`, `probe
+icons` (no new icon: the page's buttons are words, as the viewer's are);
+widget bundle rebuilt (the view changed); `lake build Ramify playgroundbake`.
+Screenshots /tmp/claude-0/playground/: `desktop-{light,dark}-{1-start,
+2-error,3-notbaked,4-done}.png` (AndSwap), `phone-{light,dark}-*.png` (iPhone
+13, DPR 3: no React error #185, no page errors), `explore-*-1-inline-
+completion.png` (the `+` chip's in-place editor and its baked completion),
+`explore2-{light,dark}-*` (Double: hover popup, `?` panel, Reading panel, a
+finished proof), `explore-light-5-menu.png` (the `⋯` menu: `+` only),
+`classic-{light,dark}.png`, `index-{light,dark}.png` (the Try it card).
+
+**Left for v2.** Per-goal aliasing for alternative patterns; a shareable link
+of the attempts (`#t=…&p=…`); clicking a goal in the tree to target it in the
+bar; tactic-label tokens (colours) for typed steps; the proof's source text
+(kept in `Built.source`, valid Lean with `sorry` per open goal) shown or
+copied; a site-wide popup table; a smarter error filter (three quarters of
+the steps are errors, mostly "no binders"/unknown identifier — ~half the
+bytes); the live WASM tier behind `answer` (spike, "Levelling up").
