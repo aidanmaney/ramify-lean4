@@ -146,10 +146,21 @@ const useProbed = (): boolean =>
     () => probed,
   );
 // the reload `askLive` made to isolate the page: start, or say why not
-if (takeIsolationMark() && LIVE_OFFERED) {
+const returnedFromIsolation = takeIsolationMark();
+if (returnedFromIsolation && LIVE_OFFERED) {
   if (ISOLATED) LIVE.start();
   else LIVE.refuse(STILL_NOT_ISOLATED);
 }
+// `?start=live` — a link that asks for live Lean itself (the reader who follows
+// it has asked, as with the button). Never a second reload: a page that came
+// back from the isolation reload still not isolated was refused just above.
+if (
+  LIVE_OFFERED &&
+  !returnedFromIsolation &&
+  LIVE.status.kind === "off" &&
+  new URLSearchParams(location.search).get("start") === "live"
+)
+  askLive();
 if (ISOLATED && LIVE_OFFERED && stored(LIVE_KEY) === "on") LIVE.start();
 void (async () => {
   try {
