@@ -68,6 +68,7 @@ import {
   liveHints,
   liveRunnable,
   takeIsolationMark,
+  liveBlockedReason,
   type LiveStatus,
 } from "./playgroundLive";
 import { injectStyleOnce, makeTaggedRenderersWith } from "./taggedCore";
@@ -119,6 +120,9 @@ const LIVE = new LiveLean(LIVE_BASE ?? "live/");
  (coi-sw.js). Not offered without a live base, on a phone, or where neither
  route exists — and then nothing names a button that is not drawn. */
 const LIVE_OFFERED = LIVE_BASE !== null && liveRunnable();
+/** Where a live base is set but this browser cannot run it: the reason, said once
+ in the goal panel's offer line (else the offer would just be missing). */
+const LIVE_BLOCKED = LIVE_BASE !== null && !LIVE_OFFERED ? liveBlockedReason() : null;
 const ISOLATED = !!globalThis.crossOriginIsolated;
 /** The reader's ask: start at once where the page is isolated, else isolate it
  first (a reload that comes back and starts by itself). */
@@ -320,6 +324,8 @@ function LiveOffer() {
       stored(LIVE_KEY) === "on" ||
       !LIVE_OFFERED,
   );
+  if (!LIVE_OFFERED && LIVE_BLOCKED && !narrow && stored(NOTICE_KEY) !== "never")
+    return <div className="ptw-pg-offer ptw-pg-dim" role="note">{LIVE_BLOCKED}</div>;
   if (hidden || narrow || !ready || st.kind !== "off") return null;
   return (
     <div className="ptw-pg-offer ptw-pg-dim">

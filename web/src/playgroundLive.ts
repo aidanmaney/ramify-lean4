@@ -181,6 +181,23 @@ export function liveRunnable(): boolean {
   return !phone && "serviceWorker" in navigator && window.isSecureContext;
 }
 
+/** Why live Lean cannot run on this page, in the reader's words — or null
+ where it can, or on a phone (phones are out of scope and stay silent). A
+ browser with service workers off (Firefox's private windows; hardened
+ setups) would otherwise just lose the offer, with nothing saying why. */
+export function liveBlockedReason(): string | null {
+  if (globalThis.crossOriginIsolated) return null;
+  try {
+    if (window.matchMedia("(pointer: coarse)").matches && !window.matchMedia("(pointer: fine)").matches) return null;
+  } catch {
+    /* not a phone we can tell */
+  }
+  if (!window.isSecureContext) return "Real Lean needs a secure (https) page.";
+  if (!("serviceWorker" in navigator))
+    return "Real Lean needs service workers, which this browser has turned off (a private window, or a privacy setting). The answers computed in advance still work.";
+  return null;
+}
+
 /** The reload `isolateAndReload` makes is marked, so the page that comes back
  starts live Lean by itself (sessionStorage: this tab only). */
 const RELOAD_MARK = "ramify.playground.liveIsolate";
