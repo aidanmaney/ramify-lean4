@@ -38,6 +38,9 @@
 //                     the top of the index; fails over PLAYGROUND_BUDGET (2 MB
 //                     gzipped). With no source files, ONLY the playground is
 //                     (re)written. `--cache DIR` keeps the bakes too.
+//   --live-base URL   where the playground's live tier is served (the folder
+//                     scripts/wasm/package-live.mjs writes), as a meta tag in
+//                     playground.html; default `live/` (serve-playground.mjs)
 //
 // Lean must be built: `cd lean && lake build ppharness` (this script runs it,
 // too). A file that `import Mathlib`s needs Mathlib's oleans (`lake exe cache
@@ -78,6 +81,9 @@ function parseArgs(argv) {
     hero: null,
     /** The playground's theorem list (`--playground`), else null. */
     playground: null,
+    /** Where the playground's live tier lives (`--live-base`, a URL or a path
+     relative to the page): written into playground.html as a meta tag. */
+    liveBase: "live/",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -93,6 +99,7 @@ function parseArgs(argv) {
     else if (a === "--no-lint") o.lint = false;
     else if (a === "--cache") o.cache = path.resolve(val());
     else if (a === "--playground") o.playground = path.resolve(val());
+    else if (a === "--live-base") o.liveBase = val();
     else if (a === "--list") {
       // One source per line, relative to the list; `#` starts a comment.
       const list = path.resolve(val());
@@ -239,7 +246,7 @@ const BOOT_CSS = `
 :root[data-theme="dark"] { --page-bg: #1b1d22; --page-fg: #d5d8dd; }
 html, body { background: var(--page-bg); color: var(--page-fg); }`;
 
-function viewerPage({ title, script, payload, description = "A Lean proof drawn as a tree with Ramify." }) {
+function viewerPage({ title, script, payload, description = "A Lean proof drawn as a tree with Ramify.", head = "" }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -247,7 +254,7 @@ function viewerPage({ title, script, payload, description = "A Lean proof drawn 
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
-${payload ? "" : '<link rel="icon" type="image/svg+xml" href="favicon.svg">\n'}${THEME_BOOT}
+${head}${payload ? "" : '<link rel="icon" type="image/svg+xml" href="favicon.svg">\n'}${THEME_BOOT}
 <style>${BOOT_CSS}</style>
 </head>
 <body>
@@ -613,10 +620,14 @@ async function publishPlayground(o) {
     if (/^playground-(chunk-)?[0-9A-Za-z]+\.js$/.test(f) && !parts.files.has(f)) fs.rmSync(path.join(o.out, f));
   for (const [name, text] of parts.files) fs.writeFileSync(path.join(o.out, name), text);
   fs.copyFileSync(path.join(web, "public/favicon.svg"), path.join(o.out, "favicon.svg"));
+  // live Lean's isolation (COOP/COEP from a service worker, for a host that
+  // sends no headers) sits BESIDE the page, so its scope covers it
+  fs.copyFileSync(path.join(web, "public/coi-sw.js"), path.join(o.out, "coi-sw.js"));
   fs.writeFileSync(
     path.join(o.out, "playground.html"),
     viewerPage({
       title: "Ramify playground",
+      head: `<meta name="ramify-live-base" content="${esc(o.liveBase)}">\n`,
       script: `<script type="module" src="${jsName}"></script>`,
       description: "Type Lean tactics and watch the proof tree grow — every answer computed by Lean in advance.",
     }),

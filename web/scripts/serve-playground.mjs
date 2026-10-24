@@ -6,7 +6,8 @@
 // isolation headers wasm threads need (COOP/COEP), and the live tier under
 // /live/: `worker.js` (scripts/wasm/playground-worker.js) plus the wasm build's
 // `live.js`, `live.wasm`, `live.worker.js` and `init.tar` from --live
-// (default ../build-wasm/out/web). With --native, /live/worker.js is a stand-in
+// (default ../build-wasm/out/web; point --live at package-live.mjs's output to
+// serve the deployed, pre-gzipped layout — its manifest.json switches the worker). With --native, /live/worker.js is a stand-in
 // that forwards each request to the NATIVE engine (`lake exe playgroundlive`)
 // — the same answers (scripts/live-check.mjs), for exercising the page
 // before or without the wasm build.
@@ -50,10 +51,13 @@ if (native) {
   ask = async (line) => { await first; return new Promise((ok) => { queue.push(ok); proc.stdin.write(line + "\n"); }); };
   first.then((l) => console.log("native engine:", l));
 }
+// the page makes the worker from a blob (playgroundLive.ts), so URLs are
+// resolved against the base the init message carries, not self.location
 const NATIVE_WORKER = `
+let base = "";
 self.onmessage = async ({ data }) => {
-  if (data.init) { postMessage({ ready: { ms: 0 } }); return; }
-  const r = await fetch("native", { method: "POST", body: data.answer });
+  if (data.init) { base = data.init.base; postMessage({ ready: { ms: 0 } }); return; }
+  const r = await fetch(base + "native", { method: "POST", body: data.answer });
   postMessage({ id: data.id, result: await r.json() });
 };`;
 

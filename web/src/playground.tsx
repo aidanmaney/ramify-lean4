@@ -59,7 +59,17 @@ import { DIAG_ICON, type Severity } from "./diagInk";
 import { daggerHtml } from "./dagger";
 import { ICON } from "./icons";
 import { formatLink, parseLink, type ViewerLink } from "./viewerLink";
-import { LiveLean, liveEngine, liveHints, type LiveStatus } from "./playgroundLive";
+import {
+  LiveLean,
+  STILL_NOT_ISOLATED,
+  isolateAndReload,
+  liveBase,
+  liveEngine,
+  liveHints,
+  liveRunnable,
+  takeIsolationMark,
+  type LiveStatus,
+} from "./playgroundLive";
 import { injectStyleOnce, makeTaggedRenderersWith } from "./taggedCore";
 import type { TaggedText } from "./taggedText";
 import {
@@ -99,12 +109,28 @@ const store = (k: string, v: string) => {
   }
 };
 /** The opt-in live tier (playgroundLive.ts): ONE wasm Lean per page, started
- by the reader. `?live=<base>` points it elsewhere (a dev server). */
-const LIVE = new LiveLean(QUERY.get("live") ?? "live/");
+ by the reader. Its base comes from the build (`publish.mjs --live-base`, a
+ meta tag); `?live=<base>` points it elsewhere (a dev server). */
+const LIVE_BASE = liveBase(QUERY);
+const LIVE = new LiveLean(LIVE_BASE ?? "live/");
+/** Live Lean needs cross-origin isolation for its threads. A server with
+ COOP/COEP gives it; a static host (GitHub Pages) does not, and there the
+ reader's ask installs a service worker that adds them and reloads once
+ (coi-sw.js). Not offered without a live base, on a phone, or where neither
+ route exists — and then nothing names a button that is not drawn. */
+const LIVE_OFFERED = LIVE_BASE !== null && liveRunnable();
+const ISOLATED = !!globalThis.crossOriginIsolated;
+/** The reader's ask: start at once where the page is isolated, else isolate it
+ first (a reload that comes back and starts by itself). */
+const askLive = () => {
+  if (ISOLATED) LIVE.start();
+  else void isolateAndReload(LIVE);
+};
 // Turning live Lean on is the ONE opt-in (the download); there is no off.
 // After it, it starts by itself on every visit: the reader's word is kept in
 // localStorage, and — since that can be cleared or blocked — the worker's own
 // Cache Storage holding the files counts as the same word (no download then).
+// Only where the page is isolated already: an automatic start never reloads.
 const LIVE_KEY = "ramify.playground.live";
 const LIVE_CACHE = "ramify-live-v1"; // scripts/wasm/playground-worker.js
 LIVE.subscribe((st) => {
@@ -119,10 +145,15 @@ const useProbed = (): boolean =>
     (f) => (probeListeners.add(f), () => probeListeners.delete(f)),
     () => probed,
   );
-if (stored(LIVE_KEY) === "on") LIVE.start();
+// the reload `askLive` made to isolate the page: start, or say why not
+if (takeIsolationMark() && LIVE_OFFERED) {
+  if (ISOLATED) LIVE.start();
+  else LIVE.refuse(STILL_NOT_ISOLATED);
+}
+if (ISOLATED && LIVE_OFFERED && stored(LIVE_KEY) === "on") LIVE.start();
 void (async () => {
   try {
-    if (LIVE.status.kind === "off" && (await caches.has(LIVE_CACHE))) {
+    if (ISOLATED && LIVE_OFFERED && LIVE.status.kind === "off" && (await caches.has(LIVE_CACHE))) {
       const held = await (await caches.open(LIVE_CACHE)).keys();
       if (held.length > 0 && LIVE.status.kind === "off") LIVE.start();
     }
@@ -132,6 +163,28 @@ void (async () => {
   probed = true;
   probeListeners.forEach((f) => f());
 })();
+/** What one start downloads, from the live tier's manifest.json
+ (scripts/wasm/package-live.mjs); until it answers (or where there is none,
+ serve-playground's uncompressed layout) the measured figure. */
+const LIVE_DOWNLOAD_MEASURED = 47e6;
+const download = { bytes: LIVE_DOWNLOAD_MEASURED, fs: new Set<() => void>() };
+if (LIVE_OFFERED)
+  void fetch(new URL("manifest.json", new URL(LIVE_BASE ?? "live/", location.href)), { cache: "no-cache" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((m: { download?: unknown } | null) => {
+      if (m && typeof m.download === "number" && m.download > 0) {
+        download.bytes = m.download;
+        download.fs.forEach((f) => f());
+      }
+    })
+    .catch(() => {
+      /* the measured figure stands */
+    });
+const useDownloadMb = (): number =>
+  useSyncExternalStore(
+    (f) => (download.fs.add(f), () => download.fs.delete(f)),
+    () => Math.round(download.bytes / 1e6),
+  );
 const useLiveStatus = (): LiveStatus =>
   useSyncExternalStore(
     (f) => LIVE.subscribe(f),
@@ -198,17 +251,14 @@ const useShownStatus = (): Shown =>
     () => shown.now,
   );
 
-/** Live Lean needs cross-origin isolation for its threads, which GitHub Pages
- cannot give (no COOP/COEP headers): there the page offers only the baked
- answers, and nothing names a button that is not drawn. */
-const LIVE_OFFERED = !!globalThis.crossOriginIsolated;
-
 /** The header's switch for the live tier: off → loading → ready → gone. Once
  Lean runs there is nothing to switch — nobody turns it off — so after a brief
  "ready" the header says nothing more (failed keeps a retry). */
 function LiveButton() {
   const st = useShownStatus();
-  if (!LIVE_OFFERED) return null;
+  const size = useDownloadMb();
+  const narrow = useNarrow(NARROW_PX);
+  if (!LIVE_OFFERED || (narrow && st.kind !== "loading" && st.kind !== "ready")) return null;
   if (st.kind === "gone") return null;
   if (st.kind === "ready")
     return (
@@ -230,9 +280,9 @@ function LiveButton() {
       title={
         st.kind === "failed"
           ? `Live Lean did not start: ${st.why} — click to try again`
-          : "Download Lean compiled to WebAssembly (about 35 MB once, desktop browsers) so any tactic is checked by Lean in this tab, not only the ones computed in advance"
+          : `Download Lean compiled to WebAssembly (about ${size} MB once, desktop browsers) so any tactic is checked by Lean in this tab, not only the ones computed in advance${ISOLATED ? "" : " — the page reloads once to turn it on"}`
       }
-      onClick={() => LIVE.start()}
+      onClick={askLive}
     >
       {st.kind === "failed" ? "Live Lean failed — retry" : "Run real Lean"}
     </button>
@@ -251,22 +301,24 @@ const NOTICE_KEY = "ramify.playground.liveNotice";
 function LiveOffer() {
   const st = useLiveStatus();
   const ready = useProbed();
+  const size = useDownloadMb();
+  const narrow = useNarrow(NARROW_PX);
   const [hidden, setHidden] = useState(
     () =>
       stored(NOTICE_KEY) === "never" ||
       stored(LIVE_KEY) === "on" ||
       !LIVE_OFFERED,
   );
-  if (hidden || !ready || st.kind !== "off") return null;
+  if (hidden || narrow || !ready || st.kind !== "off") return null;
   return (
     <div className="ptw-pg-offer ptw-pg-dim">
       <button
         type="button"
         className="ptw-pg-quiet ptw-pg-linkish"
-        onClick={() => LIVE.start()}
-        title="The answers here were worked out in advance for the steps each demo expects. Run Lean in this tab and anything you type gets Lean's own answer. Desktop browsers"
+        onClick={askLive}
+        title={`The answers here were worked out in advance for the steps each demo expects. Run Lean in this tab and anything you type gets Lean's own answer. Desktop browsers${ISOLATED ? "" : " — the page reloads once to turn it on"}`}
       >
-        Check any tactic with real Lean (35 MB, once)
+        Check any tactic with real Lean ({size} MB, once)
       </button>
       <button
         type="button"

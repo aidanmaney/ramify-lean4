@@ -316,14 +316,16 @@ Data 106 KB → 181 KB gzipped (budget 2 MB). `publish.mjs` now also replays eac
 written solution **as text in the editor** and fails the build if it does not
 close.
 
-### Live Lean (opt-in, local only)
+### Live Lean (opt-in)
 
 **Run real Lean** (header) starts a Web Worker that downloads Lean compiled to
 WebAssembly and answers what the table lacks, AFTER the baked engine behind
 `answer` (`web/src/playgroundLive.ts`; the engine is `lean/PlaygroundLive.lean`,
 the baker's own stepping code; goals come back in full and the table grows).
-It needs cross-origin isolation (COOP/COEP) for threads; the downloads are
-kept in Cache Storage keyed on Last-Modified. Turning it on is the one opt-in
+It needs cross-origin isolation (COOP/COEP) for threads — see "Deploying live
+Lean to a static host" below for how a host with no headers gets it; the
+downloads are kept in Cache Storage (`ramify-live-v1`), keyed on the
+manifest's version (else Last-Modified). Turning it on is the one opt-in
 and there is no off: later visits start it by themselves (localStorage, or
 the files already in Cache Storage), the header button goes once Lean runs,
 and until the reader opts in an arrival notification offers it. Build and serve locally:
@@ -345,3 +347,59 @@ asks live Lean which of the baker's own candidates succeed there. The engine imp
 (`isModule := false`, so the file's own declarations stay public) and the
 download omits `.olean.private` (a two-line Lean patch skips a missing part):
 the identity check is what licenses that. docs/wasm-spike.md §6–7.
+
+#### Deploying live Lean to a static host
+
+GitHub Pages sends no COOP/COEP and will not reliably compress a `.wasm` or a
+`.tar`. The layout (one origin, two Pages sites, so no CORS and the main repo,
+which Lake clones on every install, never carries the binaries):
+
+```
+https://aidanmaney.github.io/ramify-lean4/playground.html   the page (+ coi-sw.js beside it)
+https://aidanmaney.github.io/ramify-live/                    package-live.mjs's folder (its own repo)
+```
+
+```bash
+node scripts/wasm/package-live.mjs [--from build-wasm/out/web] [--out build-wasm/out/deploy]
+cd web && node scripts/publish.mjs --playground ../demos/playground.txt --live-base /ramify-live/
+```
+
+- **Assets** (`package-live.mjs`): `worker.js` (scripts/wasm/playground-worker.js),
+  `live.js`, `live.worker.js`, `live.wasm.gz` (13.9 MB, from 68.9), `init.tar.gz`
+  (33.0 MB, from 87.5), `.nojekyll` and `manifest.json` `{version, download,
+  files: {name: {bytes, gzBytes}}}` — `version` a content hash, `download` what a
+  start fetches (47 MB). gzip -9; it fails if any file is over 50 MiB. The worker
+  reads the manifest, downloads the `.gz` forms with progress in compressed bytes
+  against `gzBytes`, keeps the COMPRESSED bytes in Cache Storage under
+  `<url>?v=<version>` (a new version evicts the old) and decompresses with
+  `DecompressionStream("gzip")` (skipped where the bytes are not gzip, i.e. a
+  server already decoded them). No manifest (serve-playground's `/live/`) = the
+  old uncompressed layout, unchanged.
+- **Isolation** (`web/public/coi-sw.js`, copied beside playground.html by
+  publish.mjs): a service worker that re-serves the PLAYGROUND navigation with
+  COOP `same-origin` + COEP `require-corp`, and every same-origin response with
+  CORP `same-origin` (other pages in its scope pass through untouched).
+  Registered ONLY on the reader's ask (the header button or the goal panel's
+  offer) where the page is not isolated already; then one reload, marked in
+  sessionStorage, and the page that comes back starts live Lean by itself. A
+  reader who never asks gets no service worker and no reload; where registration
+  fails the button says so in words. Later visits are controlled (isolated) and
+  start from Cache Storage as before; an automatic start never reloads.
+- **Workers**: a worker made from `/ramify-live/worker.js` is held to ITS OWN
+  response's headers (none on Pages) and lies outside the service worker's
+  scope, so it is blocked by COEP — measured. The page makes it from a BLOB that
+  `importScripts` the script, which inherits the page's isolation
+  (`crossOriginIsolated` true, SharedArrayBuffer present, measured), and the
+  worker does the same for Lean's pthread workers (`locateFile` of
+  `live.worker.js`).
+- **The base** is the build's: `--live-base URL` writes `<meta
+  name="ramify-live-base">` (default `live/`, empty = no live tier); `?live=`
+  still wins. Offered where a base is set AND the page is isolated or can
+  register a service worker, never on a coarse-pointer-only device or under the
+  playground's narrow breakpoint. The offer's size is the manifest's `download`.
+- **Measured** (2026-10-24, Chrome, a plain `python3 -m http.server` mirror of
+  that layout on 127.0.0.1): click → reload ≈ 20 ms; first start (localhost
+  download, unpack, start, import Init) ≈ 9 s to ready; reload from Cache
+  Storage ≈ 3.5 s to ready, no `.gz` requested. The Claude desktop app's browser
+  pane cannot register service workers at all (the script fetch never leaves it),
+  so test in a real browser.

@@ -1,7 +1,9 @@
 // The playground's live tier: one Web Worker = one wasm Lean (web/src/playgroundLive.ts).
 //
-//   {init: {base}}           fetch live.js/live.wasm/init.tar under `base`, unpack the
-//                            oleans into MEMFS, import Init once → {ready: {ms}}
+//   {init: {base}}           fetch live.js, live.wasm and init.tar under `base` (the
+//                            .gz forms where `manifest.json` lists them —
+//                            scripts/wasm/package-live.mjs), unpack the oleans into
+//                            MEMFS, import Init once → {ready: {ms}}
 //   {id, answer: json}       one tactic on one goal → {id, result}
 //
 // Lean runs on THIS thread (Emscripten's main thread), so MEMFS reads are local, not
@@ -9,10 +11,12 @@
 // (docs/wasm-spike.md). Progress goes back as {progress: {step, done, total}}.
 let ready = null;
 
-async function fetchWithProgress(url, step) {
+/** `total`: the manifest's size (compressed bytes, what arrives over the wire);
+ else the response's Content-Length, which a server may leave out. */
+async function fetchWithProgress(url, step, known) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  const total = Number(res.headers.get("content-length")) || undefined;
+  const total = known ?? (Number(res.headers.get("content-length")) || undefined);
   const reader = res.body.getReader();
   const parts = [];
   let done = 0, last = 0;
@@ -30,37 +34,87 @@ async function fetchWithProgress(url, step) {
   return buf;
 }
 
-/** The big downloads (init.tar, live.wasm) through Cache Storage, keyed by the
- server's Last-Modified (or ETag): a second visit, or a reload, reads them
- from disk instead of downloading again. Anything that fails here (no Cache
- Storage, a private window) falls back to a plain download. */
+/** Cache Storage for the big downloads: one name (the page probes it, playground.tsx
+ LIVE_CACHE), keys `<url>?v=<version>`. Storing a version evicts every other
+ version of the same file. Anything that fails here (no Cache Storage, a private
+ window, quota) falls back to a plain download. */
 const CACHE = "ramify-live-v1";
+const bare = (u) => u.split("?")[0];
+async function openCache() {
+  try {
+    return await caches.open(CACHE);
+  } catch {
+    return null;
+  }
+}
+async function cacheGet(cache, key) {
+  try {
+    const hit = cache && (await cache.match(key));
+    return hit ? new Uint8Array(await hit.arrayBuffer()) : null;
+  } catch {
+    return null;
+  }
+}
+async function cachePut(cache, key, buf) {
+  if (!cache) return;
+  try {
+    for (const old of await cache.keys()) if (bare(old.url) === bare(key) && old.url !== key) await cache.delete(old);
+    await cache.put(key, new Response(buf));
+  } catch {
+    /* quota: the next visit downloads again */
+  }
+}
+
+/** One file through the cache, keyed by `version`. */
+async function versioned(url, version, total, step, cachedStep) {
+  const cache = await openCache();
+  const key = `${url}?v=${encodeURIComponent(version)}`;
+  const hit = await cacheGet(cache, key);
+  if (hit) {
+    postMessage({ progress: { step: cachedStep } });
+    return hit;
+  }
+  const buf = await fetchWithProgress(url, step, total);
+  await cachePut(cache, key, buf);
+  return buf;
+}
+
+/** The OLD layout (serve-playground's /live/, no manifest): the version is the
+ server's Last-Modified (or ETag), read off a HEAD. */
 async function cachedBytes(url, step, cachedStep) {
-  let cache = null;
-  let key = null;
+  let v = "";
   try {
     const head = await fetch(url, { method: "HEAD" });
-    const v = head.headers.get("last-modified") ?? head.headers.get("etag") ?? "";
-    cache = await caches.open(CACHE);
-    key = `${url}?v=${encodeURIComponent(v)}`;
-    const hit = await cache.match(key);
-    if (hit) {
-      postMessage({ progress: { step: cachedStep } });
-      return new Uint8Array(await hit.arrayBuffer());
-    }
+    v = head.headers.get("last-modified") ?? head.headers.get("etag") ?? "";
   } catch {
-    cache = null;
+    /* the GET below says what is wrong */
   }
-  const buf = await fetchWithProgress(url, step);
-  if (cache && key)
-    try {
-      // the previous version of this file goes
-      for (const old of await cache.keys()) if (old.url.split("?")[0] === new URL(url, location.href).href) await cache.delete(old);
-      await cache.put(key, new Response(buf));
-    } catch {
-      /* quota: the next visit downloads again */
-    }
-  return buf;
+  return versioned(url, v, undefined, step, cachedStep);
+}
+
+/** gzip → bytes. A server that already decoded it (Content-Encoding: gzip on a
+ .gz) hands over the plain bytes, so the magic number decides. */
+async function gunzip(buf) {
+  if (buf[0] !== 0x1f || buf[1] !== 0x8b) return buf;
+  const out = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(out).arrayBuffer());
+}
+
+/** `manifest.json` (scripts/wasm/package-live.mjs), or null: the old layout. */
+async function manifestAt(base) {
+  try {
+    const r = await fetch(`${base}manifest.json`, { cache: "no-cache" });
+    if (!r.ok) return null;
+    const m = await r.json();
+    return m && typeof m.version === "string" && m.files ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A same-origin script as a blob URL that imports it. */
+function blobScript(url) {
+  return URL.createObjectURL(new Blob([`importScripts(${JSON.stringify(url)});`], { type: "text/javascript" }));
 }
 
 /** ustar → MEMFS under `root`; canOwn keeps views of `buf`, not copies. */
@@ -100,12 +154,28 @@ function untarInto(FS, buf, root) {
 
 async function init(base) {
   const t0 = performance.now();
-  const wasm = await cachedBytes(`${base}live.wasm`, "downloading Lean", "loading Lean from this browser");
-  const tar = await cachedBytes(`${base}init.tar`, "downloading Lean's library", "loading Lean's library from this browser");
+  const m = await manifestAt(base);
+  let wasm, tar;
+  if (m) {
+    // the deployed layout: pre-gzipped files (a static host will not compress a
+    // .wasm or a .tar), progress against the manifest's compressed sizes
+    const gz = (f) => m.files[f]?.gzBytes;
+    const wasmGz = await versioned(`${base}live.wasm.gz`, m.version, gz("live.wasm.gz"), "downloading Lean", "loading Lean from this browser");
+    const tarGz = await versioned(`${base}init.tar.gz`, m.version, gz("init.tar.gz"), "downloading Lean's library", "loading Lean's library from this browser");
+    postMessage({ progress: { step: "unpacking Lean" } });
+    [wasm, tar] = await Promise.all([gunzip(wasmGz), gunzip(tarGz)]);
+  } else {
+    wasm = await cachedBytes(`${base}live.wasm`, "downloading Lean", "loading Lean from this browser");
+    tar = await cachedBytes(`${base}init.tar`, "downloading Lean's library", "loading Lean's library from this browser");
+  }
   postMessage({ progress: { step: "starting Lean" } });
   await new Promise((ok, bad) => {
     self.Module = {
-      locateFile: (f) => base + f,
+      // Lean's threads are workers too. One made from a URL takes ITS OWN
+      // response's headers (no COEP on a static host: blocked), so each is a
+      // blob that imports the script — a blob worker inherits its creator's
+      // isolation, as this one inherits the page's (playgroundLive.ts).
+      locateFile: (f) => (f.endsWith(".worker.js") ? blobScript(base + f) : base + f),
       wasmBinary: wasm.buffer, // from the cache above, not a second fetch
       mainScriptUrlOrBlob: `${base}live.js`, // pthread workers import live.js, not this file
       preRun: [() => { untarInto(self.Module.FS, tar, "/lib/lean"); }],

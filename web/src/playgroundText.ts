@@ -327,8 +327,8 @@ export async function replayText(
   answer: Engine,
   doc: string,
   cache: PlayCache,
-  /** Whether this page can offer live Lean (cross-origin isolated). Off — on
-   GitHub Pages — no message points the reader at a button that is not there. */
+  /** Whether this page can offer live Lean (playground.tsx LIVE_OFFERED). Off,
+   no message points the reader at a button that is not there. */
   liveOffered = true,
 ): Promise<TextRun> {
   const runIt = (what: string) => (liveOffered ? ` Run real Lean (top right) to check ${what}.` : "");

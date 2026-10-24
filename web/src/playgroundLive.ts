@@ -9,8 +9,11 @@
 //
 // The worker (`live/worker.js`) speaks two messages: `{init}` → `{ready}` once
 // the wasm runtime is up and `Init` is imported, and `{id, answer: request}` →
-// `{id, result}`. Threads need cross-origin isolation (COOP/COEP headers);
-// without it the tier says so instead of trying.
+// `{id, result}`. Threads need cross-origin isolation (COOP/COEP). A server
+// that sends the headers (serve-playground.mjs) gives it at once; a static host
+// (GitHub Pages) cannot, so on the reader's ask the page installs a service
+// worker that adds them (`web/public/coi-sw.js`) and reloads once
+// (`isolateAndReload`); without either the tier says so instead of trying.
 import {
   NOT_BAKED,
   goalKey,
@@ -80,14 +83,16 @@ export class LiveLean {
   start(): void {
     if (this.worker || this.status.kind === "ready") return;
     if (!globalThis.crossOriginIsolated) {
-      this.set({
-        kind: "failed",
-        why: "this page is not cross-origin isolated, which live Lean's threads need — serve it with COOP/COEP headers",
-      });
+      this.set({ kind: "failed", why: NOT_ISOLATED });
       return;
     }
     this.set({ kind: "loading", step: "starting" });
-    const w = new Worker(`${this.base}worker.js`);
+    // A worker made from a URL is held to ITS OWN response's headers, and a
+    // static host's carry no COEP (and the assets live outside the service
+    // worker's scope): a blob that imports the script inherits this page's
+    // isolation instead. The script's own fetches are same-origin.
+    const src = `importScripts(${JSON.stringify(`${this.base}worker.js`)});`;
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
     this.worker = w;
     w.onmessage = ({ data }) => {
       if (data.progress) this.set({ kind: "loading", ...data.progress });
@@ -101,6 +106,16 @@ export class LiveLean {
     };
     w.onerror = (e) => this.fail(e.message || "the worker stopped");
     w.postMessage({ init: { base: this.base } });
+  }
+
+  /** A step shown before the worker exists (installing the isolation). */
+  preparing(step: string): void {
+    this.set({ kind: "loading", step });
+  }
+
+  /** Live Lean cannot run in this tab, and why — in the reader's words. */
+  refuse(why: string): void {
+    this.set({ kind: "failed", why });
   }
 
   /** Stop Lean and free its memory; the next `start` loads it again (from
@@ -140,6 +155,79 @@ export class LiveLean {
     });
   }
 }
+
+const NOT_ISOLATED = "this tab is not cross-origin isolated, which live Lean's threads need";
+
+/** Where the page reads the live tier's base: `publish.mjs --live-base URL`
+ writes `<meta name="ramify-live-base">` into playground.html; `?live=` wins
+ (a dev server); else `live/` (serve-playground's layout). An empty value is
+ "no live tier". */
+export function liveBase(query: URLSearchParams): string | null {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="ramify-live-base"]');
+  const b = query.get("live") ?? meta?.content ?? "live/";
+  return b.trim() === "" ? null : b;
+}
+
+/** A desktop browser that can be isolated: already (COOP/COEP from the server)
+ or by the service worker. A phone is never offered the download. */
+export function liveRunnable(): boolean {
+  if (globalThis.crossOriginIsolated) return true;
+  let phone = false;
+  try {
+    phone = window.matchMedia("(pointer: coarse)").matches && !window.matchMedia("(pointer: fine)").matches;
+  } catch {
+    /* no matchMedia: not a phone we can tell */
+  }
+  return !phone && "serviceWorker" in navigator && window.isSecureContext;
+}
+
+/** The reload `isolateAndReload` makes is marked, so the page that comes back
+ starts live Lean by itself (sessionStorage: this tab only). */
+const RELOAD_MARK = "ramify.playground.liveIsolate";
+
+/** On load: was this page reloaded to isolate it? Reads and clears the mark. */
+export function takeIsolationMark(): boolean {
+  try {
+    const had = sessionStorage.getItem(RELOAD_MARK) === "1";
+    sessionStorage.removeItem(RELOAD_MARK);
+    return had;
+  } catch {
+    return false;
+  }
+}
+
+/** Install the isolation service worker (`coi-sw.js`, beside the page, so its
+ scope covers it) and reload once, marked. Resolves only on failure, with the
+ reason in the reader's words. */
+export async function isolateAndReload(live: LiveLean, swUrl = "coi-sw.js"): Promise<void> {
+  live.preparing("preparing this tab");
+  try {
+    sessionStorage.setItem(RELOAD_MARK, "1");
+  } catch {
+    live.refuse("this browser keeps no session storage here (a private window?), which the reload that turns live Lean on needs");
+    return;
+  }
+  try {
+    await navigator.serviceWorker.register(swUrl);
+    await navigator.serviceWorker.ready;
+  } catch {
+    try {
+      sessionStorage.removeItem(RELOAD_MARK);
+    } catch {
+      /* nothing to clear */
+    }
+    live.refuse(
+      "this browser would not let the page install the small service worker live Lean needs (a private window often blocks it)",
+    );
+    return;
+  }
+  location.reload();
+}
+
+/** The reload came back and the page is still not isolated (the service worker
+ did not take the page, or the browser ignores the headers it adds). */
+export const STILL_NOT_ISOLATED =
+  "the page came back without cross-origin isolation, which live Lean's threads need — this browser may not allow it here";
 
 type Code = TaggedText<BakedTag>;
 const rebase = (c: Code, base: number): Code =>
