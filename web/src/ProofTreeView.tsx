@@ -18,6 +18,10 @@ import {
   LINE_H,
   NODE_FONT_PX,
   NODE_PAD,
+  CLOSED_MARK_H,
+  caseBadgeLifts,
+  CLOSED_MARK_W,
+  closedMarkX,
   NODE_PAD_Y,
   ARROW_GAP,
   LINK_MARK_OFF,
@@ -103,11 +107,13 @@ import {
   expandMoveLabel,
   inlineMoveLabel,
   lintMoveLabel,
+  NAME_CASES_MOVE_LABEL,
   pillMove,
   renameMoveLabel,
   traceMoveLabel,
 } from "./moves";
 import { stepGoalsAfter } from "./paperproof";
+import { nameCasesRewrite, splitStepAt } from "./nameCasesMove";
 import {
   PLACEHOLDER,
   calcOpenSlots,
@@ -286,10 +292,12 @@ import {
   CHROME_TEXT_SM,
   CHROME_TEXT,
   FOCUS_INK,
+  CLOSED_FILL,
   LIGHTBULB_INK,
   LIGHTBULB_AUTOFIX_INK,
 } from "./theme";
 import { HypBlock } from "./hypBlock";
+import { daggerSvg } from "./dagger";
 import {
   COMPACT_LEFT,
   EDIT_STROKE,
@@ -471,6 +479,11 @@ const RAIL_CLEAR = 140;
 /** How far LEFT of both boxes the provenance connector's vertical run sits,
  so the elbow clears the node it leaves and the node it arrives at. */
 const ORIGIN_CHANNEL = 12;
+
+/** The in-place editor's completion list: its largest box (the editor's
+ foreignObject grows to hold it — Gecko clips what spills out). */
+const COMPLETION_MAX_W = 520;
+const COMPLETION_MAX_H = 168;
 
 export interface ProofTreeViewProps {
   proof: Proof;
@@ -741,6 +754,45 @@ export interface ProofTreeViewProps {
     comments?: CommentMode;
   };
 
+  /** THE TARGET GOAL — the open goal the host is addressing (the
+      playground: the goal its goal panel shows and its caret writes under).
+      That goal's box wears a plain 2px border in `--ptw-focus`. Paint only:
+      no relayout, nothing reserved, and nothing drawn when the id is not on
+      screen. Absent or null, no box is marked. */
+  targetGoalId?: string | null;
+
+  /** CLOSING MARKS — every tactic that closes its goal (no goal after it in
+      the base tree; not a failed or recovered step, not `sorry`) wears a
+      tombstone `∎` after its last line in `--ptw-closed`. The layout reserves
+      its width (`closedMarks`, layout.ts), so it overlaps nothing. Off by
+      default: the widget, the viewer and the harness are unchanged. */
+  closedMarks?: boolean;
+
+  /** Draw the ACCENT on the node the cursor (`highlightPos`) or a click
+      picked. Default true. False keeps everything else the cursor does —
+      following, peeking — and drops only the accent stroke (the playground:
+      once the proof is complete, the last step need not stay lit). A
+      marquee selection still accents. */
+  cursorAccent?: boolean;
+
+  /** The zoom to START at (and to return to on a proof with no stash). The
+      rail's steps are ×1.25. Default 1. */
+  initialZoom?: number;
+
+  /** OFF-MAP goals — open goals the host cannot answer past (the
+      playground: a state the bake never explored). Each is drawn DASHED and
+      at `STUB_OPACITY`, the stub idiom, and its `<title>` says why. Paint
+      only: no relayout, nothing reserved. Default empty. */
+  offMapGoalIds?: ReadonlySet<string>;
+  /** The `<title>` line an off-map goal carries. */
+  offMapNote?: string;
+
+  /** Draw the SIGNATURE HEADER from `declHeader`. Default true. False (the
+      playground, whose editor already shows the signature) keeps the header
+      text for what reads it — the status readout still omits the name — and
+      draws no header band. */
+  signatureHeader?: boolean;
+
   /** Told the three `initialView` values whenever one changes, so a caller
       can keep a shareable link in step (the viewer writes its URL hash). */
   onViewState?: (s: {
@@ -752,8 +804,17 @@ export interface ProofTreeViewProps {
 
 /** No setting set: every row reads the preset / the view's own default. */
 const NO_SETTINGS: ViewSettings = {};
+const NO_IDS: ReadonlySet<string> = new Set();
 /** How long the Width slider must rest before its value is written. */
 const PERSIST_SETTLE_MS = 500;
+
+/** A key pressed while TYPING somewhere — a text field, or a contenteditable
+ such as the playground's CodeMirror — belongs to that surface, never to the
+ tree's document-wide keys (`<`/`>`, `?`, ⌘Z): `\<` is how ⟨ is typed. */
+function typingIn(target: EventTarget | null): boolean {
+  const t = target as HTMLElement | null;
+  return !!t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
+}
 
 export default function ProofTreeView({
   proof,
@@ -769,7 +830,7 @@ export default function ProofTreeView({
   linkTint = false,
   onPopoutEdit,
   highlightPos,
-  declHeader,
+  declHeader: declHeaderProp,
   declHeaderStart,
   declHeaderNameStop,
   declHeaderSigStop,
@@ -815,7 +876,15 @@ export default function ProofTreeView({
   restart,
   initialView,
   onViewState,
+  targetGoalId = null,
+  closedMarks = false,
+  cursorAccent = true,
+  initialZoom = 1,
+  offMapGoalIds = NO_IDS,
+  offMapNote = "",
+  signatureHeader = true,
 }: ProofTreeViewProps) {
+  const declHeader = signatureHeader ? declHeaderProp : undefined;
   const preset = PRESETS[experience];
 
   // THE APPEARANCE (appearance.ts): the setting, with the Layout panel's
@@ -893,6 +962,7 @@ export default function ProofTreeView({
     polish: !!onPolish && polishReady,
     restart: !!restart,
     play: !!onTryTactic,
+    appearance: !!onSettingChange,
   };
 
   const forcedReflow =
@@ -1005,7 +1075,7 @@ export default function ProofTreeView({
   const [gallery, setGallery] = useOverride(viewSettings.gallery ?? false);
   const [pick, setPick] = useState<Record<string, number>>({});
 
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(initialZoom);
 
   const [elideCuts, setElideCuts] = useState<ElideCut[]>([]);
 
@@ -1434,8 +1504,7 @@ export default function ProofTreeView({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "?" && e.key !== "F1") return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+      if (typingIn(e.target)) return;
       e.preventDefault();
       setHelpOpen((v) => !v);
     };
@@ -1450,8 +1519,7 @@ export default function ProofTreeView({
     if (onUndo) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+      if (typingIn(e.target)) return;
       toastRef.current("Undo needs the Ramify extension");
     };
     document.addEventListener("keydown", onKey);
@@ -1462,8 +1530,7 @@ export default function ProofTreeView({
     if (!onUndo) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+      if (typingIn(e.target)) return;
       e.preventDefault();
       // No toast: the editor's own change is the feedback, and this side
       // cannot know whether anything was undoable.
@@ -2149,6 +2216,28 @@ export default function ProofTreeView({
     return out;
   }, [treeNodes, chainOpen]);
 
+  // THE CLOSING MARKS (`closedMarks`): decided on the BASE tree — a cut or
+  // an open trace (whose leaves hang off a closing `simp`) must not change
+  // which steps closed their goal — and handed to the layout, which reserves
+  // the `∎` and stamps `closedMark` for the paint.
+  const closedIds = useMemo(() => {
+    if (!closedMarks) return undefined;
+    const parents = new Set(baseNodes.flatMap((n) => n.parents.map((p) => p.id)));
+    const out = new Set<string>();
+    for (const n of baseNodes)
+      if (
+        n.type === "tactic" &&
+        !parents.has(n.id) &&
+        !n.recovered &&
+        !n.synthetic &&
+        !n.traceLeaf &&
+        !n.ledger &&
+        !/^(sorry|admit)\b/.test(n.label.trim())
+      )
+        out.add(n.id);
+    return out;
+  }, [closedMarks, baseNodes]);
+
   const engine = useMemo(
     () =>
       createLayoutEngine(narratedNodes, {
@@ -2163,6 +2252,7 @@ export default function ProofTreeView({
               : true,
         commentsHidden: commentsOff,
         commentsExpanded,
+        closedMarks: closedIds,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -2173,6 +2263,7 @@ export default function ProofTreeView({
       commentMode,
       commentsOff,
       commentsExpanded,
+      closedIds,
     ],
   );
 
@@ -2307,7 +2398,7 @@ export default function ProofTreeView({
       }
       setChainOpen(nextChain);
     } else {
-      setZoom(1);
+      setZoom(initialZoom);
       setFocusId(null);
       setPathId(null);
       setElideCuts([]);
@@ -2573,6 +2664,12 @@ export default function ProofTreeView({
     [engine, only, focusSet, compact, sideBySide, hideAll, aside],
   );
 
+  // Wide's sibling case badges on one line (`caseBadgeLifts`, paint only).
+  const caseLifts = useMemo(
+    () => (compact ? null : caseBadgeLifts(nodes)),
+    [compact, nodes],
+  );
+
   // The goals that currently wear a `+N`: read off the STAMP `applyElisions`
   // left on the drawn goal, so a fold PEEKED open (its cut filtered out of
   // `treeNodes`, so no stamp) shows `−` again with no second piece of state
@@ -2825,6 +2922,28 @@ export default function ProofTreeView({
     return out;
   }, [rewriteCtx]);
 
+  // NAME THE CASES (a Quick Fix): a `cases`/`induction` written without
+  // `with` whose cases carry inaccessible hypotheses (`h✝`). The text is the
+  // tactic's own verbatim source, the arms the elaborator's step
+  // (nameCasesMove.ts); offered without a round trip, checked on the click
+  // through the same proposal pill as every rewrite.
+  const nameCaseFixes = useMemo(() => {
+    const out = new Map<string, Rewrite>();
+    const ctx = rewriteCtx;
+    if (!ctx) return out;
+    for (const d of ctx.nodes) {
+      if (d.type !== "tactic" || !d.position || d.traceLeaf || d.recovered)
+        continue;
+      const step = splitStepAt(proof.steps, d.position.start);
+      if (!step) continue;
+      const src = ctx.src(d.position.start);
+      if (!src) continue;
+      const r = nameCasesRewrite(d.id, src, step, d.branch, proof.steps);
+      if (r) out.set(d.id, r);
+    }
+    return out;
+  }, [rewriteCtx, proof.steps]);
+
   // D4 — the lints in hand for this proof, as the reader asked for them. The
   // SIBLING wins over the field (the `deleteSlots` rule) and the option gates
   // both: with the option off there are no lint diagnostics at all, so the
@@ -3001,8 +3120,10 @@ export default function ProofTreeView({
     for (const [id, m] of renames)
       for (const rn of m.values())
         out.push({ nodeId: id, kind: "rename", title: rn.rewrite.title, rewrite: rn.rewrite });
+    for (const [id, r] of nameCaseFixes)
+      out.push({ nodeId: id, kind: "namecases", title: r.title, rewrite: r });
     return out;
-  }, [onPropose, rewrites, lintFixes, renames]);
+  }, [onPropose, rewrites, lintFixes, renames, nameCaseFixes]);
 
   // The proof as the agent is shown it: the tree's own outline, one line per
   // node in DFS order. Not the file's bytes — this side does not hold them —
@@ -3614,10 +3735,16 @@ export default function ProofTreeView({
   // the same way; the anchoring each already did is unchanged.
   const upToEnabled = !!highlightPos;
   const polishShown = !!onPolish && polishReady;
+  // `lints` can act only where someone answers it: the widget's `onLints`
+  // (it asks the server), or lints already in hand (the harness's NDJSON, a
+  // viewer payload baked with them). Elsewhere (the playground, a viewer
+  // payload without lints) the row is NOT DRAWN and never lights Reading.
+  const lintsShown =
+    !!onLints || (lints?.length ?? 0) > 0 || (proof.lints?.length ?? 0) > 0;
   const readingState: ReadingState = {
     brief,
     merge: combine,
-    lints: lintsOn,
+    lints: lintsOn && lintsShown,
     hypOrigins: hypOriginsOn,
     upToCursor: upToCursor && upToEnabled,
     polish: polishOn && polishShown,
@@ -4782,7 +4909,7 @@ export default function ProofTreeView({
   // and `cantor · 12 steps` beneath it said the name twice. Where there is no
   // header (the harness's NDJSON carries none) the name stays.
   const statusName = useMemo(() => {
-    if (declHeader) return "";
+    if (declHeaderProp) return "";
     const words = declHead.trim().split(/\s+/);
     const raw =
       words.length > 1
@@ -4791,7 +4918,7 @@ export default function ProofTreeView({
           ? proof.proofId
           : "";
     return clipText(raw, STATUS_NAME_MAX);
-  }, [declHeader, declHead, proof.proofId]);
+  }, [declHeaderProp, declHead, proof.proofId]);
 
   // `N open`: the first open goal BELOW THE CURSOR in the base tree's order
   // (the cursor being the node the view is accenting), wrapping to the first.
@@ -4940,8 +5067,7 @@ export default function ProofTreeView({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "<" && e.key !== ">") return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+      if (typingIn(e.target)) return;
       e.preventDefault();
       tourStepRef.current(e.key === ">" ? 1 : -1);
     };
@@ -5007,10 +5133,37 @@ export default function ProofTreeView({
     };
     setZoom(n);
   };
+  // The rail's zoom anchors on the TREE'S VISIBLE INK, not the frame's
+  // centre: horizontally the middle of the ink in view, vertically its top
+  // where the top is in view (else the middle). Anchored on the frame's
+  // centre, a small tree near the top-left was pushed off the top by a zoom
+  // in (the playground's audit). Pinch / ⌘-wheel keep the pointer.
   const zoomBy = (factor: number) => {
     const el = scrollRef.current;
     if (!el) return;
-    zoomAt(zoom * factor, el.clientWidth / 2, el.clientHeight / 2);
+    const vw = el.clientWidth;
+    const vh = el.clientHeight;
+    let px = vw / 2;
+    let py = vh / 2;
+    if (nodes.length > 0) {
+      const sx = (x: number) => (MARGIN.left + PAD_X + x) * zoom - el.scrollLeft;
+      const sy = (y: number) => (MARGIN.top + PAD_Y + y) * zoom - el.scrollTop;
+      const leftOf = (n: (typeof nodes)[number]) => n.x - n.data.w / 2;
+      const l = Math.max(0, sx(Math.min(...nodes.map(leftOf))));
+      const r = Math.min(
+        vw,
+        sx(Math.max(...nodes.map((n) => leftOf(n) + n.data.w))),
+      );
+      const top = sy(Math.min(...nodes.map((n) => n.y - inkExtent(n.data).up)));
+      const t = Math.max(0, top);
+      const b = Math.min(
+        vh,
+        sy(Math.max(...nodes.map((n) => n.y + inkExtent(n.data).down))),
+      );
+      if (r > l) px = (l + r) / 2;
+      if (b > t) py = top >= 0 ? top : (t + b) / 2;
+    }
+    zoomAt(zoom * factor, px, py);
   };
 
   const fitWidth = () => {
@@ -6503,6 +6656,7 @@ export default function ProofTreeView({
         // Key-gated rows are HIDDEN, not disabled, where the gate is shut
         // (2026-09-22): no companion, no key, or the setting off.
         polishShown={polishShown}
+        lintsShown={lintsShown}
         polishWhy={
           commentMode === "narrate"
             ? "Rewrite each generated line into fluent English through the extension; the author's own comments are never sent (≈)"
@@ -6727,7 +6881,12 @@ export default function ProofTreeView({
                 (link.target.data.h + bandTopH(link.target.data)) / 2;
 
               const contentTop = bandTop + bandTopH(link.target.data);
-              const endY = bandTop - ARROW_GAP;
+              // A wide case badge raised to its siblings' line
+              // (`caseBadgeLifts`): the link ends above it, not through it.
+              const endY =
+                bandTop -
+                (caseLifts?.get(link.target.data.id) ?? 0) -
+                ARROW_GAP;
 
               const sLeft = link.source.x - link.source.data.w / 2;
               const tLeft = link.target.x - link.target.data.w / 2;
@@ -6907,9 +7066,18 @@ export default function ProofTreeView({
               const labelTop = contentTop + hypH;
               const style = NODE_STYLES[type] ?? NODE_STYLES.default;
 
-              const isCursor = id === cursorNodeId;
+              const isCursor = cursorAccent && id === cursorNodeId;
 
               const accent = isCursor || !!selection?.has(id);
+              // The host's TARGET goal (`targetGoalId`): a plain focus-ink
+              // border, paint only. A marquee selection keeps its accent.
+              const isTarget =
+                type === "goal" &&
+                id === targetGoalId &&
+                !selection?.has(id);
+              // OFF-MAP (`offMapGoalIds`): dashed and at `STUB_OPACITY`,
+              // the stub idiom; paint only.
+              const offMap = type === "goal" && offMapGoalIds.has(id);
 
               const isCombined = !!node.data.elidedCut?.combined;
               // A GHOST: `isGhostNode`'s own question, asked of the drawn
@@ -6989,7 +7157,10 @@ export default function ProofTreeView({
                   ? diagInkOf(diagSev)
                   : null;
               const boxSw =
-                accent || recovered === "failed" || (classic && diagSev === 1)
+                accent ||
+                isTarget ||
+                recovered === "failed" ||
+                (classic && diagSev === 1)
                   ? 2
                   : 1.5;
               const recoveredStroke =
@@ -7106,6 +7277,8 @@ export default function ProofTreeView({
                   : !!onTrace);
               // D5 — a context line here has a Mathlib-style name to offer.
               const renamable = (renames.get(id)?.size ?? 0) > 0;
+              // An unnamed split whose cases can be named.
+              const nameable = nameCaseFixes.get(id);
               // THE LIGHTBULB (batch 4): lit where any Quick Fix or Refactor
               // row is on offer — the same booleans those rows are built
               // from, so the bulb and the section cannot disagree. D6's "ask
@@ -7114,6 +7287,7 @@ export default function ProofTreeView({
               const fixable =
                 !proposing &&
                 (!!lintable ||
+                  !!nameable ||
                   expandable ||
                   renamable ||
                   inlinable ||
@@ -7248,6 +7422,7 @@ export default function ProofTreeView({
               // on anything quoted from the source: the label, the tactic
               // lists, the arm patterns.
               const nodeTooltip = [
+                offMap ? offMapNote : "",
                 node.data.proseLabel ? node.data.label : "",
                 leafTip,
                 subtermTip,
@@ -7979,6 +8154,29 @@ export default function ProofTreeView({
                           },
                         ]
                       : [];
+                  // NAME THE CASES — the split rewritten with `with` and one
+                  // `| tag names => sorry` per case; a proposal, like the lint.
+                  case "namecases":
+                    return nameable && !proposing
+                      ? [
+                          {
+                            id: k,
+                            ...MOVE_LOOK.namecases,
+                            label: NAME_CASES_MOVE_LABEL,
+                            title: `${NAME_CASES_MOVE_LABEL} — ${CHECKED_FIRST}`,
+                            onClick: () => proposeRewrite(id, nameable),
+                            onHover: (on: boolean) =>
+                              onPreviewRange?.(
+                                on
+                                  ? {
+                                      start: nameable.edits[0].range.start,
+                                      stop: nameable.edits[0].range.end,
+                                    }
+                                  : null,
+                              ),
+                          },
+                        ]
+                      : [];
                   // THE LIGHTBULB (batch 4): not a move of its own but the
                   // door to the menu's Quick Fix and Refactor sections —
                   // VS Code's `lightbulb`, `lightbulb-autofix` in its own ink
@@ -8151,6 +8349,13 @@ export default function ProofTreeView({
                       !caps.restructure,
                       restructureWhy,
                     );
+                  case "namecases":
+                    return avail(
+                      k,
+                      !!nameable && !proposing,
+                      !caps.restructure,
+                      restructureWhy,
+                    );
                   case "fix":
                     return avail(k, fixable, !caps.restructure, restructureWhy);
                   case "delete":
@@ -8230,7 +8435,9 @@ export default function ProofTreeView({
                       deletePreview.anchor !== id &&
                       deletePreview.ids.has(id))
                       ? 0.35
-                      : undefined
+                      : offMap
+                        ? STUB_OPACITY
+                        : undefined
                   }
                   onClick={clickable && !isEditing ? handleClick : undefined}
                   // Right-click: the move menu at the pointer (VS Code's
@@ -8342,11 +8549,16 @@ export default function ProofTreeView({
                             (node.data.parents.length > 0 ? COMMENT_INDENT : 0)
                           : -node.data.caseW / 2
                       }
-                      y={boxTop - topH + CASE_LINE_H / 2}
+                      y={
+                        boxTop -
+                        topH +
+                        CASE_LINE_H / 2 -
+                        (caseLifts?.get(id) ?? 0)
+                      }
                       dy="0.32em"
                     >
                       <tspan opacity={DIM_OPACITY}>{CASE_PREFIX}</tspan>
-                      {node.data.caseLabel}
+                      {daggerSvg(node.data.caseLabel, CASE_FONT_PX)}
                     </text>
                   )}
 
@@ -8393,7 +8605,7 @@ export default function ProofTreeView({
                           }
                           dy="0.32em"
                         >
-                          {line.text}
+                          {daggerSvg(line.text, COMMENT_FONT_PX)}
                         </tspan>
                       ))}
                     </text>
@@ -8529,7 +8741,9 @@ export default function ProofTreeView({
                     rx={boxRx}
 
                     stroke={
-                      accent
+                      isTarget
+                        ? FOCUS_INK
+                        : accent
                         ? SEQ_STROKE
                         : (recoveredStroke ??
                           classicDiagStroke ??
@@ -8544,7 +8758,7 @@ export default function ProofTreeView({
                     // the click and the `<title>` still land on it.
                     fill={nodeBoxFill(node.data)}
                     strokeDasharray={
-                      recoveredStroke || isMarker ? "3 3" : undefined
+                      recoveredStroke || isMarker || offMap ? "3 3" : undefined
                     }
 
                     visibility={hideForEdit ? "hidden" : undefined}
@@ -9031,14 +9245,36 @@ export default function ProofTreeView({
                           line.text.startsWith(TURNSTILE) ? (
                             <>
                               <tspan fill={TURNSTILE_FILL}>{TURNSTILE.trim()}</tspan>
-                              {line.text.slice(TURNSTILE.trim().length)}
+                              {daggerSvg(
+                                line.text.slice(TURNSTILE.trim().length),
+                                NODE_FONT_PX,
+                              )}
                             </>
                           ) : (
-                            line.text
+                            daggerSvg(line.text, NODE_FONT_PX)
                           )}
                         </tspan>
                       ))}
                     </text>
+                  )}
+
+                  {/* THE CLOSING MARK: `∎` after the last line, where the
+                      layout reserved it (`closedMarkX`, the measurer's own
+                      arithmetic). */}
+                  {node.data.closedMark && !hideForEdit && (
+                    <rect
+                      data-ptw-closed-mark=""
+                      x={-w / 2 + NODE_PAD + closedMarkX(lines)}
+                      y={
+                        labelTop +
+                        (lines.length - 0.5) * LINE_H -
+                        CLOSED_MARK_H / 2
+                      }
+                      width={CLOSED_MARK_W}
+                      height={CLOSED_MARK_H}
+                      fill={CLOSED_FILL}
+                      style={{ pointerEvents: "none" }}
+                    />
                   )}
 
                   {briefPreviewOn &&
@@ -9531,6 +9767,7 @@ export default function ProofTreeView({
                   proposal.kind === "expand" ||
                   proposal.kind === "rename" ||
                   proposal.kind === "lint" ||
+                  proposal.kind === "namecases" ||
                   proposal.kind === "collapse"
                     ? ""
                     : ` → ${shorter}`;
@@ -9866,14 +10103,32 @@ export default function ProofTreeView({
                   emptyHint !== null &&
                   measureText(emptyHint, editFontPx, !!editing.comment) <=
                     fw - 2 * NODE_PAD;
+                // Gecko CLIPS a foreignObject's content to its box whatever
+                // its `overflow` (Blink and WebKit paint the spill), so the
+                // box grows to hold what hangs below the editor — the
+                // completion list, the empty-commit label — and lets clicks
+                // through where it is empty (pointer-events on the editor's
+                // own div only).
+                const boxW = fw + EDIT_STROKE;
+                const boxH = fh + EDIT_STROKE;
+                const spillH = completion
+                  ? EDIT_STROKE + 2 + COMPLETION_MAX_H + 12
+                  : emptyHint !== null && !hintFits
+                    ? LINE_H + 12
+                    : 0;
+                const spillW = completion
+                  ? Math.max(0, COMPLETION_MAX_W + 12 - boxW)
+                  : emptyHint !== null && !hintFits
+                    ? Math.max(0, measureText(emptyHint, COMMENT_FONT_PX, true) + 24 - boxW)
+                    : 0;
                 return (
                   <g transform={`translate(${en.x},${en.y})`}>
                     <foreignObject
                       x={-w / 2 - EDIT_STROKE / 2}
                       y={overlayY - EDIT_STROKE / 2}
-                      width={fw + EDIT_STROKE}
-                      height={fh + EDIT_STROKE}
-                      style={{ overflow: "visible" }}
+                      width={boxW + spillW}
+                      height={boxH + spillH}
+                      style={{ overflow: "visible", pointerEvents: "none" }}
                     >
                       <div
                         data-ptw-edit=""
@@ -9881,8 +10136,9 @@ export default function ProofTreeView({
                         onClick={(e) => e.stopPropagation()}
                         style={{
                           position: "relative",
-                          width: "100%",
-                          height: "100%",
+                          width: boxW,
+                          height: boxH,
+                          pointerEvents: "auto",
                         }}
                       >
                         {editHighlight && (
@@ -10050,6 +10306,14 @@ export default function ProofTreeView({
 
                           onBlur={() => {
                             if (editingRef.current?.calcStage) return;
+                            // The playground is a page in a browser: a blur
+                            // because the WINDOW went to the back (the reader
+                            // left to look something up) is not a commit — the
+                            // editor keeps its text and the browser hands it
+                            // focus back on return. The widget's webview loses
+                            // window focus to its own source editor, where the
+                            // blur has always meant commit, so it keeps that.
+                            if (caps.play && !document.hasFocus()) return;
                             commitEdit();
                           }}
                           style={{
@@ -10160,8 +10424,8 @@ export default function ProofTreeView({
                               top: fh + EDIT_STROKE + 2,
                               left: EDIT_STROKE / 2,
                               minWidth: Math.min(fw, 240),
-                              maxWidth: 520,
-                              maxHeight: 168,
+                              maxWidth: COMPLETION_MAX_W,
+                              maxHeight: COMPLETION_MAX_H,
                               overflowY: "auto",
                               zIndex: 2,
 

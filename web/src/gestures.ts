@@ -83,6 +83,10 @@ export type Caps = {
   /** The playground: a tactic typed under an open goal is answered from the
    baked table (`onTryTactic`); nothing is written. */
   play: boolean;
+  /** The host can WRITE `ramify.appearance` (`onSettingChange`: the widget
+   with its companion, the harness). Without it the Layout panel's
+   `classic look` row is not drawn (the static viewer, the playground). */
+  appearance: boolean;
 };
 
 export type GestureTarget =
@@ -284,7 +288,7 @@ export const GESTURES: Gesture[] = [
   {
     target: "background",
     input: "`+` on an open goal",
-    says: "to try a tactic there — Lean's answer was computed in advance",
+    says: "to write a tactic there — Lean answers it (computed in advance, or live)",
     needs: "play",
   },
 

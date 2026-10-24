@@ -14,6 +14,7 @@ import type { HypLine } from "./types";
 import type { HypMarkStyle } from "./theme";
 import { HYP_MARK } from "./gestures";
 import { isInaccessibleName } from "./proofToTree";
+import { daggerHtml, daggerSvg } from "./dagger";
 import {
   HYP_LIT_FILL,
   HYP_NAME_FILL,
@@ -37,7 +38,7 @@ const HYP_LIT_PAD = 2;
  only takes the inaccessible style. */
 function hypLineText(line: HypLine, dimmed: boolean): ReactNode {
   const cut = line.cont ? -1 : line.text.indexOf(" : ");
-  if (cut <= 0) return line.text;
+  if (cut <= 0) return daggerSvg(line.text, HYP_FONT_PX);
   const names = line.text.slice(0, cut).split(" ");
   return (
     <>
@@ -51,11 +52,11 @@ function hypLineText(line: HypLine, dimmed: boolean): ReactNode {
             fontStyle={gone ? "italic" : undefined}
             opacity={gone ? 0.7 : undefined}
           >
-            {i > 0 ? ` ${n}` : n}
+            {daggerSvg(i > 0 ? ` ${n}` : n, HYP_FONT_PX)}
           </tspan>
         );
       })}
-      {line.text.slice(cut)}
+      {daggerSvg(line.text.slice(cut), HYP_FONT_PX)}
     </>
   );
 }
@@ -222,7 +223,7 @@ export function HypBlock({
                   marginTop: line.sep ? HYP_SEP_H : 0,
                 }}
               >
-                {taggedLines[j] ?? line.text}
+                {taggedLines[j] ?? daggerHtml(line.text)}
               </div>
             ))}
           </div>

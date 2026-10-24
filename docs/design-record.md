@@ -5113,3 +5113,135 @@ bar; tactic-label tokens (colours) for typed steps; the proof's source text
 copied; a site-wide popup table; a smarter error filter (three quarters of
 the steps are errors, mostly "no binders"/unknown identifier — ~half the
 bytes); the live WASM tier behind `answer` (spike, "Levelling up").
+
+## 2026-10-05 — The playground's live tier, its source pane, and naming the cases (v2)
+
+**Live Lean, built on a Mac with no 32-bit stage.** The spike's recipe needs an
+i386 Linux stage0; Docker runs `linux/386` on Apple silicon at ~1/65 of native
+(a 10⁷-iteration Python loop: 62.8 s against 0.97 s; Rosetta does not translate
+32-bit code). Instead: the C is pointer-size independent (stage0's committed C
+is the proof), so the NATIVE v4.32.2 `lean -c -Dcompiler.postponeCompile=false`
+writes it for all 2270 Init/Std/Lean modules against the toolchain's own oleans
+(4 min, 10 cores; `leanir` emits nothing — it compiles only what was postponed);
+emcc compiles it (2.5 min); a static wasm `lean` CLI under node compiles `Init`
+in dependency order into 32-bit oleans (`gen-oleans.mjs`, 601 modules, 13 min).
+Two more Lean patches (`recipe/lean4-v4.32.2-mac.patch`): `get_loaded_libs` has
+no `dl_iterate_phdr` in wasm (writing an olean calls it; the spike never wrote
+one in wasm) — a wasm module reports itself as one image at base 0; and the
+node shell mounts `/Users`, `/private`. `scripts/wasm/build-mac.sh` is the whole
+recipe.
+
+**One stepping code path.** `lean/PlaygroundLive.lean` holds `ppKey`, `runOne`,
+`usedHyps`, `normTac`, `mayBeProof` (restated, Paperproof-free) and the engine;
+the baker imports it (bakes byte-identical before/after, 12/12). The engine
+returns goals in full (`goalToInteractive`, tags stripped) so the page's table
+grows; the page keys them by its own `goalKey`, NOT `ppGoal` (which wraps long
+hypotheses differently: 206 false mismatches when compared). `live-check.mjs`:
+every baked step through an engine — 36,179/36,179 identical, native AND wasm
+(median 2–3 ms, max 211 ms).
+
+**Dropping `.olean.private` (275 → 88 MB).** Importing `Init` at the EXPORTED
+level (as a `module` importer does) needs no private parts. Two traps, both
+measured: (1) `importModules (level := .exported)` makes the env a `module`, so
+the theorem file's own declarations become private (`_private.0.and_swap'` —
+"no theorem"; 372 hints naming `_private.0.double.eq_def`) — fixed by calling
+`importModulesCore` + `finalizeImport (isModule := false)`; (2)
+`readModuleDataPartsOfMod` opens every part unconditionally — a 2-line patch
+skips a missing private part. With both, 36,179/36,179 identical
+(`RAMIFY_EXPORTED=1` forces the level natively so the check runs without the
+patch).
+
+**The source pane (owner's choice B, then A for the bar, A for multi-line).**
+The text is the truth; the tree, the bar's successor (the goal panel) and the
+Quick Fix all write it; every edit replays. Lean's block rules by line and
+column (`playgroundText.ts` header), each pinned by `probe playground`. Undo is
+the editor's. Firefox (Zen) clips HTML that overflows an SVG `foreignObject`
+whatever its `overflow`, so the in-place editor's completion list rendered as an
+empty box there: the `foreignObject` now grows to hold the list (and the
+below-box hint), with `pointer-events` on the editor's own div only.
+
+**Naming the cases.** `cases h` leaves `h✝`; learners do not know `rename_i`
+or `rcases`. `nameCases.ts` writes the `cases h with | inl h => sorry | …`
+skeleton (dagger dropped, `a✝` → `ih`, taken names primed, `sorry` bodies per
+the standing rule); the goal panel teaches it where it applies, the tree offers
+it as a Quick Fix (`namecases`, codicon `tag`, verified through the pill), and
+a `sorry` alternative's first tactic goes on its own line two columns in from
+its `|`. The baker guides the FIRST `cases h` of a proposition per path and
+makes `rename_i` free (every split: AppendLength unfinished at 19 min; every
+FIRST split, data included: RewriteChain 144 → 4,891 states, data 730 KB gz;
+propositions only: 181 KB gz). The fix is offered only while NO case has a
+step of its own (`nameCasesRewrite(…, steps)`, both wires and the panel): over
+a split already followed by bullets, the skeleton's `sorry`s would close the
+cases and leave those bullets with no goals. Through the real server
+(`probe lsp lean/ProofTreeNameCases.lean … --namecases`): `cases` on `∨` and
+`∧`, `induction` on `Nat` and `List` — all four `benign`, 9–15 ms.
+
+**Live goals tagged, live hints.** The popup bake moved to
+`lean/ProofTreeBake.lean` (no Paperproof, no `import Lean`), imported by the
+harvest, the baker and the engine — bakes byte-identical after the move. The
+engine returns each answer's popups; the page re-bases their indices onto the
+table's. The baker's candidate generators moved into `PlaygroundLive.lean`
+too, and `{hints: true}` runs them on a live goal (12 ms natively). Lake
+prefixes the package's C symbols (`lp_ppharness_…`, `initialize_ppharness_…`):
+the engine build copies Lake's own C for both modules rather than running
+`lean -c` by hand, which linked with an undefined symbol.
+
+## 2026-10-23 — The playground's taste pass, and shipping the baked tier as 1.0
+
+An audit of the deployed playground in Chrome (dark and light, 1456 px), then
+of the local v2, then the fixes, each checked in the live page after a
+rebuild. What changed and why:
+
+- **Opens wide, `diff` context, one zoom step in** (`initialZoom` 1.25). Outline
+  pinned a 200 px tree in the corner of a 1400 px pane, and `all` repeated
+  `n : Nat` in every box. The reader's layout/context/comments ride the hash
+  (`#t=X&layout=…`, viewerLink.ts vocabulary, only non-defaults written). The
+  rail's zoom now anchors on the tree's visible ink, not the frame centre
+  (the root slid off the top; measured 167.6–167.9 px across three zooms).
+- **The target goal** (the goal panel's) wears a plain 2 px `--ptw-focus`
+  border (`targetGoalId`; a glow was tried and was too loud).
+- **A finished proof** — `closedMarks`: a drawn ∎ (`CLOSED_MARK_W/H`, the
+  glyph inked half-height in the code font) after every closing tactic,
+  measured by `closedMarkX`; the theorem strip gets a `--ptw-closed` edge and
+  "Proved"; no step stays accented. PROVED requires no error in the text: a
+  stray step after the last goal ("No goals to be proved.") showed "Proved"
+  over a file Lean rejects — the goal panel now names that line instead.
+- **✝** is a narrow cross that reads as "t" at 12 px, with or without
+  JuliaMono: drawn raised (dy −0.35em), at 0.62em, dimmed (dagger.tsx), the
+  measurer charging `DAGGER_SCALE`; names and types, plain and baked paths.
+  The widget keeps the full glyph (`setSmallDaggers(false)`: the infoview's
+  own InteractiveCode is not ours to restyle).
+- **Hints are ranked** (`rankedCompletions`): "Closes this goal", "Makes
+  progress", "Other moves" dimmed. On SquareParity's `inr` the closing move was
+  last of nine, after `exfalso` (which leaves `⊢ False`).
+- **Off-map goals** (frontier, live Lean off) draw dashed at `STUB_OPACITY`
+  (`offMapGoalIds`); the goal panel says "Not explored in this demo — Undo to
+  go back". A caption under the box would sit in the chips lane.
+- **The docstring popover** (docTip.tsx `DocCard`, one place for every
+  surface): type, first paragraph with code spans, "More…"; capped and kept in
+  the viewport; `Z.hover` below the node menu; never opened by right-click.
+- **Geometry**: an OPEN goal reserves `CORNER_W` (it widened 110 → 155 px when
+  its first step arrived; fingerprint moved for `openblock.lean#2` only);
+  sibling case badges in a wide layer share one baseline (`caseBadgeLifts`,
+  paint only, overlap probe sweeps it).
+- **Chrome**: quiet text buttons, one primary "Get Ramify for VS Code", the
+  theme as a `color-mode` icon (the word named the other theme), no
+  underlines; the live-tier notice moved from over the tree to one line in the
+  goal panel; the tree pane's signature header is hidden where the editor
+  shows the source (`signatureHeader={false}`); Context rows wear icons;
+  `classic look` needs `caps.appearance`; the `lints` row needs something that
+  lints (Reading was lit by an option that could not act).
+- **Editor**: an electric `·` (re-indents to the sibling bullet's column —
+  a bullet meant to nest snaps back too; Tab fixes it); the lint tooltip uses
+  the hover tokens; the goal panel shows the caret line's diagnostic;
+  mis-indented continuation lines are explained (`swallowed`) instead of
+  quoted as one unknown tactic.
+
+**Shipping (owner, 2026-10-23): the BAKED tier as 1.0; the live tier waits.**
+Live Lean's threads need cross-origin isolation and GitHub Pages cannot send
+COOP/COEP, so `LIVE_OFFERED = crossOriginIsolated` gates the header button,
+the goal-panel offer and every "Run real Lean (top right)" sentence
+(`replayText(…, liveOffered)`). Locally (`serve-playground.mjs`) all of it
+stays. A narrow screen gets one line, "Best on a desktop". Before the live
+tier ships: a COOP/COEP service worker, and hosting for `live.wasm` (69 MB)
+and `init.tar` (87 MB), which do not belong in the repository.

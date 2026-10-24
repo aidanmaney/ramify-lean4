@@ -8,7 +8,7 @@
 //   npm run probe -- lsp <file.lean> <line> <col> [--json] [--cf=0] [--all]
 //                                        [--trace] [--rewrite] [--collapse]
 //                                        [--rename] [--direct] [--lint]
-//                                        [--edits] [--wire]
+//                                        [--edits] [--wire] [--namecases]
 //
 // `--wire` (with `--all`) is ONE HARVEST, BOTH WIRES' gate: it also runs the
 // CLI (`ppharness --widget-data`) over the same file and compares, for every
@@ -89,6 +89,8 @@ import {
   traceIndex,
   AUTOMATION_CANDIDATES,
   renamesFor,
+  isUnnamedSplit,
+  nameCasesRewrite,
   contradictionShapes,
   lintsByNode,
   lintFix,
@@ -452,7 +454,7 @@ if (flags.all) {
       console.log(`deleted \`${firstInline.name}\` without substituting → ${v.verdict}: ${v.message}`);
     }
   }
-  if (flags.rename || flags.direct) {
+  if (flags.rename || flags.direct || flags.namecases) {
     const payload = res.r;
     const nodes = proofToTree(payload, { slots: payload.deleteSlots });
     const byStart = new Map(
@@ -480,6 +482,37 @@ if (flags.all) {
       });
       return { ...r, ms: Date.now() - t };
     };
+
+    if (flags.namecases) {
+      // Every split written without alternatives: the Quick Fix's own rewrite
+      // (nameCasesMove.ts, as the view builds it) through the real
+      // `checkRewrite`. The fixture is lean/ProofTreeNameCases.lean.
+      const rows = [];
+      for (const st of payload.steps ?? []) {
+        if (!isUnnamedSplit(st.tacticString)) continue;
+        const src = ctx.src(st.position.start);
+        if (!src) continue;
+        const branch = (payload.branches ?? []).find(
+          (b) => b.stepStart.line === st.position.start.line && b.stepStart.character === st.position.start.character,
+        );
+        const rw = nameCasesRewrite("n", src, st, branch, payload.steps);
+        if (!rw) continue;
+        const v = await check(rw.edits);
+        rows.push({
+          at: `${st.position.start.line}:${st.position.start.character}`,
+          split: st.tacticString,
+          writes: rw.edits[0].newText.replace(/\n\s*/g, " / "),
+          verdict: v.verdict,
+          ms: v.ms,
+          msg: (v.message ?? "").slice(0, 40),
+        });
+      }
+      console.table(rows);
+      if (rows.length === 0 || rows.some((r) => r.verdict !== "benign")) {
+        console.log("FAIL: a Name the cases rewrite is not benign (or none was offered)");
+        process.exitCode = 1;
+      }
+    }
 
     if (flags.rename) {
       // One row per HYPOTHESIS, not per drawn line: the same `h` is in every

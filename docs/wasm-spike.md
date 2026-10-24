@@ -295,3 +295,68 @@ The total is **~1.5–2 weeks**.
 Not recommended: the stock `lean.js` CLI (22 s per call from proxied file I/O and
 the import each run), or the upstream `MAIN_MODULE` link (V8 refuses to
 instantiate it).
+
+## 6. Building on a Mac, with no 32-bit stage (2026-10-05)
+
+The recipe above needs a 32-bit x86 Linux to run the i386 stage0. On an
+Apple-silicon Mac that is emulation: Docker runs `linux/386` at about 1/65 of
+native speed (Rosetta does not translate 32-bit code), which would turn the
+build into days. `scripts/wasm/build-mac.sh` removes that stage:
+
+- **The C does not care about pointer size, but the oleans do.** An olean is a
+  memory image, so it carries the writer's pointer size; the generated C uses
+  `lean.h`'s macros and `sizeof` and is the same at 32 and 64 bits (stage0's
+  committed C is how Lean itself relies on that). So the native 64-bit
+  v4.32.2 `lean -c` writes the C for every `Init`/`Std`/`Lean` module against
+  the toolchain's own oleans (2270 modules, 4 min on 10 cores;
+  `-Dcompiler.postponeCompile=false`, since `leanir` only compiles what was
+  postponed and the release library was not built that way).
+- **The wasm `lean` writes its own oleans.** The C++ is configured straight from
+  `src/` for Emscripten (`STAGE=1`, `MMAP=OFF`), every module's C goes through
+  `emcc` (2.5 min), and a static `lean.js` CLI runs under node to compile
+  `Init` in dependency order (`gen-oleans.mjs`). The playground imports only
+  `Init`, so `Std` and `Lean` need code but no oleans.
+- Two more Lean patches (`recipe/lean4-v4.32.2-mac.patch`): writing an olean
+  calls `get_loaded_libs`, which on Linux uses `dl_iterate_phdr` — absent in
+  wasm, and never hit by the spike, which wrote no oleans in wasm — so a wasm
+  module reports itself as one image at base 0; and the node shell mounts
+  `/Users` and `/private` beside `/home` and `/tmp`.
+
+The engine is `lean/PlaygroundLive.lean`, which the baker now imports — the
+spike's copies of `runOne`/`ppKey`/`usedHyps` are gone, and the bakes are
+byte-identical before and after (12/12). It returns each goal in full (a
+`BakedGoal` with plain code: the infoview's `goalToInteractive`, tags stripped)
+so the page can grow its table, keyed by the page's own `goalKey` (which wraps
+differently from `ppGoal`; comparing `ppGoal` reported 206 false mismatches).
+`web/scripts/live-check.mjs` replays every baked step through an engine:
+natively, **4508/4508 identical** (median 1 ms).
+
+## 7. Without `.olean.private` (2026-10-05)
+
+The engine imports `Init` at the **exported** level — what a `module` importer
+sees — so the download leaves out every `.olean.private` (187 of the 275 MB):
+
+| | before | after |
+|---|---|---|
+| `init.tar` raw / gz / br | 275 / 117 / 86 MB | **87.5 / 33.0 / 27.1 MB** |
+| `live.wasm` raw / gz / br | 68.8 / 13.9 / 8.4 MB | unchanged |
+| download, br (gz) | ≈ 94 (131) MB | **≈ 35.5 (47) MB** |
+| wasm heap / node RSS | 375 / 981 MB | **181 / 593 MB** |
+| `import Init` | 0.31 s | 0.16 s (51,355 constants, against 65,273) |
+| `live-check`, 12 theorems | 36,179/36,179 | **36,179/36,179** |
+
+Two things had to be right, both measured:
+
+1. `importModules (level := .exported)` makes the environment a `module`, and
+   then the theorem file's own `theorem`/`def`s are PRIVATE: `find?` misses the
+   theorem, and Lean's hints name `_private.0.double.eq_def` (372 mismatches).
+   The engine calls `importModulesCore` + `finalizeImport (isModule := false)`.
+2. `readModuleDataPartsOfMod` opens all three parts unconditionally; the mac
+   patch returns `#[main, server]` when the private part is absent.
+
+`RAMIFY_EXPORTED=1` forces the exported level in the NATIVE engine (which has
+the private files), so the identity check runs before any wasm build. In the
+browser the downloads are kept in Cache Storage (`ramify-live-v1`, keyed on
+Last-Modified): measured on localhost the first start is ~0.8 s and a cached
+start ~3 s (reading 156 MB back costs more than a localhost fetch); over a real
+network the cache is the difference between ~35 MB and nothing.

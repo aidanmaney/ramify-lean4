@@ -320,7 +320,7 @@ function indexPage(entries, hero, pg = null) {
   // The playground leads the cards: the one page where the reader writes.
   const play = pg
     ? `<h2>Try it</h2>\n<div class="grid">\n<div class="card">
-<a class="go" href="playground.html" title="Pick a small theorem and type tactics under its goals: the tree grows, and every goal and error is what Lean said (computed in advance — no server)"><span class="thumb">${pic("playground", "The playground: a proof tree growing as tactics are typed")}</span>
+<a class="go" href="playground.html" title="Pick a small theorem and type tactics under its goals: the tree grows, and every goal and error is what Lean said (computed in advance, or by Lean in your browser — no server)"><span class="thumb">${pic("playground", "The playground: a proof tree growing as tactics are typed")}</span>
 <span class="cap"><span class="t">Playground — type a tactic, watch the tree grow</span><span class="n">${pg.count} theorems</span></span></a>
 </div>\n</div>\n`
     : "";
@@ -419,6 +419,34 @@ const kb = (n) => `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
 
 // ------------------------------------------------------------------ bundle
 
+/** One entry, code-split: `{entry, files: name → text}`, names content-hashed
+ (`<prefix>-<hash>.js`, chunks `<prefix>-chunk-<hash>.js`). */
+async function bundleSplit(entry, prefix) {
+  const req = createRequire(path.join(web, "package.json"));
+  const { build } = await import(pathToFileURL(req.resolve("esbuild")).href);
+  const res = await build({
+    entryPoints: [path.join(web, entry)],
+    bundle: true,
+    splitting: true,
+    format: "esm",
+    outdir: path.join(web, ".split-out"),
+    entryNames: `${prefix}-[hash]`,
+    chunkNames: `${prefix}-chunk-[hash]`,
+    jsx: "automatic",
+    minify: true,
+    write: false,
+    metafile: true,
+    target: "es2022",
+    define: { "process.env.NODE_ENV": '"production"' },
+    logLevel: "warning",
+  });
+  const files = new Map(res.outputFiles.map((f) => [path.basename(f.path), f.text]));
+  const [entryOut, meta] = Object.entries(res.metafile.outputs).find(([, v]) => v.entryPoint);
+  // what the page loads up front: the entry and the chunks it imports statically
+  const eager = new Set([path.basename(entryOut), ...meta.imports.filter((i) => i.kind === "import-statement").map((i) => path.basename(i.path))]);
+  return { entry: path.basename(entryOut), files, eager };
+}
+
 async function bundleViewer(entry = "src/viewerMain.tsx") {
   const req = createRequire(path.join(web, "package.json"));
   const { build } = await import(pathToFileURL(req.resolve("esbuild")).href);
@@ -506,6 +534,27 @@ async function replaySolution(lib, bake, source) {
   return built.closed ? null : `${built.open.length} goal(s) left open`;
 }
 
+/** The solution as the EDITOR reads it (playgroundText.ts): the file's own
+ proof body, indentation, bullets and all, under the page's header line,
+ replayed through the baked table alone. Null when it closes, else why. */
+async function replaySolutionText(lib, bake, source) {
+  const at = source.indexOf(":= by");
+  const body = source
+    .slice(at + 5)
+    .split("\n")
+    .slice(1)
+    .filter((l) => !/^\s*$/.test(l));
+  const header = `theorem ${bake.theorem} : ${bake.statement} := by`;
+  const doc = [header, ...body].join("\n");
+  const t = lib.loadTable(lib.checkBake(bake));
+  const answer = lib.makeAnswer([lib.bakedEngine(t)]);
+  const run = await lib.replayText(t, answer, doc, new Map());
+  const built = lib.buildProof(t, run.attempts, bake.theorem);
+  if (built.closed) return null;
+  const notes = run.editorDiagnostics.filter((d) => d.severity <= 2).map((d) => `line ${d.range.start.line}: ${d.message.split("\n")[0]}`);
+  return `${built.open.length} goal(s) left open${notes.length ? ` (${notes.join("; ")})` : ""}`;
+}
+
 /** `--playground LIST`: every theorem's bake → `<out>/playground/`, its index,
  the page and its bundle. Returns what the index card needs. */
 async function publishPlayground(o) {
@@ -529,12 +578,16 @@ async function publishPlayground(o) {
     if (bake.playgroundVersion !== PLAYGROUND_VERSION)
       throw new Error(`${name}: bake format ${bake.playgroundVersion}, this script writes ${PLAYGROUND_VERSION}`);
     const source = fs.readFileSync(file, "utf8");
-    const broken = await replaySolution(lib, bake, source);
+    const broken =
+      (await replaySolution(lib, bake, source)) ??
+      (await replaySolutionText(lib, bake, source).then((why) => why && `as text in the editor: ${why}`));
     if (broken) throw new Error(`${name}: its own solution does not replay in the page — ${broken}`);
     const doc = fileDoc(source);
     const title = doc?.title ?? bake.theorem;
     const blurb = doc?.blurb ?? "";
-    const json = JSON.stringify({ ...bake, title, blurb, file: path.relative(repo, file).split(path.sep).join("/") });
+    // `source`: the file's text, which the opt-in live Lean elaborates (helper
+    // `def`s and the theorem) before it answers a tactic the bake lacks
+    const json = JSON.stringify({ ...bake, title, blurb, file: path.relative(repo, file).split(path.sep).join("/"), source });
     fs.writeFileSync(path.join(dir, `${name}.json`), json);
     const z = gz(json);
     dataGz += z;
@@ -551,12 +604,14 @@ async function publishPlayground(o) {
   const keep = new Set([...theorems.map((t) => `${t.name}.json`), "index.json"]);
   for (const f of fs.readdirSync(dir)) if (!keep.has(f)) fs.rmSync(path.join(dir, f));
 
-  const js = await bundleViewer("src/playgroundMain.tsx");
-  const hash = crypto.createHash("sha256").update(js).digest("hex").slice(0, 10);
-  const jsName = `playground-${hash}.js`;
+  // SPLIT: what the page loads lazily (vim mode) is its own chunk sharing the
+  // page's CodeMirror (two copies of @codemirror/state do not interoperate)
+  const parts = await bundleSplit("src/playgroundMain.tsx", "playground");
+  const jsName = parts.entry;
+  const js = parts.files.get(jsName);
   for (const f of fs.readdirSync(o.out))
-    if (/^playground-[0-9a-f]+\.js$/.test(f) && f !== jsName) fs.rmSync(path.join(o.out, f));
-  fs.writeFileSync(path.join(o.out, jsName), js);
+    if (/^playground-(chunk-)?[0-9A-Za-z]+\.js$/.test(f) && !parts.files.has(f)) fs.rmSync(path.join(o.out, f));
+  for (const [name, text] of parts.files) fs.writeFileSync(path.join(o.out, name), text);
   fs.copyFileSync(path.join(web, "public/favicon.svg"), path.join(o.out, "favicon.svg"));
   fs.writeFileSync(
     path.join(o.out, "playground.html"),
@@ -566,10 +621,12 @@ async function publishPlayground(o) {
       description: "Type Lean tactics and watch the proof tree grow — every answer computed by Lean in advance.",
     }),
   );
-  const jsGz = gz(js);
+  const jsGz = [...parts.eager].reduce((n, f) => n + gz(parts.files.get(f)), 0);
   console.log(`\nplayground: ${theorems.length} theorems`);
   for (const r of rows) console.log(r);
-  console.log(`  data, gzipped: ${kb(dataGz)} (budget ${kb(PLAYGROUND_BUDGET)});  ${jsName} ${kb(Buffer.byteLength(js))}, gz ${kb(jsGz)};  total gz ${kb(dataGz + jsGz)}`);
+  console.log(`  data, gzipped: ${kb(dataGz)} (budget ${kb(PLAYGROUND_BUDGET)});  ${jsName} + ${parts.eager.size - 1} shared chunk(s), gz ${kb(jsGz)};  total gz ${kb(dataGz + jsGz)}`);
+  for (const [name, text] of parts.files)
+    if (!parts.eager.has(name)) console.log(`  ${name} (loaded on demand: vim mode) gz ${kb(gz(text))}`);
   if (dataGz > PLAYGROUND_BUDGET)
     throw new Error(`the playground's data is ${kb(dataGz)} gzipped, over the ${kb(PLAYGROUND_BUDGET)} budget — lower a theorem's @depth or drop @try lines`);
   return { count: theorems.length, dataGz };

@@ -17,7 +17,9 @@
 //                                      extension is the product; dark falls back
 //                                      to light), else the hero file's viewer
 //
-// Needs Playwright (`npm i -D playwright`, or NODE_PATH pointing at an install);
+// Needs Playwright (`npm i -D playwright`, or NODE_PATH pointing at an install;
+// `playwright-core` will do with CHROME=<path to a Chrome binary>, which then
+// draws the pictures — no browser download);
 // the index works without the pictures — each card falls back to its title.
 import fs from "node:fs";
 import http from "node:http";
@@ -59,6 +61,11 @@ async function loadPlaywright() {
   const paths = [web, ...(process.env.NODE_PATH ?? "").split(path.delimiter).filter(Boolean)];
   try {
     return await import(pathToFileURL(req.resolve("playwright", { paths })).href);
+  } catch {
+    /* try the library alone (it brings no browser: CHROME names one) */
+  }
+  try {
+    return await import(pathToFileURL(req.resolve("playwright-core", { paths })).href);
   } catch {
     throw new Error("Playwright not found: `npm i -D playwright`, or set NODE_PATH to an install");
   }
@@ -151,22 +158,25 @@ async function treeShot(page, url, out) {
   await webp(page, await page.screenshot({ clip }), CARD_W, out);
 }
 
-/** The playground's card: the page itself, a few tactics into a proof, typed
- through its own input (so the picture is what a visitor gets). */
-const PLAYGROUND_SCRIPT = ["intro n", "induction n", "rfl", "rename_i k ih", "rw [double]"];
+/** The playground's card: the page itself with a proof under way in its
+ source pane — seeded through the page's own per-theorem text (the key its
+ editor keeps), so the picture is the page replaying real text, not a mock. */
+const PLAYGROUND_BODY = ["  intro n", "  induction n with", "  | zero => rfl", "  | succ k ih =>", "    rw [double]", "    omega"];
 async function playgroundShot(page, url, out) {
-  // narrow, so the card (~320 css px) is readable: the phone layout
-  await page.setViewportSize({ width: 560, height: 720 });
+  await page.setViewportSize({ width: 900, height: 640 });
   await page.goto(url);
   await page.waitForSelector("[data-ptw-scroll] svg");
-  const input = 'input[aria-label="A tactic for this goal"]';
-  for (const t of PLAYGROUND_SCRIPT) {
-    await page.fill(input, t);
-    await page.click("button[type=submit]");
-    await page.waitForTimeout(500);
-  }
-  await page.fill(input, "omega");
-  await page.waitForTimeout(1200);
+  await page.evaluate(async (body) => {
+    const name = new URLSearchParams(location.hash.slice(1)).get("t");
+    const b = await (await fetch(`playground/${encodeURIComponent(name)}.json`)).json();
+    localStorage.setItem(
+      `ramify.playground.doc.${name}`,
+      [`theorem ${b.theorem} : ${b.statement} := by`, ...body].join("\n"),
+    );
+  }, PLAYGROUND_BODY);
+  await page.reload();
+  await page.waitForSelector("[data-ptw-scroll] svg");
+  await page.waitForTimeout(1500);
   await webp(page, await page.screenshot(), CARD_W, out);
 }
 
@@ -199,7 +209,7 @@ const { hero, cards, playground } = JSON.parse(fs.readFileSync(path.join(site, "
 fs.mkdirSync(path.join(site, "thumbs"), { recursive: true });
 const server = await serve(site);
 const base = `http://127.0.0.1:${server.address().port}/`;
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
 try {
   for (const theme of THEMES) {
     const ctx = await browser.newContext({ deviceScaleFactor: 2, colorScheme: theme });

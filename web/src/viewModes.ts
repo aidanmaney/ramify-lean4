@@ -39,6 +39,8 @@ export const HYP_MODES: Record<
     name: string;
     glyph: string;
     glyphPx?: number;
+    /** The Context panel row's icon (icons.ts `context.*`). */
+    icon: CodiconName;
     next: HypMode;
     title: string;
   }
@@ -47,6 +49,7 @@ export const HYP_MODES: Record<
     name: "used",
     glyph: "▸",
     glyphPx: 19,
+    icon: ICON["context.used"],
     next: "new",
     title: "Context: used — only hypotheses the rest of the proof below actually uses",
   },
@@ -58,6 +61,7 @@ export const HYP_MODES: Record<
     // one character off the other three.
     name: "intro",
     glyph: "λ",
+    icon: ICON["context.intro"],
     next: "delta",
     title:
       "Context: intro — only hypotheses the preceding tactic introduced as a binding",
@@ -65,12 +69,14 @@ export const HYP_MODES: Record<
   delta: {
     name: "diff",
     glyph: "Δ",
+    icon: ICON["context.diff"],
     next: "full",
     title: "Context: diff — hypotheses this goal introduced, plus any its tactic uses",
   },
   full: {
     name: "all",
     glyph: "∀",
+    icon: ICON["context.all"],
     next: "used",
     title: "Context: all — every hypothesis in scope",
   },

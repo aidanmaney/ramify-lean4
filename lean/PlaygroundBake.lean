@@ -1,5 +1,6 @@
 import Lean
 import ProofTreeHarvest
+import PlaygroundLive
 /-!
 # PlaygroundBake — the baked playground's table, computed by real Lean
 
@@ -53,18 +54,6 @@ open Lean Elab Meta Term
 
 namespace Playground
 
-/-- Every goal is tried against these, plus what the goal and the file add.
-Three are deliberate mistakes a learner makes (`exact rfl` on a goal that is
-not a reflexivity, `exfalso` too early, `contradiction` with nothing to
-contradict); Lean's own error is what the page shows for them. -/
-def coreCandidates : Array String := #[
-  "simp", "simp_all", "omega", "rfl", "decide", "constructor", "left", "right",
-  "assumption", "contradiction", "trivial", "exfalso", "exact rfl"
-]
-
-/-- An `intro`-family step: free under the depth cap. -/
-def isIntro (tac : String) : Bool := tac == "intro" || tac.startsWith "intro "
-
 structure GoalRec where
   id     : Nat
   depth  : Nat
@@ -87,133 +76,6 @@ structure Bake where
   steps   : Array (Nat × String × Outcome) := #[]
   /-- Goals whose tagged print disagreed with Paperproof's plain print. -/
   printMismatch : Nat := 0
-
-/-- The infoview's own print of a goal (`ppGoal`: grouping, `n✝`, the case
-tag) — the state's KEY. -/
-def ppKey (g : MVarId) : MetaM String := return toString (← ppGoal g)
-
-def hasSorryOrMVar (g : MVarId) : MetaM Bool := g.withContext do
-  let t ← instantiateMVars (← g.getType)
-  if t.hasSorry || t.hasExprMVar then return true
-  for d in ← getLCtx do
-    if d.isImplementationDetail then continue
-    let ty ← instantiateMVars d.type
-    if ty.hasSorry || ty.hasExprMVar then return true
-  return false
-
-/-- Lean's own name for an unused binder: the statement's, else `h` for a
-proof and `x` for data, made unused against the context AND the names picked
-before it (so `intro a b` and `intro a; intro b` name alike). -/
-def pickName (lctx : LocalContext) (taken : Array Name) (n : Name) (isProp : Bool) : Name :=
-  let base := if n.isAnonymous || n.hasMacroScopes then (if isProp then `h else `x)
-    else n.eraseMacroScopes
-  let lctx := taken.foldl (fun l t => l.mkLocalDecl ⟨t⟩ t (mkConst ``True)) lctx
-  lctx.getUnusedName base
-
-/-- The canonical `intro`s: every prefix (≤ 6) of the binder telescope. -/
-def canonicalIntros (g : MVarId) : MetaM (Array String) := g.withContext do
-  let lctx ← getLCtx
-  let t ← instantiateMVars (← g.getType)
-  let names ← forallBoundedTelescope t (some 6) fun xs _ => do
-    let mut taken : Array Name := #[]
-    for x in xs do
-      let d ← x.fvarId!.getDecl
-      taken := taken.push (pickName lctx taken d.userName (← isProp d.type))
-    return taken
-  let mut out := #[]
-  for k in [1:names.size + 1] do
-    out := out.push ("intro " ++ " ".intercalate ((names.extract 0 k).toList.map toString))
-  return out
-
-/-- The canonical `rename_i`s: the inaccessibles' own base names (`n✝` → `n`,
-`left✝` → `left`), an inaccessible `a✝` proof as `ih`; every suffix ≤ 3. -/
-def canonicalRenames (g : MVarId) : MetaM (Array String) := g.withContext do
-  let lctx ← getLCtx
-  let inacc := (lctx.foldl (init := #[]) fun acc d =>
-    if d.isImplementationDetail then acc
-    else if d.userName.hasMacroScopes || d.userName.isInaccessibleUserName then acc.push d
-    else acc)
-  if inacc.isEmpty then return #[]
-  let mut taken : Array Name := #[]
-  for d in inacc do
-    let base := d.userName.eraseMacroScopes
-    let isP ← isProp d.type
-    let base := if isP && base == `a then `ih else base
-    -- the context WITHOUT the inaccessibles, so `n✝` may become `n`
-    let free := inacc.foldl (fun l e => l.erase e.fvarId) lctx
-    taken := taken.push (pickName free taken base isP)
-  let mut out := #[]
-  for k in [1:(min 3 taken.size) + 1] do
-    let names := taken.extract (taken.size - k) taken.size
-    out := out.push ("rename_i " ++ " ".intercalate (names.toList.map toString))
-  return out
-
-/-- Moves read off the goal's own hypotheses (accessible ones only). -/
-def hypCandidates (g : MVarId) : MetaM (Array String) := g.withContext do
-  let mut out := #[]
-  for d in ← getLCtx do
-    if d.isImplementationDetail || d.userName.hasMacroScopes then continue
-    let n := d.userName.toString
-    let ty ← whnfR (← instantiateMVars d.type)
-    if ← isProp d.type then
-      out := out ++ #[s!"exact {n}", s!"simp at {n}"]
-      if ty.isForall then out := out.push s!"apply {n}"
-      match ty.getAppFn.constName? with
-      | some ``Eq | some ``Iff => out := out ++ #[s!"rw [{n}]", s!"rw [← {n}]"]
-      | some ``And | some ``Or | some ``Exists | some ``False => out := out.push s!"cases {n}"
-      | _ => pure ()
-    else
-      match ty.getAppFn.constName? with
-      | some ``Nat | some ``List => out := out ++ #[s!"induction {n}", s!"cases {n}"]
-      | _ => pure ()
-  return out
-
-/-- Run one tactic on one goal from the current state: the goals it leaves, or
-the first error. Errors come three ways and all three are caught: a thrown
-exception, a LOGGED error with recovery, and a runtime exception (heartbeats,
-recursion — `tryCatchRuntimeEx`; plain `try` misses them). -/
-def runOne (g : MVarId) (tstx : Syntax) : TermElabM (Except String (List MVarId)) :=
-  tryCatchRuntimeEx
-    (withCurrHeartbeats do
-      let gs ← withoutErrToSorry <| Tactic.run g (Tactic.evalTactic tstx)
-      let msgs := (← getThe Core.State).messages
-      if msgs.hasErrors then
-        let errs := msgs.toList.filter (fun (m : Message) => m.severity == .error)
-        let txt ← match errs.head? with
-          | some m => m.data.toString
-          | none => pure "error"
-        return Except.error txt
-      return Except.ok gs)
-    (fun (e : Exception) => do return Except.error (← e.toMessageData.toString))
-
-/-- The hypotheses (by name) of `g`'s context a step USED — the step's
-`tacticDependsOn`: a PROOF the term it built mentions (so `omega` reports the
-facts it used), or any hypothesis the tactic's text names (so `induction n`
-uses `n`). Data the term merely mentions because the goal does is not a use. -/
-def usedHyps (g : MVarId) (tac : String) : MetaM (Array String) := g.withContext do
-  let pf ← instantiateMVars (mkMVar g)
-  let fvs := (collectFVars {} pf).fvarSet
-  let words := (tac.split (fun c => !(c.isAlphanum || c == '_' || c == '\'' || c == '.'))).toList.map (·.toString)
-  let mut out := #[]
-  for d in ← getLCtx do
-    if d.isImplementationDetail then continue
-    let shown := toString (← ppExpr d.toExpr)
-    if (fvs.contains d.fvarId && (← isProp d.type)) || words.contains shown then
-      out := out.push shown
-  return out
-
-/-- Whitespace-normalised (runs of blanks become one space, ends trimmed), as
-the client normalises what the visitor types. -/
-def normTac (s : String) : String := Id.run do
-  let mut out := ""
-  let mut gap := false
-  for c in s.toList do
-    if c == ' ' || c == '\n' || c == '\t' || c == '\r' then gap := !out.isEmpty
-    else
-      if gap then out := out.push ' '
-      gap := false
-      out := out.push c
-  return out
 
 /-- The solution's tactics, read off its syntax by KIND: the items of every
 tactic sequence, descending into `·` blocks; `intro`s are left to the
@@ -244,12 +106,27 @@ structure Spec where
   depth    : Nat
   solution : Array String
 
+/-- `cases h` for each accessible hypothesis whose type is a `∧`, `∨`, `∃` or
+`False` — the splits `hypCandidates` offers on propositions. -/
+def propSplits (g : MVarId) : MetaM (Array String) := g.withContext do
+  let mut out := #[]
+  for d in ← getLCtx do
+    if d.isImplementationDetail || d.userName.hasMacroScopes then continue
+    unless ← isProp d.type do continue
+    let ty ← whnfR (← instantiateMVars d.type)
+    match ty.getAppFn.constName? with
+    | some ``And | some ``Or | some ``Exists | some ``False => out := out.push s!"cases {d.userName}"
+    | _ => pure ()
+  return out
+
 def bakeTheorem (spec : Spec) (hv : IO.Ref ProofTree.BakeState) :
     TermElabM (Bake × Nat × Nat) := do
   let env ← getEnv
   let root ← mkFreshExprMVar spec.type (kind := .syntheticOpaque)
   let bake ← IO.mkRef ({} : Bake)
-  let mut queue : Array (Nat × MVarId × Term.SavedState) := #[]
+  -- the Bool: a split already guided on the path here (only the FIRST split
+  -- on a path is guided — nested splits on lists explode the search)
+  let mut queue : Array (Nat × MVarId × Term.SavedState × Bool) := #[]
   let intern (g : MVarId) (depth : Nat) : TermElabM (Nat × Bool) := withCurrHeartbeats do
     let key ← ppKey g
     let b ← bake.get
@@ -271,7 +148,7 @@ def bakeTheorem (spec : Spec) (hv : IO.Ref ProofTree.BakeState) :
       let mut ks := #[]
       for d in ← getLCtx do
         if d.isImplementationDetail then continue
-        ks := ks.push (← Paperproof.Services.mayBeProof d.toExpr)
+        ks := ks.push (← mayBeProof d.toExpr)
       pure ks
     let plain ← g.withContext do pure (toString (← ppExpr (← instantiateMVars (← g.getType))))
     let mismatch := ig.type.stripTags != plain
@@ -281,7 +158,7 @@ def bakeTheorem (spec : Spec) (hv : IO.Ref ProofTree.BakeState) :
       printMismatch := b.printMismatch + (if mismatch then 1 else 0) }
     return (id, true)
   let (rid, _) ← intern root.mvarId! 0
-  queue := queue.push (rid, root.mvarId!, ← saveState)
+  queue := queue.push (rid, root.mvarId!, ← saveState, false)
   bake.modify fun b => { b with goals := b.goals.modify rid ({ · with queued := true }) }
   -- GUIDED steps are expanded; every other candidate is a PROBE: its answer
   -- is baked (goals or error) but the goals it leaves are not explored unless
@@ -295,7 +172,7 @@ def bakeTheorem (spec : Spec) (hv : IO.Ref ProofTree.BakeState) :
   let mut timedOut := 0
   let mut qi := 0
   while qi < queue.size do
-    let some (gid, g, st) := queue[qi]? | break
+    let some (gid, g, st, splitAbove) := queue[qi]? | break
     qi := qi + 1
     let depth := (← bake.get).goals[gid]!.depth
     if depth ≥ spec.depth then continue
@@ -307,6 +184,10 @@ def bakeTheorem (spec : Spec) (hv : IO.Ref ProofTree.BakeState) :
     let intros ← guard (canonicalIntros g)
     let renames ← guard (canonicalRenames g)
     let hyps ← guard (hypCandidates g)
+    -- a split of a PROPOSITION (`∧ ∨ ∃ False`): where a learner meets `h✝`.
+    -- Data splits (`cases n`, `induction xs`) are guided only by the solution:
+    -- guiding them all took RewriteChain from 144 to 4891 states.
+    let splits ← guard (propSplits g)
     let all := intros ++ renames ++ hyps ++ coreCandidates ++ spec.extras ++ spec.solution
     let mut seen : Std.HashSet String := {}
     let mut cands := #[]
@@ -336,15 +217,22 @@ def bakeTheorem (spec : Spec) (hv : IO.Ref ProofTree.BakeState) :
           else
             let uses ← usedHyps g tac
             let after ← saveState
-            let free := isIntro tac
-            let guided := guidedFixed.contains tac || intros.contains tac || renames.contains tac
+            -- naming is free under the cap, as `intro` is: it does not
+            -- change the goal, and a learner's `cases … with | inl hp`
+            -- is replayed as the split then `rename_i hp`
+            let free := isIntro tac || tac.startsWith "rename_i "
+            -- a split on a hypothesis is how learners start (the hints offer
+            -- it), so its cases are explored: never a dead end
+            let isSplit := splits.contains tac
+            let guided := guidedFixed.contains tac || intros.contains tac || renames.contains tac ||
+              (isSplit && !splitAbove)
             let mut ids := #[]
             for g' in gs do
               let (id, _) ← intern g' (if free then depth else depth + 1)
               ids := ids.push id
               if guided && !(← bake.get).goals[id]!.queued then
                 bake.modify fun b => { b with goals := b.goals.modify id ({ · with queued := true }) }
-                queue := queue.push (id, g', after)
+                queue := queue.push (id, g', after, splitAbove || isSplit)
             pure (some (Outcome.goals ids uses))
       if let some o := outcome? then
         bake.modify fun b => { b with steps := b.steps.push (gid, tac, o) }
@@ -371,16 +259,6 @@ def toJsonBake (spec : Spec) (stmt : String) (b : Bake) (hv : ProofTree.BakeStat
     ("depth", toJson spec.depth), ("solution", toJson spec.solution),
     ("goals", Json.arr goals), ("steps", Json.arr steps), ("errors", toJson msgs),
     ("hovers", toJson hv.popups)]
-
-/-- The directives (`-- @try`, `-- @depth`) are comment LINES, read as text. -/
-def directives (src : String) : Array String × Option Nat := Id.run do
-  let mut tries := #[]
-  let mut depth := none
-  for line in src.splitOn "\n" do
-    let l := line.trimAscii.toString
-    if l.startsWith "-- @try " then tries := tries.push (l.drop 8).toString.trimAscii.toString
-    else if l.startsWith "-- @depth " then depth := (l.drop 10).toString.trimAscii.toString.toNat?
-  return (tries, depth)
 
 end Playground
 

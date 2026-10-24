@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import type { GoalInfo, Proof } from "./paperproof";
 import { stepGoalsAfter } from "./paperproof";
 import { hypLine, isInaccessibleName, TURNSTILE } from "./proofToTree";
+import { daggerHtml } from "./dagger";
 import {
   flattenTaggedText,
   lineOffsets,
@@ -124,7 +125,7 @@ function taggedLines<T>(
         {code(part)}
       </span>
     ) : (
-      lines[i]
+      daggerHtml(lines[i])
     );
   });
 }
@@ -237,7 +238,9 @@ export function makeTaggedRenderersWith<T>(
       return (
         <span className="ptw-tagged">
 
-          <span className={hypNameClass(h.username, diffCls)}>{h.username}</span>
+          <span className={hypNameClass(h.username, diffCls)}>
+            {daggerHtml(h.username)}
+          </span>
           {" : "}
           {code(b.type)}
           {h.value != null && b.val ? (

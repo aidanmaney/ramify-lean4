@@ -49,6 +49,12 @@ name = "ProofTreeRecover"
 # choice and tagged goals: born in Ramify.lean's widget path, factored out so
 # the RPC and the CLI call the same function. Core-only (no ProofWidgets),
 # which is what lets Ppharness import it.
+# --- Hover popups baked for a page with no server (file: ProofTreeBake.lean) --
+# Split out of the harvest so the playground's live engine (no Paperproof, no
+# `import Lean`) bakes goals the way the CLI wire does. The harvest imports it.
+[[lean_lib]]
+name = "ProofTreeBake"
+
 [[lean_lib]]
 name = "ProofTreeHarvest"
 
@@ -87,6 +93,19 @@ needs = ["proofTreeWidgetJs"]
 [[lean_exe]]
 name = "ppharness"
 root = "Main"
+supportInterpreter = true
+
+# --- The playground's live engine (file: PlaygroundLive.lean) -----------------
+# One tactic on one goal, by real Lean, in the bake's shape. Narrow imports (no
+# `import Lean`, no Paperproof) so it compiles to WebAssembly (scripts/wasm/);
+# the baker imports it, so live and baked answers are one code path.
+[[lean_lib]]
+name = "PlaygroundLive"
+
+# Native: one JSON request per stdin line (identity checks, a desktop backend).
+[[lean_exe]]
+name = "playgroundlive"
+root = "PlaygroundLiveMain"
 supportInterpreter = true
 
 # --- The baked playground's baker (file: PlaygroundBake.lean) -----------------

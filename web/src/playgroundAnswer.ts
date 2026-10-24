@@ -35,7 +35,6 @@ import type {
   ProofStepPosition,
   RecoveredStep,
 } from "./paperproof";
-import type { TaggedGoalEntryOf } from "./taggedCore";
 import { flattenTaggedText, type TaggedText } from "./taggedText";
 import type { BakedPopup, BakedTag } from "./viewerPayload";
 
@@ -90,6 +89,8 @@ export interface PlaygroundBake {
   title?: string;
   blurb?: string;
   file?: string;
+  /** The theorem file's text (publish.mjs), for the live tier. */
+  source?: string;
 }
 
 /** The bake this page reads, or a sentence a reader can act on. */
@@ -121,9 +122,16 @@ export interface Table {
   /** Each state's key (`goalKey`), by id. */
   keys: string[];
   byKey: Map<string, number>;
-  /** Per state: canonical tactic → outcome, in bake order. */
+  /** Per state: canonical tactic → outcome, in bake order. A live answer is
+   recorded here too, so asking again is a lookup. */
   steps: Map<number, Map<string, Outcome>>;
+  /** Per state: one route from the root, `[tactic, index of the goal it
+   leaves that the route continues from]` — what a live engine replays to
+   rebuild the state (STATE, NOT TEXT: docs/playground-spike.md). */
+  paths: Map<number, Path>;
 }
+
+export type Path = ReadonlyArray<readonly [string, number]>;
 
 /** The names a hypothesis bundle stands for, with their kinds. */
 const flatHyps = (g: BakedGoal) =>
@@ -154,13 +162,43 @@ export function loadTable(bake: PlaygroundBake): Table {
         : { error: bake.errors[out.e] ?? "error" },
     );
   }
-  return { bake, keys, byKey, steps };
+  // the shortest route to every state (BFS over succeeding steps)
+  const paths = new Map<number, Path>([[0, []]]);
+  const queue = [0];
+  while (queue.length) {
+    const s = queue.shift()!;
+    for (const [tac, o] of steps.get(s) ?? [])
+      if (!("error" in o))
+        o.goals.forEach((c, i) => {
+          if (paths.has(c)) return;
+          paths.set(c, [...paths.get(s)!, [tac, i]]);
+          queue.push(c);
+        });
+  }
+  return { bake, keys, byKey, steps, paths };
+}
+
+/** A state a live engine met that the bake did not: appended to the table
+ (the table GROWS; ids stay stable), its route recorded. Returns its id, or
+ the existing one where the key is known. */
+export function addState(t: Table, st: BakedState, path: Path): number {
+  const key = goalKey(st.goal);
+  const known = t.byKey.get(key);
+  if (known !== undefined) return known;
+  const id = t.bake.goals.length;
+  t.bake.goals.push(st);
+  t.keys.push(key);
+  t.byKey.set(key, id);
+  t.paths.set(id, path);
+  return id;
 }
 
 // ----------------------------------------------------------------- the seam
 
 export type EngineAnswer =
-  | { goals: string[]; uses: string[] }
+  /** `states`: a LIVE engine's goals in full, parallel to `goals`, for the
+   ones the table does not hold yet. */
+  | { goals: string[]; uses: string[]; states?: BakedState[] }
   | { error: string }
   | NotBaked;
 
@@ -308,6 +346,40 @@ export function completions(t: Table, state: number, aliases: Aliases): string[]
   return out;
 }
 
+/** The hints, RANKED for a reader (2026-10-23): what CLOSES the goal (the
+ answer leaves no goals), what MAKES PROGRESS (goals left, at least one of
+ them explored in the bake and not the goal itself), and every other move
+ (only frontier goals, or the same goal back). Within a group the bake's
+ order stands. `tactics` (canonical spellings, default every succeeding one)
+ narrows it — live Lean's list; an outcome the table lacks is "other". Shown
+ through the aliases, as `completions`. */
+export interface RankedHints {
+  closes: string[];
+  progress: string[];
+  other: string[];
+}
+export function rankedCompletions(
+  t: Table,
+  state: number,
+  aliases: Aliases,
+  tactics?: readonly string[],
+): RankedHints {
+  const m = t.steps.get(state);
+  const show = shownMap(aliases);
+  const out: RankedHints = { closes: [], progress: [], other: [] };
+  const list = tactics ?? [...(m?.keys() ?? [])];
+  for (const tac of list) {
+    const o = m?.get(tac);
+    if (o && "error" in o) continue;
+    const shownTac = show.size ? renameWords(tac, show) : tac;
+    if (!o) out.other.push(shownTac);
+    else if (o.goals.length === 0) out.closes.push(shownTac);
+    else if (o.goals.some((g) => g !== state && !t.bake.goals[g]?.frontier)) out.progress.push(shownTac);
+    else out.other.push(shownTac);
+  }
+  return out;
+}
+
 /** Resolve one typed line on one goal occurrence (`state`, seen through
  `aliases`), asking `answer` for the outcome. */
 export async function play(
@@ -368,10 +440,23 @@ export async function play(
       pick = { tactic: tac, renames };
       break;
     }
-  if (!pick) return notBaked();
+  // 3. not baked: the visitor's own text (their names read back to the
+  // canonical ones) — the baked engine says NOT_BAKED, a live one answers
+  if (!pick) pick = { tactic: renameWords(label, toCanon), renames: new Map() };
 
   const a = await answer(key, pick.tactic);
   if (a === NOT_BAKED) return notBaked();
+  // a live answer: remember it, so the table answers it next time
+  const fresh = !t.steps.get(state)?.has(pick.tactic);
+  if ("error" in a) {
+    if (fresh) record(t, state, pick.tactic, { error: a.error });
+  } else if (a.states) {
+    const route = t.paths.get(state) ?? [];
+    a.goals.forEach((k, i) => {
+      if (!t.byKey.has(k) && a.states?.[i])
+        addState(t, a.states[i], [...route, [pick.tactic, i]]);
+    });
+  }
   if ("error" in a)
     return {
       kind: "error",
@@ -385,6 +470,7 @@ export async function play(
   for (const c of pick.renames.keys()) if (next.get(c) === c) next.delete(c);
   const goals = a.goals.map((k) => t.byKey.get(k));
   if (goals.some((g) => g === undefined)) return notBaked();
+  if (fresh) record(t, state, pick.tactic, { goals: goals as number[], uses: a.uses });
   return {
     kind: "ok",
     tactic: pick.tactic,
@@ -395,6 +481,12 @@ export async function play(
   };
 }
 
+function record(t: Table, state: number, tactic: string, o: Outcome) {
+  let m = t.steps.get(state);
+  if (!m) t.steps.set(state, (m = new Map()));
+  m.set(tactic, o);
+}
+
 // ------------------------------------------------------ attempts → a Proof
 
 /** One line the visitor ran: on which goal OCCURRENCE, and Lean's answer. A
@@ -402,6 +494,19 @@ export async function play(
 export interface Attempt {
   occ: string;
   play: Extract<Play, { kind: "ok" } | { kind: "error" }>;
+  /** Where the tactic stands in the EDITOR's text (playgroundText.ts); absent,
+   positions follow the tree's own preorder (the bar-only page). */
+  at?: ProofStepPosition;
+  /** The step's range as the TREE reads it: `at` widened over trailing trivia
+   to the end of its line, as Paperproof's positions are — so a trailing
+   `-- comment` belongs to its own step (proofToTree's containment rule). */
+  span?: ProofStepPosition;
+  /** The occurrence ids the goals it leaves get (the text replay mints them,
+   so it can target them); absent, minted here in attempt order. */
+  kids?: string[];
+  /** Per goal left, the aliases its subtree carries where they differ from
+   `play.aliases` (a `cases … with` alternative names its own case). */
+  kidAliases?: Aliases[];
 }
 
 export interface OpenGoal {
@@ -421,7 +526,7 @@ export interface OpenGoal {
 }
 
 export interface Built {
-  proof: Proof & { taggedGoals: TaggedGoalEntryOf<BakedTag>[] };
+  proof: Proof & { taggedGoals: { goalId: string; goal: BakedGoal }[] };
   diagnostics: RawDiagnostic[];
   /** The bake's popups plus the renamed copies minted for aliases. */
   hovers: BakedPopup[];
@@ -477,9 +582,10 @@ export function buildProof(t: Table, attempts: readonly Attempt[], theoremId: st
     last.set(a.occ, i);
     if (a.play.kind === "ok") {
       const p = a.play;
-      const ids = p.goals.map((state) => {
-        const id = `g${occN++}`;
-        occs.set(id, { state, aliases: p.aliases, hypIds: mintHyps(state, p.aliases, o) });
+      const ids = p.goals.map((state, k) => {
+        const id = a.kids?.[k] ?? `g${occN++}`;
+        const al = a.kidAliases?.[k] ?? p.aliases;
+        occs.set(id, { state, aliases: al, hypIds: mintHyps(state, al, o) });
         return id;
       });
       children.set(i, ids);
@@ -517,7 +623,7 @@ export function buildProof(t: Table, attempts: readonly Attempt[], theoremId: st
     };
   };
 
-  const tagged: TaggedGoalEntryOf<BakedTag>[] = [];
+  const tagged: { goalId: string; goal: BakedGoal }[] = [];
   const infoCache = new Map<string, GoalInfo>();
   const infoOf = (occId: string): GoalInfo => {
     const hit = infoCache.get(occId);
@@ -587,9 +693,10 @@ export function buildProof(t: Table, attempts: readonly Attempt[], theoremId: st
       return;
     }
     const a = attempts[i];
-    const at = { line: line++, character: indent };
+    const at = a.at?.start ?? { line: line++, character: indent };
+    if (a.at) line = Math.max(line, a.at.stop.line + 1);
     if (i === attempts.length - 1) cursor = at;
-    const position: ProofStepPosition = {
+    const position: ProofStepPosition = a.span ?? a.at ?? {
       start: at,
       stop: { line: at.line, character: indent + a.play.label.length },
     };

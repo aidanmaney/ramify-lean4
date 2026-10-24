@@ -158,6 +158,7 @@ export function StatusBar({
   onBarOpenChange,
   onBriefHover,
   polishShown,
+  lintsShown,
   polishWhy,
   proposeShown,
   proposeBusy,
@@ -215,6 +216,8 @@ export function StatusBar({
   onBriefHover: (h: boolean) => void;
   /** False: the row is not drawn (no companion, no key, or the setting off). */
   polishShown: boolean;
+  /** False: the `lints` row is not drawn (nothing could answer it). */
+  lintsShown: boolean;
   polishWhy: string;
   /** False: the row is not drawn, as `polishShown`. */
   proposeShown: boolean;
@@ -1066,14 +1069,19 @@ export function StatusBar({
             icon={<Codicon name={ICON["layout.gallery"]} />}
             onClick={() => onGalleryChange(!gallery)}
           />
-          <BarRow
-            kind="toggle"
-            label="classic look"
-            title="Draw the tree and its chrome in Ramify's classic skin — kept in the ramify.appearance setting where the Ramify extension is installed"
-            on={classic}
-            icon={null}
-            onClick={() => onClassicChange(!classic)}
-          />
+          {/* Only where the host has an appearance SETTING to write
+              (`caps.appearance`): the static viewer and the playground keep
+              the look their page chose. */}
+          {caps.appearance && (
+            <BarRow
+              kind="toggle"
+              label="classic look"
+              title="Draw the tree and its chrome in Ramify's classic skin — kept in the ramify.appearance setting where the Ramify extension is installed"
+              on={classic}
+              icon={null}
+              onClick={() => onClassicChange(!classic)}
+            />
+          )}
           <MenuDivider />
           {/* RESET TREE, a lone action (it leaves the panel up; the
               toast's Undo brings the view back). Expand all and Collapse to
@@ -1160,6 +1168,7 @@ export function StatusBar({
               label={HYP_MODES[m].name}
               title={HYP_MODES[m].title}
               on={hypMode === m}
+              icon={<Codicon name={HYP_MODES[m].icon} />}
               onClick={() => {
                 onHypModeChange(m);
                 close();
@@ -1172,6 +1181,7 @@ export function StatusBar({
             label="split data & props"
             title="Draw each goal's context as data first, then propositions, with a divider (default: Lean's own binder order)"
             on={hypGroup}
+            icon={<Codicon name={ICON["context.hypGroup"]} />}
             onClick={() => onHypGroupChange(!hypGroup)}
           />
         </BarPanel>
@@ -1240,7 +1250,8 @@ export function StatusBar({
               height is its rows', so a hidden row leaves no gap). */}
           {READING_OPTIONS.map((o) => (
             <Fragment key={o.id}>
-              {(o.id !== "polish" || polishShown) && (
+              {(o.id !== "polish" || polishShown) &&
+                (o.id !== "lints" || lintsShown) && (
                 <BarRow
                   kind="toggle"
                   label={o.label}

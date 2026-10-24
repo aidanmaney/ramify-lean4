@@ -36,6 +36,13 @@ export const ICON = {
   "layout.gallery": "window",
   "layout.width": "word-wrap",
 
+  // The Context panel's rows: one per breadth, then the data/props split.
+  "context.used": "filter",
+  "context.intro": "symbol-parameter",
+  "context.diff": "diff",
+  "context.all": "list-flat",
+  "context.hypGroup": "group-by-ref-type",
+
   // The Comments panel's rows.
   "comments.show": "comment",
   "comments.hide": "eye-closed",
@@ -56,6 +63,8 @@ export const ICON = {
   "move.inline": "fold-down",
   "move.extract": "fold-up",
   "move.lint": "lightbulb-autofix",
+  // Name the cases: a split's alternatives get their TAGS written out.
+  "move.nameCases": "tag",
   "move.lens": "split-horizontal",
   "move.goal": "unfold",
   "move.more": "ellipsis",
@@ -117,6 +126,10 @@ export const ICON = {
   // Every other dismiss / cancel: the help panel, a pill's cancel chip.
   "chip.cancel": "close",
   "help.close": "close",
+
+  // The playground page (playground.tsx): a proved theorem, the theme switch.
+  "page.proved": "pass",
+  "page.theme": "color-mode",
 } as const satisfies Record<string, CodiconName>;
 
 export type IconSlot = keyof typeof ICON;
@@ -128,6 +141,10 @@ export const SAME_MEANING: { slots: IconSlot[]; why: string }[] = [
   {
     slots: ["band.layout", "layout.outline"],
     why: "the Layout item wears its default layout's icon, as a VS Code status item wears its default's",
+  },
+  {
+    slots: ["band.context", "context.used"],
+    why: "the Context item wears its default breadth's icon, as the Layout item does",
   },
   {
     slots: ["band.comments", "comments.show", "menu.comment"],

@@ -64,7 +64,7 @@ export interface RewriteEdit {
 }
 
 export interface Rewrite {
-  kind: "inline" | "extract" | "collapse" | "expand" | "rename" | "lint";
+  kind: "inline" | "extract" | "collapse" | "expand" | "rename" | "lint" | "namecases";
   /** The node the gesture was offered on. */
   nodeId: string;
   /** The hypothesis inlined, or the name the extraction introduces. */

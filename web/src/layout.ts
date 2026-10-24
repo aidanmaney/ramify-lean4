@@ -64,20 +64,50 @@ const budgetFor = (m: ReflowMode): number =>
     : Math.max(REFLOW_MIN_CHARS, Math.min(REFLOW_MAX_CHARS, m)) * CHAR_W;
 const MIN_W = 60;
 
+/** LEAN'S INACCESSIBLE-NAME DAGGER (`n✝`, `a✝¹`). At 12px the glyph reads as
+ a letter `t`, so where the host owns every painter (the harness, the static
+ viewer, the playground) it is drawn RAISED, SMALLER and dimmed (dagger.tsx
+ paints it); the measurer below charges it at that scale, so a box keeps no
+ slack. The widget turns it off: its tagged goals are the infoview's own
+ `InteractiveCode`, which draws the glyph full size, and the measure must
+ match what paints. Set once, before anything is measured. */
+export const DAGGER = "✝";
+/** The dagger's size against the text around it, and its lift (em of the
+ surrounding text). */
+export const DAGGER_SCALE = 0.62;
+export const DAGGER_LIFT = 0.35;
+let smallDaggers = true;
+export function setSmallDaggers(on: boolean): void {
+  if (on !== smallDaggers) {
+    smallDaggers = on;
+    measureCache.clear();
+  }
+}
+export const smallDaggersOn = (): boolean => smallDaggers;
+
 export const measureText = (() => {
   const ctx =
     typeof document !== "undefined"
       ? document.createElement("canvas").getContext("2d")
       : null;
 
+  const raw = (text: string, fontPx: number, italic: boolean): number =>
+    ctx
+      ? ((ctx.font = `${italic ? "italic " : ""}${fontPx}px ${codeFontFamily}`),
+        ctx.measureText(text).width)
+      : [...text].length * (fontPx <= HYP_FONT_PX ? HYP_CHAR_W : CHAR_W);
+
   return (text: string, fontPx: number, italic = false): number => {
     const key = `${italic ? "i" : ""}${fontPx}:${text}`;
     const hit = measureCache.get(key);
     if (hit !== undefined) return hit;
-    const w = ctx
-      ? ((ctx.font = `${italic ? "italic " : ""}${fontPx}px ${codeFontFamily}`),
-        ctx.measureText(text).width)
-      : [...text].length * (fontPx <= HYP_FONT_PX ? HYP_CHAR_W : CHAR_W);
+    let w: number;
+    if (smallDaggers && text.includes(DAGGER)) {
+      const parts = text.split(DAGGER);
+      w =
+        raw(parts.join(""), fontPx, italic) +
+        (parts.length - 1) * DAGGER_SCALE * raw(DAGGER, fontPx, italic);
+    } else w = raw(text, fontPx, italic);
     measureCache.set(key, w);
     return w;
   };
@@ -156,6 +186,36 @@ export function inkExtent(d: LayoutNode): { up: number; down: number } {
     up: half + (d.commentFloats ? d.commentBlockH : 0),
     down: half + belowH(d),
   };
+}
+
+/** WIDE'S CASE BADGES ON ONE LINE. Sugiyama centres each node's ink on its
+ layer, so sibling cases of different heights (`induction n`'s short `zero`
+ beside a taller `succ`) wore their `case` badges at different heights. Paint
+ only: siblings (same parent) sharing a layer (same `y`) raise their badge to
+ the TOPMOST badge among them — still inside the layer's reservation, which is
+ the tallest member's height — and nothing is re-laid. Returns each raised
+ node's lift in px (absent = 0). Read by the renderer and by `probe overlap`;
+ the compact layouts place cases on their own rows and never call it. */
+export function caseBadgeLifts(
+  placed: readonly PlacedNode[],
+): Map<string, number> {
+  const groups = new Map<string, { id: string; top: number }[]>();
+  for (const pn of placed) {
+    const d = pn.data;
+    if (d.caseH <= 0) continue;
+    const key = `${d.parents[0]?.id ?? ""}\u0000${Math.round(pn.y)}`;
+    const top = pn.y - (bandTopH(d) + d.h) / 2;
+    const g = groups.get(key);
+    if (g) g.push({ id: d.id, top });
+    else groups.set(key, [{ id: d.id, top }]);
+  }
+  const out = new Map<string, number>();
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    const min = Math.min(...g.map((e) => e.top));
+    for (const e of g) if (e.top - min > 0.5) out.set(e.id, e.top - min);
+  }
+  return out;
 }
 
 /** The TOP edge of the comment strip, relative to the node's placed `y` — the
@@ -855,11 +915,36 @@ export function topLineWidth(
         measureText(lines[0]?.text ?? "", NODE_FONT_PX);
 }
 
+/** THE CLOSING MARK (the playground's `closedMarks`): a tombstone `∎` after
+ the LAST line of a tactic that closes its goal, in `--ptw-closed`. ONE
+ coding, read by `sizeOf`'s reserve and by the renderer's x: the mark starts
+ `CLOSED_MARK_GAP` after the last line's ink. */
+export const CLOSED_MARK = "∎";
+export const CLOSED_MARK_GAP = 5;
+/** The mark is DRAWN, not set as text (design language rule 6: the `∎`
+ glyph falls back to a font that inks it at half the text height): a filled
+ rect the label's cap height tall, centred on the last line. Width and
+ height are the measurer's and the renderer's one coding. */
+export const CLOSED_MARK_W = Math.round(NODE_FONT_PX * 0.55);
+export const CLOSED_MARK_H = Math.round(NODE_FONT_PX * 0.75);
+/** Where the mark starts, from the label's left padding edge. */
+export function closedMarkX(lines: readonly WrappedLine[]): number {
+  const last = lines[lines.length - 1];
+  return (
+    (last?.indent ?? 0) +
+    measureText(last?.text ?? "", NODE_FONT_PX) +
+    CLOSED_MARK_GAP
+  );
+}
+const closedMarkW = (lines: readonly WrappedLine[]): number =>
+  closedMarkX(lines) + CLOSED_MARK_W;
+
 function sizeOf(
   text: string,
   hyps: HypLine[] | undefined,
   reflow: ReflowMode = "off",
   corner = 0,
+  closed = false,
 ): Pick<LayoutNode, "lines" | "w" | "h" | "hypH" | "hyps"> {
   const budget = budgetFor(reflow);
   const lines = wrapText(
@@ -883,7 +968,12 @@ function sizeOf(
   return {
     lines,
     hyps: hypLines,
-    w: Math.max(labelW, hypW, corner > 0 ? topW + 2 * NODE_PAD + corner : 0),
+    w: Math.max(
+      labelW,
+      hypW,
+      corner > 0 ? topW + 2 * NODE_PAD + corner : 0,
+      closed ? closedMarkW(lines) + 2 * NODE_PAD : 0,
+    ),
     h: hypH + lines.length * LINE_H + 2 * NODE_PAD_Y,
     hypH,
   };
@@ -956,6 +1046,11 @@ export interface LayoutEngineOptions {
   commentsHidden?: ReadonlySet<string>;
 
   commentsExpanded?: ReadonlySet<string>;
+
+  /** The tactics that wear the CLOSING MARK (the view's `closedMarks`):
+   each is sized with room for `∎` after its last line and stamped
+   `closedMark`, which is what the renderer paints from. */
+  closedMarks?: ReadonlySet<string>;
 }
 
 const LEDGER_INDENT = 2 * CHAR_W;
@@ -1089,7 +1184,7 @@ function proseLabelSize(
 type SizeRec = ReturnType<typeof sizeOf> &
   ReturnType<typeof commentSize> &
   ReturnType<typeof caseSize> &
-  Pick<LayoutNode, "chipH" | "proseLabel">;
+  Pick<LayoutNode, "chipH" | "proseLabel" | "closedMark">;
 
 /** Wide layout's x-coordinates come from d3-dag's `coordSimplex` (an LP): the
  best packing, and at scale ALL of `computeLayout`'s cost — measured offline
@@ -1110,6 +1205,7 @@ export function createLayoutEngine(
     comments = true,
     commentsHidden,
     commentsExpanded,
+    closedMarks,
   }: LayoutEngineOptions = {},
 ) {
   const ORD = new Map<string, number>();
@@ -1276,6 +1372,7 @@ export function createLayoutEngine(
             },
           ];
         }
+        const closed = n.type === "tactic" && !!closedMarks?.has(n.id);
         return [
           n.id,
           {
@@ -1283,10 +1380,15 @@ export function createLayoutEngine(
               n.label,
               n.hyps,
               reflow,
-              n.type === "goal" && (HAS_CHILDREN.has(n.id) || !!n.folded)
+              // An OPEN goal (`addSpec`: it can take a first step) reserves
+              // the corner too, so adding that step widens nothing.
+              n.type === "goal" &&
+                (HAS_CHILDREN.has(n.id) || !!n.folded || !!n.addSpec)
                 ? CORNER_W
                 : 0,
+              closed,
             ),
+            ...(closed ? { closedMark: true } : null),
             ...commentSize(
               hideComment ? undefined : n.comment,
               reflow,

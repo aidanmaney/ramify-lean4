@@ -41,3 +41,7 @@ export { ICON, SAME_MEANING } from "../src/icons";
 export { CODICONS } from "../src/codicon";
 // The baked playground's pure module (`probe playground`).
 export * from "../src/playgroundAnswer";
+export * from "../src/playgroundText";
+// Name the cases, a Quick Fix (`probe namecases`).
+export * from "../src/nameCases";
+export * from "../src/nameCasesMove";

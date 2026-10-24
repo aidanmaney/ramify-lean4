@@ -143,9 +143,9 @@ const SETTINGS_REQUEST = "settings-request.json";
 // asserts all of it equal.
 const MOVE_IDS = [
   "source", "focus", "skip", "path", "fix", "delete", "trace", "collapse",
-  "expand", "inline", "extract", "lint", "lens", "goal",
+  "expand", "inline", "extract", "lint", "namecases", "lens", "goal",
 ];
-const TACTIC_ONLY_MOVES = ["skip", "trace", "expand", "inline", "extract", "lens", "goal"];
+const TACTIC_ONLY_MOVES = ["skip", "trace", "expand", "inline", "extract", "namecases", "lens", "goal"];
 const MOVE_IDS_FOR = {
   tactic: MOVE_IDS.filter((x) => x !== "focus"),
   goal: MOVE_IDS.filter((x) => !TACTIC_ONLY_MOVES.includes(x)),

@@ -1,3 +1,90 @@
+# Handoff — the local session, 2026-10-04 → 05 (overnight)
+
+Everything below is **uncommitted** on `claude/jolly-thompson-buna1f` (you have
+not asked for a commit) and **local only** (your call: no deploys, no CI, no
+hosting until you have looked). The cloud session's handoff follows it.
+
+## Try it
+
+```bash
+node web/scripts/serve-playground.mjs          # http://localhost:8642/playground.html
+```
+
+Run real Lean (top right) → live Lean in the tab (~35 MB br / 47 MB gz download
+over a network; cached after the first time; ~1 s to start on localhost).
+
+## Morning checklist (things only you can check)
+
+1. **Zen**: the in-place editor's completion list (click a `+`, type `in`) —
+   Firefox clipped it to an empty box; the editor's foreignObject now grows to
+   hold it. Also the vim insert-mode cursor (was black-on-black).
+2. **VS Code**: Restart File once (the worker predates the new widget), then
+   the lightbulb on an unnamed `cases h` should offer **Name the cases**.
+3. The feel of the source pane + goal panel + live Lean on a few theorems.
+
+## What landed (oldest first)
+
+- **Live Lean (WASM), built on this Mac** — no 32-bit stage: native `lean -c`
+  writes the C, emcc compiles it, the wasm CLI writes Init's 32-bit oleans.
+  `scripts/wasm/build-mac.sh` (≈ 40 min from scratch, `engine` step ≈ 7 min).
+  `lean/PlaygroundLive.lean` is the ONE copy of the stepping code (the baker
+  imports it). `web/scripts/live-check.mjs`: every baked step through an
+  engine — **8,308/8,308 identical** on the published bakes (36,179/36,179 on
+  a wider one), native and wasm.
+- **Download 275 → 88 MB** (`.olean.private` dropped; Init imported at the
+  exported level; still 36,179/36,179). docs/wasm-spike.md §6–7.
+- **Live goals are tagged** (colours + hover popups like the baked ones):
+  popup baking moved to `lean/ProofTreeBake.lean`, which the harvest, the
+  baker and the engine share (all 12 bakes byte-identical after the move).
+- **Live hints**: on a goal the demo never reached, Hints asks live Lean which
+  of the baker's own candidates succeed there.
+- **The source pane** (your choice B): CodeMirror (+ vim toggle) is the source
+  of truth; the tree, the goal panel and the Quick Fixes write the text.
+  `playgroundText.ts` reads Lean's block rules (each pinned in
+  `probe playground`). **The goal panel** replaced the input bar (your 2A).
+- **Named cases** (your 3A): `nameCases.ts` + the Quick Fix `namecases`
+  (both wires) + the goal panel's teaching line; the editor reads
+  `cases/induction … with | tag names =>`; the baker explores under the first
+  `cases h` of a proposition (data 106 → 181 KB gz).
+- `publish.mjs` fails if a theorem's own solution does not close **as text in
+  the editor** (all 12 do).
+- **Comments** in the source are the tree's: strips on their steps, the
+  `.fold`/`.none`/`.mark` flags, comment editing — as in VS Code.
+- "Lean is checking…" in the goal panel when a replay takes over 300 ms.
+- The goal panel shows **what a step leaves** ("After this step: …") with the
+  caret on it, as VS Code's infoview does.
+- Live Lean is **one opt-in with no off**: after the first Run real Lean it
+  starts by itself on every visit (localStorage, else the worker's Cache
+  Storage holding the files), and the header button disappears once Lean
+  runs. On arrival a notification advertises it (Run real Lean / Not now /
+  Don't show again) until the reader opts in.
+- A **draggable divider** between the source and the tree (double-click
+  resets; kept per browser).
+- `scripts/thumbs.mjs` (the site index's playground picture) now seeds the
+  editor's text instead of typing into the old bar — **not run** (needs
+  Playwright, which I did not install).
+- **Name the cases, checked by the real server**: `probe lsp
+  lean/ProofTreeNameCases.lean <line> 2 --namecases` — `cases` on `∨`/`∧`,
+  `induction` on `Nat`/`List`, all `benign`. Offered only while no case has a
+  step yet (over existing bullets it would strand them).
+- The installable package (`dist/lakefile.toml`) declares the new
+  `ProofTreeBake` library — without it `dist/` did not build; the `.vsix` was
+  rebuilt and reinstalled.
+- Fixes found by using it: Firefox completion clipping; caret colour; typing
+  into the header at its end; deleting the last line; the worker's relative
+  URLs. The reasoning for each is in the design record entry
+  "2026-10-05 — The playground's live tier, its source pane, and naming the cases".
+
+## Open / decided-later
+
+- Hosting the wasm (35–47 MB) and the COOP/COEP shim for Pages — parked (local).
+- The editor reads tactic blocks by line: `;`/`<;>` on one line run as one
+  tactic; `next`/`all_goals … with blocks` are not understood.
+- The page's script is 345 KB gz (CodeMirror is most of the growth); vim mode
+  (41 KB gz) is a separate chunk loaded only when switched on.
+
+---
+
 # Handoff — from the cloud session to a local Claude Code session
 
 Written 2026-10-05 by the cloud session before its credit ran out. Read

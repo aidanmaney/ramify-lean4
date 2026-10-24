@@ -52,6 +52,7 @@ import {
 import { goalAnnotations, type GoalAnnotation } from "./lensGoals";
 import { posLE } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
+import { setSmallDaggers } from "./layout";
 import { WidgetBoundary } from "./errorBoundary";
 import type { HypMarkStyle } from "./theme";
 import { useOverride } from "./useOverride";
@@ -77,6 +78,10 @@ import {
   type TacticTokenInfo,
 } from "./tacticTokens";
 import type { Elision, LabelToken, TacticToken } from "./tacticCore";
+
+// The infoview's `InteractiveCode` draws Lean's `✝` full size in the tagged
+// goals, so the widget's measurer must too (layout.ts `setSmallDaggers`).
+setSmallDaggers(false);
 
 const HOVER_DWELL_MS = 180;
 

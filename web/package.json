@@ -17,7 +17,12 @@
     "publish:site": "node scripts/publish.mjs --list ../demos/site.txt --playground ../demos/playground.txt && node scripts/thumbs.mjs"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
     "@leanprover/unicode-input": "^0.1.11",
+    "@replit/codemirror-vim": "^6.4.0",
     "d3-dag": "^1.2.1",
     "d3-hierarchy": "^3.1.2",
     "react": "^19.2.6",

@@ -1,7 +1,7 @@
 /-!
 # Zero plus n
 
-On `Nat`, addition recurses on its SECOND argument, so `n + 0 = n` holds by
+On `Nat`, addition recurses on its second argument, so `n + 0 = n` holds by
 definition but `0 + n = n` does not: it needs induction. `omega` and `simp`
 know it already; `induction n` shows why it is true.
 -/

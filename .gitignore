@@ -37,3 +37,8 @@ web/probe/eval-extra.ndjson
 # The static viewer's generated site (web/scripts/publish.mjs). Deployed to
 # GitHub Pages from its own branch, never committed here.
 site/
+
+# scripts/wasm/build-mac.sh: emsdk, Lean source, C, objects, oleans, the wasm (GBs)
+build-wasm/
+# publish.mjs: esbuild's split-bundle scratch (not written to disk, but reserved)
+web/.split-out/

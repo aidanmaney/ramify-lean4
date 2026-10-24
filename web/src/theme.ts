@@ -262,6 +262,9 @@ const PALETTE_CSS = `
   --ptw-menu-sel-fg: var(--vscode-menu-selectionForeground, var(--ptw-menu-fg));
   --ptw-chrome-lit: var(--vscode-list-activeSelectionBackground, color-mix(in srgb, var(--ptw-hue-goal) 16%, transparent));
   --ptw-focus: var(--vscode-focusBorder, var(--ptw-hue-goal));
+  /* A step that CLOSED its goal wears a tombstone in the success ink: the
+     workbench's passed-test green, else the tactic's own stroke. */
+  --ptw-closed: var(--vscode-testing-iconPassed, var(--ptw-node-tactic-stroke));
   /* Batch 2 (2026-10-04). The signature header is the editor's STICKY
      SCROLL (its background, its bottom border and the shadow under it); a
      KEYCAP is VS Code's keybinding label (menus' shortcut column, the help
@@ -521,6 +524,9 @@ export const NODE_TEXT = "var(--ptw-node-text)";
 export const SEQ_STROKE = "var(--ptw-accent)";
 /** The neutral ring: the editor overlay border and the like (not the accent). */
 export const FOCUS_INK = "var(--ptw-focus)";
+/** The closing mark `∎` (a step that closed its goal): VS Code's passed-test
+ green, else the tactic stroke. */
+export const CLOSED_FILL = "var(--ptw-closed)";
 export const ACCENT_TEXT = "var(--ptw-accent-text)";
 export const HYP_USED_FILL = "var(--ptw-hyp-used)";
 export const HYP_UNUSED_FILL = "var(--ptw-hyp-unused)";
@@ -668,6 +674,9 @@ export const Z = {
   chrome: 10,
   signature: 11,
   popup: 12,
+  /** A hover card over the code (a constant's type and docstring): above
+   the chrome, BELOW the node menu a right-click opens. */
+  hover: 20,
   nodeMenu: 25,
   tip: 30,
 } as const;

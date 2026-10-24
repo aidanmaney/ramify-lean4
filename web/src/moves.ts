@@ -33,6 +33,7 @@ export const MOVE_IDS = [
   "inline",
   "extract",
   "lint",
+  "namecases",
   "lens",
   "goal",
 ] as const;
@@ -43,7 +44,8 @@ export type MoveId = (typeof MOVE_IDS)[number];
  structure: rows in groups with a separator between them — NAVIGATE (where to
  look, and what automation used), FOLD (what is drawn), EDIT (the source text),
  and the two CODE-ACTION sections the lightbulb opens (batch 4): QUICK FIX
- (the linter's fix, writing out what `simp` used, a Mathlib-style rename) and
+ (the linter's fix, naming a split's cases, writing out what `simp` used, a
+ Mathlib-style rename) and
  REFACTOR (inline, extract, replace a run with automation, ask the model) —
  VS Code's code-action order, quick fixes first. A row's SLOT is its move id,
  or for a menu-only row the word below; `MENU_SLOTS` is the order, groups in
@@ -69,6 +71,7 @@ export const MENU_SLOTS = [
   "chip",
   // quick fix
   "lint",
+  "namecases",
   "expand",
   "rename",
   // refactor
@@ -130,6 +133,7 @@ export const MOVE_MARK: Record<MoveId, string> = {
   inline: "⤵",
   extract: "⤴",
   lint: "✎",
+  namecases: "|",
   lens: "⧉",
   goal: "+",
 };
@@ -232,6 +236,11 @@ export const EXTRACT_TITLE = "pull the `by` block out as `have this`";
 /** D4's `✎`. `fix` is `LINT_FIXES`' sentence for the linter. */
 export const lintMoveLabel = (fix: string) => `Apply the linter's fix: ${fix}`;
 
+/** NAME THE CASES (nameCases.ts): a `cases`/`induction` written without
+ `with` left its hypotheses inaccessible (`h✝`); the fix writes the
+ alternatives with the names Lean printed, bodies `sorry`. */
+export const NAME_CASES_MOVE_LABEL = "Name the cases";
+
 /** THE LIGHTBULB (batch 4): what the bar's `fix` slot does to this step —
  opens its fixes. `lint`: one of them is the linter's, so the bulb wears
  `lightbulb-autofix`, as VS Code's does for a preferred quick fix. */
@@ -292,13 +301,21 @@ const SLOT_NAME: Record<MoveId, string> = {
   inline: "Move into its one use",
   extract: "Pull out as a `have`",
   lint: "Apply the linter's fix",
+  namecases: "Name the cases",
   lens: "Open to the side",
   goal: "Show the goal this step proves",
 };
 
 /** The moves that open a proposal: each is greyed while another proposal on the
  node is waiting for an answer. */
-export const RESTRUCTURE: readonly MoveId[] = ["collapse", "expand", "inline", "extract", "lint"];
+export const RESTRUCTURE: readonly MoveId[] = [
+  "collapse",
+  "expand",
+  "inline",
+  "extract",
+  "lint",
+  "namecases",
+];
 const PENDING_WHY = { pending: "answer the open proposal first" };
 
 const SLOT_WHY: Partial<Record<MoveId, Partial<Record<Unavailable, string>>>> = {

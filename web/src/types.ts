@@ -323,4 +323,9 @@ export interface LayoutNode extends TreeNode {
   commentMore?: { hidden: number; expanded: boolean; label: string };
 
   proseLabel?: boolean;
+
+  /** This tactic closes its goal and wears the CLOSING MARK `∎` after its
+   last line (layout.ts `closedMarkX`; only where the view's `closedMarks`
+   is on). */
+  closedMark?: boolean;
 }

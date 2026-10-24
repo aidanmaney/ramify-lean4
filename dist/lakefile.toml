@@ -43,6 +43,10 @@ name = "ProofTreeRecover"
 srcDir = "../lean"
 
 [[lean_lib]]
+name = "ProofTreeBake"
+srcDir = "../lean"
+
+[[lean_lib]]
 name = "ProofTreeHarvest"
 srcDir = "../lean"
 

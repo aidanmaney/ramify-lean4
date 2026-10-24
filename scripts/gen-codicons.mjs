@@ -40,6 +40,12 @@ const NAMES = [
   // rows that had borrowed another slot's icon, and Restart File
   "git-commit", "list-unordered", "unfold", "fold", "quote", "layout-centered",
   "debug-restart",
+  // name the cases (a Quick Fix)
+  "tag",
+  // the Context panel's rows (one per breadth, and the data/props split)
+  "symbol-parameter", "diff", "list-flat", "group-by-ref-type",
+  // the playground page: a proved theorem, the theme switch
+  "pass", "color-mode",
 ];
 
 const version = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version;

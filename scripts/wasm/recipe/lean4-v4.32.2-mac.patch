@@ -1,0 +1,34 @@
+diff --git a/src/runtime/compact.cpp b/src/runtime/compact.cpp
+--- a/src/runtime/compact.cpp
++++ b/src/runtime/compact.cpp
+@@ -100,6 +100,10 @@
+         if (!name) continue;
+         libs.push_back({reinterpret_cast<size_t>(hdr), name});
+     }
++#elif defined(LEAN_EMSCRIPTEN)
++    // ramify: a wasm module is ONE image (function pointers are table indices from 0),
++    // and there is no dl_iterate_phdr; report it as a single library at base 0
++    libs.push_back({0, "lean.wasm"});
+ #else
+     // Linux: use dl_iterate_phdr
+     dl_iterate_phdr([](struct dl_phdr_info * info, size_t, void * data) -> int {
+diff --git a/src/util/shell.cpp b/src/util/shell.cpp
+--- a/src/util/shell.cpp
++++ b/src/util/shell.cpp
+@@ -299,8 +299,14 @@
+         }
+ 
+         // We cannot mount /, see https://github.com/emscripten-core/emscripten/issues/2040
+-        FS.mount(NODEFS, { root: "/home" }, "/home");
+-        FS.mount(NODEFS, { root: "/tmp" }, "/tmp");
++        // ramify: macOS keeps homes under /Users and temp under /private
++        var dirs = "/home:/tmp:/Users:/private".split(":");
++        for (var i = 0; i < dirs.length; i++) {
++            var d = dirs[i];
++            try { require("fs").statSync(d); } catch (e) { continue; }
++            try { FS.mkdir(d); } catch (e) {}
++            FS.mount(NODEFS, { root: d }, d);
++        }
+         FS.chdir(process.cwd());
+     );
+ #elif defined(LEAN_WINDOWS)

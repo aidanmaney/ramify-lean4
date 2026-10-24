@@ -27,6 +27,7 @@ export const MOVE_LOOK: Record<MoveId, Pick<NodeMove, "glyph" | "codicon">> = {
   inline: { glyph: MOVE_MARK.inline, codicon: ICON["move.inline"] },
   extract: { glyph: MOVE_MARK.extract, codicon: ICON["move.extract"] },
   lint: { glyph: MOVE_MARK.lint, codicon: ICON["move.lint"] },
+  namecases: { glyph: MOVE_MARK.namecases, codicon: ICON["move.nameCases"] },
   lens: { glyph: MOVE_MARK.lens, codicon: ICON["move.lens"] },
   goal: { glyph: MOVE_MARK.goal, codicon: ICON["move.goal"] },
 };
@@ -46,7 +47,8 @@ export function disabledSlot(id: MoveId, tip: string): NodeMove[] {
 }
 
 /** Can this move EVER apply to a node of this kind? Read off the gates in
- `movesFor`: skip, trace, expand, inline, extract, lens and the ledger `+` are
+ `movesFor`: skip, trace, expand, inline, extract, namecases, lens and the
+ ledger `+` are
  tactic-only (`elideGateOf`, `isAutomationNode`, `popoutable`, `linkPlus`
  all require `type === "tactic"`), focus is goal-only (`focusable`), and the
  rest apply to both. A slot is kept only where this holds — a move that never
@@ -58,6 +60,7 @@ const TACTIC_ONLY: readonly MoveId[] = [
   "expand",
   "inline",
   "extract",
+  "namecases",
   "lens",
   "goal",
 ];

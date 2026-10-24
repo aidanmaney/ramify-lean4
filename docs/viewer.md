@@ -184,6 +184,20 @@ no source files it rewrites only the playground; with them the index gets a
 **Try it** card above every group (its picture: `thumbs.mjs` types five
 tactics into `Double` through the page's own input).
 
+The page opens in layout `wide`, context `diff`, one rail zoom step in
+(`initialZoom` 1.25); the reader's own layout, context and comments ride the
+hash beside `t=` in the viewer's words (`#t=ZeroAdd&layout=spine`, defaults
+left out). The goal panel's hints are RANKED (`rankedCompletions`): "Closes
+this goal", "Makes progress" (a goal left that the bake explored), "Other
+moves" dimmed. An open goal the bake never explored (`frontier`, live Lean
+off) is drawn dashed at `STUB_OPACITY` (`offMapGoalIds`) and the panel says
+"Not explored in this demo — Undo to go back". A proof whose lines the
+auto-indent nested under the first is named (`swallowed`, playgroundText.ts).
+A complete proof washes the theorem strip in `--ptw-closed` with "Proved";
+the tree pane draws no signature header (`signatureHeader={false}`: the
+editor's first line is the signature). The live tier is offered by one quiet
+line at the foot of the goal panel.
+
 ### A theorem file
 
 ```lean
@@ -250,3 +264,84 @@ input, Try, Hints — is the same question for a phone. Phones are baked-only.
 
 Measured 2026-10-05 (12 theorems): 105 KB gzipped of data (2.4–23 KB each),
 the bundle 696 KB / 235 KB gz, baking ~40 s.
+
+### The source (v2, 2026-10-05)
+
+The page's source of truth is now **Lean text in an editor** (CodeMirror 6,
+`web/src/playgroundEditor.tsx`; vim through `@replit/codemirror-vim` behind
+the header's toggle, a 41 KB gz chunk loaded only when switched on —
+`publish.mjs` bundles the playground code-split; `\` abbreviations; Enter keeps the indentation), with the
+tree beside it. Every edit replays the whole body (`replayText`,
+`web/src/playgroundText.ts`, debounced 180 ms; answers cached per goal state)
+through the same `play()` path, with Lean's tactic-block semantics read by
+line and column: a tactic works on the main goal, deeper lines continue it,
+`·` takes the next goal, `case tag =>` the goal by tag, `cases …/induction …
+with` + `| tag names =>` alternatives name each case (replayed as the split
+then `rename_i names` on that case), `sorry` leaves its goal open, a failure
+stops its block (a `·`/`case` block recovers, so its siblings run). Comments
+are not tactics, but they are the tree's: `bodyComments` reports them as the
+harvest does (`proof.comments`), each step's range for the tree is widened to
+its line's end as Paperproof's positions are (so a trailing `-- note` is its
+own step's), and the strips, `.fold`/`.none`/`.mark` flags and comment editing
+work as in VS Code. A replay that takes over 300 ms (live Lean) shows
+"Lean is checking…" in the goal panel. Not understood: `;`/`<;>` sequences on one line (they run as one
+tactic), `next`, `all_goals` and other combinators with blocks.
+
+The tree **writes the text**: each open goal has an `Anchor` (where its next
+tactic goes: a new line under the block, `case tag =>` for a later goal,
+a `sorry` replaced, a missing alternative added), the `+` chip, the goal
+panel's hints and the Quick Fix rows write through it; double-click edits a
+step's line (`getTacticEdit`/`onEditTactic` over the step's real range); the
+trash deletes it (`deleteSlots`, the widget's `deleteEdit.ts`); ⌘Z in the tree
+is the editor's undo; `»` reveals the line. The text is kept per theorem in
+`localStorage` (with the vim and source toggles), never relied on.
+
+**The goal panel** (under the editor, replacing v1's input bar): with the caret
+on a step, the goal that line works on and Lean's message where it failed;
+elsewhere, the open goal being worked on (a picker for several) — tagged, with
+hovers — and its baked tactics as chips that write into the text. Where the
+goal's hypotheses are inaccessible (`h✝`) because a split was written without
+alternatives, it says so and offers **Name the cases** (`web/src/nameCases.ts`:
+`cases h` → `cases h with` / `| inl h => sorry` / `| inr h => sorry`, the
+dagger dropped, `a✝` → `ih`, a taken name primed). The same rewrite is the
+tree's Quick Fix `namecases` (lightbulb, both wires).
+
+**The baker** guides the FIRST `cases h` of a PROPOSITION (`∧ ∨ ∃ False`)
+along each path — where a learner meets `h✝`; before, its cases were never
+explored, so the hint led to a dead end — and makes `rename_i` free under the
+depth cap, as `intro` is. Data splits stay guided only by the solution, and
+only the first split per path: guiding every split ran AppendLength for 19 min
+unfinished, and guiding data splits took RewriteChain from 144 to 4,891 states.
+Data 106 KB → 181 KB gzipped (budget 2 MB). `publish.mjs` now also replays each theorem's
+written solution **as text in the editor** and fails the build if it does not
+close.
+
+### Live Lean (opt-in, local only)
+
+**Run real Lean** (header) starts a Web Worker that downloads Lean compiled to
+WebAssembly and answers what the table lacks, AFTER the baked engine behind
+`answer` (`web/src/playgroundLive.ts`; the engine is `lean/PlaygroundLive.lean`,
+the baker's own stepping code; goals come back in full and the table grows).
+It needs cross-origin isolation (COOP/COEP) for threads; the downloads are
+kept in Cache Storage keyed on Last-Modified. Turning it on is the one opt-in
+and there is no off: later visits start it by themselves (localStorage, or
+the files already in Cache Storage), the header button goes once Lean runs,
+and until the reader opts in an arrival notification offers it. Build and serve locally:
+
+```bash
+scripts/wasm/build-mac.sh                        # once: emsdk, C, objects, CLI, Init oleans, engine (≈ 40 min)
+scripts/wasm/build-mac.sh engine                 # after a change to lean/PlaygroundLive.lean (≈ 7 min)
+node web/scripts/serve-playground.mjs            # http://localhost:8642/playground.html
+node web/scripts/serve-playground.mjs --native   # the same page answered by the NATIVE engine
+node web/scripts/live-check.mjs BAKES [--engine "node scripts/wasm/live-stdio.mjs …"] [--kinds]
+```
+
+`live-check` replays every baked step through an engine and requires identical
+answers (goal keys, kinds, uses, errors up to metavariable numbers): 8,308 of
+8,308 on the published bakes (and 36,179 of 36,179 on a wider bake), native
+and wasm. Live goals are TAGGED (hover popups, `lean/ProofTreeBake.lean`, the
+bake the CLI wire uses) and, where the demo has no hints for a goal, **Hints**
+asks live Lean which of the baker's own candidates succeed there. The engine imports `Init` at the EXPORTED level
+(`isModule := false`, so the file's own declarations stay public) and the
+download omits `.olean.private` (a two-line Lean patch skips a missing part):
+the identity check is what licenses that. docs/wasm-spike.md §6–7.
