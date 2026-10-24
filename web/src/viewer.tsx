@@ -25,6 +25,8 @@ import {
   type ReactNode,
 } from "react";
 import ProofTreeView from "./ProofTreeView";
+import { ICON } from "./icons";
+import { Codicon } from "./codiconView";
 import { BakedCode } from "./bakedCode";
 import { BakedPopups } from "./bakedPopups";
 import { filterDiagnostics, proofSpan } from "./diagnostics";
@@ -180,8 +182,16 @@ body {
   border: 1px solid ${CHROME_BORDER}; border-radius: ${CHROME_RADIUS}px;
   padding: 2px 6px; cursor: pointer;
 }
-.ptw-viewer-head button[aria-pressed="true"] { background: var(--ptw-chrome-lit); }
-.ptw-viewer-head a { color: inherit; }
+.ptw-viewer-head a { color: inherit; text-decoration: none; }
+/* the playground's header grammar: a bold wordmark, QUIET text buttons (no box
+   until hover — the toolbar's wash; pressed = the toolbar's active wash), one
+   primary button, the theme as an icon */
+.ptw-viewer-brand { font-weight: 600; }
+.ptw-viewer-head .ptw-viewer-quiet { background: transparent; border-color: transparent; }
+.ptw-viewer-head .ptw-viewer-quiet:hover { background: var(--ptw-toolbar-hover); }
+.ptw-viewer-head .ptw-viewer-quiet[aria-pressed="true"] { background: var(--ptw-toolbar-active); }
+.ptw-viewer-icon { display: inline-flex; align-items: center; justify-content: center; padding: 3px; }
+.ptw-viewer-head a[data-ptw-btn] { padding: 3px 10px; border-radius: ${CHROME_RADIUS}px; }
 .ptw-viewer-file { font-family: var(--vscode-editor-font-family); }
 .ptw-viewer-dim { opacity: ${DIM_OPACITY}; }
 .ptw-viewer-spacer { flex: 1 1 0; }
@@ -554,15 +564,16 @@ export default function Viewer() {
   const head = (picker: ReactNode) => (
     <header className="ptw-viewer-head" {...chromeScopeProps()}>
       {!inline && (
-        <a href="./" className="ptw-viewer-dim" title="Every published file">
+        <a href="./" className="ptw-viewer-brand" title="Every published file">
           Ramify
         </a>
       )}
-      {inline && <span className="ptw-viewer-dim">Ramify</span>}
+      {inline && <span className="ptw-viewer-brand">Ramify</span>}
       {payload && <span className="ptw-viewer-file">{payload.file}</span>}
       {picker}
       <span className="ptw-viewer-spacer" />
       <a
+        data-ptw-btn=""
         href={RELEASE_URL}
         title="This page is for reading. In VS Code the same tree is live: edit in the tree, see diagnostics as you type, and restructure a proof with Lean checking each change."
       >
@@ -573,6 +584,7 @@ export default function Viewer() {
       </a>
       <button
         type="button"
+        className="ptw-viewer-quiet"
         aria-pressed={paneOpen}
         title={paneOpen ? "Hide the source" : "Show the source"}
         onClick={() => setPaneOpen(!paneOpen)}
@@ -581,11 +593,12 @@ export default function Viewer() {
       </button>
       <button
         type="button"
-        title={kind === "dark" ? "Use the light theme" : "Use the dark theme"}
-        aria-label={kind === "dark" ? "Use the light theme" : "Use the dark theme"}
+        className="ptw-viewer-quiet ptw-viewer-icon"
+        title={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        aria-label={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
         onClick={toggleTheme}
       >
-        {kind === "dark" ? "Light" : "Dark"}
+        <Codicon name={ICON["page.theme"]} />
       </button>
     </header>
   );
