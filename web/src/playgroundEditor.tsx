@@ -30,6 +30,7 @@ import {
   lineNumbers,
   type DecorationSet,
   type ViewUpdate,
+  tooltips,
 } from "@codemirror/view";
 import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 import type { DocEdit } from "./calcEdit";
@@ -296,6 +297,12 @@ export function PlaygroundEditor({
           drawSelection(),
           history(),
           lintGutter(),
+          // tooltips on the page's THEMED root (`[data-ptw-theme]`, unclipped):
+          // inside the editor pane a lint tooltip on an early line opened above
+          // it and was cut off by the pane's top edge; out here CodeMirror flips
+          // it below and keeps it in the window. Not <body>: the `--ptw-*`
+          // tokens its colours read are defined on the themed root only.
+          tooltips({ parent: host.current!.closest<HTMLElement>("[data-ptw-theme]") ?? document.body }),
           newlineKeepIndent,
           electricBullet,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
