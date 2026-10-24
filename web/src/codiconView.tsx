@@ -10,14 +10,14 @@
 // mark per SET: `chrome` (the status bar, its panels, the rail, the header,
 // the message strip) and `node` (the hover bar and the `⋯` menu, where the same
 // codicon names mean moves — `list-tree` is the outline layout in the bar and
-// `⇑` on a node).
+// `⇑` on a node), and `ledger` (a ledger row's disclosure, classic `+`/`−`).
 import { createElement as h, useContext, type CSSProperties, type ReactNode } from "react";
 import { CODICONS, type CodiconData, type CodiconName } from "./codicon";
 import { AppearanceContext } from "./appearance";
 import { CHROME_RADIUS } from "./theme";
 
 /** Which classic vocabulary a codicon name is read in (see the header). */
-export type IconSet = "chrome" | "node";
+export type IconSet = "chrome" | "node" | "ledger";
 
 /** One codicon, `size` px square (16, the size they are drawn for), filled in
  `color` (`currentColor` by default, so it takes its control's ink).
@@ -48,7 +48,7 @@ export function Codicon({
   const classic = useContext(AppearanceContext) === "classic";
   const inSvg = x !== undefined || y !== undefined;
   const css = inSvg ? style : { display: "block", flex: "none", ...style };
-  const old = classic ? (set === "node" ? NODE_CLASSIC : CHROME_CLASSIC)[name] : undefined;
+  const old = classic ? CLASSIC_SETS[set][name] : undefined;
   if (old) {
     // The classic mark at its own pixel size, centred in the codicon's box:
     // the outer viewBox is the 16-unit codicon grid, scaled to `size`.
@@ -342,4 +342,18 @@ const NODE_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
     }),
     p("M4.8 1.5v3.2L3 7h6L7.2 4.7V1.5z", { key: 2, fill: "currentColor" }),
   ),
+};
+
+// A calc / constructor LEDGER ROW's disclosure (2026-10-23): the codicon
+// chevrons in the vscode skin; the classic skin keeps the `+` / `−` the row
+// wore before, in the same reserved box (layout.ts `LEDGER_INDENT`).
+const LEDGER_CLASSIC: Partial<Record<CodiconName, ReactNode>> = {
+  "chevron-right": glyph("+", 14),
+  "chevron-down": glyph("−", 14),
+};
+
+const CLASSIC_SETS: Record<IconSet, Partial<Record<CodiconName, ReactNode>>> = {
+  chrome: CHROME_CLASSIC,
+  node: NODE_CLASSIC,
+  ledger: LEDGER_CLASSIC,
 };

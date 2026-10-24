@@ -36,8 +36,14 @@ const HYP_LIT_PAD = 2;
  italic keeps the advance — so the measured width is untouched. A wrapped
  continuation has no names; a dimmed (unused) line keeps its one dim ink and
  only takes the inaccessible style. */
+/** Where a line's NAMES end (the ` : ` before its type), or -1 on a wrapped
+ continuation or a line without one. Shared by the names' ink below and the
+ used-hyp wash, so the wash covers exactly the inked names. */
+const hypNameEnd = (line: HypLine): number =>
+  line.cont ? -1 : line.text.indexOf(" : ");
+
 function hypLineText(line: HypLine, dimmed: boolean): ReactNode {
-  const cut = line.cont ? -1 : line.text.indexOf(" : ");
+  const cut = hypNameEnd(line);
   if (cut <= 0) return daggerSvg(line.text, HYP_FONT_PX);
   const names = line.text.slice(0, cut).split(" ");
   return (
@@ -127,8 +133,18 @@ export function HypBlock({
         <g style={{ pointerEvents: "none" }}>
           {lines.map((line, j) => {
             if (!line.used) return null;
+            // The NAMES alone (2026-10-23): a whole-line block beside the
+            // producer diff's wash on the target read as two heavy washes
+            // fighting. A continuation has no names and gets none; a line
+            // with no ` : ` keeps the whole text. The tagged path paints
+            // its text over this same rect, in the same code font.
+            const cut = hypNameEnd(line);
+            if (line.cont) return null;
             const lx = textX + (line.indent ?? 0);
-            const lw = measureText(line.text, HYP_FONT_PX);
+            const lw = measureText(
+              cut > 0 ? line.text.slice(0, cut) : line.text,
+              HYP_FONT_PX,
+            );
 
             return markStyle === "underline" ? (
               <line

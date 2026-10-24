@@ -1488,6 +1488,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
       <ProofTreeView
         proof={stable.proof}
         onReveal={reveal}
+        closedMarks
         getTacticEdit={getTacticEdit}
         onEditTactic={editTactic}
         getGoalTerms={getGoalTerms}

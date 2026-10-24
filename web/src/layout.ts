@@ -922,11 +922,15 @@ export function topLineWidth(
 export const CLOSED_MARK = "∎";
 export const CLOSED_MARK_GAP = 5;
 /** The mark is DRAWN, not set as text (design language rule 6: the `∎`
- glyph falls back to a font that inks it at half the text height): a filled
- rect the label's cap height tall, centred on the last line. Width and
- height are the measurer's and the renderer's one coding. */
-export const CLOSED_MARK_W = Math.round(NODE_FONT_PX * 0.55);
-export const CLOSED_MARK_H = Math.round(NODE_FONT_PX * 0.75);
+ glyph falls back to a font that inks it at half the text height): a QUIET
+ tombstone (2026-10-23 — the cap-height block read as a terminal cursor) — a
+ square about 0.45em, standing on the last line's BASELINE and so reaching
+ x-height, painted at `DIM_OPACITY`. Width and height are the measurer's and
+ the renderer's one coding; `CLOSED_MARK_BASELINE` is the label's own
+ baseline offset below the line's middle (the text paint's `dy="0.32em"`). */
+export const CLOSED_MARK_W = Math.round(NODE_FONT_PX * 0.45);
+export const CLOSED_MARK_H = CLOSED_MARK_W;
+export const CLOSED_MARK_BASELINE = 0.32 * NODE_FONT_PX;
 /** Where the mark starts, from the label's left padding edge. */
 export function closedMarkX(lines: readonly WrappedLine[]): number {
   const last = lines[lines.length - 1];
@@ -1053,7 +1057,15 @@ export interface LayoutEngineOptions {
   closedMarks?: ReadonlySet<string>;
 }
 
-const LEDGER_INDENT = 2 * CHAR_W;
+/** A ledger continuation row's reserved gutter, and the row's DISCLOSURE
+ mark drawn in it (the view's row paint: a `chevron-right`/`-down` codicon,
+ classic `+`/`−`) — `LEDGER_MARK_PX` square at the gutter's left edge,
+ vertically centred on its `LINE_H` row. Measurer and renderer share both. */
+export const LEDGER_MARK_PX = 12;
+/** The clear run between the mark's box and the row's relation glyph. The
+ chevron's ink ends ~3px inside its 12px box, so this reads as ≈ 6–8px. */
+export const LEDGER_MARK_GAP = 4;
+export const LEDGER_INDENT = LEDGER_MARK_PX + LEDGER_MARK_GAP;
 function ledgerSize(
   rows: LedgerRow[],
   hyps: HypLine[] | undefined,

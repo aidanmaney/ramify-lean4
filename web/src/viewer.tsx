@@ -413,6 +413,7 @@ function ViewerBody({
             <ProofTreeView
               proof={proof}
               onReveal={reveal}
+              closedMarks
               tokenColors={TOKEN_PALETTE[kind]}
               highlightPos={cursor}
               declHeader={proof.declHeader}

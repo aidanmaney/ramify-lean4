@@ -17,6 +17,20 @@ export const MARGIN = { top: 80, right: 90, bottom: 40, left: 90 };
 
 export const COMPACT_LEFT = 16;
 
+/** Where a proof's FIRST ink lands on arrival, in screen px below the frame's
+ top (2026-10-23): one step gap and a little, room for a goal's hover bar
+ (`BAR_BTN` − `BAR_OVERLAP` = 17 above the box) and a mark tab. The arrival
+ centring used `MARGIN.top` (80), which left an empty band between the
+ signature header and the root. The in-view tests below allow a top edge this
+ close (`inViewTop`), so the follow that runs right after the arrival never
+ re-centres the very node it placed — the view must not move on its own. */
+export const ARRIVAL_TOP = 20;
+/** The in-view test's padding: `IN_VIEW_PAD` at the sides and the bottom, at
+ most `ARRIVAL_TOP` at the top (less a pixel for the browser's rounding of
+ `scrollTop`). */
+export const IN_VIEW_PAD = 32;
+export const IN_VIEW_TOP = Math.min(IN_VIEW_PAD, ARRIVAL_TOP - 1);
+
 const ZOOM_MIN = 0.05;
 
 const ZOOM_MAX = 2;
@@ -97,7 +111,7 @@ export function inViewScroll(
   const ink = inkExtent(node.data);
   const inkTop = cy - ink.up * zoom;
   const inkBot = cy + ink.down * zoom;
-  const pad = 32;
+  const pad = IN_VIEW_PAD;
   const maxX = el.scrollWidth - el.clientWidth;
   const maxY = el.scrollHeight - el.clientHeight;
   let left = el.scrollLeft;
@@ -106,7 +120,7 @@ export function inViewScroll(
   if (park !== undefined)
     top = clampScroll(inkMid - el.clientHeight * park, maxY);
   else if (
-    inkTop < el.scrollTop + pad ||
+    inkTop < el.scrollTop + IN_VIEW_TOP ||
     inkBot > el.scrollTop + el.clientHeight - pad
   )
     top = clampScroll(inkMid - el.clientHeight / 2, maxY);

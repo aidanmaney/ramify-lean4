@@ -117,6 +117,10 @@ export const ICON = {
   // The tree's own marks.
   "hop.chip": "ellipsis",
   "tab.remove": "close",
+  // A ledger row's own disclosure (calc / constructor rows): its goal is
+  // hidden (right) or shown (down) — the fold chevrons, at row size.
+  "ledger.rowHidden": "chevron-right",
+  "ledger.rowShown": "chevron-down",
 
   // The scope chip in the signature header: the move that scoped, and out.
   "scope.focus": "target",
@@ -186,11 +190,18 @@ export const SAME_MEANING: { slots: IconSlot[]; why: string }[] = [
     why: "close, cancel, take off — VS Code's one dismiss mark",
   },
   {
-    slots: ["menu.hide", "goal.open", "header.open", "reading.disclose"],
+    slots: ["menu.hide", "goal.open", "header.open", "reading.disclose", "ledger.rowShown"],
     why: "a disclosure chevron pointing down: open, and closes on click",
   },
   {
-    slots: ["menu.restore", "goal.folded", "scope.separator", "marks.next", "gallery.next"],
+    slots: [
+      "menu.restore",
+      "goal.folded",
+      "scope.separator",
+      "marks.next",
+      "gallery.next",
+      "ledger.rowHidden",
+    ],
     why: "a chevron pointing right: closed / onward — VS Code's folded-region and breadcrumb separator mark",
   },
   {

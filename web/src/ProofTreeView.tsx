@@ -16,9 +16,11 @@ import {
   createLayoutEngine,
   hypLineOffset,
   LINE_H,
+  LEDGER_MARK_PX,
   NODE_FONT_PX,
   NODE_PAD,
   CLOSED_MARK_H,
+  CLOSED_MARK_BASELINE,
   caseBadgeLifts,
   CLOSED_MARK_W,
   closedMarkX,
@@ -303,6 +305,9 @@ import {
   EDIT_STROKE,
   type FollowAnim,
   MARGIN,
+  ARRIVAL_TOP,
+  IN_VIEW_PAD,
+  IN_VIEW_TOP,
   animateScroll,
   cancelFollow,
   cfStubNodeId,
@@ -765,7 +770,8 @@ export interface ProofTreeViewProps {
       the base tree; not a failed or recovered step, not `sorry`) wears a
       tombstone `∎` after its last line in `--ptw-closed`. The layout reserves
       its width (`closedMarks`, layout.ts), so it overlaps nothing. Off by
-      default: the widget, the viewer and the harness are unchanged. */
+      default (the probes' fingerprint reads the defaults, and so does the
+      harness); the widget, the viewer and the playground turn it on. */
   closedMarks?: boolean;
 
   /** Draw the ACCENT on the node the cursor (`highlightPos`) or a click
@@ -2228,7 +2234,13 @@ export default function ProofTreeView({
       if (
         n.type === "tactic" &&
         !parents.has(n.id) &&
-        !n.recovered &&
+        // A recovered TERM step (a calc link's `Finset.sum_range_succ …`, a
+        // term-mode proof) and a SUBTERM graft (one component of an
+        // `exact ⟨…⟩`) close their goals exactly as a by-block sibling
+        // does, so they wear the mark too — ONE rule: a leaf step closes
+        // unless it FAILED or was SKIPPED (or is synthetic, below).
+        n.recovered !== "failed" &&
+        n.recovered !== "skipped" &&
         !n.synthetic &&
         !n.traceLeaf &&
         !n.ledger &&
@@ -4365,9 +4377,9 @@ export default function ProofTreeView({
         const ink = inkExtent(now.data);
         const inkTop = cy - ink.up * zoom;
         const inkBot = cy + ink.down * zoom;
-        const pad = 32;
+        const pad = IN_VIEW_PAD;
         if (
-          inkTop < el.scrollTop + pad ||
+          inkTop < el.scrollTop + IN_VIEW_TOP ||
           inkBot > el.scrollTop + el.clientHeight - pad
         )
           el.scrollTop = clampScroll(
@@ -4705,9 +4717,11 @@ export default function ProofTreeView({
         : (MARGIN.left + PAD_X + root.x) * zoom - viewport.w / 2,
       maxX,
     );
+    // The root's ink lands `ARRIVAL_TOP` below the frame's top — one step
+    // gap under the signature header, not `MARGIN.top`'s empty band.
     el.scrollTop = clampScroll(
       (MARGIN.top + PAD_Y + root.y - inkExtent(root.data).up) * zoom -
-        MARGIN.top,
+        ARRIVAL_TOP,
       maxY,
     );
     centeredOn.current = { proofKey, viewKey };
@@ -9169,16 +9183,31 @@ export default function ProofTreeView({
                             }}
                           >
                             {rowKeys?.[j] ? (
+                              // The row's DISCLOSURE in its reserved gutter
+                              // (layout.ts `LEDGER_INDENT`/`LEDGER_MARK_PX`):
+                              // the fold chevrons, dim until the row is
+                              // hovered — a `+` beside arithmetic read as a
+                              // plus sign (classic keeps it, `set="ledger"`).
                               <span
                                 style={{
                                   position: "absolute",
                                   left: 0,
-                                  top: 0,
-                                  color: style.stroke,
-                                  opacity: PREVIEW_OPACITY,
+                                  top: (LINE_H - LEDGER_MARK_PX) / 2,
                                 }}
                               >
-                                {chainOpen.has(rowKeys[j]) ? "−" : "+"}
+                                <Codicon
+                                  set="ledger"
+                                  name={
+                                    chainOpen.has(rowKeys[j])
+                                      ? ICON["ledger.rowShown"]
+                                      : ICON["ledger.rowHidden"]
+                                  }
+                                  size={LEDGER_MARK_PX}
+                                  color={style.stroke}
+                                  opacity={
+                                    moreHover === rowKeys[j] ? 1 : DIM_OPACITY
+                                  }
+                                />
                               </span>
                             ) : null}
                             {line}
@@ -9267,12 +9296,14 @@ export default function ProofTreeView({
                       x={-w / 2 + NODE_PAD + closedMarkX(lines)}
                       y={
                         labelTop +
-                        (lines.length - 0.5) * LINE_H -
-                        CLOSED_MARK_H / 2
+                        (lines.length - 0.5) * LINE_H +
+                        CLOSED_MARK_BASELINE -
+                        CLOSED_MARK_H
                       }
                       width={CLOSED_MARK_W}
                       height={CLOSED_MARK_H}
                       fill={CLOSED_FILL}
+                      opacity={DIM_OPACITY}
                       style={{ pointerEvents: "none" }}
                     />
                   )}
@@ -9342,20 +9373,22 @@ export default function ProofTreeView({
                     <g>
                       {rowKeys.map((key, j) =>
                         key === null ? null : (
-                          <text
+                          // The row's disclosure — the tagged path's twin.
+                          <Codicon
                             key={`g${j}`}
-                            textAnchor="start"
-                            fontSize={NODE_FONT_PX}
-                            fontFamily={getCodeFontFamily()}
-                            fill={style.stroke}
-                            opacity={PREVIEW_OPACITY}
-                            style={{ letterSpacing: 0 }}
+                            set="ledger"
+                            name={
+                              chainOpen.has(key)
+                                ? ICON["ledger.rowShown"]
+                                : ICON["ledger.rowHidden"]
+                            }
+                            size={LEDGER_MARK_PX}
                             x={-w / 2 + NODE_PAD}
-                            y={labelTop + (j + 0.5) * LINE_H}
-                            dy="0.32em"
-                          >
-                            {chainOpen.has(key) ? "−" : "+"}
-                          </text>
+                            y={labelTop + j * LINE_H + (LINE_H - LEDGER_MARK_PX) / 2}
+                            color={style.stroke}
+                            opacity={moreHover === key ? 1 : DIM_OPACITY}
+                            style={{ pointerEvents: "none" }}
+                          />
                         ),
                       )}
                       {rowKeys.map((key, j) =>

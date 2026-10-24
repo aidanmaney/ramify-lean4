@@ -239,6 +239,29 @@ function caseName(goal: GoalInfo | undefined): string | undefined {
   return name;
 }
 
+/** Is a case-tag COMPONENT one Lean MINTED rather than one the author
+ wrote? The elaborator names an anonymous `?_` of `refine`/`refine'` (and so
+ of `calc`'s and `constructor`'s expansions) `refine_<n>` / `refine'_<n>`,
+ and a hygienic or inaccessible component carries `✝`, `_@` or `_hyg`.
+ Decided by the component's FORM alone — the ONE predicate behind the case
+ badge (`authoredCaseTag`). */
+const MINTED_TAG_PART = /^refine'?_\d+$/;
+export const isGeneratedTagPart = (c: string): boolean =>
+  MINTED_TAG_PART.test(c) ||
+  c.includes("✝") ||
+  c.includes("_@") ||
+  c.includes("_hyg");
+
+/** A case tag with every MINTED component dropped (`refine_4.inl` → `inl`,
+ `refine_3` → nothing). `caseLabel` is built from it, and `caseLabel` is the
+ one string `caseSize` measures and the view paints, so a minted tag gets no
+ badge in either. */
+export function authoredCaseTag(tag: string | undefined): string | undefined {
+  if (!tag) return undefined;
+  const kept = tag.split(".").filter((c) => c !== "" && !isGeneratedTagPart(c));
+  return kept.length > 0 ? kept.join(".") : undefined;
+}
+
 /** The case badge's text: the goal's own tag, plus what B5's arm says the
     branch bound there — the pattern the author wrote (`inl ⟨k, hk⟩`) where
     there is one, else the names (`succ k ih`). A badge is only ever GROWN,
@@ -556,6 +579,36 @@ function attributeComments(
     if (prev) add(tacticId(prev.goalBefore.id), text);
   }
   return { text: out, ranges, flags, flagRanges };
+}
+
+/** THE LABEL'S TAIL — trailing syntax whose meaning the tree already draws,
+ dropped from the DRAWN label (2026-10-23). Two tokens, each admitted by DATA
+ about the step and never by reading further into the text than the token:
+ - ` := by` — the by-block IS the step's spawned subtree, drawn below it; only
+   where the step spawned goals (`have h : T := by`, `suffices … := by`).
+ - ` with` — B5 says the author wrote `with | … =>` alternatives (`withAlts`)
+   on an `induction`/`cases`/`match`, whose arms are drawn as case children.
+   `rcases … with h | h` keeps its `with`: its pattern follows the keyword,
+   so it is never the TRAILING token.
+ A SUFFIX is cut, so every prefix offset into the label is unchanged — the
+ token colouring's `alignInLabel` (the tactic's source text still starts with
+ the shorter label) and every head-word read keep working; editing and
+ deletion read `TacticEdit`/`deleteSlots` text, never the label. */
+const ALTS_FORMS = new Set(["induction", "cases", "match"]);
+export function dropDrawnTail(
+  label: string,
+  spawned: boolean,
+  branch?: { form: string; withAlts?: boolean },
+): string {
+  if (spawned) {
+    const m = /\s*:=\s*by$/.exec(label);
+    if (m && m.index > 0) return label.slice(0, m.index);
+  }
+  if (branch?.withAlts && ALTS_FORMS.has(branch.form)) {
+    const m = /\s+with$/.exec(label);
+    if (m && m.index > 0) return label.slice(0, m.index);
+  }
+  return label;
 }
 
 function cleanLabel(label: string, comments: SourceComment[]): string {
@@ -1298,11 +1351,13 @@ export function proofToTree(
       // an arm under a goal that shares its parent's tag adds no badge, so no
       // node gains height it did not have.
       caseLabel: armLabel(
-        thisCase === parentCase
-          ? undefined
-          : parentCase && thisCase?.startsWith(parentCase + ".")
-            ? thisCase.slice(parentCase.length + 1)
-            : thisCase,
+        authoredCaseTag(
+          thisCase === parentCase
+            ? undefined
+            : parentCase && thisCase?.startsWith(parentCase + ".")
+              ? thisCase.slice(parentCase.length + 1)
+              : thisCase,
+        ),
         arm,
       ),
 
@@ -1351,7 +1406,11 @@ export function proofToTree(
     if (!step) return;
 
     const tId = tacticId(goalId);
-    const fullLabel = cleanLabel(step.tacticString, proof.comments ?? []);
+    const fullLabel = dropDrawnTail(
+      cleanLabel(step.tacticString, proof.comments ?? []),
+      (step.spawnedGoals?.length ?? 0) > 0,
+      branchOf(step),
+    );
 
     const collapsed = brief
       ? collapseLabel(fullLabel, branchOf(step)?.form)
