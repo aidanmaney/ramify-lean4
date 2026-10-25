@@ -1,0 +1,37 @@
+diff --git a/src/Lean/Environment.lean b/src/Lean/Environment.lean
+index cf5faa1..3deb1e3 100644
+--- a/src/Lean/Environment.lean
++++ b/src/Lean/Environment.lean
+@@ -1710,9 +1710,20 @@ structure PersistentEnvExtensionDescr (α β σ : Type) extends PersistentEnvExt
+   exportEntriesFn : σ → Array α := useDefaultIfOtherFieldGiven (fun _ => #[]) exportEntriesFnEx
+   exportEntriesFnEx := fun _ s => .uniform (exportEntriesFn s)
+ 
++-- ramify: `pExts.any` below compiled to the UNSPECIALIZED monadic `Array.anyMUnsafe.any`,
++-- which recurses one frame chain per extension already registered (~6 wasm frames each,
++-- ~300 deep by the end of `initialize_Lean`): Safari's worker stack overflowed in `main`.
++-- A tail-recursive loop compiles to a jump.
++private partial def persistentEnvExtensionNameUsed
++    (pExts : Array (PersistentEnvExtension EnvExtensionEntry EnvExtensionEntry EnvExtensionState))
++    (n : Name) (i : Nat) : Bool :=
++  if h : i < pExts.size then
++    if pExts[i].name == n then true else persistentEnvExtensionNameUsed pExts n (i + 1)
++  else false
++
+ unsafe def registerPersistentEnvExtensionUnsafe {α β σ : Type} [Inhabited σ] (descr : PersistentEnvExtensionDescr α β σ) : IO (PersistentEnvExtension α β σ) := do
+   let pExts ← persistentEnvExtensionsRef.get
+-  if pExts.any (fun ext => ext.name == descr.name) then throw (IO.userError s!"invalid environment extension, '{descr.name}' has already been used")
++  if persistentEnvExtensionNameUsed pExts descr.name 0 then throw (IO.userError s!"invalid environment extension, '{descr.name}' has already been used")
+   let replay? := descr.replay?.map fun replay =>
+     fun oldState newState newConsts s => { s with state := replay oldState.state newState.state newConsts s.state }
+   let ext ← registerEnvExtension (asyncMode := descr.asyncMode) (replay? := replay?) do
+@@ -2051,6 +2062,10 @@ private def readModuleDataPartsOfMod (mod : Name) : IO (Array (ModuleData × Com
+   let sFile := OLeanLevel.server.adjustFileName mFile
+   let server ← unsafe CompactedRegion.read (α := ModuleData) sFile #[main.2]
+   let pFile := OLeanLevel.private.adjustFileName mFile
++  -- ramify: a host may ship without the private parts (the playground's live
++  -- tier imports `Init` at the exported level and drops 187 of 275 MB)
++  unless (← pFile.pathExists) do
++    return #[main, server]
+   let priv ← unsafe CompactedRegion.read (α := ModuleData) pFile #[main.2, server.2]
+   return #[main, server, priv]
+ 

@@ -36,6 +36,12 @@ if has fetch; then
     git clone -q --depth 1 --branch v4.32.2 https://github.com/leanprover/lean4.git
     (cd lean4 && git apply "$here/recipe/lean4-v4.32.2-wasm.patch" && git apply "$here/recipe/lean4-v4.32.2-mac.patch")
   fi
+  # Lean/Environment.lean: the reader skips a missing `.olean.private` (§7), and
+  # registering a persistent env extension no longer recurses once per extension
+  # already registered (Safari's worker stack, §8). Applied to an older checkout
+  # too; a change here means `rm c/Lean/Environment.c` and `objs engine`.
+  (cd lean4 && { git apply --reverse --check "$here/recipe/lean4-v4.32.2-env.patch" 2>/dev/null ||
+    { git checkout -q src/Lean/Environment.lean && git apply "$here/recipe/lean4-v4.32.2-env.patch"; }; })
 fi
 
 if has c; then

@@ -351,8 +351,9 @@ Two things had to be right, both measured:
    then the theorem file's own `theorem`/`def`s are PRIVATE: `find?` misses the
    theorem, and Lean's hints name `_private.0.double.eq_def` (372 mismatches).
    The engine calls `importModulesCore` + `finalizeImport (isModule := false)`.
-2. `readModuleDataPartsOfMod` opens all three parts unconditionally; the mac
-   patch returns `#[main, server]` when the private part is absent.
+2. `readModuleDataPartsOfMod` opens all three parts unconditionally; the env
+   patch (`recipe/lean4-v4.32.2-env.patch`, applied by `build-mac.sh fetch`)
+   returns `#[main, server]` when the private part is absent.
 
 `RAMIFY_EXPORTED=1` forces the exported level in the NATIVE engine (which has
 the private files), so the identity check runs before any wasm build. In the
@@ -360,3 +361,52 @@ browser the downloads are kept in Cache Storage (`ramify-live-v1`, keyed on
 Last-Modified): measured on localhost the first start is ~0.8 s and a cached
 start ~3 s (reading 156 MB back costs more than a localhost fetch); over a real
 network the cache is the difference between ~35 MB and nothing.
+
+## 8. Safari's worker stack (2026-10-24)
+
+Safari 27.2 never started live Lean: `RangeError: Maximum call stack size
+exceeded` under `callMain` (Chrome and Firefox start). That is the ENGINE's
+native stack, which also bounds wasm frames — not Emscripten's `STACK_SIZE`
+(the shadow stack in linear memory). Reproduced under node, whose
+`--stack-size` (KB) bounds wasm frames the same way:
+`echo | node --stack-size=N scripts/wasm/live-stdio.mjs build-wasm/out/web build-wasm/out/web/init.tar`.
+
+**The cause was not the module-initializer chain** (that is shallow: v4.32's
+`lean_initialize` → `initialize_Lean_*` is a handful of frames) but ONE loop.
+`registerPersistentEnvExtensionUnsafe` checks the name with
+`pExts.any (·.name == descr.name)`, which compiles (upstream stage0 too) to the
+UNSPECIALIZED monadic `Array.anyMUnsafe.any`: `bind (p a[i]) fun b => … any (i+1)`
+through `lean_apply_4`, i.e. ~6 native frames per extension ALREADY registered.
+Lean registers 188 persistent extensions during `initialize_Lean`, so the last
+registrations ran ~1100 frames deep (a `--profiling-funcs` link named them;
+the overflow at 150 KB was in `initialize_Lean_Meta_Tactic_Rfl`, 163 deep).
+Natively the 8 MB main stack hides it. The fix is in the env patch: the check is
+a tail-recursive `persistentEnvExtensionNameUsed`, which the compiler turns into
+a `goto` (`c/Lean/Environment.c` regenerated, `objs engine` rebuilt;
+`live.wasm` 68,899,061 → 68,898,693 bytes; `live.js`, `live.worker.js`,
+`init.tar` byte-identical).
+
+| node `--stack-size` (KB) | start-up before | start-up after | ordinary answers | `simp` loops to maxRecDepth (18 steps) |
+|---|---|---|---|---|
+| 984 (default), 600 | ok | ok | ok | ok |
+| 500, 400 | ok | ok | ok | overflow |
+| 300, 200 | ok | ok | ok (8290/8290) | overflow |
+| 150 | **overflow** | ok | overflow | overflow |
+| 100, 95 | overflow | ok | — | — |
+| 90 | overflow | overflow | — | — |
+
+`live-check` over the current bakes at the default stack: **8308/8308
+identical** after the fix. So start-up now needs under half the stack it did
+(≈95 KB against ≈200 KB). **What is left:** answering needs more than start-up
+ever did — ordinary steps 150–200 KB (genuine elaborator nesting: `rw [← h]`
+is ~18 nested `evalTactic` levels, ~570 frames through `lean_apply_*`), and the
+18 baked `simp` steps that natively end in "maximum recursion depth has been
+reached" need 500–600 KB (Lean's `maxRecDepth` counts Lean-level depth, not
+native frames). If Safari's worker limit sits between 95 and ~200 KB-of-V8,
+Lean now starts there and a deep answer fails as `live Lean: Maximum call stack
+size exceeded` (the worker catches it per answer — but a RangeError unwinds
+through wasm without running C++ cleanups, so the instance after one is not
+guaranteed sound). Next steps, unbuilt: measure Safari's worker depth; a
+lower `maxRecDepth` in the wasm engine only (the error text is the same at any
+limit, but which steps hit it would change); restarting the worker after an
+overflow.
