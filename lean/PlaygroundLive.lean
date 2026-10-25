@@ -226,6 +226,21 @@ def elabFile (src : String) : IO Environment := do
 
 def errJson (s : String) : Json := Json.mkObj [("error", toJson s)]
 
+/-- The answers' options: the baker's (`maxHeartbeats` 20000; `maxRecDepth` is
+Lean's default 512 — `Core.Context.maxRecDepth := 4000` is a no-op, since
+`CoreM.toIO` re-derives the field from the options), unless
+`RAMIFY_MAX_REC_DEPTH` lowers `maxRecDepth`. Only the WASM engine sets it
+(`live_shim.c`, from the build's `-DRAMIFY_MAX_REC_DEPTH`): a browser worker's
+native stack is far smaller than a native thread's, and Lean's limit counts
+Lean-level depth, not native frames, so a runaway `simp` overflowed the stack
+before it reached 512. The error is the same text at any limit
+(docs/wasm-spike.md §8). -/
+def answerOptions : IO Options := do
+  let o := maxHeartbeats.set {} 20000
+  return match (← IO.getEnv "RAMIFY_MAX_REC_DEPTH").bind String.toNat? with
+    | some n => maxRecDepth.set o n
+    | none => o
+
 def answer (req : Json) : IO Json := do
   let file ← IO.ofExcept (req.getObjValAs? String "file")
   let thm ← IO.ofExcept (req.getObjValAs? String "theorem")
@@ -237,7 +252,7 @@ def answer (req : Json) : IO Json := do
   let some ci := env.find? thm.toName
     | return errJson s!"no theorem {thm}{match (← fileErrs.get)[file]? with | some e => s!": {e}" | none => ""}"
   let ctx : Core.Context := {
-    fileName := "<playground>", fileMap := default, options := maxHeartbeats.set {} 20000,
+    fileName := "<playground>", fileMap := default, options := ← answerOptions,
     maxHeartbeats := 20000 * 1000, maxRecDepth := 4000 }
   let parse (t : String) : Except String Syntax := Parser.runParserCategory env `tactic t
   let act : TermElabM Json := do

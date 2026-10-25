@@ -38,6 +38,20 @@ static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &
 
 int main(int argc, char ** argv) {
   double t0 = now_ms();
+#ifdef RAMIFY_MAX_REC_DEPTH
+  // the answers' maxRecDepth (PlaygroundLive.lean `answerOptions`), lowered in the
+  // wasm build only: a browser worker's native stack overflows long before a runaway
+  // `simp` reaches Lean's 512 (docs/wasm-spike.md §8). An ENV already set wins.
+#define RAMIFY_STR2(x) #x
+#define RAMIFY_STR(x) RAMIFY_STR2(x)
+#ifdef __EMSCRIPTEN__
+  // Lean's `IO.getEnv` reads Emscripten's JS-side `ENV` (runtime/io.cpp), not libc's environ
+  EM_ASM({ if (!ENV["RAMIFY_MAX_REC_DEPTH"]) ENV["RAMIFY_MAX_REC_DEPTH"] = UTF8ToString($0); },
+         RAMIFY_STR(RAMIFY_MAX_REC_DEPTH));
+#else
+  setenv("RAMIFY_MAX_REC_DEPTH", RAMIFY_STR(RAMIFY_MAX_REC_DEPTH), 0);
+#endif
+#endif
   lean_initialize();
   lean_object * res = initialize_LiveEngine(1 /* builtin */);
   lean_io_mark_end_initialization();

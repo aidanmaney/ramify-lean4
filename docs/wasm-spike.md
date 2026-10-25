@@ -410,3 +410,57 @@ guaranteed sound). Next steps, unbuilt: measure Safari's worker depth; a
 lower `maxRecDepth` in the wasm engine only (the error text is the same at any
 limit, but which steps hit it would change); restarting the worker after an
 overflow.
+
+### Answers: tail calls, no profiler frames, `maxRecDepth` 80 (2026-10-25)
+
+Measured with a fresh engine per probe (`node --stack-size=N`, the worst case: the
+first answer after start runs before V8 has tiered the code up, and its frames are
+larger — a warm engine passes the same steps with ~10% less), bisected to 1–5 KB.
+The three probes are the deepest of each kind: ZeroAdd's `rw [Nat.add_comm]` after
+`intro n` (20 nested `evalTactic` levels, 677 frames, the owner's `rw [Nat.add_zero]`
+replays it as its path, so the two move together), Double's fourth `unfold double`
+(the goal's formatter: `andthen_formatter` chains, ~850 frames), and the 18 deep
+`simp [Nat.add_succ]` steps.
+
+| variant (cumulative) | `live.wasm` | start-up | `rw` / owner | `unfold double` | deep `simp` | live-check, 8 engines |
+|---|---|---|---|---|---|---|
+| deployed: C `-O3`, link `-O2` | 68.9 MB | 64 | 207 | 184 | 683 | 15.0 s |
+| link `-O3` | 66.8 | 64 | 207 | — | 624 | — |
+| link `-Os` | 64.8 | 64 | 207 | — | 624 | — |
+| + `evalTactic` without `profileitM` | 64.8 | 64 | 183 | — | 624 | — |
+| + `-mtail-call` (Lean's C, engine, link) | 64.8 | 64 | 156 | — | 617 | 15.4 s |
+| + C++ runtime `-mtail-call` | 64.8 | 64 | 156 | — | 617 | — (no change; reverted) |
+| + C `-Os` (**chosen**) | **63.0** | 64 | 157 | 178 | 611 | 15.5 s |
+| + `maxRecDepth` 80 (**chosen**) | 63.0 | 64 | 160 | 178 | **152** | 14.7 s |
+
+(`-O2`/`-O3`/`-Os` at link and `-O3`/`-Os` for the C change NOTHING for the ordinary
+steps — the depth is frame COUNT, not frame size; V8 `--liftoff-only` and
+`--no-liftoff` both read 219 for the `rw`, so the tier is not a lever either.)
+
+- **Tail calls** (`-mtail-call`: Lean's generated C is full of `return f(…)` through
+  closures; Safari 18.2+, Chrome 112+, Firefox 121+ run `return_call`). −25 %.
+- **`evalTactic`'s `profileitM`** (`recipe/lean4-v4.32.2-stack.patch`): every nested
+  tactic went through `profileitM` → `profileitIOUnsafe` → `lean_profileit` (a C++
+  `time_task`) → `EIO.toBaseIO` → back, ~10 frames per level, though with `profiler`
+  off it does nothing. The patch calls it only where `profiler` is on. −11 %.
+- **`maxRecDepth`.** The baker's and engine's `Core.Context.maxRecDepth := 4000` was
+  a no-op: `CoreM.toIO` re-derives the field from the OPTIONS, so every answer ran
+  at Lean's default 512. The engine now sets the `maxRecDepth` OPTION from
+  `RAMIFY_MAX_REC_DEPTH` (`answerOptions`, PlaygroundLive.lean), which only the wasm
+  build sets (`live_shim.c` writes it into Emscripten's JS `ENV` — Lean's `IO.getEnv`
+  reads that, not libc's environ — from `-DRAMIFY_MAX_REC_DEPTH`, `LIVE_MAX_REC_DEPTH`
+  in build-mac.sh, default 80). Natively, every baked step is identical at 512, 256,
+  128, 64, 56 and 48; 40 changes 4 (NoSqrtTwo's `decide`/`trivial` start failing).
+  The deep `simp` costs ~1.05 KB per level (48 → 117, 64 → 134, 80 → 152, 96 → 168,
+  112 → 185, 128 → 204, 256 → 375, 512 → 611 KB) and ends in the same error text at
+  any limit. 80 is the largest depth at which the runaway `simp` is no longer the
+  deepest answer (152 against `unfold double`'s 178), with 1.7× the depth any baked
+  step uses.
+
+**Thresholds now** (fresh engine): start-up 64 KB (with one trivial answer), every
+ordinary baked step ≤ 178 KB, the owner's step 160, deep `simp` 152 — so **180 KB
+answers all 8308 baked steps identically, fresh engine per step** (a full
+`--fresh` run), against ≥ 683 before; a warm engine passes them all at 170
+(2 overflow at 160). Native and wasm live-check at the default stack: 8308/8308.
+Download: `live.wasm.gz` 13.9 → 12.6 MB. Still unknown: Safari's worker limit in
+V8-equivalent KB; the deepest answer now needs ~26 % of what it did (178 against 683).

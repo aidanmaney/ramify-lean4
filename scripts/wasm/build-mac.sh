@@ -15,7 +15,14 @@
 #
 # Output: build-wasm/out/web/{live.js,live.wasm,live.worker.js,init.tar}, served by
 # web/scripts/serve-playground.mjs. Measured 2026-10-05 on an M-series Mac (10 cores):
-# C 4 min, objs 2.5 min, oleans ~15 min, engine link ~6 min.
+# C 4 min, objs 2.5 min, oleans ~15 min, engine link ~4.5 min.
+#
+# Native stack (docs/wasm-spike.md §8 — a browser worker's stack bounds wasm frames;
+# Safari's is the smallest): Lean's C and the engine are compiled `-Os -mtail-call`
+# (wasm tail calls: Safari 18.2+, Chrome 112+, Firefox 121+), `evalTactic` skips its
+# `profileitM` wrapper while the profiler is off (recipe/lean4-v4.32.2-stack.patch),
+# and the engine's answers run under `maxRecDepth` LIVE_MAX_REC_DEPTH (80; the native
+# baker keeps Lean's 512 — identical answers down to 48, measured).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
@@ -42,6 +49,11 @@ if has fetch; then
   # too; a change here means `rm c/Lean/Environment.c` and `objs engine`.
   (cd lean4 && { git apply --reverse --check "$here/recipe/lean4-v4.32.2-env.patch" 2>/dev/null ||
     { git checkout -q src/Lean/Environment.lean && git apply "$here/recipe/lean4-v4.32.2-env.patch"; }; })
+  # Lean/Elab/Tactic/Basic.lean: no `profileitM` frames per nested `evalTactic` while the
+  # profiler is off (§8); applying it drops that module's C, so `c objs engine` rebuild it.
+  (cd lean4 && { git apply --reverse --check "$here/recipe/lean4-v4.32.2-stack.patch" 2>/dev/null ||
+    { git checkout -q src/Lean/Elab/Tactic/Basic.lean && git apply "$here/recipe/lean4-v4.32.2-stack.patch" &&
+      rm -f "$W/c/Lean/Elab/Tactic/Basic.c"; }; })
 fi
 
 if has c; then
@@ -63,16 +75,21 @@ if has cpp; then
   make -C $B -j"$J" leancpp leanrt leanshell leanmain
 fi
 
-CFLAGS=(-O3 -DNDEBUG -pthread -fwasm-exceptions -ffp-contract=off -Wno-unused-command-line-argument -I$B/include)
+# -Os -mtail-call: the smallest native stack per answer at the same speed (§8: against
+# -O3 without tail calls, 157 against 183 KB for the deepest `rw`, 63.0 against 68.9 MB)
+OPT=(-Os -mtail-call)
+CFLAGS=("${OPT[@]}" -DNDEBUG -pthread -fwasm-exceptions -ffp-contract=off -Wno-unused-command-line-argument -I$B/include)
+LIVE_MAX_REC_DEPTH=${LIVE_MAX_REC_DEPTH:-80}
 
 if has objs; then
   emsdk_env
+  # objects built with other flags are rebuilt (the stamp names the flags)
+  mkdir -p o; [ "$(cat o/.cflags 2>/dev/null)" = "${CFLAGS[*]}" ] || { find o -name '*.o' -delete; echo "${CFLAGS[*]}" > o/.cflags; }
   cc1() {
     m=$1; mkdir -p "o/$(dirname "$m")"; [ "o/$m.o" -nt "c/$m.c" ] && return 0
-    emcc -c -O3 -DNDEBUG -pthread -fwasm-exceptions -ffp-contract=off -Wno-unused-command-line-argument \
-      -I$B/include "c/$m.c" -o "o/$m.o" || echo "FAIL o $m"
+    emcc -c $CF "c/$m.c" -o "o/$m.o" || echo "FAIL o $m"
   }
-  export -f cc1; export B
+  export -f cc1; export B CF="${CFLAGS[*]}"
   xargs -P "$J" -I{} bash -c 'cc1 {}' < modules.txt
   mkdir -p lib out
   for P in Init Std Lean; do
@@ -81,11 +98,11 @@ if has objs; then
     emar rcs lib/lib$P.a $(cat lib/$P.list)
   done
   python3 "$here/gen-symtab.py" out/symtab.c c Init
-  emcc -c -O2 "${CFLAGS[@]}" out/symtab.c -o out/symtab.o
+  emcc -c "${CFLAGS[@]}" out/symtab.c -o out/symtab.o
 fi
 
 LINK=(-Llib -L$B/lib/lean -lleancpp -lInit -lStd -lLean -lleanrt $B/libuv/src/libuv/libuv.a -lstdc++ -lm
-  -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -fwasm-exceptions -pthread
+  -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=4GB -fwasm-exceptions -pthread -mtail-call
   -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s STACK_SIZE=8MB -s PTHREAD_POOL_SIZE=4 -s FORCE_FILESYSTEM=1)
 
 if has cli; then
@@ -108,10 +125,13 @@ if has engine; then
   (cd "$repo/lean" && lake build playgroundlive >/dev/null)
   for m in ProofTreeBake PlaygroundLive; do cp "$repo/lean/.lake/build/ir/$m.c" live/$m.c; done
   sed 's/initialize_LiveEngine/initialize_ppharness_PlaygroundLive/g' "$here/live_shim.c" > live/live_shim.c
-  for f in ProofTreeBake PlaygroundLive live_shim; do emcc -c "${CFLAGS[@]}" live/$f.c -o live/$f.o; done
+  for f in ProofTreeBake PlaygroundLive; do emcc -c "${CFLAGS[@]}" live/$f.c -o live/$f.o; done
+  # the answers' maxRecDepth (PlaygroundLive.lean `answerOptions`): a runaway `simp`
+  # stops at Lean's own limit before it overflows a browser worker's stack (§8)
+  emcc -c "${CFLAGS[@]}" -DRAMIFY_MAX_REC_DEPTH="$LIVE_MAX_REC_DEPTH" live/live_shim.c -o live/live_shim.o
   emcc live/live_shim.o live/PlaygroundLive.o live/ProofTreeBake.o out/symtab.o "${LINK[@]}" -s EXIT_RUNTIME=0 \
     -s EXPORTED_FUNCTIONS=_main,_malloc,_free,_ramify_init,_ramify_answer \
-    -s EXPORTED_RUNTIME_METHODS=FS,ENV,ccall,UTF8ToString -O2 -o out/web/live.js
+    -s EXPORTED_RUNTIME_METHODS=FS,ENV,ccall,UTF8ToString -Os -o out/web/live.js
   # the oleans the engine imports, WITHOUT `.olean.private` (187 of 275 MB): the
   # engine imports Init at the exported level, and the reader (mac patch) skips
   # a missing private part — 36,179/36,179 identical (docs/wasm-spike.md §7)

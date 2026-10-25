@@ -1,0 +1,22 @@
+diff --git a/src/Lean/Elab/Tactic/Basic.lean b/src/Lean/Elab/Tactic/Basic.lean
+index fbbedd6..731aad1 100644
+--- a/src/Lean/Elab/Tactic/Basic.lean
++++ b/src/Lean/Elab/Tactic/Basic.lean
+@@ -188,9 +188,16 @@ structure EvalTacticFailure where
+   exception : Exception
+   state : SavedState
+ 
++/-- `profileitM`, but only where `profiler` is on: off (the default) it is the
++identity, and skipping it saves ~10 native frames per nested `evalTactic` (a
++browser worker's stack, ramify docs/wasm-spike.md §8). -/
++@[inline] private def profileTactic (stx : Syntax) (x : TacticM α) : TacticM α := do
++  let opts ← getOptions
++  if profiler.get opts then profileitM Exception "tactic execution" (decl := stx.getKind) opts x else x
++
+ partial def evalTactic (stx : Syntax) : TacticM Unit := do
+   checkSystem "tactic execution"
+-  profileitM Exception "tactic execution" (decl := stx.getKind) (← getOptions) <|
++  profileTactic stx <|
+   withRef stx <| withIncRecDepth <| withFreshMacroScope <| match stx with
+     | .node _ k _    =>
+       if k == nullKind then
