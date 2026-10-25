@@ -71,6 +71,7 @@ import {
   liveBlockedReason,
   type LiveStatus,
 } from "./playgroundLive";
+import { holdWhile } from "./quietScreen";
 import { injectStyleOnce, makeTaggedRenderersWith } from "./taggedCore";
 import type { TaggedText } from "./taggedText";
 import {
@@ -222,6 +223,20 @@ const shown = {
   timer: 0 as ReturnType<typeof setTimeout> | 0,
   fs: new Set<() => void>(),
 };
+// a page-thread Lean (Safari) holds the thread while it starts: the step it
+// reports reaches the screen first, and the pacing is skipped to get there (else
+// the thread waited out every queued label's STEP_MIN_MS; once it answers, the
+// paced labels are not waited on)
+holdWhile(() => {
+  if (LIVE.ready || shown.queue.length === 0) return false;
+  if (!shown.timer || shown.queue.length > 1) {
+    clearTimeout(shown.timer);
+    shown.queue = shown.queue.slice(-1);
+    shown.since = 0;
+    showNext();
+  }
+  return shown.queue.length > 0;
+});
 function showNext() {
   shown.timer = 0;
   const hold =

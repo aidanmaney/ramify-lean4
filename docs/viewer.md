@@ -392,6 +392,16 @@ cd web && node scripts/publish.mjs --playground ../demos/playground.txt --live-b
   (`crossOriginIsolated` true, SharedArrayBuffer present, measured), and the
   worker does the same for Lean's pthread workers (`locateFile` of
   `live.worker.js`).
+- **Safari: the page's main thread** (docs/wasm-spike.md §8, 2026-10-25). A
+  Safari worker's 512 KiB native stack is less than some answers need, so where
+  the page's JS stack is at least 4× a worker's (Safari 12.7×, Chrome 2.0×,
+  measured by the same recursion in both; no user-agent test) the SAME
+  `worker.js` is loaded on the page and run there (`self.ramifyLiveHost`;
+  `pagePort` in playgroundLive.ts), Lean's pthreads still blob workers. The page
+  freezes for each answer, after a quiet-screen wait (`web/src/quietScreen.ts`:
+  no finite animation, no input for 150 ms, a painted frame; capped at 1.5 s);
+  a restart terminates the old instance's threads. `?live-host=main|worker`
+  forces a host; the choice is one console line.
 - **The base** is the build's: `--live-base URL` writes `<meta
   name="ramify-live-base">` (default `live/`, empty = no live tier); `?live=`
   still wins. Offered where a base is set AND the page is isolated or can

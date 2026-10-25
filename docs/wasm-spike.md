@@ -464,3 +464,60 @@ answers all 8308 baked steps identically, fresh engine per step** (a full
 (2 overflow at 160). Native and wasm live-check at the default stack: 8308/8308.
 Download: `live.wasm.gz` 13.9 → 12.6 MB. Still unknown: Safari's worker limit in
 V8-equivalent KB; the deepest answer now needs ~26 % of what it did (178 against 683).
+
+### Safari: Lean on the page's main thread (2026-10-25)
+
+Measured in Safari: a worker thread gets 512 KiB of native stack (~467 KiB usable
+to JavaScriptCore), and `rw [Nat.add_comm]` / `rw [Nat.add_zero]` after `intro n`
+need 547–578 KiB there, so they overflow (the worker's catch answers in words and
+the page restarts Lean). Emscripten's pthreads are workers too (the same 512 KiB),
+so moving answers onto one does not help; the page's main thread has ~3.5 MiB.
+Under `jsc` (the scratch driver, inline tasks) both steps answer at
+`--maxPerThreadStackUsage` 3,584 KiB and overflow at 467. So **in Safari live Lean
+runs on the page's main thread**; Chrome and Firefox keep the worker. The cost,
+accepted: the page freezes for each answer (tens of ms) and during start-up.
+
+- **One copy.** `scripts/wasm/playground-worker.js` is a `createHost(post,
+  {version, beforeBlocking})` → `{handle, dispose}`. In a worker it answers the
+  worker's messages as before; loaded on the page (`<script>`, version-tagged) it
+  defines `self.ramifyLiveHost` and playgroundLive.ts's `pagePort` calls `handle`
+  where the worker would get a message, delivering what it posts on a microtask.
+  Manifest, `.gz` + `DecompressionStream`, Cache Storage, `WebAssembly.compile` +
+  `instantiateWasm`, progress, the quit hook and the overflow catch are shared.
+- **live.js on the page** runs inside a function of its own (its text wrapped in a
+  blob `<script>`, no eval), so its top-level `var`s do not land on `window` and a
+  restart leaves nothing global. `mainScriptUrlOrBlob` was already set, so the
+  pthread workers import `live.js` by URL, and `locateFile` still hands them a blob
+  `live.worker.js` (a page-made blob worker inherits the page's isolation). On the
+  page `ENVIRONMENT_IS_WEB` holds, so `_emscripten_thread_init` gets
+  `canBlock = false` and a futex wait is Emscripten 3.1.44's busy spin
+  (`futex_wait_main_browser_thread`), which calls `_emscripten_yield` and so serves
+  the pthreads' proxied calls (MEMFS lives on this thread) while it waits;
+  `ALLOW_BLOCKING_ON_MAIN_THREAD` is the default (on) and
+  `_emscripten_check_blocking_allowed` is empty in this build. **No relink.**
+- **Restart without a leak.** `dispose` calls `PThread.terminateAllThreads()` (in
+  Chrome: 4 workers made at start, the same 4 terminated, none made by answers)
+  and releases the main thread's mailbox wait: Emscripten parks it on
+  `Atomics.waitAsync` and re-arms it on every wake, which would keep a dead
+  instance's memory reachable for ever, so live.js gets an `Atomics` whose
+  `waitAsync` this host notifies on dispose and whose wake then reaches nothing.
+- **The host is chosen by measurement, not the user agent** (`chooseHost`): the
+  same trivial recursion, best of three, on the page and in a throwaway blob
+  worker; the page wins from 4× (`MAIN_RATIO`). Safari 45,625 against 3,599
+  (12.7×); Chrome 15,515 against 7,943 (2.0×; Chrome's worker answers every
+  baked step, §8). Firefox not yet measured. `?live-host=main|worker` overrides;
+  the choice and its numbers are one console line (`[ramify] live Lean on …`).
+- **A quiet screen first** (`web/src/quietScreen.ts`, page host only): before
+  Lean's start-up, the Init import and every answer, wait until no finite
+  animation runs, no pointer/key/wheel/scroll event for 150 ms (the view's eased
+  scrolls are scroll events), nothing `holdWhile`-registered is busy (the
+  playground's paced status label, while Lean is not yet ready), then one painted
+  frame (rAF, then a timeout; 100 ms fallback where rAF does not fire), capped at
+  1.5 s. Answers run one after another, as in the worker (nothing supersedes).
+  Measured in Chrome with `?live-host=main`: answers typed in the editor waited
+  89–102 ms; start-up waited at the cap (1.5–1.8 s, the paced labels) and then
+  0.2–0.8 s before the Init import.
+- **Identical answers**: `intro n`, `rw [Nat.add_comm]`, `rw [Nat.add_zero]`
+  (both closing and failing), `simp`, `omega`, `exact Nat.zero_add n` give
+  byte-identical results (less `ms`) on both hosts, before and after a restart,
+  asked in order and all at once.

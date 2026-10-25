@@ -53,13 +53,23 @@ if (native) {
 }
 // the page makes the worker from a blob (playgroundLive.ts), so URLs are
 // resolved against the base the init message carries, not self.location
-const NATIVE_WORKER = `
-let base = "";
-self.onmessage = async ({ data }) => {
-  if (data.init) { base = data.init.base; postMessage({ ready: { ms: 0 } }); return; }
-  const r = await fetch(base + "native", { method: "POST", body: data.answer });
-  postMessage({ id: data.id, result: await r.json() });
-};`;
+// (as worker.js, it also defines the PAGE host where it is loaded on the page:
+// playgroundLive.ts `?live-host=main`)
+const NATIVE_WORKER = `(function () {
+function createHost(post) {
+  let base = "";
+  return {
+    async handle(data) {
+      if (data.init) { base = data.init.base; post({ ready: { ms: 0 } }); return; }
+      const r = await fetch(base + "native", { method: "POST", body: data.answer });
+      post({ id: data.id, result: await r.json() });
+    },
+    dispose() {},
+  };
+}
+if (typeof window === "undefined") { const h = createHost(postMessage); self.onmessage = ({ data }) => h.handle(data); }
+else self.ramifyLiveHost = createHost;
+})();`;
 
 // A page is never served from the browser's cache without asking (a stale
 // playground.html pointed at a bundle hash that no longer exists — Chrome

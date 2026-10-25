@@ -6,7 +6,7 @@
 //   node scripts/wasm/package-live.mjs [--from build-wasm/out/web] [--out build-wasm/out/deploy]
 //
 // Writes worker.js, live.js, live.worker.js, live.wasm.gz, init.tar.gz,
-// .nojekyll and manifest.json {version, download, files: {name: {bytes, gzBytes}}}
+// .nojekyll and manifest.json {version, download, files: {name: {bytes, gzBytes, hash}}}
 // — `bytes` the file's own (uncompressed) size, `gzBytes` what goes over the
 // wire. `version` is a content hash: the worker's Cache Storage keys on it, so
 // a new build evicts the old one and an unchanged one is read from disk.
@@ -53,8 +53,9 @@ const hashes = [];
 for (const [name, src] of plain) {
   fs.copyFileSync(src, path.join(out, name));
   const bytes = fs.statSync(src).size;
-  files[name] = { bytes, gzBytes: bytes };
-  hashes.push(`${name}:${await sha(src)}`);
+  const hash = await sha(src);
+  files[name] = { bytes, gzBytes: bytes, hash: hash.slice(0, 16) };
+  hashes.push(`${name}:${hash}`);
 }
 for (const [name, src] of zipped) {
   const dst = path.join(out, name);
@@ -67,8 +68,10 @@ for (const [name, src] of zipped) {
     fs.renameSync(`${dst}.tmp`, dst);
     console.log(`${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
-  files[name] = { bytes: fs.statSync(src).size, gzBytes: fs.statSync(dst).size };
-  hashes.push(`${name}:${await sha(src)}`);
+  const hash = await sha(src);
+  // the big files are cached by their OWN hash: a change to the scripts alone re-downloads nothing big
+  files[name] = { bytes: fs.statSync(src).size, gzBytes: fs.statSync(dst).size, hash: hash.slice(0, 16) };
+  hashes.push(`${name}:${hash}`);
 }
 fs.writeFileSync(path.join(out, ".nojekyll"), "");
 const version = crypto.createHash("sha256").update(hashes.join("\n")).digest("hex").slice(0, 16);

@@ -1,4 +1,5 @@
-// THE LIVE TIER — real Lean, compiled to WebAssembly, in a Web Worker.
+// THE LIVE TIER — real Lean, compiled to WebAssembly, in a Web Worker (or, where a
+// worker's stack is too small — Safari — on the page's own main thread).
 //
 // The baked table (playgroundAnswer.ts) answers what was computed in advance.
 // This engine answers the rest: `lean/PlaygroundLive.lean` (the same stepping
@@ -14,6 +15,12 @@
 // (GitHub Pages) cannot, so on the reader's ask the page installs a service
 // worker that adds them (`web/public/coi-sw.js`) and reloads once
 // (`isolateAndReload`); without either the tier says so instead of trying.
+//
+// The HOST is chosen once per page (`chooseHost`): a worker, unless the page's
+// JS stack is MAIN_RATIO times a worker's, as in Safari (512 KiB in a worker,
+// less than `rw [Nat.add_comm]` needs; docs/wasm-spike.md §8). Then the same
+// worker.js runs on this thread (`pagePort`) and the page freezes for each
+// answer, after a quiet-screen wait (quietScreen.ts). `?live-host=` overrides.
 import {
   NOT_BAKED,
   goalKey,
@@ -22,6 +29,7 @@ import {
   type Engine,
   type Table,
 } from "./playgroundAnswer";
+import { quietScreen, watchInput } from "./quietScreen";
 import type { TaggedText } from "./taggedText";
 import type { BakedPopup, BakedTag } from "./viewerPayload";
 
@@ -51,19 +59,110 @@ export interface LiveRequest {
   tactic: string;
 }
 
-/** One worker = one Lean. Created on the reader's click, kept for the page. */
+/** Where Lean runs: a Web Worker, or the page's own main thread. */
+export type LiveHostKind = "worker" | "main";
+
+/** What LiveLean talks to: a worker, or worker.js's host loaded on the page. */
+interface Port {
+  post(msg: object): void;
+  terminate(): void;
+}
+
+/** worker.js on the page (`self.ramifyLiveHost`, scripts/wasm/playground-worker.js). */
+type PageHost = { handle(msg: object): Promise<void>; dispose(): void };
+type PageHostFactory = (
+  post: (m: HostMessage) => void,
+  opts: { version: string; beforeBlocking: () => Promise<void> },
+) => PageHost;
+
+type HostMessage = {
+  progress?: { step: string; done?: number; total?: number };
+  ready?: { ms: number };
+  failed?: string;
+  id?: number;
+  restart?: boolean;
+  result?: LiveResult;
+};
+
+/** JS recursion depth here: the same code is run in a worker (`workerDepth`), so
+ the two numbers compare. The best of three — the first runs before the JIT. */
+function stackDepth(): number {
+  let best = 0;
+  for (let k = 0; k < 3; k++) {
+    let n = 0;
+    const f = (): void => {
+      n++;
+      f();
+    };
+    try {
+      f();
+    } catch {
+      /* the limit */
+    }
+    best = Math.max(best, n);
+  }
+  return best;
+}
+
+function workerDepth(): Promise<number> {
+  return new Promise((ok) => {
+    let w: Worker | null = null;
+    const done = (n: number) => {
+      w?.terminate();
+      ok(n);
+    };
+    try {
+      const src = `postMessage((${stackDepth.toString()})());`;
+      w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+      w.onmessage = (e) => done(Number(e.data) || 0);
+      w.onerror = () => done(0);
+      setTimeout(() => done(0), 3000);
+    } catch {
+      done(0);
+    }
+  });
+}
+
+/** The page's thread wins where its stack is at least this many times a
+ worker's. Measured (docs/wasm-spike.md §8): Safari 3,599 frames in a worker
+ against 45,625 on the page (12.7×) — a worker's 512 KiB is less than some
+ answers need; Chrome 15,509 against 7,943 (2.0×). */
+const MAIN_RATIO = 4;
+
+/** Which host, and why (one console line). `?live-host=main|worker` decides
+ for testing; otherwise the stack depths do — no user-agent sniffing. */
+async function chooseHost(): Promise<{ kind: LiveHostKind; why: string }> {
+  const forced = new URLSearchParams(location.search).get("live-host");
+  if (forced === "main" || forced === "worker") return { kind: forced, why: `?live-host=${forced}` };
+  const main = stackDepth();
+  const worker = await workerDepth();
+  const ratio = worker > 0 ? main / worker : Infinity;
+  const kind = ratio >= MAIN_RATIO ? "main" : "worker";
+  return {
+    kind,
+    why: `JS stack depth: page ${main}, worker ${worker} (${ratio.toFixed(1)}×; the page from ${MAIN_RATIO}×)`,
+  };
+}
+
+/** One host = one Lean. Created on the reader's click, kept for the page. */
 export class LiveLean {
   status: LiveStatus = { kind: "off" };
-  private worker: Worker | null = null;
+  /** Where Lean runs, once chosen (kept across restarts). */
+  host: LiveHostKind | null = null;
+  private port: Port | null = null;
   private next = 1;
   private pending = new Map<number, (r: LiveResult) => void>();
   private listeners = new Set<(s: LiveStatus) => void>();
+  /** Bumped by every start/stop, so a start still choosing its host is dropped. */
+  private gen = 0;
 
   private readonly base: string;
 
   constructor(base: string) {
     // absolute: the worker resolves URLs against ITS location, not the page's
     this.base = new URL(base, location.href).href;
+    // `?live-debug`: `window.__live` is this, so a test can ask it directly
+    if (new URLSearchParams(location.search).has("live-debug")) Object.assign(globalThis, { __live: this, __quietWaits: [] });
   }
 
   subscribe(f: (s: LiveStatus) => void): () => void {
@@ -81,12 +180,50 @@ export class LiveLean {
   }
 
   start(): void {
-    if (this.worker || this.status.kind === "ready") return;
+    if (this.port || this.status.kind === "ready") return;
     if (!globalThis.crossOriginIsolated) {
       this.set({ kind: "failed", why: NOT_ISOLATED });
       return;
     }
+    if (this.status.kind === "loading" && this.status.step === "starting") return; // choosing
     this.set({ kind: "loading", step: "starting" });
+    const gen = ++this.gen;
+    const go = (kind: LiveHostKind) => {
+      if (gen !== this.gen) return;
+      this.port = kind === "main" ? this.pagePort() : this.workerPort();
+      this.port.post({ init: { base: this.base } });
+    };
+    if (this.host) {
+      go(this.host);
+      return;
+    }
+    void chooseHost().then(({ kind, why }) => {
+      if (gen !== this.gen) return;
+      this.host = kind;
+      console.log(`[ramify] live Lean on ${kind === "main" ? "the page's main thread" : "a Web Worker"} — ${why}`);
+      go(kind);
+    });
+  }
+
+  private receive(data: HostMessage) {
+    if (data.progress) this.set({ kind: "loading", ...data.progress });
+    else if (data.ready) this.set({ kind: "ready", ms: data.ready.ms });
+    else if (data.failed) this.fail(data.failed);
+    else if (data.id) {
+      const k = this.pending.get(data.id);
+      this.pending.delete(data.id);
+      if (data.result) k?.(data.result);
+      // the step overflowed Lean's stack: a fresh instance (from the cache, a
+      // few seconds) — the playground caches the answer, so the same step is
+      // not asked again
+      if (data.restart) {
+        this.stop();
+        this.start();
+      }
+    }
+  }
+
+  private workerPort(): Port {
     // A worker made from a URL is held to ITS OWN response's headers, and a
     // static host's carry no COEP (and the assets live outside the service
     // worker's scope): a blob that imports the script inherits this page's
@@ -97,26 +234,54 @@ export class LiveLean {
     // handed to worker.js's own handler once it has loaded.
     const src = `const q = []; self.onmessage = (e) => q.push(e); fetch(${JSON.stringify(`${this.base}manifest.json`)}, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null).then((m) => { self.LIVE_VERSION = m && m.version ? String(m.version) : ""; importScripts(${JSON.stringify(`${this.base}worker.js`)} + (self.LIVE_VERSION ? "?v=" + self.LIVE_VERSION : "")); for (const e of q) self.onmessage(e); }).catch((e) => postMessage({ failed: String(e && e.message || e) }));`;
     const w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
-    this.worker = w;
-    w.onmessage = ({ data }) => {
-      if (data.progress) this.set({ kind: "loading", ...data.progress });
-      else if (data.ready) this.set({ kind: "ready", ms: data.ready.ms });
-      else if (data.failed) this.fail(data.failed);
-      else if (data.id) {
-        const k = this.pending.get(data.id);
-        this.pending.delete(data.id);
-        k?.(data.result);
-        // the step overflowed the worker's stack: a fresh instance (from the
-        // cache, a few seconds) — the playground caches the answer, so the
-        // same step is not asked again
-        if (data.restart) {
-          this.stop();
-          this.start();
-        }
-      }
-    };
+    w.onmessage = ({ data }) => this.receive(data as HostMessage);
     w.onerror = (e) => this.fail(e.message || "the worker stopped");
-    w.postMessage({ init: { base: this.base } });
+    return { post: (m) => w.postMessage(m), terminate: () => w.terminate() };
+  }
+
+  /** The same worker.js, on this thread: each blocking call waits for a quiet
+   screen first (quietScreen.ts), and messages run one after another, as a
+   worker's would. */
+  private pagePort(): Port {
+    watchInput();
+    const base = this.base;
+    let host: PageHost | null = null;
+    let stopped = false;
+    const deliver = (m: HostMessage) => {
+      // after this call returns, as a worker's message would arrive
+      queueMicrotask(() => {
+        if (!stopped) this.receive(m);
+      });
+    };
+    const beforeBlocking = async () => {
+      const ms = await quietScreen();
+      (globalThis as { __quietWaits?: number[] }).__quietWaits?.push(Math.round(ms)); // ?live-debug
+      if (ms > QUIET_LOG_MS) console.log(`[ramify] waited ${Math.round(ms)} ms for a quiet screen`);
+    };
+    let chain: Promise<unknown> = (async () => {
+      let version = "";
+      try {
+        const r = await fetch(`${base}manifest.json`, { cache: "no-cache" });
+        const m = r.ok ? ((await r.json()) as { version?: unknown }) : null;
+        version = m && m.version ? String(m.version) : "";
+      } catch {
+        /* the old layout: no manifest */
+      }
+      const g = globalThis as { ramifyLiveHost?: PageHostFactory };
+      if (!g.ramifyLiveHost) await loadScript(`${base}worker.js${version ? `?v=${version}` : ""}`);
+      if (!g.ramifyLiveHost) throw new Error("worker.js did not define its page host");
+      if (!stopped) host = g.ramifyLiveHost(deliver, { version, beforeBlocking });
+    })().catch((e: unknown) => deliver({ failed: String((e as Error)?.message ?? e) }));
+    return {
+      post: (m) => {
+        chain = chain.then(() => (stopped ? undefined : host?.handle(m))).catch(() => undefined);
+      },
+      terminate: () => {
+        stopped = true;
+        host?.dispose();
+        host = null;
+      },
+    };
   }
 
   /** A step shown before the worker exists (installing the isolation). */
@@ -134,8 +299,9 @@ export class LiveLean {
   stop(): void {
     for (const k of this.pending.values()) k({ error: "live Lean is not running", ms: 0 });
     this.pending.clear();
-    this.worker?.terminate();
-    this.worker = null;
+    this.gen++;
+    this.port?.terminate();
+    this.port = null;
     this.set({ kind: "off" });
   }
 
@@ -143,8 +309,9 @@ export class LiveLean {
     this.set({ kind: "failed", why });
     for (const k of this.pending.values()) k({ error: `live Lean stopped: ${why}`, ms: 0 });
     this.pending.clear();
-    this.worker?.terminate();
-    this.worker = null;
+    this.gen++;
+    this.port?.terminate();
+    this.port = null;
   }
 
   /** The candidates that SUCCEED on a goal (the baker's own list, run live). */
@@ -157,14 +324,27 @@ export class LiveLean {
   }
 
   private ask(req: object): Promise<LiveResult | LiveHints> {
-    const w = this.worker;
-    if (!w || !this.ready) return Promise.resolve({ error: "live Lean is not running", ms: 0 });
+    const p = this.port;
+    if (!p || !this.ready) return Promise.resolve({ error: "live Lean is not running", ms: 0 });
     const id = this.next++;
     return new Promise((ok) => {
       this.pending.set(id, ok as (r: LiveResult) => void);
-      w.postMessage({ id, answer: JSON.stringify(req) });
+      p.post({ id, answer: JSON.stringify(req) });
     });
   }
+}
+
+/** A quiet-screen wait shorter than this is not worth a console line. */
+const QUIET_LOG_MS = 200;
+
+function loadScript(src: string): Promise<void> {
+  return new Promise((ok, bad) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = () => ok();
+    s.onerror = () => bad(new Error(`${src}: the script did not load`));
+    document.head.append(s);
+  });
 }
 
 const NOT_ISOLATED = "this tab is not cross-origin isolated, which live Lean's threads need";
