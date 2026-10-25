@@ -46,6 +46,7 @@ import {
   HOVER_FG,
   POPUP_CHROME,
   TOKEN_COLOR,
+  Z,
   chromeSurface,
 } from "./theme";
 
@@ -284,6 +285,16 @@ export function PlaygroundEditor({
   // the view lives as long as the component; `initial` seeds it once
   const seed = useRef(initial);
   useEffect(() => {
+    // the tooltips' own HOST: a zero-size fixed box inside the page's THEMED
+    // root (`[data-ptw-theme]`). Mounted straight on the root, CodeMirror's
+    // tooltip container became a 245 px block child of the page's column
+    // flexbox and squeezed the main area (every browser; Zen showed the page
+    // using a third of its window). Fixed and 0×0, it takes no space; the
+    // tooltips inside still read the `--ptw-*` tokens and are not clipped.
+    const tipHost = document.createElement("div");
+    tipHost.className = "ptw-pg-tiphost";
+    Object.assign(tipHost.style, { position: "fixed", left: "0", top: "0", width: "0", height: "0", overflow: "visible", zIndex: String(Z.popup) });
+    (host.current!.closest<HTMLElement>("[data-ptw-theme]") ?? document.body).appendChild(tipHost);
     const v = new EditorView({
       parent: host.current!,
       state: EditorState.create({
@@ -297,12 +308,10 @@ export function PlaygroundEditor({
           drawSelection(),
           history(),
           lintGutter(),
-          // tooltips on the page's THEMED root (`[data-ptw-theme]`, unclipped):
-          // inside the editor pane a lint tooltip on an early line opened above
-          // it and was cut off by the pane's top edge; out here CodeMirror flips
-          // it below and keeps it in the window. Not <body>: the `--ptw-*`
-          // tokens its colours read are defined on the themed root only.
-          tooltips({ parent: host.current!.closest<HTMLElement>("[data-ptw-theme]") ?? document.body }),
+          // tooltips outside the editor pane (inside it a lint tooltip on an
+          // early line opened above and was cut off by the pane's top edge):
+          // in `tipHost`, CodeMirror flips them below and keeps them in the window
+          tooltips({ parent: tipHost }),
           newlineKeepIndent,
           electricBullet,
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
@@ -322,6 +331,7 @@ export function PlaygroundEditor({
     view.current = v;
     return () => {
       v.destroy();
+      tipHost.remove();
       view.current = null;
     };
   }, []);
