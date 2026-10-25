@@ -239,6 +239,10 @@ const theme = EditorView.theme({
     border: `1px solid ${HOVER_BORDER} !important`,
     borderRadius: `${CHROME_RADIUS}px`,
     boxShadow: POPUP_CHROME.boxShadow,
+    // its host is a 0×0 box (tipHost): without a width of its own the tooltip
+    // shrank to its narrowest, one word per line
+    width: "max-content",
+    maxWidth: "min(560px, calc(100vw - 32px))",
   },
   ".cm-tooltip .cm-diagnostic": {
     color: HOVER_FG,

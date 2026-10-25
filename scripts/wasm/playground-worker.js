@@ -238,7 +238,16 @@ self.onmessage = async ({ data }) => {
     try {
       result = JSON.parse(self.Module.ccall("ramify_answer", "string", ["string"], [data.answer]));
     } catch (e) {
-      result = { error: `live Lean: ${e?.message ?? e}`, ms: 0 };
+      const msg = String(e?.message ?? e);
+      // a native stack overflow (Safari's worker stack is smaller than
+      // Chrome's or Firefox's): the instance is not sound after one — the
+      // RangeError unwinds through wasm without C++ cleanup — so the page
+      // restarts this worker (from the cache) after the answer
+      if (/call stack/i.test(msg)) {
+        postMessage({ id: data.id, restart: true, result: { error: "This step needs more stack than this browser gives Lean (Safari's is smaller than Chrome's or Firefox's). Try another tactic; live Lean restarts.", ms: 0 } });
+        return;
+      }
+      result = { error: `live Lean: ${msg}`, ms: 0 };
     }
     postMessage({ id: data.id, result });
   }

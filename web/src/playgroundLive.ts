@@ -106,6 +106,13 @@ export class LiveLean {
         const k = this.pending.get(data.id);
         this.pending.delete(data.id);
         k?.(data.result);
+        // the step overflowed the worker's stack: a fresh instance (from the
+        // cache, a few seconds) — the playground caches the answer, so the
+        // same step is not asked again
+        if (data.restart) {
+          this.stop();
+          this.start();
+        }
       }
     };
     w.onerror = (e) => this.fail(e.message || "the worker stopped");
