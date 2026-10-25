@@ -313,6 +313,8 @@ import {
   cfStubNodeId,
   clampScroll,
   clampZoom,
+  EDIT_CELL,
+  EDIT_SPILL_CELL,
   editOverlayLayer,
   inViewScroll,
   nodeBoxFill,
@@ -10168,9 +10170,10 @@ export default function ProofTreeView({
 
                         onClick={(e) => e.stopPropagation()}
                         style={{
-                          position: "relative",
+                          display: "grid",
+                          gridTemplateColumns: `${boxW}px`,
+                          gridTemplateRows: `${boxH}px auto`,
                           width: boxW,
-                          height: boxH,
                           pointerEvents: "auto",
                         }}
                       >
@@ -10179,7 +10182,7 @@ export default function ProofTreeView({
                             data-ptw-mirror=""
                             aria-hidden
                             style={{
-                              ...editOverlayLayer(0),
+                              ...editOverlayLayer(),
 
                               borderRadius: editOuterRx,
                               background: editBg,
@@ -10361,8 +10364,7 @@ export default function ProofTreeView({
                             letterSpacing: 0,
                             padding: `${NODE_PAD_Y + EDIT_STROKE / 2}px ${NODE_PAD + EDIT_STROKE / 2}px`,
 
-                            position: "relative",
-                            zIndex: 1,
+                            gridArea: EDIT_CELL,
                             background: editHighlight ? "transparent" : editBg,
 
                             color:
@@ -10394,11 +10396,10 @@ export default function ProofTreeView({
                           <div
                             aria-hidden
                             style={{
-                              position: "absolute",
-                              left: 0,
-                              top: "100%",
+                              gridArea: EDIT_SPILL_CELL,
+                              justifySelf: "start",
+                              alignSelf: "start",
                               marginTop: 4,
-                              zIndex: 2,
                               pointerEvents: "none",
                               whiteSpace: "nowrap",
                               padding: "1px 6px",
@@ -10417,7 +10418,7 @@ export default function ProofTreeView({
                           <div
                             aria-hidden
                             style={{
-                              ...editOverlayLayer(2),
+                              ...editOverlayLayer(),
 
                               color: "transparent",
                             }}
@@ -10449,18 +10450,20 @@ export default function ProofTreeView({
                           <div
                             onMouseDown={(e) => e.preventDefault()}
                             style={{
-                              position: "absolute",
+                              gridArea: EDIT_SPILL_CELL,
+                              justifySelf: "start",
+                              alignSelf: "start",
                               // The foreignObject starts EDIT_STROKE/2 outside
-                              // the rect, so these two keep the list exactly
-                              // where it was: flush with the box's left edge,
-                              // 2px under its outline.
-                              top: fh + EDIT_STROKE + 2,
-                              left: EDIT_STROKE / 2,
+                              // the rect and the spill row starts at the box's
+                              // bottom (boxH = fh + EDIT_STROKE), so these keep
+                              // the list where it was: flush with the box's
+                              // left edge, 2px under its outline.
+                              marginTop: 2,
+                              marginLeft: EDIT_STROKE / 2,
                               minWidth: Math.min(fw, 240),
                               maxWidth: COMPLETION_MAX_W,
                               maxHeight: COMPLETION_MAX_H,
                               overflowY: "auto",
-                              zIndex: 2,
 
                               background: EDIT_BG,
                               color: EDIT_TEXT,

@@ -65,10 +65,15 @@ export function nodeBoxFill(d: LayoutNode): string {
     : (NODE_STYLES[d.type] ?? NODE_STYLES.default).fill;
 }
 
-export const editOverlayLayer = (zIndex: number): CSSProperties => ({
-  position: "absolute",
-  inset: 0,
-  zIndex,
+// Every layer of the editor shares the overlay's ONE grid cell (EDIT_CELL) and
+// stacks by DOM order — never `position` or `z-index`: WebKit paints a
+// positioned element inside a <foreignObject> against the wrong origin, so the
+// field opened, took focus and was nowhere on screen (Safari, 2026-10-25).
+export const EDIT_CELL = "1 / 1";
+/** Where what hangs below the box (completion list, empty-commit label) sits. */
+export const EDIT_SPILL_CELL = "2 / 1";
+export const editOverlayLayer = (): CSSProperties => ({
+  gridArea: EDIT_CELL,
   overflow: "hidden",
   pointerEvents: "none",
   boxSizing: "border-box",
