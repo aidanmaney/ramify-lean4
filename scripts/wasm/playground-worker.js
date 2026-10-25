@@ -197,6 +197,16 @@ async function init(base) {
       preRun: [() => { untarInto(self.Module.FS, tar, "/lib/lean"); }],
       postRun: [ok],
       onAbort: (w) => bad(new Error(`Lean aborted: ${w}`)),
+      // An exception escaping Lean's main (Safari: "Maximum call stack size
+      // exceeded" in the module initializers — its worker stack is smaller)
+      // ends in Emscripten's quit, which nothing awaited: the page sat at
+      // "starting Lean" for ever. It fails here instead, and the page keeps
+      // the baked answers.
+      quit: (status, toThrow) => {
+        const msg = String(toThrow?.message ?? toThrow ?? `exit ${status}`);
+        bad(new Error(/call stack/i.test(msg) ? "this browser's worker call stack is too small for Lean's start-up (Safari); the answers computed in advance still work" : `Lean stopped: ${msg}`));
+        throw toThrow;
+      },
       printErr: (s) => console.log("[lean]", s),
     };
     importScripts(`${base}live.js`);
