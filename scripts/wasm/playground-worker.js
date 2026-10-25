@@ -171,6 +171,9 @@ async function init(base) {
   // Compile here, not inside Emscripten, so the slow part has its own step:
   // Safari compiles a 69 MB module far more slowly than Chrome, and from
   // outside that looked like a hang at "starting Lean".
+  // the manifest's version on every script this loads: a static host's HTTP
+  // cache would otherwise mix an old loader with a new engine after a deploy
+  const vq = self.LIVE_VERSION ? `?v=${self.LIVE_VERSION}` : "";
   postMessage({ progress: { step: "compiling Lean" } });
   const tc = performance.now();
   const module = await WebAssembly.compile(wasm);
@@ -192,8 +195,8 @@ async function init(base) {
       // response's headers (no COEP on a static host: blocked), so each is a
       // blob that imports the script — a blob worker inherits its creator's
       // isolation, as this one inherits the page's (playgroundLive.ts).
-      locateFile: (f) => (f.endsWith(".worker.js") ? blobScript(base + f) : base + f),
-      mainScriptUrlOrBlob: `${base}live.js`, // pthread workers import live.js, not this file
+      locateFile: (f) => (f.endsWith(".worker.js") ? blobScript(base + f + vq) : base + f + vq),
+      mainScriptUrlOrBlob: `${base}live.js${vq}`, // pthread workers import live.js, not this file
       preRun: [() => { untarInto(self.Module.FS, tar, "/lib/lean"); }],
       postRun: [ok],
       onAbort: (w) => bad(new Error(`Lean aborted: ${w}`)),
@@ -212,7 +215,7 @@ async function init(base) {
       },
       printErr: (s) => console.log("[lean]", s),
     };
-    importScripts(`${base}live.js`);
+    importScripts(`${base}live.js${vq}`);
   });
   console.log(`[ramify] compiled in ${compileMs} ms, started in ${Math.round(performance.now() - ts)} ms`);
   postMessage({ progress: { step: "importing Init" } });

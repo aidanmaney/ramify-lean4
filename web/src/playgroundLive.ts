@@ -91,7 +91,11 @@ export class LiveLean {
     // static host's carry no COEP (and the assets live outside the service
     // worker's scope): a blob that imports the script inherits this page's
     // isolation instead. The script's own fetches are same-origin.
-    const src = `importScripts(${JSON.stringify(`${this.base}worker.js`)});`;
+    // `?v=<manifest version>`: a static host lets the browser cache scripts
+    // (Pages: 10 min), and an old worker.js against a new engine failed start-up
+    // Messages that arrive while the manifest is fetched are queued, then
+    // handed to worker.js's own handler once it has loaded.
+    const src = `const q = []; self.onmessage = (e) => q.push(e); fetch(${JSON.stringify(`${this.base}manifest.json`)}, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null).then((m) => { self.LIVE_VERSION = m && m.version ? String(m.version) : ""; importScripts(${JSON.stringify(`${this.base}worker.js`)} + (self.LIVE_VERSION ? "?v=" + self.LIVE_VERSION : "")); for (const e of q) self.onmessage(e); }).catch((e) => postMessage({ failed: String(e && e.message || e) }));`;
     const w = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
     this.worker = w;
     w.onmessage = ({ data }) => {
