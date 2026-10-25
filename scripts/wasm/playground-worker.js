@@ -203,6 +203,9 @@ async function init(base) {
       // "starting Lean" for ever. It fails here instead, and the page keeps
       // the baked answers.
       quit: (status, toThrow) => {
+        // a NORMAL exit (Lean's main returning 0) also comes here, as
+        // Emscripten's ExitStatus: that one is start-up finishing, not failing
+        if (toThrow?.name === "ExitStatus" && status === 0) throw toThrow;
         const msg = String(toThrow?.message ?? toThrow ?? `exit ${status}`);
         bad(new Error(/call stack/i.test(msg) ? "this browser's worker call stack is too small for Lean's start-up (Safari); the answers computed in advance still work" : `Lean stopped: ${msg}`));
         throw toThrow;
