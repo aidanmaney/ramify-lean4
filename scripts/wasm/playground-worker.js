@@ -168,15 +168,31 @@ async function init(base) {
     wasm = await cachedBytes(`${base}live.wasm`, "downloading Lean", "loading Lean from this browser");
     tar = await cachedBytes(`${base}init.tar`, "downloading Lean's library", "loading Lean's library from this browser");
   }
+  // Compile here, not inside Emscripten, so the slow part has its own step:
+  // Safari compiles a 69 MB module far more slowly than Chrome, and from
+  // outside that looked like a hang at "starting Lean".
+  postMessage({ progress: { step: "compiling Lean" } });
+  const tc = performance.now();
+  const module = await WebAssembly.compile(wasm);
+  const compileMs = Math.round(performance.now() - tc);
   postMessage({ progress: { step: "starting Lean" } });
+  const ts = performance.now();
   await new Promise((ok, bad) => {
     self.Module = {
+      instantiateWasm: (imports, done) => {
+        WebAssembly.instantiate(module, imports).then((inst) => done(inst, module), (e) => bad(new Error(`instantiating Lean: ${e?.message ?? e}`)));
+        return {};
+      },
+      // what start-up is still waiting on (e.g. Lean's thread pool), so a
+      // stall names itself instead of sitting at "starting Lean"
+      monitorRunDependencies: (left) => {
+        if (left > 0) postMessage({ progress: { step: `starting Lean (waiting on ${left})` } });
+      },
       // Lean's threads are workers too. One made from a URL takes ITS OWN
       // response's headers (no COEP on a static host: blocked), so each is a
       // blob that imports the script — a blob worker inherits its creator's
       // isolation, as this one inherits the page's (playgroundLive.ts).
       locateFile: (f) => (f.endsWith(".worker.js") ? blobScript(base + f) : base + f),
-      wasmBinary: wasm.buffer, // from the cache above, not a second fetch
       mainScriptUrlOrBlob: `${base}live.js`, // pthread workers import live.js, not this file
       preRun: [() => { untarInto(self.Module.FS, tar, "/lib/lean"); }],
       postRun: [ok],
@@ -185,6 +201,7 @@ async function init(base) {
     };
     importScripts(`${base}live.js`);
   });
+  console.log(`[ramify] compiled in ${compileMs} ms, started in ${Math.round(performance.now() - ts)} ms`);
   postMessage({ progress: { step: "importing Init" } });
   const r = JSON.parse(self.Module.ccall("ramify_init", "string", ["string"], ["/lib/lean"]));
   if (!r.ok) throw new Error(r.error ?? (r.messages ?? []).join("; ") ?? "Init did not import");
