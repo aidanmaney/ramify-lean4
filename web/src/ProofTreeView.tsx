@@ -10052,9 +10052,13 @@ export default function ProofTreeView({
                     : NODE_FONT_PX;
                 const editLineH =
                   editing.comment && !proseEdit ? COMMENT_LINE_H : LINE_H;
+                // The (+) add and the calc stage hang under their GOAL, so
+                // they open at the goal's width (w) and grow with the draft;
+                // the 320 floor ran a field under a short goal off the pane's
+                // edge (2026-10-25). A comment strip keeps the 320.
                 const fw = Math.max(
                   w,
-                  standsInForBox ? 0 : 320,
+                  standsInForBox || editing.add || editing.calcStage ? 0 : 320,
                   ...valueLines.map(
                     (l) =>
                       measureText(l, editFontPx, !!editing.comment) +
