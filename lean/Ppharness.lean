@@ -215,7 +215,8 @@ def parseSource (src : String) (fileName : String := "<ppharness>")
           grafts := recovA.grafts ++ recovB.grafts ++ recovD.grafts ++ recovE.grafts
           recovered := recovA.recovered ++ recovB.recovered ++ recovD.recovered
                          ++ recovE.recovered
-          ledgers := recovE.ledgers }
+          ledgers := recovE.ledgers
+          branches := recovB.branches ++ recovE.branches }
 
         let openBlock ← ProofTree.Recover.recoverOpenBlock fileMap tree
           (ProofTree.Recover.commandStx? tree) slots
@@ -247,6 +248,7 @@ def parseSource (src : String) (fileName : String := "<ppharness>")
             (ProofTree.Recover.commandStx? tree >>= ProofTree.declName?)
 
           let branches ← ProofTree.branches fileMap tree r.steps
+            (extra := recov.branches)
 
           let calcRelations ← ProofTree.collectCalcRelations tree <|
             ProofTree.calcRelationGoals

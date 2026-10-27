@@ -4,6 +4,36 @@ import ProofTreeComments
 
 open Lean Elab Paperproof.Services
 
+namespace ProofTree
+
+-- B5's wire shapes, up here because term recovery mints branches too (a
+-- recovered `match`, equations, an `if`): see `Recovery.branches`.
+structure BranchArm where
+
+  tag : String := ""
+
+  binders : Array String := #[]
+
+  pattern : Option String := none
+
+  goalId : Option String := none
+  deriving ToJson, FromJson, Inhabited
+
+structure BranchInfo where
+
+  stepStart : Lsp.Position
+
+  form : String
+
+  «on» : Option String := none
+
+  withAlts : Bool := false
+
+  arms : Array BranchArm := #[]
+  deriving ToJson, FromJson, Inhabited
+
+end ProofTree
+
 namespace ProofTree.Recover
 
 structure RecoveredStep where
@@ -48,8 +78,18 @@ structure Recovery where
   recovered : Array RecoveredStep := #[]
 
   ledgers   : Array TermLedger := #[]
+  /-- B5 entries for splits the WALK found (a term `match`, a declaration's
+      equations, an `if`), which no `TacticInfo` describes — `ProofTree.branches`
+      takes them as `extra` and files them beside the tactic ones. -/
+  branches  : Array ProofTree.BranchInfo := #[]
 
 def Recovery.isEmpty (r : Recovery) : Bool := r.steps.isEmpty
+
+/-- Two recoveries side by side, every list in order. -/
+def Recovery.append (a b : Recovery) : Recovery :=
+  { steps := a.steps ++ b.steps, goals := a.goals ++ b.goals
+    grafts := a.grafts ++ b.grafts, recovered := a.recovered ++ b.recovered
+    ledgers := a.ledgers ++ b.ledgers, branches := a.branches ++ b.branches }
 
 def Recovery.apply (rc : Recovery) (r : Result) : Result :=
   let steps := r.steps.map fun s =>
@@ -222,11 +262,37 @@ def commandStx? (tree : InfoTree) : Option Syntax :=
 private def isTheoremLike (cmdStx : Syntax) : Bool :=
   !(nodesOfKind [``Parser.Command.theorem, ``Parser.Command.example] cmdStx).isEmpty
 
+/-- A FUNCTIONAL PROGRAM (2026-10-27, "Programs as trees"): a `def`, an
+`instance` or an `abbrev`, by the command's syntax kind.  Its body is walked
+exactly as a term proof's is, with two differences carried by
+`TermWalk.program`: a DATA component of an `⟨…⟩` earns a goal (the data is the
+point of a program), and every recovered step reads its term's free variables
+as `tacticDependsOn`, so context breadth `used` has something to show. -/
+private def isProgramLike (cmdStx : Syntax) : Bool :=
+  !(nodesOfKind [``Parser.Command.definition, ``Parser.Command.instance,
+    ``Parser.Command.abbrev] cmdStx).isEmpty
+
+/-- Nodes of kind `k` in preorder, never descending INTO one. -/
+private partial def kindsHere (k : SyntaxNodeKind) (stx : Syntax) : Array Syntax :=
+  if stx.getKind == k then #[stx]
+  else stx.getArgs.foldl (fun acc a => acc ++ kindsHere k a) #[]
+
+/-- The declaration's VALUE node, by kind, the first in preorder: `:= t`
+(`declValSimple`), equations (`declValEqns`), or `where` fields
+(`whereStructInst`). -/
+private def declValue? (cmdStx : Syntax) : Option Syntax :=
+  (nodesOfKind [``Parser.Command.declValSimple, ``Parser.Command.declValEqns,
+    ``Parser.Command.whereStructInst] cmdStx)[0]?
+
+/-- The term the walk starts from: `:= t`'s `t`; equations' `matchAlts` (which
+`walkTerm` reads as ONE split); a `where` instance's `whereStructInst`. -/
 private def declBody? (cmdStx : Syntax) : Option Syntax := do
-  let dv := (nodesOfKind [``Parser.Command.declValSimple] cmdStx)[0]?
-  match dv with
-  | some n => if n.getNumArgs ≥ 2 then some n[1] else none
-  | none => none
+  let n ← declValue? cmdStx
+  if n.isOfKind ``Parser.Command.declValSimple then
+    if n.getNumArgs ≥ 2 then some n[1] else none
+  else if n.isOfKind ``Parser.Command.declValEqns then
+    (kindsHere ``Parser.Term.matchAlts n)[0]?
+  else some n
 
 private def byteRange? (stx : Syntax) : Option (Nat × Nat) :=
   stx.getRange? |>.map fun r => (r.start.byteIdx, r.stop.byteIdx)
@@ -236,6 +302,8 @@ private structure TermWalk where
   infos       : Array (ContextInfo × TermInfo)
   tacticInfos : Array (ContextInfo × TacticInfo)
   steps       : List ProofStep
+  /-- Walking a program (`isProgramLike`), not a proof. -/
+  program     : Bool := false
 
 private def findInfo (w : TermWalk) (stx : Syntax) :
     Option (ContextInfo × TermInfo) :=
@@ -297,10 +365,45 @@ private def sliceStep (w : TermWalk) (b e : String.Pos.Raw) :
 
 private def mkStep (label : String) (start stop : Lsp.Position)
     (goalBefore : GoalInfo) (goalsAfter : List GoalInfo)
-    (spawnedGoals : List GoalInfo) : ProofStep :=
+    (spawnedGoals : List GoalInfo) (deps : List String := []) : ProofStep :=
   { tacticString := label, goalBefore, goalsAfter, spawnedGoals
-    tacticDependsOn := [], theorems := []
+    tacticDependsOn := deps, theorems := []
     position := { start, stop } }
+
+private def termDeps (cctx : ContextInfo) (ti : TermInfo) : IO (List String) :=
+  cctx.runMetaM ti.lctx do
+    try
+      let full ← instantiateMVars ti.expr
+      let ids := (collectFVars {} full).fvarIds
+      return (ids.filterMap ti.lctx.find?).map (·.fvarId.name.toString) |>.toList
+    catch _ => return []
+
+/-- What a recovered PROGRAM step reads: the free variables of the term the
+step stands for.  A proof's recovered steps keep `[]` (unchanged since Part B). -/
+private def depsOf (w : TermWalk) (stx : Syntax) : IO (List String) := do
+  unless w.program do return []
+  match findInfo w stx with
+  | some (cctx, ti) => termDeps cctx ti
+  | none => return []
+
+/-- The first child after the atom `tok` that has a range — read off the
+ATOM, never off an index. -/
+private def afterAtom? (stx : Syntax) (tok : String) : Option Syntax := Id.run do
+  let mut hit := false
+  for a in stx.getArgs do
+    if hit && a.getRange?.isSome then return some a
+    if let .atom _ v := a then
+      if v == tok then hit := true
+  return none
+
+/-- The byte range of the first child atom `tok`. -/
+private def atomRange? (stx : Syntax) (tok : String) : Option (String.Pos.Raw × String.Pos.Raw) :=
+  stx.getArgs.findSome? fun a => match a with
+    | .atom info v => if v == tok then info.getRange?.map (fun r => (r.start, r.stop)) else none
+    | _ => none
+
+private def srcText (w : TermWalk) (b e : String.Pos.Raw) : String :=
+  (String.Pos.Raw.extract w.fileMap.source b e).trimAscii.toString
 
 private def isPropTy (cctx : ContextInfo) (lctx : LocalContext) (ty : Expr) :
     IO Bool :=
@@ -325,7 +428,9 @@ private def componentGoal (w : TermWalk) (sub : Syntax) : IO (Option GoalInfo) :
     return none
   let some (cctx, ti) := findInfo w sub | return none
   let some ety := ti.expectedType? | return none
-  unless ← isPropTy cctx ti.lctx ety do return none
+  -- A program's data is the point of it: only a PROOF's witness is gated.
+  unless w.program do
+    unless ← isPropTy cctx ti.lctx ety do return none
   try
     let g ← synthGoal cctx ti.lctx ety sStart
     return some g
@@ -375,6 +480,25 @@ private partial def ctorTarget? (stx : Syntax) : Option Syntax :=
 private def ctorComponents (stx : Syntax) : Array Syntax :=
   if stx.getNumArgs ≥ 2 then stx[1].getSepArgs else #[]
 
+/-- A `let rec`/`where` helper: a goal of the helper's declared type, tagged
+with its NAME (Lean's own `case go` idiom), its equations walked below by
+`walk` (which is `walkTerm`). -/
+private def helperGoal (w : TermWalk) (decl : Syntax)
+    (walk : GoalInfo → Syntax → IO Recovery) : IO (Option (GoalInfo × Recovery)) := do
+  let some eq := (kindsHere ``Parser.Term.letEqnsDecl decl)[0]? | return none
+  let some alts := eq.getArgs.find? (·.isOfKind ``Parser.Term.matchAlts) | return none
+  let some (cctx, ti) := findInfo w eq | return none
+  let some ety := ti.expectedType? | return none
+  let name := match (kindsHere ``Parser.Term.letId eq)[0]? with
+    | some n => match n.getRange? with
+      | some r => srcText w r.start r.stop
+      | none => ""
+    | none => ""
+  let g ← synthGoal cctx ti.lctx ety (lspStart w eq)
+  let g := { g with username := name }
+  let r ← walk g alts
+  return some (g, { r with goals := r.goals ++ [g] })
+
 private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
     (stx : Syntax) : IO Recovery := do
   let k := stx.getKind
@@ -408,7 +532,36 @@ private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
     for byNode in nodesOfKind [``Parser.Term.byTactic] stx do
       if let some g ← byRootGoal w byNode then
         spawned := spawned ++ [g]
-    return push {} (mkStep label start stop goalBefore [] spawned) []
+    return push {} (mkStep label start stop goalBefore [] spawned (← depsOf w stx)) []
+  -- ONE SPLIT, shared by a term `match` and a declaration's equations: one
+  -- goal per `| pats => rhs` (the RHS's expected type, the pattern variables
+  -- in its context, the PATTERN as the goal's tag so the case badge reads it),
+  -- the RHS walked below it, and the B5 entry with every arm filled.
+  let split (label : String) (start stop : Lsp.Position) (form : String)
+      (on : Option String) (withAlts : Bool) (alts : Syntax)
+      (deps : List String) : IO Recovery := do
+    let before := goalBefore.hyps.map (·.id)
+    let mut kids : List GoalInfo := []
+    let mut sub : Recovery := {}
+    let mut arms : Array ProofTree.BranchArm := #[]
+    for alt in kindsHere ``Parser.Term.matchAlt alts do
+      let some rhs := afterAtom? alt "=>" | continue
+      let some (_, barStop) := atomRange? alt "|" | continue
+      let some (arrowStart, _) := atomRange? alt "=>" | continue
+      let pat := srcText w barStop arrowStart
+      let some (g0, needs) ← subGoal rhs none | continue
+      let g := if needs then { g0 with username := pat } else g0
+      let r ← recurse g needs rhs
+      kids := kids ++ [g]
+      sub := sub.append { r with goals := r.goals ++ (if needs then [g] else []) }
+      arms := arms.push
+        { tag := pat, pattern := some pat
+          binders := ((g.hyps.filter fun h => !before.contains h.id).map (·.username)).toArray
+          goalId := some g.id.name.toString }
+    if kids.isEmpty then leaf else
+    let r := push sub (mkStep label start stop goalBefore kids [] deps) []
+    let b : ProofTree.BranchInfo := { stepStart := start, form, «on» := on, withAlts, arms }
+    return { r with branches := r.branches.push b }
   if k == ``Parser.Term.have || k == ``Parser.Term.let then
     let isHave := k == ``Parser.Term.have
     let body := stx.getArgs.back!
@@ -444,7 +597,9 @@ private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
           steps := sideRecovery.steps ++ bodyRecovery.steps
           goals := sideRecovery.goals ++ bodyRecovery.goals ++ [contGoal]
           grafts := sideRecovery.grafts ++ bodyRecovery.grafts
-          recovered := sideRecovery.recovered ++ bodyRecovery.recovered }
+          recovered := sideRecovery.recovered ++ bodyRecovery.recovered
+          branches := sideRecovery.branches ++ bodyRecovery.branches }
+        let step := { step with tacticDependsOn := ← depsOf w side }
         return push merged step spawned
   else if k == ``Parser.Term.anonymousCtor then
     -- `⟨a, b, c⟩`: the node itself stays one step (the term the reader wrote),
@@ -466,7 +621,8 @@ private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
       sub := { steps := sub.steps ++ r.steps
                goals := sub.goals ++ r.goals
                grafts := sub.grafts ++ r.grafts
-               recovered := sub.recovered ++ r.recovered }
+               recovered := sub.recovered ++ r.recovered
+               branches := sub.branches ++ r.branches }
     if minted.isEmpty && spawned.isEmpty then leaf else
     return push sub (mkStep label start stop goalBefore [] (spawned ++ minted)) minted
   else if k == ``Parser.Term.fun then
@@ -485,13 +641,157 @@ private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
   else if k == ``Parser.Term.byTactic then
 
     return {}
+  else if k == ``Parser.Term.match then
+    -- `match d with | p => t …`: the label is the verbatim head up to the
+    -- first alternative (`match xs with`; the client drops the ` with` as it
+    -- does for a tactic `match`), one goal per alternative.
+    let some alts := stx.getArgs.find? (·.isOfKind ``Parser.Term.matchAlts) | leaf
+    let some rg := stx.getRange? | leaf
+    let some altsRg := alts.getRange? | leaf
+    let (label, start, stop) := sliceStep w rg.start altsRg.start
+    let discrs := stx.getArgs.foldl (init := #[]) fun acc a =>
+      if a.isOfKind ``Parser.Term.matchAlts then acc
+      else acc ++ kindsHere ``Parser.Term.matchDiscr a
+    let on := String.intercalate ", " <| discrs.toList.filterMap fun d =>
+      d.getRange?.map fun r => srcText w r.start r.stop
+    let mut deps : List String := []
+    for d in discrs do
+      for x in ← depsOf w d do
+        unless deps.contains x do deps := deps ++ [x]
+    split label start stop "match" (if on.isEmpty then none else some on) true alts deps
+  else if k == ``Parser.Term.matchAlts then
+    -- EQUATIONS (`def f : α → β | p => t …`).  Lean expands them to
+    -- `fun x✝ => match x✝ with …`, and none of that has source text, so the
+    -- step is labelled `match` — the keyword naming what Lean does, the head
+    -- word a term `match` shares — and claims NO source: a zero-width range
+    -- at the first `|` (so `»` still lands there, and `harvestEdits` offers no
+    -- edit of text that is not the label).  The arms carry the patterns.
+    let some alt0 := (kindsHere ``Parser.Term.matchAlt stx)[0]? | leaf
+    let some (barStart, _) := atomRange? alt0 "|" | leaf
+    let at_ := w.fileMap.utf8PosToLspPos barStart
+    split "match" at_ at_ "equations" none false stx []
+  else if k == `termIfThenElse || k == `termDepIfThenElse then
+    -- `if c then t else e` / `if h : c then t else e`: two goals, tagged
+    -- `then` and `else` (the words the author wrote), the dependent form's
+    -- hypothesis bound in both.
+    let some thenT := afterAtom? stx "then" | leaf
+    let some elseT := afterAtom? stx "else" | leaf
+    let some rg := stx.getRange? | leaf
+    let some thenRg := thenT.getRange? | leaf
+    let some (_, ifStop) := atomRange? stx "if" | leaf
+    let some (thenStart, _) := atomRange? stx "then" | leaf
+    let (label, start, stop) := sliceStep w rg.start thenRg.start
+    let dep := k == `termDepIfThenElse
+    let hName := match atomRange? stx ":" with
+      | some (colon, _) => if dep then srcText w ifStop colon else ""
+      | none => ""
+    let cond? := if dep then afterAtom? stx ":" else afterAtom? stx "if"
+    let deps ← match cond? with
+      | some c => depsOf w c
+      | none => pure []
+    let mut kids : List GoalInfo := []
+    let mut sub : Recovery := {}
+    let mut arms : Array ProofTree.BranchArm := #[]
+    for (t, tag) in [(thenT, "then"), (elseT, "else")] do
+      let some (g0, needs) ← subGoal t none | continue
+      let g := if needs then { g0 with username := tag } else g0
+      let r ← recurse g needs t
+      kids := kids ++ [g]
+      sub := sub.append { r with goals := r.goals ++ (if needs then [g] else []) }
+      arms := arms.push
+        { tag, binders := if hName.isEmpty then #[] else #[hName]
+          goalId := some g.id.name.toString }
+    if kids.length < 2 then leaf else
+    let r := push sub (mkStep label start stop goalBefore kids [] deps) []
+    let b : ProofTree.BranchInfo :=
+      { stepStart := start, form := "if", «on» := some (srcText w ifStop thenStart), arms }
+    return { r with branches := r.branches.push b }
+  else if k == ``Parser.Term.paren then
+    -- `(match …)` / `(if …)` read as what they wrap; any other parenthesis
+    -- stays the leaf it always was.
+    let inner := stx.getArgs.filter fun a => !(a matches .atom ..) && a.getRange?.isSome
+    let inner := match inner with
+      | #[i] => if i.getKind == nullKind && i.getNumArgs == 1 then i[0] else i
+      | _ => stx
+    let ik := inner.getKind
+    if ik == ``Parser.Term.match || ik == `termIfThenElse || ik == `termDepIfThenElse then
+      walkTerm w goalBefore inner
+    else leaf
+  else if k == ``Parser.Term.letrec then
+    -- `let rec f : τ | … ; body`: the head (`let rec f : τ`) is the step, each
+    -- helper a SPAWNED goal with its equations below it, the body the
+    -- continuation.
+    let body := stx.getArgs.back!
+    let some rg := stx.getRange? | leaf
+    let decls := (stx.getArgs.pop).foldl (init := #[]) fun acc a =>
+      acc ++ kindsHere ``Parser.Term.letRecDecl a
+    let headStop := (decls.findSome? fun d =>
+        (kindsHere ``Parser.Term.matchAlts d)[0]? >>= (·.getRange?)) |>.map (·.start)
+    let some bodyRg := body.getRange? | leaf
+    let (label, start, stop) := sliceStep w rg.start (headStop.getD bodyRg.start)
+    let mut spawned : List GoalInfo := []
+    let mut sub : Recovery := {}
+    for d in decls do
+      if let some (g, r) ← helperGoal w d (walkTerm w) then
+        spawned := spawned ++ [g]
+        sub := sub.append r
+    match ← subGoal body (some goalBefore) with
+    | none => leaf
+    | some (contGoal, needs) =>
+      let r ← recurse contGoal needs body
+      let all := sub.append { r with goals := r.goals ++ [contGoal] }
+      return push all (mkStep label start stop goalBefore [contGoal] spawned) []
+  else if k == ``Parser.Command.whereStructInst then
+    -- `instance : C where f x := t …`: one goal per FIELD (tagged with the
+    -- field's name), its binders a step of their own (`add p q :=`), the value
+    -- walked below.  The step itself is the `where`.
+    let some (wStart, wStop) := atomRange? stx "where" | leaf
+    let mut kids : List GoalInfo := []
+    let mut sub : Recovery := {}
+    let mut arms : Array ProofTree.BranchArm := #[]
+    for f in kindsHere ``Parser.Term.structInstField stx do
+      let some def_ := (kindsHere ``Parser.Term.structInstFieldDef f)[0]? | continue
+      let some value := afterAtom? def_ ":=" | continue
+      let some fRg := f.getRange? | continue
+      let some vRg := value.getRange? | continue
+      let name := match (kindsHere ``Parser.Term.structInstLVal f)[0]? >>= (·.getRange?) with
+        | some r => srcText w r.start r.stop
+        | none => ""
+      let info := (findInfo w f).orElse fun _ => findInfo w value
+      let some (cctx, ti) := info | continue
+      let some ety := ti.expectedType? | continue
+      let fg ← synthGoal cctx ti.lctx ety (lspStart w f)
+      let fg := { fg with username := name }
+      kids := kids ++ [fg]
+      arms := arms.push { tag := name, goalId := some fg.id.name.toString }
+      if fRg.start == vRg.start then
+        let r ← walkTerm w fg value
+        sub := sub.append { r with goals := r.goals ++ [fg] }
+      else
+        -- `add p q := v`: the binders and the `:=` are the field's own step.
+        let (flabel, fstart, fstop) := sliceStep w fRg.start vRg.start
+        match ← subGoal value none with
+        | none =>
+          sub := sub.append { goals := [fg] }
+        | some (vg, needs) =>
+          let r ← recurse vg needs value
+          let r := push { r with goals := r.goals ++ [vg] }
+            (mkStep flabel fstart fstop fg [vg] []) []
+          sub := sub.append { r with goals := r.goals ++ [fg] }
+    if kids.isEmpty then leaf else
+    let start := w.fileMap.utf8PosToLspPos wStart
+    let r := push sub (mkStep "where" start (w.fileMap.utf8PosToLspPos wStop)
+      goalBefore kids []) []
+    let b : ProofTree.BranchInfo := { stepStart := start, form := "where", arms }
+    return { r with branches := r.branches.push b }
   else
     leaf
 
 def recoverTerm (fileMap : FileMap) (tree : InfoTree)
     (cmdStx? : Option Syntax) (steps : List ProofStep) : IO Recovery := do
   let some cmdStx := cmdStx? | return {}
-  unless isTheoremLike cmdStx do return {}
+  let program := !isTheoremLike cmdStx && isProgramLike cmdStx
+  unless isTheoremLike cmdStx || program do return {}
   let some body := declBody? cmdStx | return {}
   if body.getKind == ``Parser.Term.byTactic then return {}
   let infos := tree.foldInfo (init := (#[] : Array (ContextInfo × TermInfo)))
@@ -502,12 +802,41 @@ def recoverTerm (fileMap : FileMap) (tree : InfoTree)
     fun ctx info acc => match info with
       | .ofTacticInfo ti => acc.push (ctx, ti)
       | _ => acc
-  let w : TermWalk := { fileMap, infos, tacticInfos, steps }
-  let some (cctx, ti) := findInfo w body | return {}
+  let w : TermWalk := { fileMap, infos, tacticInfos, steps, program }
+  -- A `where` instance's value is a SYNTHETIC `structInst` whose range runs
+  -- past the fields' trailing trivia, so it is found by its START.
+  let startInfo := match byteRange? body with
+    | some (b, _) => infos.find? fun (_, ti) =>
+        ti.stx.isOfKind ``Parser.Term.structInst && (byteRange? ti.stx).map (·.1) == some b
+    | none => none
+  let some (cctx, ti) := (findInfo w body).orElse fun _ => startInfo | return {}
   let some ety := ti.expectedType? | return {}
   let rootGoal ← synthGoal cctx ti.lctx ety (lspStart w body)
   let rec' ← walkTerm w rootGoal body
   if rec'.steps.isEmpty then return {}
+  -- `where` helpers: SPAWNED by the body's own first step (the head of the
+  -- walk's list), each with its equations below it — the `let rec` shape,
+  -- since `where` elaborates to exactly that.
+  let mut rec' := rec'
+  if let some v := declValue? cmdStx then
+    let decls := (kindsHere ``Parser.Term.whereDecls v).foldl (init := #[])
+      fun acc wd => acc ++ kindsHere ``Parser.Term.letRecDecl wd
+    let mut spawned : List GoalInfo := []
+    let mut sub : Recovery := {}
+    for d in decls do
+      if let some (g, r) ← helperGoal w d (walkTerm w) then
+        spawned := spawned ++ [g]
+        sub := sub.append r
+    match rec'.steps with
+    | st :: rest =>
+      if !spawned.isEmpty then
+        rec' := (({ rec' with
+          steps := { st with spawnedGoals := st.spawnedGoals ++ spawned } :: rest }
+          : Recovery).append sub)
+    | [] => pure ()
+  -- A program with no structure (`def three := 3`) is one leaf, and a single
+  -- leaf under its type says nothing the signature does not: no tree.
+  if program && rec'.steps.length ≤ 1 then return {}
   return { rec' with goals := rootGoal :: rec'.goals }
 
 -- Part E — term-level structure INSIDE a tactic.  `exact ⟨key n, parity n, gap
@@ -580,7 +909,8 @@ def recoverTermInStep (fileMap : FileMap) (tree : InfoTree)
                  steps := out.steps ++ r.steps
                  goals := out.goals ++ r.goals ++ [g]
                  grafts := out.grafts ++ r.grafts ++ [(host.position.start, g)]
-                 recovered := out.recovered ++ r.recovered }
+                 recovered := out.recovered ++ r.recovered
+                 branches := out.branches ++ r.branches }
     -- One component is a branch, not a ledger: below two rows the reader is
     -- better served by the box the component already had.
     if rows.size ≥ 2 then
@@ -603,7 +933,7 @@ def recoverOpenBlock (fileMap : FileMap) (tree : InfoTree)
     (cmdStx? : Option Syntax) (slots : Array TacticSlot) :
     IO (Option OpenBlock) := do
   let some cmdStx := cmdStx? | return none
-  unless isTheoremLike cmdStx do return none
+  unless isTheoremLike cmdStx || isProgramLike cmdStx do return none
   unless slots.isEmpty do return none
   let some body := declBody? cmdStx | return none
   unless body.getKind == ``Parser.Term.byTactic do return none
@@ -635,14 +965,6 @@ def recoverOpenBlock (fileMap : FileMap) (tree : InfoTree)
     goal
     anchor := fileMap.utf8PosToLspPos bodyRg.stop
     indent := (fileMap.utf8PosToLspPos cmdRg.start).character + 2 }
-
-private def termDeps (cctx : ContextInfo) (ti : TermInfo) : IO (List String) :=
-  cctx.runMetaM ti.lctx do
-    try
-      let full ← instantiateMVars ti.expr
-      let ids := (collectFVars {} full).fvarIds
-      return (ids.filterMap ti.lctx.find?).map (·.fvarId.name.toString) |>.toList
-    catch _ => return []
 
 def recoverCalcLinks (fileMap : FileMap) (tree : InfoTree)
     (steps : List ProofStep) (extra : Option Syntax := none) : IO Recovery := do
@@ -1224,30 +1546,6 @@ keeps whatever it did before.
 -/
 namespace ProofTree
 
-structure BranchArm where
-
-  tag : String := ""
-
-  binders : Array String := #[]
-
-  pattern : Option String := none
-
-  goalId : Option String := none
-  deriving ToJson, FromJson, Inhabited
-
-structure BranchInfo where
-
-  stepStart : Lsp.Position
-
-  form : String
-
-  «on» : Option String := none
-
-  withAlts : Bool := false
-
-  arms : Array BranchArm := #[]
-  deriving ToJson, FromJson, Inhabited
-
 private def branchForm (k : Name) : Option String :=
   if k == ``Lean.Parser.Tactic.induction then some "induction"
   else if k == ``Lean.Parser.Tactic.cases then some "cases"
@@ -1539,15 +1837,18 @@ private def decode (fileMap : FileMap) (ctx : ContextInfo) (ti : TacticInfo)
 
 /-- B5 — the branching structure of every step that has one. -/
 def branches (fileMap : FileMap) (tree : InfoTree)
-    (steps : List Paperproof.Services.ProofStep) : IO (Array BranchInfo) := do
+    (steps : List Paperproof.Services.ProofStep)
+    (extra : Array BranchInfo := #[]) : IO (Array BranchInfo) := do
   if steps.isEmpty then return #[]
   let tacticInfos := tree.foldInfo (init := (#[] : Array (ContextInfo × TacticInfo)))
     fun ctx info acc => match info with
       | .ofTacticInfo ti => acc.push (ctx, ti)
       | _ => acc
   let key (p : Lsp.Position) : String := s!"{p.line}:{p.character}"
-  let mut seen : Std.HashSet String := {}
-  let mut out : Array BranchInfo := #[]
+  -- The walk's own splits first: a recovered step's start is no tactic's, so
+  -- nothing below can claim the same key, but `seen` makes that a rule.
+  let mut seen : Std.HashSet String := extra.foldl (·.insert <| key ·.stepStart) {}
+  let mut out : Array BranchInfo := extra
   for (ctx, ti) in tacticInfos do
     let some form := branchForm ti.stx.getKind | continue
     -- `have h : P := by …`, `by_contra`, `exfalso` all EXPAND to `refine`, and

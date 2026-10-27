@@ -280,6 +280,17 @@ export function narrateHead(label: string): string {
   return tacticKeyword(first);
 }
 
+/** A PROGRAM's recovered splits (2026-10-27, "Programs as trees"): the forms
+ the TERM walk mints for a declaration's equations, a term `match`, an `if`
+ and a `where` instance. Asked before the `term` family, so a recovered split
+ reads as the split it is. */
+const PROGRAM_FORM: Record<string, string> = {
+  equations: "equations",
+  match: "match",
+  if: "if",
+  where: "where",
+};
+
 /** The family, or `""` where nothing in the table claims this step — the
  RESIDUE the probe counts and reports. */
 export function narrateFamily(n: TreeNode): string {
@@ -287,7 +298,15 @@ export function narrateFamily(n: TreeNode): string {
   // as a chain of (in)equalities, which is the one thing it is not.
   if (n.ledgerKind === "ctor") return "ctor";
   if (n.ledger || n.chain) return "calc";
-  if (n.recovered === "term" || n.recovered === "subterm") return "term";
+  if (n.recovered === "term" || n.recovered === "subterm") {
+    const pf = n.branch ? PROGRAM_FORM[n.branch.form] : undefined;
+    if (pf) return pf;
+    // A term `let` / `let rec` (a program's data, a helper): the head word,
+    // read off the recovered label as a tactic's is.
+    if (/^let\s+rec\b/.test(flat(n.label))) return "letrec";
+    if (narrateHead(n.label) === "let") return "let";
+    return "term";
+  }
   if (n.recovered === "failed") return "failed";
   if (n.recovered === "skipped") return "sorry";
   const form = n.branch?.form;
@@ -374,6 +393,9 @@ function template(n: TreeNode, ctx: NarrateCtx): string {
     case "suffices":
       return `It suffices to show ${clip(flat(n.label).replace(/^\S+\s*/, ""), 60)}`;
     case "let":
+      // A program's `let` names a VALUE, and the value is the point.
+      if (n.recovered)
+        return clip(`Let ${flat(n.label).replace(/^let\s+/, "")}`, LINE_CAP);
       return haveLine(n, ctx, "Write");
 
     case "obtain": {
@@ -529,8 +551,48 @@ function template(n: TreeNode, ctx: NarrateCtx): string {
       return clip(lead + rows.join(sep), LINE_CAP);
     }
 
+    // A program's splits: the arms' own patterns (a tag IS the pattern there),
+    // never their binders again.
+    case "equations": {
+      // `[], acc` is ONE arm of two patterns: parenthesised, so the list's own
+      // commas still separate arms.
+      const pats = (n.branch?.arms ?? [])
+        .map((a) => (a.tag.includes(", ") ? `(${a.tag})` : a.tag))
+        .filter((t) => t);
+      return pats.length > 0
+        ? `Define it by cases on the arguments: ${list(pats, 4)}`
+        : `Define it by cases on the arguments`;
+    }
+    case "match": {
+      const pats = (n.branch?.arms ?? []).map((a) => a.tag).filter((t) => t);
+      return pats.length > 0
+        ? `Match ${on || "it"} against ${list(pats, 4)}`
+        : `Match ${on || "it"}`;
+    }
+    case "if":
+      return `Branch on whether ${on || "the condition holds"}`;
+    case "where": {
+      const fields = (n.branch?.arms ?? []).map((a) => a.tag).filter((t) => t);
+      return fields.length > 0
+        ? `Give the field${fields.length === 1 ? "" : "s"} ${list(fields, 4)}`
+        : `Give the fields`;
+    }
+    case "letrec": {
+      const head = flat(n.label).replace(/^let\s+rec\s+/, "");
+      return `Define the helper ${clip(head, 60)}, then use it`;
+    }
+
     case "term": {
       const text = flat(n.label);
+      // A `where` field's own binders (`add p q :=`): what it binds, then
+      // what it defines.
+      if (/:=$/.test(text)) {
+        const names = newHyps(n, ctx).map((h) => splitHyp(h).name);
+        const what = text.split(/\s+/)[0];
+        return names.length > 0
+          ? `Given ${list(names)}, define ${what}`
+          : `Define ${what}`;
+      }
       if (/^fun\b|^λ/.test(text)) return `Given the argument, ${clip(text, 52)}`;
       const l = principalLemma(n);
       if (l) return clip(`The term ${l.name}${docClause(l.doc)}`, LINE_CAP);

@@ -66,7 +66,8 @@
 //
 // line/col are 0-based LSP coordinates.  Prints a summary (steps, proofId,
 // declRange, diagnostics, openBlock, cf fields, timings); --json dumps the
-// payload; --all walks every `theorem` in the file at its `by` and prints one
+// payload; --all walks every `theorem` in the file at its `by` (and every
+// `def`/`instance`/`abbrev` at its head line) and prints one
 // row per proof (the "one pass through the file" timing).
 //
 // Recipe (each step was load-bearing when it was found): `lake serve` from
@@ -292,6 +293,15 @@ if (flags.all) {
   const rows = [];
   const allEdits = [];
   for (let i = 0; i < lines.length; i++) {
+    // A PROGRAM (`def`/`instance`/`abbrev`, 2026-10-27) is asked at its head
+    // line: its body is a term, there is no `by` to find.
+    if (/^(def|instance|abbrev)\b/.test(lines[i])) {
+      const res = await call(i, 2);
+      rows.push(row(i, 2, res));
+      if (flags.edits) allEdits.push(...editRows(res.r).map((e) => ({ decl: lines[i].split(" ")[1] ?? "", ...e })));
+      if (flags.wire && res.r.steps.length > 0) wirePayloads.push(res.r);
+      continue;
+    }
     const m = /^(theorem|lemma|example)\b.*:=\s*by\s*$/.exec(lines[i]) ?? (/^(theorem|lemma|example)\b/.test(lines[i]) ? { index: 0 } : null);
     if (!m) continue;
     // the `by` line: the first line at or after the head ending in `:= by`

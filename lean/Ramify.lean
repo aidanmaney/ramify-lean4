@@ -401,7 +401,8 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       grafts := recovA.grafts ++ recovB.grafts ++ recovD.grafts ++ recovE.grafts
       recovered := recovA.recovered ++ recovB.recovered ++ recovD.recovered
                      ++ recovE.recovered
-      ledgers := recovE.ledgers }
+      ledgers := recovE.ledgers
+      branches := recovB.branches ++ recovE.branches }
 
     let openBlock ← Recover.recoverOpenBlock fileMap snap.infoTree (some snap.stx)
       slots
@@ -453,6 +454,7 @@ def mkTreePayload (snap : Snapshots.Snapshot) (fileMap : FileMap)
       parsedTree.steps (declName? snap.stx)
 
     let branches ← ProofTree.branches fileMap snap.infoTree parsedTree.steps
+      (extra := recov.branches)
 
     let tacticNames ← match anyGoalContext snap.infoTree with
       | some (ctx, _) =>

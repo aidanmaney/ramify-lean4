@@ -384,7 +384,9 @@ def harvestEdits (env : Environment) (fileMap : FileMap) (stx : Syntax)
 
     for s in steps do
       let key := (s.position.start.line, s.position.start.character)
-      unless seen.contains key do
+      -- A step that claims NO source (a declaration's equations, whose split
+      -- Lean wrote and the author did not) has no text to edit.
+      unless seen.contains key || s.position.start == s.position.stop do
         seen := seen.insert key
         let indent := tacticIndentAt fileMap s.position.start.line
         let b0 := fileMap.lspPosToUtf8Pos s.position.start
