@@ -77,3 +77,66 @@ theorem add_zero' (n : Nat) : n + 0 = n := by
   induction n with
   | zero => rfl
   | succ k ih => rfl
+
+/-! ### Do blocks — a spine, one step per element. -/
+
+/-- Indices of the first pair that sums to `target`. Pure, though it reads as imperative. -/
+def twoSum (xs : Array Int) (target : Int) : Option (Nat × Nat) := Id.run do
+  let mut seen : Std.HashMap Int Nat := {}
+  for h : i in [0:xs.size] do
+    let x := xs[i]                      -- no bounds check: `h` proves `i < xs.size`
+    if let some j := seen[target - x]? then
+      return some (j, i)
+    seen := seen.insert x i
+  return none
+
+#guard twoSum #[2, 7, 11, 15] 9 == some (0, 1)
+
+/-- `let x ← e` in `IO`, `unless`, a bare action. -/
+def greet (name : String) : IO Unit := do
+  let stdout ← IO.getStdout
+  unless name.isEmpty do
+    stdout.putStrLn s!"hello, {name}"
+  stdout.flush
+
+/-- `StateM`: read, write, return. -/
+def tick : StateM Nat Nat := do
+  let n ← get
+  set (n + 1)
+  return n
+
+/-- `match` inside `do`, a block per arm. -/
+def describe (xs : List Nat) : IO String := do
+  match xs with
+  | [] => return "empty"
+  | x :: _ =>
+    IO.println s!"head {x}"
+    return s!"starts with {x}"
+
+/-- A nested `for`, an `if … else`, a mutable accumulator. -/
+def countPairs (n : Nat) : Nat := Id.run do
+  let mut count := 0
+  for i in [0:n] do
+    for j in [0:n] do
+      if i < j then
+        count := count + 1
+      else
+        count := count
+  return count
+
+/-- `x ← e` (reassign from an action) and a nested `(← e)` lift. -/
+def readSum (stdin : IO.FS.Stream) : IO Nat := do
+  let mut total := 0
+  let line ← stdin.getLine
+  total ← pure (total + line.length)
+  let more := (← stdin.getLine).length
+  return total + more
+
+/-- `while`. -/
+def halve (n : Nat) : Nat := Id.run do
+  let mut k := n
+  let mut steps := 0
+  while k > 1 do
+    k := k / 2
+    steps := steps + 1
+  return steps

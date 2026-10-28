@@ -176,7 +176,7 @@ export interface TermLedger {
 
 export interface RecoveredStep {
   start: { line: number; character: number };
-  kind: "failed" | "skipped" | "term" | "subterm";
+  kind: "failed" | "skipped" | "term" | "subterm" | "do";
 }
 
 export interface TacticSlot {

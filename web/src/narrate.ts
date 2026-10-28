@@ -291,6 +291,18 @@ const PROGRAM_FORM: Record<string, string> = {
   where: "where",
 };
 
+/** A `do` block's nested blocks and splits (2026-10-27, "Do blocks"): the B5
+ forms the do walk mints. Every other element is the `do` family, read by its
+ head word. */
+const DO_FORM: Record<string, string> = {
+  for: "for",
+  while: "while",
+  unless: "unless",
+  repeat: "repeat",
+  if: "if",
+  match: "match",
+};
+
 /** The family, or `""` where nothing in the table claims this step — the
  RESIDUE the probe counts and reports. */
 export function narrateFamily(n: TreeNode): string {
@@ -306,6 +318,10 @@ export function narrateFamily(n: TreeNode): string {
     if (/^let\s+rec\b/.test(flat(n.label))) return "letrec";
     if (narrateHead(n.label) === "let") return "let";
     return "term";
+  }
+  if (n.recovered === "do") {
+    const df = n.branch ? DO_FORM[n.branch.form] : undefined;
+    return df ?? "do";
   }
   if (n.recovered === "failed") return "failed";
   if (n.recovered === "skipped") return "sorry";
@@ -377,6 +393,76 @@ function casePatterns(n: TreeNode, ctx: NarrateCtx): string[] {
     .filter((g) => g.type === "goal")
     .map((g) => caseName(g))
     .filter((s) => s !== "");
+}
+
+/** `lhs := rhs` / `lhs ← rhs` at the top level of a do element's text (a
+ `:=` inside parentheses is a named argument, a `←` there a nested lift):
+ the element's own grammar, not an argument index. */
+function splitAssign(text: string): { lhs: string; op: string; rhs: string } | null {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if ("([{⟨".includes(ch)) depth++;
+    else if (")]}⟩".includes(ch)) depth--;
+    else if (depth === 0) {
+      for (const op of [" := ", " ← ", " <- "])
+        if (text.startsWith(op, i))
+          return {
+            lhs: text.slice(0, i).trim(),
+            op: op.trim() === ":=" ? ":=" : "←",
+            rhs: text.slice(i + op.length).trim(),
+          };
+    }
+  }
+  return null;
+}
+
+/** A `return` RETURNS EARLY where it sits in a block that hangs beside a
+ trunk that goes on — a loop's body, an `if` with code after it: some goal
+ above it is SPAWNED. One at the end of the spine (or of an arm the spine
+ ends in) is the block's value. */
+function returnsEarly(n: TreeNode, ctx: NarrateCtx): boolean {
+  for (let p = parentOf(n, ctx); p; p = parentOf(p, ctx))
+    if (p.type === "goal" && p.spawned) return true;
+  return false;
+}
+
+/** One `do` element's line, by its head word and its shape. */
+function doLine(n: TreeNode, ctx: NarrateCtx): string {
+  const text = flat(n.label);
+  const head = narrateHead(n.label);
+  if (head === "return") {
+    const v = text.replace(/^return\b\s*/, "");
+    const early = returnsEarly(n, ctx) ? " early" : "";
+    return clip(v ? `Return ${v}${early}` : `Return${early}`, LINE_CAP);
+  }
+  if (head === "break") return "Leave the loop";
+  if (head === "continue") return "Go on to the next iteration";
+  const let_ = /^let\s+(mut\s+)?/.exec(text);
+  const a = splitAssign(let_ ? text.slice(let_[0].length) : text);
+  if (a && let_?.[1]) {
+    // `seen : T` — the name, and the type where the author wrote one.
+    const c = a.lhs.indexOf(" : ");
+    const name = c < 0 ? a.lhs : a.lhs.slice(0, c);
+    const what = c < 0 ? "variable" : clip(a.lhs.slice(c + 3), 34);
+    return clip(
+      a.op === ":="
+        ? `Make ${name} a mutable ${what}, starting at ${a.rhs}`
+        : `Run ${a.rhs} and keep the result in a mutable ${name}`,
+      LINE_CAP,
+    );
+  }
+  if (a && let_)
+    return clip(
+      a.op === ":=" ? `Let ${a.lhs} := ${a.rhs}` : `Run ${a.rhs} and call the result ${a.lhs}`,
+      LINE_CAP,
+    );
+  if (a)
+    return clip(
+      a.op === ":=" ? `Update ${a.lhs} to ${a.rhs}` : `Run ${a.rhs} and store the result in ${a.lhs}`,
+      LINE_CAP,
+    );
+  return clip(`Run ${text}`, LINE_CAP);
 }
 
 function template(n: TreeNode, ctx: NarrateCtx): string {
@@ -569,8 +655,40 @@ function template(n: TreeNode, ctx: NarrateCtx): string {
         ? `Match ${on || "it"} against ${list(pats, 4)}`
         : `Match ${on || "it"}`;
     }
-    case "if":
+    case "if": {
+      // `if let p := e` / `if let p ← e` (a do block's): a match, read as one.
+      const cond = flat(n.branch?.on ?? "");
+      const m = /^let\s+/.exec(cond);
+      const a = m ? splitAssign(cond.slice(m[0].length)) : null;
+      if (a)
+        return clip(
+          a.op === ":="
+            ? `If ${a.rhs} matches ${a.lhs}`
+            : `Run ${a.rhs}; if the result matches ${a.lhs}`,
+          LINE_CAP,
+        );
       return `Branch on whether ${on || "the condition holds"}`;
+    }
+    // A do block's loops: what they range over, and what the body is given.
+    case "for": {
+      const hs = newHyps(n, ctx).map(splitHyp);
+      const data = hs.filter((h) => !isProp(h.type)).map((h) => h.name);
+      const props = hs.filter((h) => isProp(h.type));
+      const over = on || "the collection";
+      const lead = data.length > 0 ? `For each ${list(data)} in ${over}` : `Loop over ${over}`;
+      const proof = props.length > 0
+        ? `, with ${props.map((p) => `${p.name} : ${clip(p.type, 30)}`).join(", ")}`
+        : "";
+      return clip(lead + proof, LINE_CAP);
+    }
+    case "while":
+      return `Repeat while ${on || "the condition holds"}`;
+    case "unless":
+      return `Unless ${on || "the condition holds"}, run the block`;
+    case "repeat":
+      return `Repeat the block until it breaks or returns`;
+    case "do":
+      return doLine(n, ctx);
     case "where": {
       const fields = (n.branch?.arms ?? []).map((a) => a.tag).filter((t) => t);
       return fields.length > 0

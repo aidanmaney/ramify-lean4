@@ -499,6 +499,370 @@ private def helperGoal (w : TermWalk) (decl : Syntax)
   let r ← walk g alts
   return some (g, { r with goals := r.goals ++ [g] })
 
+/-! ### `do` blocks as a SPINE (2026-10-27, "Do blocks")
+
+A `doSeq` is a trunk: one recovered step per element, its label the element's
+verbatim source (a loop / `if` / `match` up to its own block, anything else its
+first line), and between two steps a GOAL — the context Lean's do elaborator
+hands the NEXT element (every element keeps its own `TermInfo`, and that
+info's `lctx` is the scope at that point) under the block's result type.
+Nested blocks (`for`/`while`/`unless`/`repeat` bodies, the arms of an `if`
+or a `match`) hang off their step as goals of their own, tagged `body`,
+`then`/`else`, or the pattern; with a continuation they are SPAWNED (the trunk
+goes on beside them), without one they are the step's goals, a split.
+
+What the elaborator puts in those contexts besides the reader's binders is
+its own plumbing — `__r`, `__s`, `__do_jp`, `__do_lift`, a `_` pattern's
+`tail` — and every such name carries MACRO SCOPES (the do elaborator mints
+them hygienically); a name the author wrote has none.  That, not a list of
+names, is the filter (`isImplementationDetail` misses half of them: a
+`let`-bound `__r` is not marked).  A `let mut` variable is re-bound by every
+reassignment and by each loop iteration, so the context holds several fvars of
+one name; only the LATEST is in scope and drawn, under the id of its FIRST
+binding (`DoCtx.canon`), so B2's origin is its `let mut` and context breadth
+`used` finds it whichever version a step read. -/
+
+/-- What one top-level `do` shares down its spine. -/
+private structure DoCtx where
+  /-- The block's result type, printed once; `Id α` reads as `α` (the value
+      of `Id.run do …` IS an `α`). -/
+  tyStr    : String
+  /-- Every name a `let mut` in the block binds, read off the syntax. -/
+  mutNames : Array String
+  /-- A mutable variable's FIRST fvar id, by name. -/
+  canon    : IO.Ref (Std.HashMap String String)
+
+private def isDoSeq (s : Syntax) : Bool :=
+  s.isOfKind ``Parser.Term.doSeqIndent || s.isOfKind ``Parser.Term.doSeqBracketed
+
+/-- A do-ELEMENT's syntax kind (`doLet`, `doFor`, `doExpr`, …) or the `do`
+term itself: every such `TermInfo` stands for the element AND everything
+after it (its `expr` is the continuation), so it is never a dependency. -/
+private def isDoKind (k : SyntaxNodeKind) : Bool :=
+  "Lean.Parser.Term.do".isPrefixOf k.toString
+
+/-- The elements of a `doSeq`, in source order (`doSeqItem` = element + `;`?). -/
+private def doElems (seq : Syntax) : Array Syntax :=
+  (kindsHere ``Parser.Term.doSeqItem seq).filterMap fun it =>
+    it.getArgs.find? fun a => !(a matches .atom ..) && a.getRange?.isSome
+
+/-- The `TermInfo` of exactly this node, preferring one of its own kind (an
+`if let` is also elaborated as the `doMatch` it expands to, a `(← e)` lift as
+a `doLet`, at the same range). -/
+private def findInfoOf (w : TermWalk) (stx : Syntax) : Option (ContextInfo × TermInfo) :=
+  match byteRange? stx with
+  | none => none
+  | some r =>
+    let hits := w.infos.filter fun (_, ti) => byteRange? ti.stx == some r
+    (hits.find? fun (_, ti) => ti.stx.getKind == stx.getKind) <|> hits[0]?
+
+private def userVisible (d : LocalDecl) : Bool :=
+  !d.isAuxDecl && !d.isImplementationDetail && !d.userName.hasMacroScopes
+
+private def canonId (d : DoCtx) (name id : String) : IO String := do
+  unless d.mutNames.contains name do return id
+  match (← d.canon.get).get? name with
+  | some c => return c
+  | none => d.canon.modify (·.insert name id); return id
+
+/-- The goal BETWEEN two elements: the next element's scope, user binders
+only, each name once at its latest binding, mutable variables under their
+first id. -/
+private def doGoal (d : DoCtx) (cctx : ContextInfo) (lctx : LocalContext)
+    (pos : Lsp.Position) (tag : String) : IO GoalInfo := do
+  let raw ← cctx.runMetaM lctx do
+    let mut decls : Array LocalDecl := #[]
+    for decl in lctx do
+      if userVisible decl then decls := decls.push decl
+    -- Each name once, at its FIRST place in the context (a reassignment
+    -- re-binds at the end, and the lines must not shuffle from goal to goal),
+    -- with its LATEST binding (the one in scope).
+    let mut out : Array (String × String × String × Bool) := #[]
+    for i in [0:decls.size] do
+      let first := decls[i]!
+      if (decls.extract 0 i).any (·.userName == first.userName) then continue
+      let decl := (decls.extract i decls.size).foldl
+        (fun acc d => if d.userName == first.userName then d else acc) first
+      let tyStr := toString (← Meta.ppExpr decl.type)
+      let isP ← try Meta.isProof (mkFVar decl.fvarId) catch _ => pure false
+      out := out.push (decl.userName.toString, decl.fvarId.name.toString, tyStr, isP)
+    return out
+  let mut hyps : List Hypothesis := []
+  for (name, id, ty, isP) in raw do
+    hyps := hyps ++ [{ username := name, type := ty, value := none,
+                       id := ← canonId d name id,
+                       isProof := if isP then "proof" else "data" }]
+  return { username := tag, type := d.tyStr, hyps, id := syntheticGoalId pos }
+
+private def elemGoal (w : TermWalk) (d : DoCtx) (e : Syntax) (tag : String := "") :
+    IO (Option GoalInfo) := do
+  match findInfoOf w e with
+  | some (cctx, ti) => return some (← doGoal d cctx ti.lctx (lspStart w e) tag)
+  | none => return none
+
+/-- What an element READS: the free variables of its own terms — every
+`TermInfo` inside it that is not a binder, not a do-kind (those stand for the
+continuation) and not inside one of its nested blocks (`skip`). Programs only,
+as `depsOf`. -/
+private def doDeps (w : TermWalk) (d : DoCtx) (scope : List String) (e : Syntax)
+    (skip : Array Syntax) : IO (List String) := do
+  unless w.program do return []
+  let some (b, en) := byteRange? e | return []
+  let skipR := skip.filterMap byteRange?
+  let mut out : List String := []
+  for (cctx, ti) in w.infos do
+    -- Only what the author WROTE: an expansion's own nodes (`unless c do b`
+    -- is `if c then pure () else b`) carry synthetic info over the whole
+    -- element and would read its block as well.
+    unless ti.stx.getHeadInfo matches .original .. do continue
+    if ti.isBinder || isDoKind ti.stx.getKind then continue
+    let some (b', e') := byteRange? ti.stx | continue
+    unless b ≤ b' && e' ≤ en do continue
+    if skipR.any (fun (sb, se) => sb ≤ b' && e' ≤ se) then continue
+    let names ← cctx.runMetaM ti.lctx do
+      try
+        let full ← instantiateMVars ti.expr
+        let ids := (collectFVars {} full).fvarIds
+        return ids.filterMap (ti.lctx.find? ·) |>.filterMap fun decl =>
+          if userVisible decl then some (decl.userName.toString, decl.fvarId.name.toString)
+          else none
+      catch _ => return #[]
+    for (n, id) in names do
+      let id ← canonId d n id
+      -- What it reads from the scope it was GIVEN: its own binder is not a
+      -- dependency (`let mut k := n` reads `n`).
+      unless out.contains id || !scope.contains id do out := out ++ [id]
+  return out
+
+/-- The names `let mut` binds anywhere in the block (`let mut x := …`,
+`let mut x ← …`), by kind: the FIRST `letId`/`doIdDecl` of the element is
+its own binder (a nested `let` in the value comes later in preorder). -/
+private def mutNamesIn (doStx : Syntax) : Array String := Id.run do
+  let mut out := #[]
+  for e in nodesOfKind [``Parser.Term.doLet, ``Parser.Term.doLetArrow] doStx do
+    let isMut := e.getArgs.any fun a => a.getArgs.any (· matches .atom _ "mut")
+    unless isMut do continue
+    let ids := nodesOfKind [``Parser.Term.letId, ``Parser.Term.doIdDecl] e
+    if let some idn := ids[0]? then
+      if let some (.ident _ _ v _) := idn.getArgs.find? (· matches .ident ..) then
+        out := out.push v.toString
+  return out
+
+/-- A do-`if`'s parts in order, flattened through its `else if` groups. -/
+private partial def flatParts (stx : Syntax) : Array Syntax :=
+  stx.getArgs.foldl (init := #[]) fun acc a =>
+    if a.getKind == nullKind || a.getKind == groupKind then acc ++ flatParts a
+    else acc.push a
+
+/-- The child just before the atom `tok` that has a range. -/
+private def beforeAtom? (stx : Syntax) (tok : String) : Option Syntax := Id.run do
+  let mut last : Option Syntax := none
+  for a in stx.getArgs do
+    if let .atom _ v := a then
+      if v == tok then return last
+    if a.getRange?.isSome then last := some a
+  return none
+
+private def textOf (w : TermWalk) (stx : Syntax) : String :=
+  match stx.getRange? with
+  | some r => srcText w r.start r.stop
+  | none => ""
+
+mutual
+
+/-- One `doSeq` as a trunk from `goalBefore`. -/
+private partial def walkSeq (w : TermWalk) (d : DoCtx) (goalBefore : GoalInfo)
+    (seq : Syntax) : IO Recovery := do
+  let elems := doElems seq
+  let mut cur := goalBefore
+  let mut out : Recovery := {}
+  for i in [0:elems.size] do
+    let e := elems[i]!
+    let next? ← match elems[i + 1]? with
+      | some n => do
+        match ← elemGoal w d n with
+        | some g => pure (some g)
+        | none => pure (some { cur with id := syntheticGoalId (lspStart w n), username := "" })
+      | none => pure none
+    out := out.append (← walkElem w d cur e next?)
+    if let some g := next? then cur := g
+  return out
+
+/-- One element: its step, its nested blocks, `next?` the goal after it. -/
+private partial def walkElem (w : TermWalk) (d : DoCtx) (cur : GoalInfo)
+    (e : Syntax) (next? : Option GoalInfo) : IO Recovery := do
+  let some rg := e.getRange? | return {}
+  let k := e.getKind
+  -- A nested block as a goal of its own, tagged, walked as a trunk.
+  let arm (seq : Syntax) (tag : String) : IO (Option (GoalInfo × Recovery)) := do
+    let some first := (doElems seq)[0]? | return none
+    let some g ← elemGoal w d first tag | return none
+    let r ← walkSeq w d g seq
+    return some (g, { r with goals := r.goals ++ [g] })
+  let binders (g : GoalInfo) : Array String :=
+    let before := cur.hyps.map (·.id)
+    ((g.hyps.filter fun h => !before.contains h.id).map (·.username)).toArray
+  -- The step, with its nested goals: SPAWNED beside a continuation, else the
+  -- step's own goals (a split at the end of a block).
+  -- `reach` is the step's POSITION stop: like a tactic's, it runs through the
+  -- trivia after the label (to the nested block, or the element's trailing
+  -- trivia), so a comment written after an element is attributed to it; the
+  -- label and the edit stay tight.
+  let finish (label : String) (start reach : Lsp.Position) (kids : List GoalInfo)
+      (sub : Recovery) (deps : List String) (branch : Option ProofTree.BranchInfo) :
+      Recovery :=
+    let (after, spawned) := match next? with
+      | some n => ([n], kids)
+      | none => (kids, [])
+    let st := mkStep label start reach cur after spawned deps
+    { sub with
+      steps := st :: sub.steps
+      goals := sub.goals ++ next?.toList
+      recovered := #[{ start, kind := "do" }] ++ sub.recovered
+      branches := match branch with
+        | some b => #[b] ++ sub.branches
+        | none => sub.branches }
+  let plain : IO Recovery := do
+    -- Its first line: a multi-line element (a long expression, a `try`) is
+    -- named by where it starts.
+    let raw := String.Pos.Raw.extract w.fileMap.source rg.start rg.stop
+    let cut := match raw.find? (· == '\n') with
+      | some p => ⟨rg.start.byteIdx + p.offset.byteIdx⟩
+      | none => rg.stop
+    let (label, start, stop) := sliceStep w rg.start cut
+    let reach := if cut == rg.stop then
+        match e.getTailInfo with
+        | .original _ _ trailing _ => w.fileMap.utf8PosToLspPos trailing.stopPos
+        | _ => stop
+      else stop
+    let mut spawned : List GoalInfo := []
+    for byNode in nodesOfKind [``Parser.Term.byTactic] e do
+      if let some g ← byRootGoal w byNode then spawned := spawned ++ [g]
+    let r := finish label start reach [] {} (← doDeps w d (cur.hyps.map (·.id)) e #[]) none
+    return { r with steps := r.steps.map fun s =>
+      if s.position.start == start then { s with spawnedGoals := s.spawnedGoals ++ spawned } else s }
+  if k == ``Parser.Term.doFor || k == ``Parser.Term.doWhile
+      || k == ``Parser.Term.doUnless || k == ``Parser.Term.doRepeat then
+    let some body := e.getArgs.find? isDoSeq | plain
+    let some bodyRg := body.getRange? | plain
+    let (label, start, _) := sliceStep w rg.start bodyRg.start
+    let some (g, sub) ← arm body "body" | plain
+    let form := if k == ``Parser.Term.doFor then "for"
+      else if k == ``Parser.Term.doWhile then "while"
+      else if k == ``Parser.Term.doUnless then "unless" else "repeat"
+    -- `for x in xs`: the collection(s); `while`/`unless`: the condition.
+    let on : Option String :=
+      if k == ``Parser.Term.doFor then
+        -- The loop's OWN declarations, never a nested loop's in the body.
+        let decls := e.getArgs.foldl (init := #[]) fun acc a =>
+          if isDoSeq a then acc else acc ++ kindsHere ``Parser.Term.doForDecl a
+        let colls := decls.filterMap fun decl =>
+          (afterAtom? decl "in").map (textOf w)
+        if colls.isEmpty then none else some (", ".intercalate colls.toList)
+      else
+        let kw := atomRange? e form
+        let dk := atomRange? e "do"
+        match kw, dk with
+        | some (_, a), some (b, _) => some (srcText w a b)
+        | _, _ => none
+    let deps ← doDeps w d (cur.hyps.map (·.id)) e #[body]
+    let arm0 : ProofTree.BranchArm :=
+      { tag := "body", binders := binders g, goalId := some g.id.name.toString }
+    let b : ProofTree.BranchInfo :=
+      { stepStart := start, form := form, «on» := on, arms := #[arm0] }
+    return finish label start (lspStart w body) [g] sub deps (some b)
+  else if k == ``Parser.Term.doIf then
+    -- `if c then … (else if c then …)* (else …)?`: each block tagged by the
+    -- keyword that opens it.
+    let parts := flatParts e
+    let mut pending : Option String := none
+    let mut seenThen := false
+    let mut seqs : Array (String × Syntax) := #[]
+    let mut cond? : Option Syntax := none
+    for p in parts do
+      match p with
+      | .atom _ "then" =>
+        pending := some (if seenThen then "else if" else "then"); seenThen := true
+      | .atom _ "else" => pending := some "else"
+      | .atom _ "if" => pending := none
+      | _ =>
+        if isDoSeq p then
+          if let some t := pending then seqs := seqs.push (t, p)
+          pending := none
+        else if cond?.isNone && p.getRange?.isSome then cond? := some p
+    let some (_, first) := seqs[0]? | plain
+    let some firstRg := first.getRange? | plain
+    let (label, start, _) := sliceStep w rg.start firstRg.start
+    let mut kids : List GoalInfo := []
+    let mut sub : Recovery := {}
+    let mut arms : Array ProofTree.BranchArm := #[]
+    for (tag, s) in seqs do
+      let some (g, r) ← arm s tag | continue
+      kids := kids ++ [g]
+      sub := sub.append r
+      arms := arms.push { tag, binders := binders g, goalId := some g.id.name.toString }
+    if kids.isEmpty then plain else
+    let deps ← doDeps w d (cur.hyps.map (·.id)) e (seqs.map (·.2))
+    let b : ProofTree.BranchInfo :=
+      { stepStart := start, form := "if", «on» := cond?.map (textOf w), arms }
+    return finish label start (lspStart w first) kids sub deps (some b)
+  else if k == ``Parser.Term.doMatch then
+    let alts := kindsHere ``Parser.Term.matchAlt e
+    let some alt0 := alts[0]? | plain
+    let some altRg := alt0.getRange? | plain
+    let (label, start, _) := sliceStep w rg.start altRg.start
+    let on := ", ".intercalate <| (kindsHere ``Parser.Term.matchDiscr e).toList.map (textOf w)
+    let mut kids : List GoalInfo := []
+    let mut sub : Recovery := {}
+    let mut arms : Array ProofTree.BranchArm := #[]
+    for alt in alts do
+      let some rhs := afterAtom? alt "=>" | continue
+      let some (_, barStop) := atomRange? alt "|" | continue
+      let some (arrowStart, _) := atomRange? alt "=>" | continue
+      let pat := srcText w barStop arrowStart
+      let some (g, r) ← arm rhs pat | continue
+      kids := kids ++ [g]
+      sub := sub.append r
+      arms := arms.push { tag := pat, pattern := some pat, binders := binders g,
+                          goalId := some g.id.name.toString }
+    if kids.isEmpty then plain else
+    let deps ← doDeps w d (cur.hyps.map (·.id)) e alts
+    let on? : Option String := if on.isEmpty then none else some on
+    let b : ProofTree.BranchInfo :=
+      { stepStart := start, form := "match", «on» := on?, withAlts := true, arms }
+    return finish label start (lspStart w alt0) kids sub deps (some b)
+  else
+    plain
+
+end
+
+/-- A `do` term as a spine from `goalBefore`. -/
+private def walkDo (w : TermWalk) (goalBefore : GoalInfo) (doStx : Syntax) :
+    IO Recovery := do
+  let some seq := doStx.getArgs.find? isDoSeq | return {}
+  let some (cctx, ti) := findInfoOf w doStx | return {}
+  let tyStr ← cctx.runMetaM ti.lctx do
+    let ty ← match ti.expectedType? with
+      | some t => pure t
+      | none => Meta.inferType ti.expr
+    let ty ← instantiateMVars ty
+    let ty := if ty.isAppOfArity ``Id 1 then ty.appArg! else ty
+    return toString (← Meta.ppExpr ty)
+  let canon ← IO.mkRef {}
+  walkSeq w { tyStr, mutNames := mutNamesIn doStx, canon } goalBefore seq
+
+/-- `Id.run do …`, by the ELABORATED function (`Id.run`), not its spelling:
+the `do` argument, found by kind. -/
+private def idRunDo? (w : TermWalk) (stx : Syntax) : IO (Option Syntax) := do
+  let some (cctx, ti) := findInfo w stx | return none
+  let isRun ← cctx.runMetaM ti.lctx do
+    try return (← instantiateMVars ti.expr).getAppFn.constName? == some ``Id.run
+    catch _ => return false
+  unless isRun do return none
+  let args := stx.getArgs.foldl (init := #[]) fun acc a =>
+    if a.getKind == nullKind then acc ++ a.getArgs else acc.push a
+  return args.find? (·.isOfKind ``Parser.Term.do)
+
 private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
     (stx : Syntax) : IO Recovery := do
   let k := stx.getKind
@@ -560,7 +924,7 @@ private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
           goalId := some g.id.name.toString }
     if kids.isEmpty then leaf else
     let r := push sub (mkStep label start stop goalBefore kids [] deps) []
-    let b : ProofTree.BranchInfo := { stepStart := start, form, «on» := on, withAlts, arms }
+    let b : ProofTree.BranchInfo := { stepStart := start, form := form, «on» := on, withAlts, arms }
     return { r with branches := r.branches.push b }
   if k == ``Parser.Term.have || k == ``Parser.Term.let then
     let isHave := k == ``Parser.Term.have
@@ -784,6 +1148,16 @@ private partial def walkTerm (w : TermWalk) (goalBefore : GoalInfo)
       goalBefore kids []) []
     let b : ProofTree.BranchInfo := { stepStart := start, form := "where", arms }
     return { r with branches := r.branches.push b }
+  else if k == ``Parser.Term.do then
+    let r ← walkDo w goalBefore stx
+    if r.steps.isEmpty then leaf else return r
+  else if k == ``Parser.Term.app then
+    -- `Id.run do …` is the block's pure value: the block is the term.
+    match ← idRunDo? w stx with
+    | some doStx =>
+      let r ← walkDo w goalBefore doStx
+      if r.steps.isEmpty then leaf else return r
+    | none => leaf
   else
     leaf
 

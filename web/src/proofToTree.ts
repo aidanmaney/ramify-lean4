@@ -656,7 +656,7 @@ export function proofToTree(
 
   const recoveredAt = new Map<
     string,
-    "failed" | "skipped" | "term" | "subterm"
+    "failed" | "skipped" | "term" | "subterm" | "do"
   >();
   for (const r of proof.recovered ?? [])
     recoveredAt.set(`${r.start.line}:${r.start.character}`, r.kind);
@@ -1126,7 +1126,7 @@ export function proofToTree(
     if (!step) return undefined;
 
     if (
-      ["term", "subterm"].includes(
+      ["term", "subterm", "do"].includes(
         recoveredAt.get(
           `${step.position.start.line}:${step.position.start.character}`,
         ) ?? "",

@@ -1327,10 +1327,11 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
     // reconstruction, and a SUBTERM — several of which share the line of the
     // `exact` that supplied them and would otherwise overwrite its reading
     // with the last component's. Part B's `term` steps ARE the script (a
-    // term-mode proof has no other), so they stay.
+    // term-mode proof has no other), and so are a `do` block's elements, so
+    // they stay.
     const recovered = new Set(
       (stable.proof.recovered ?? [])
-        .filter((r) => r.kind !== "term")
+        .filter((r) => r.kind !== "term" && r.kind !== "do")
         .map((r) => `${r.start.line}:${r.start.character}`),
     );
     const key = (p: { line: number; character: number }) =>

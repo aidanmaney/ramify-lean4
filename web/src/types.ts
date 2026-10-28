@@ -176,7 +176,7 @@ export interface TreeNode {
 
   synthetic?: boolean;
 
-  recovered?: "failed" | "skipped" | "term" | "subterm";
+  recovered?: "failed" | "skipped" | "term" | "subterm" | "do";
 
   /** B3 — the constants this step's tactic text names, in source order of
       first occurrence, deduped by name. Attributed INNERMOST server-side, so a
