@@ -208,10 +208,29 @@ function parseJsonc(text) {
   return JSON.parse(out.replace(/,(\s*[}\]])/g, "$1"));
 }
 
+// The theme the window is SHOWING. With `window.autoDetectColorScheme` on,
+// VS Code follows the OS and shows `workbench.preferred{Dark,Light}ColorTheme`
+// while `workbench.colorTheme` still names the other one, so reading
+// `colorTheme` alone published Latte's token inks onto a Mocha window. The API
+// gives no active theme NAME, only its kind; the kind picks the preference.
+function activeThemeLabel() {
+  const wb = vscode.workspace.getConfiguration("workbench");
+  const win = vscode.workspace.getConfiguration("window");
+  const kind = vscode.window.activeColorTheme.kind;
+  const K = vscode.ColorThemeKind;
+  const hc = kind === K.HighContrast || kind === K.HighContrastLight;
+  let pref = null;
+  if (hc && win.get("autoDetectHighContrast") !== false)
+    pref = kind === K.HighContrast
+      ? "preferredHighContrastColorTheme"
+      : "preferredHighContrastLightColorTheme";
+  else if (!hc && win.get("autoDetectColorScheme"))
+    pref = kind === K.Dark ? "preferredDarkColorTheme" : "preferredLightColorTheme";
+  return (pref && wb.get(pref)) || wb.get("colorTheme");
+}
+
 function activeThemeFile() {
-  const label = vscode.workspace
-    .getConfiguration("workbench")
-    .get("colorTheme");
+  const label = activeThemeLabel();
   for (const ext of vscode.extensions.all) {
     const themes = ext.packageJSON?.contributes?.themes;
     if (!Array.isArray(themes)) continue;
@@ -925,7 +944,7 @@ function tokenColors(themeName) {
 
 function publishThemeColors() {
   try {
-    const name = vscode.workspace.getConfiguration("workbench").get("colorTheme");
+    const name = activeThemeLabel();
     const colors = tokenColors(name);
     const brackets =
       vscode.workspace
@@ -1668,6 +1687,11 @@ function activate(context) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       const themeChanged =
         e.affectsConfiguration("workbench.colorTheme") ||
+        e.affectsConfiguration("workbench.preferredDarkColorTheme") ||
+        e.affectsConfiguration("workbench.preferredLightColorTheme") ||
+        e.affectsConfiguration("workbench.preferredHighContrastColorTheme") ||
+        e.affectsConfiguration("workbench.preferredHighContrastLightColorTheme") ||
+        e.affectsConfiguration("window.autoDetectColorScheme") ||
         e.affectsConfiguration("editor.tokenColorCustomizations") ||
         e.affectsConfiguration("editor.semanticTokenColorCustomizations") ||
         e.affectsConfiguration("editor.bracketPairColorization.enabled") ||
