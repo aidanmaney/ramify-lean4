@@ -53,6 +53,7 @@ cd web && npm run probe -- lsp ../lean/ProofTreeLints.lean 35 2 --lint          
 cd web && npm run probe -- lsp ../lean/ProofTreeScratch.lean 0 0 --all --edits  # the tacticEdits/deleteSlots tight-range invariant
 cd web && npm run probe -- lsp ../lean/ProofTreeNameCases.lean 12 2 --namecases  # Name the cases through the real checkRewrite (all benign; one theorem per call's position)
 cd web && npm run probe -- viewer                # the static viewer's payload + pure modules, over probe/viewer/*.ndjson (in npm test)
+cd web && npm run probe -- contrast [--all]      # every text ink's theme.ts recipe resolved over Light/Dark Modern bg/fg, × the opacity its paint adds, on its ground: ≥ 4.5:1 (in npm test)
 cd web && npm run probe -- icons                 # one codicon = one meaning (icons.ts ICON/SAME_MEANING), no codicon literal outside it, no classic glyph painted as text (in npm test)
 cd web && npm run probe -- lsp ../lean/ProofTreeTour.lean 0 0 --all --wire   # one harvest, both wires: CLI vs RPC per declaration, every baked popup vs the live infoToInteractive
 cd web && node scripts/publish.mjs <file.lean>...   # the static site → ../site/ (docs/viewer.md); --cache DIR while iterating

@@ -6,6 +6,10 @@ import {
   HYP_LINE_H,
   hypGutterW,
   hypLineOffset,
+  HYP_ARROW_GAP,
+  HYP_FROM_PX,
+  hypArrowText,
+  getUiFontFamily,
   HYP_SEP_H,
   getCodeFontFamily,
   measureText,
@@ -22,7 +26,7 @@ import {
   HYP_MARK_FILL,
   HYP_UNUSED_FILL,
   HYP_USED_FILL,
-  FAINT_OPACITY,
+  CHROME_BORDER,
   CHROME_RADIUS,
 } from "./theme";
 
@@ -31,7 +35,7 @@ const UNDERLINE_DROP = 2.5;
 const HYP_LIT_PAD = 2;
 
 /** A plain line's text with its NAMES inked as the infoview inks them (one
- pane over): `--ptw-hypname`, or italic and faint for an inaccessible `x✝`.
+ pane over): `--ptw-hypname`, or italic in `--ptw-inaccessible` (a dim TOKEN, no opacity) for an inaccessible `x✝`.
  Colour and style only — the same characters in the same code font, whose
  italic keeps the advance — so the measured width is untouched. A wrapped
  continuation has no names; a dimmed (unused) line keeps its one dim ink and
@@ -56,7 +60,6 @@ function hypLineText(line: HypLine, dimmed: boolean): ReactNode {
             className={gone ? "ptw-inaccessible" : undefined}
             fill={dimmed ? undefined : gone ? INACCESSIBLE_FILL : HYP_NAME_FILL}
             fontStyle={gone ? "italic" : undefined}
-            opacity={gone ? 0.7 : undefined}
           >
             {daggerSvg(i > 0 ? ` ${n}` : n, HYP_FONT_PX)}
           </tspan>
@@ -100,6 +103,9 @@ export function HypBlock({
       behaves like part of the goal box it is drawn in. */
   onLineClick?: (j: number, alt: boolean) => void;
 }) {
+  // The lead column (`lead`, outside `used`): bullets on the lines the
+  // consumer reads, the others in the unused ink. In `used` every line shown
+  // is read, so nothing is marked and nothing dims.
   const anyUsed = hypGutterW(lines) > 0;
 
   const textX = x + hypGutterW(lines);
@@ -112,8 +118,23 @@ export function HypBlock({
   const hypBaseline = (j: number) =>
     hypLineMid(j) + 0.32 * HYP_FONT_PX + UNDERLINE_DROP;
 
-  const lineFill = (used: boolean) =>
-    anyUsed && !used ? HYP_UNUSED_FILL : HYP_USED_FILL;
+  const lineFill = (line: HypLine) =>
+    line.more || (anyUsed && !line.used) ? HYP_UNUSED_FILL : HYP_USED_FILL;
+
+  // The far-origin arrow, after the line's text (`HYP_ARROW_GAP`; layout's
+  // `hypLineInkW` measured exactly this), in the dim ink — one dimming.
+  const arrowSvg = (line: HypLine) =>
+    line.arrow ? (
+      <tspan
+        dx={HYP_ARROW_GAP}
+        fill={HYP_UNUSED_FILL}
+        fontStyle="normal"
+        fontFamily={getUiFontFamily()}
+        fontSize={HYP_FROM_PX}
+      >
+        {hypArrowText(line.arrow)}
+      </tspan>
+    ) : null;
 
   return (
     <>
@@ -123,9 +144,8 @@ export function HypBlock({
           x2={x + width}
           y1={y + sepIndex * HYP_LINE_H + HYP_SEP_H / 2}
           y2={y + sepIndex * HYP_LINE_H + HYP_SEP_H / 2}
-          stroke={HYP_UNUSED_FILL}
+          stroke={CHROME_BORDER}
           strokeWidth={1}
-          opacity={FAINT_OPACITY}
         />
       )}
 
@@ -181,7 +201,7 @@ export function HypBlock({
           style={{ letterSpacing: 0 }}
         >
           {lines.map((line, j) =>
-            line.used && !line.cont ? (
+            line.used && line.lead && !line.cont ? (
               <tspan
                 key={j}
                 x={x}
@@ -219,9 +239,9 @@ export function HypBlock({
               // inside one of them.
               <div
                 key={j}
-                title={lineTitle?.(j)}
-                onMouseEnter={onLine ? () => onLine(j) : undefined}
-                onMouseLeave={onLine ? () => onLine(null) : undefined}
+                title={line.more ? undefined : lineTitle?.(j)}
+                onMouseEnter={onLine && !line.more ? () => onLine(j) : undefined}
+                onMouseLeave={onLine && !line.more ? () => onLine(null) : undefined}
                 onClick={
                   onLineClick
                     ? (e) => {
@@ -233,13 +253,25 @@ export function HypBlock({
                 }
                 style={{
                   height: HYP_LINE_H,
-                  color: lineFill(line.used),
+                  color: lineFill(line),
                   paddingLeft: line.indent ?? 0,
 
                   marginTop: line.sep ? HYP_SEP_H : 0,
                 }}
               >
-                {taggedLines[j] ?? daggerHtml(line.text)}
+                {line.more ? line.text : (taggedLines[j] ?? daggerHtml(line.text))}
+                {line.arrow ? (
+                  <span
+                    style={{
+                      marginLeft: HYP_ARROW_GAP,
+                      color: HYP_UNUSED_FILL,
+                      fontFamily: getUiFontFamily(),
+                      fontSize: HYP_FROM_PX,
+                    }}
+                  >
+                    {hypArrowText(line.arrow)}
+                  </span>
+                ) : null}
               </div>
             ))}
           </div>
@@ -258,9 +290,10 @@ export function HypBlock({
               x={textX + (line.indent ?? 0)}
               y={y + sepOff(j) + (j + 0.5) * HYP_LINE_H}
               dy="0.32em"
-              fill={lineFill(line.used)}
+              fill={lineFill(line)}
             >
-              {hypLineText(line, anyUsed && !line.used)}
+              {line.more ? line.text : hypLineText(line, anyUsed && !line.used)}
+              {arrowSvg(line)}
             </tspan>
           ))}
         </text>
@@ -275,7 +308,7 @@ export function HypBlock({
           sized the block with. */}
       {onLine && !taggedLines && (
         <g>
-          {lines.map((_line, j) => (
+          {lines.map((line, j) => line.more ? null : (
             <rect
               key={j}
               x={x}

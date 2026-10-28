@@ -12,7 +12,7 @@ export const CHORD_FOLD_ALL = `${KEY_MOD}K ${KEY_MOD}0`;
 export const CHORD_UNFOLD_ALL = `${KEY_MOD}K ${KEY_MOD}J`;
 export const KEY_MENU = `${KEY_MOD}.`;
 
-export const HYP_MARK = "▸";
+export const HYP_MARK = "•";
 
 export type NodeGates = {
   revealable: boolean;

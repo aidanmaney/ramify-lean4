@@ -81,8 +81,8 @@ const TAGGED_CSS = [
     // the goal list draws italic at 0.7. Colour and style only — the code
     // font's italic keeps the advance, so nothing measured moves.
     ".ptw-hypname { color: var(--ptw-hypname); }",
-    ".ptw-turnstile { color: var(--ptw-turnstile); }",
-    ".ptw-inaccessible { color: var(--ptw-inaccessible); font-style: italic; opacity: 0.7; }",
+    ".ptw-turnstile { color: var(--ptw-turnstile); font-weight: 400; }",
+    ".ptw-inaccessible { color: var(--ptw-inaccessible); font-style: italic; }",
 ].join("\n");
 
 /** A hypothesis name's classes: the infoview's ink (inaccessible or not),

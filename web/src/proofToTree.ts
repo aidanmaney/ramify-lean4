@@ -25,7 +25,7 @@ import type {
   TreeNode,
 } from "./types";
 import { collapseLabel } from "./briefLabel";
-import { tacticHead } from "./elide";
+import { tacticHead, tacticKeyword } from "./elide";
 import { postOrder } from "./treeWalk";
 
 /** Where a hypothesis line came from, resolved to something the view can draw:
@@ -134,6 +134,10 @@ function contextFor(
     return goal.hyps.filter((h) => !inherited.has(h.id) || used.has(h.id));
   };
   let shown = goal.hyps;
+  // `used` with a consumer leaves hypotheses out; `+N more` says how many
+  // (2026-10-25). Not where the author picked the lines (`.h#`), and not on a
+  // goal with no consumer, which shows its whole delta.
+  let more = 0;
   if (mode === "used") {
     if (!consumedBy) shown = deltaOf();
     else {
@@ -145,6 +149,7 @@ function contextFor(
       shown = goal.hyps.filter(
         (h) => deep.has(h.id) || fallbackNames.has(h.username),
       );
+      more = goal.hyps.length - shown.length;
     }
   } else if (mode === "new") {
     if (!producedBy) shown = [];
@@ -159,30 +164,76 @@ function contextFor(
   if (inherited?.size && mode !== "full")
     shown = shown.filter((h) => !inherited.has(hypLine(h)));
 
-  if (flags?.onlyHyps?.length)
+  if (flags?.onlyHyps?.length) {
     shown = shown.filter((h) => flags.onlyHyps!.includes(h.username));
+    more = 0;
+  }
+
+  // THE LEAD COLUMN (2026-10-25): outside `used`, a goal with a consumer
+  // marks the hypotheses that step reads with a `•`, and EVERY line reserves
+  // the column so the names stay aligned. In `used` every line shown is read,
+  // so there is nothing to mark and no column.
+  const lead = mode !== "used" && !!consumedBy ? true : undefined;
+  // FAR-ONLY ORIGINS: a line whose B2 origin is the goal's own producer says
+  // nothing new (the box above it is that step), so only a FAR origin keeps
+  // its arrow (`originFar`, painted `← <head word>`).
+  const producerId = producedBy ? tacticId(producedBy.goalBefore.id) : null;
+  const withOrigin = (h: Hypothesis) => {
+    const o = originOf?.(h);
+    if (!o) return undefined;
+    return {
+      ...o,
+      arrow: o.origin === producerId ? undefined : originHead(o.originText),
+    };
+  };
+  const moreLine = (): HypLine[] =>
+    more > 0 ? [{ text: hypMoreText(more), used: false, more }] : [];
 
   if (!group)
-    return shown.map((h) => ({
-      text: hypLine(h),
-      used: used.has(h.id),
-      hypName: h.username,
-      hypType: h.type,
-      ...originOf?.(h),
-    }));
+    return [
+      ...shown.map((h) => ({
+        text: hypLine(h),
+        used: used.has(h.id),
+        lead,
+        hypName: h.username,
+        hypType: h.type,
+        ...withOrigin(h),
+      })),
+      ...moreLine(),
+    ];
   const data = shown.filter((h) => h.isProof !== "proof");
   const props = shown.filter((h) => h.isProof === "proof");
-  return [...data, ...props].map((h, i) => ({
-    text: hypLine(h),
-    used: used.has(h.id),
-    hypName: h.username,
-    hypType: h.type,
-    ...originOf?.(h),
-    sep: data.length > 0 && props.length > 0 && i === data.length
-      ? true
-      : undefined,
-  }));
+  return [
+    ...[...data, ...props].map((h, i) => ({
+      text: hypLine(h),
+      used: used.has(h.id),
+      lead,
+      hypName: h.username,
+      hypType: h.type,
+      ...withOrigin(h),
+      sep: data.length > 0 && props.length > 0 && i === data.length
+        ? true
+        : undefined,
+    })),
+    ...moreLine(),
+  ];
 }
+
+/** The head a FAR origin is named by (`from obtain`), or nothing. The
+ intro family says nothing a reader needs (most origins are a `rintro`), so it
+ gets no annotation. Two do-element heads are two words — `let mut`, `if let`
+ — read by the label's leading keywords; everything else is `tacticKeyword`
+ (hop captions keep theirs unchanged). */
+const SILENT_ORIGINS = new Set(["intro", "intros", "rintro"]);
+export function originHead(label: string): string | undefined {
+  const m = /^\s*(let\s+mut|if\s+let)(?![A-Za-z0-9_'])/.exec(label);
+  if (m) return m[1].replace(/\s+/, " ");
+  const k = tacticKeyword(label);
+  return SILENT_ORIGINS.has(k) ? undefined : k;
+}
+
+/** The `+N more` line's text — one string, measured and painted. */
+export const hypMoreText = (n: number): string => `+${n} more`;
 
 const IDENT_CH = /[A-Za-z0-9_']/;
 

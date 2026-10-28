@@ -124,9 +124,71 @@ export const LINK_MARK_OFF = 8;
 const HYP_CHAR_W = 6.6;
 export const HYP_LINE_H = 13;
 
-export const hypGutterW = (lines: readonly { used?: boolean }[]) =>
-  lines.some((l) => l.used) && !lines.every((l) => l.used) ? HYP_MARK_W : 0;
+/** THE LEAD COLUMN: reserved on every line of a block whose lines carry
+ `lead` (a goal with a consumer, outside the `used` breadth — proofToTree
+ stamps it), so the names stay aligned whether or not a line wears the `•`. */
+export const hypGutterW = (lines: readonly { lead?: boolean }[]) =>
+  lines.some((l) => l.lead) ? HYP_MARK_W : 0;
 export const HYP_MARK_W = 11;
+
+/** THE FAR-ORIGIN NOTE (2026-10-25, revised 2026-10-27): `from <head>` after
+ a context line's text, `HYP_ARROW_GAP` past its ink, in the UI FACE at
+ `HYP_FROM_PX` — not the code font and no `←`, which read as part of the goal
+ (`←` is Lean syntax: `rw [← h]`, do-notation's `x ← e`). One coding:
+ `hypLineInkW` measures it with `measureUiText`, HypBlock paints
+ `hypArrowText` in `getUiFontFamily()` at the same size. */
+export const HYP_ARROW_GAP = 8;
+/** = theme.ts `CHROME_TEXT_SM` (layout cannot import theme: a cycle). */
+export const HYP_FROM_PX = 11;
+export const hypArrowText = (word: string): string => `from ${word}`;
+
+/** The UI face as the canvas can name it: the host's `--vscode-font-family`
+ resolved (a canvas font cannot read `var()`), else the CHROME_FONT fallback.
+ The painter uses this same string, so measure and paint name one face. */
+function resolveUiFontFamily(): string {
+  if (typeof document === "undefined") return "system-ui, sans-serif";
+  const v = getComputedStyle(document.documentElement)
+    .getPropertyValue("--vscode-font-family")
+    .trim();
+  return v !== "" ? `${v}, system-ui, sans-serif` : "system-ui, sans-serif";
+}
+let uiFontFamily = resolveUiFontFamily();
+export const getUiFontFamily = (): string => uiFontFamily;
+/** UI-face text width; under node a per-character estimate (0.55 em). */
+export const measureUiText = (() => {
+  const ctx =
+    typeof document !== "undefined"
+      ? document.createElement("canvas").getContext("2d")
+      : null;
+  const cache = new Map<string, number>();
+  return (text: string, fontPx: number): number => {
+    const key = `${uiFontFamily}|${fontPx}:${text}`;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    let w: number;
+    if (ctx) {
+      ctx.font = `${fontPx}px ${uiFontFamily}`;
+      w = ctx.measureText(text).width;
+    } else w = [...text].length * fontPx * 0.55;
+    cache.set(key, w);
+    return w;
+  };
+})();
+export function refreshUiFontFamily(): string {
+  uiFontFamily = resolveUiFontFamily();
+  return uiFontFamily;
+}
+/** A context line's ink width from the block's text column: indent, text,
+ and the arrow where the line carries one. */
+export function hypLineInkW(l: HypLine): number {
+  return (
+    (l.indent ?? 0) +
+    measureText(l.text, HYP_FONT_PX) +
+    (l.arrow
+      ? HYP_ARROW_GAP + measureUiText(hypArrowText(l.arrow), HYP_FROM_PX)
+      : 0)
+  );
+}
 
 export const HYP_SEP_H = 7;
 
@@ -908,9 +970,7 @@ export function topLineWidth(
   hypLines: readonly HypLine[],
 ): number {
   return hypLines.length > 0
-    ? (hypLines[0].indent ?? 0) +
-        measureText(hypLines[0].text, HYP_FONT_PX) +
-        hypGutterW(hypLines)
+    ? hypLineInkW(hypLines[0]) + hypGutterW(hypLines)
     : (lines[0]?.indent ?? 0) +
         measureText(lines[0]?.text ?? "", NODE_FONT_PX);
 }
@@ -995,7 +1055,9 @@ function hypBlockSize(
   const hypLines: HypLine[] = reflow === "off"
     ? raw
     : raw.flatMap((l) =>
-        wrapText(
+        l.more
+          ? [l]
+          : wrapText(
           l.text,
           budget - gutter,
           HYP_FONT_PX,
@@ -1004,12 +1066,15 @@ function hypBlockSize(
 
           false,
         ).map(
-          (w) => ({
+          (w, k, all) => ({
             text: w.text,
             used: l.used,
+            lead: l.lead,
             cont: w.cont,
             indent: w.indent,
             sep: w.cont ? undefined : l.sep,
+            // The far-origin arrow ends the hypothesis: the LAST piece only.
+            arrow: k === all.length - 1 ? l.arrow : undefined,
             // Provenance rides every wrapped piece: a hypothesis that spills
             // over two lines came from ONE step, and hovering either half must
             // say so.
@@ -1026,9 +1091,7 @@ function hypBlockSize(
   const hypW =
     hypLines.length > 0
       ? Math.max(
-          ...hypLines.map(
-            (l) => (l.indent ?? 0) + measureText(l.text, HYP_FONT_PX),
-          ),
+          ...hypLines.map(hypLineInkW),
         ) +
         gutter +
         2 * NODE_PAD

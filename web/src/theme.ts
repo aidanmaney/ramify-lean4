@@ -116,15 +116,16 @@ const PALETTE_CSS = `
   --ptw-lightbulb-autofix: var(--vscode-editorLightBulbAutoFix-foreground, var(--ptw-hue-info));
 
   /* Context lines are the densest text in the tree, so they are plain
-     foreground with the unused ones dimmed — no hue at all. The dim is 74%
-     (2026-09-28: the smallest mix that reaches 4.5:1 on a goal box in Light
-     and Dark Modern), not lower: it is real content, and on an
+     foreground with the unused ones dimmed — no hue at all. The dim is 80%
+     (2026-10-25: the smallest mix that reaches 4.5:1 on a FOLDED goal box —
+     the fold wash over the goal fill — in Light and Dark Modern; 74% was
+     measured on the plain fill only), not lower: it is real content, and on an
      already-low-contrast theme (Solarized Light, whose own foreground is a
      soft grey-blue) dimming compounds with the theme's own softness and
      pushes it past legible. */
   --ptw-hyp-used: var(--ptw-fg);
   --ptw-hyp-unused: #6e6e6e;
-  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 74%, var(--ptw-surface));
+  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 80%, var(--ptw-surface));
   --ptw-hyp-mark: #b4763a;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
 
@@ -167,8 +168,8 @@ const PALETTE_CSS = `
   --ptw-diff-del-border: var(--vscode-diffEditor-removedTextBorder, transparent);
 
   --ptw-comment: #767676;
-  --ptw-case: #6b7f99;
-  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
+  --ptw-case: #5b6f89;
+  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 82%, var(--ptw-bg));
   /* THE INFOVIEW'S OWN INKS (2026-10-04), one pane over: the goal list
      colours a hypothesis's NAME, the turnstile and a case label from the
      lean4 extension's theme colours. They exist only in the VS Code host;
@@ -176,9 +177,11 @@ const PALETTE_CSS = `
      static viewer are unchanged. (The dots are escaped: they are part of the
      variable's name.) */
   --ptw-hypname: var(--vscode-lean4-infoView\\.hypothesisName, var(--ptw-hyp-used));
-  --ptw-turnstile: var(--vscode-lean4-infoView\\.turnstile, var(--ptw-node-text));
+  /* The turnstile is DIM beside the heavier target (2026-10-25): a dim token,
+     never opacity over one. */
+  --ptw-turnstile: var(--vscode-lean4-infoView\\.turnstile, var(--ptw-hyp-unused));
   --ptw-case-ink: var(--vscode-lean4-infoView\\.caseLabel, var(--ptw-case));
-  --ptw-inaccessible: var(--vscode-lean4-infoView\\.inaccessibleHypothesisName, var(--ptw-hypname));
+  --ptw-inaccessible: var(--vscode-lean4-infoView\\.inaccessibleHypothesisName, var(--ptw-hyp-unused));
   /* An AUTHOR's comment strip speaks in the theme's comment colour (the
      syntax token the companion sends, else the muted Light+/Dark+ green), as
      the same line does in the buffer. A GENERATED strip (narration, polish)
@@ -203,7 +206,7 @@ const PALETTE_CSS = `
      narration the prose IS the box's content and only the italic and the
      hueless grey need to say it is not code. */
   --ptw-prose: #b6bdc6;
-  --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
+  --ptw-prose: color-mix(in srgb, var(--ptw-fg) 80%, var(--ptw-surface));
   --ptw-link: #939393;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 55%, var(--ptw-bg));
   /* Opt-in link tint (ramify.linkTint): the neutral link ink pulled toward
@@ -214,7 +217,7 @@ const PALETTE_CSS = `
   --ptw-link-tactic: #6d9a78;
   --ptw-link-tactic: color-mix(in srgb, var(--ptw-hue-tactic) 45%, var(--ptw-link));
   --ptw-muted: #767676;
-  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
+  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 82%, var(--ptw-bg));
   --ptw-rail-pressed: #4a5568;
   --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
   /* THE CHROME'S INK (2026-09-22 taste pass). Every floater — status bar,
@@ -227,7 +230,7 @@ const PALETTE_CSS = `
      so it lands on either side of the luminance split. */
   --ptw-chrome-bg: var(--vscode-editorWidget-background, var(--ptw-surface));
   --ptw-chrome-border: var(--vscode-editorWidget-border, color-mix(in srgb, var(--ptw-fg) 22%, var(--ptw-bg)));
-  --ptw-chrome-ink: var(--vscode-icon-foreground, color-mix(in srgb, var(--ptw-fg) 85%, var(--ptw-bg)));
+  --ptw-chrome-ink: var(--vscode-icon-foreground, var(--ptw-fg));
   /* A toolbar button's hover and pressed washes (hover bar, rail, bar
      items): VS Code's own toolbar pair. */
   --ptw-toolbar-hover: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--ptw-fg) 8%, transparent));
@@ -348,7 +351,7 @@ const PALETTE_CSS = `
   --ptw-node-default-stroke: #696969;
   --ptw-node-default-stroke: color-mix(in srgb, var(--ptw-fg) 43%, var(--ptw-bg));
   --ptw-hyp-unused: #a4a4a4;
-  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 74%, var(--ptw-surface));
+  --ptw-hyp-unused: color-mix(in srgb, var(--ptw-fg) 80%, var(--ptw-surface));
   --ptw-hyp-mark: #d9a271;
   --ptw-hyp-mark: color-mix(in srgb, var(--ptw-hue-accent) 72%, var(--ptw-fg));
   --ptw-hyp-lit: #4a3f37;
@@ -357,18 +360,19 @@ const PALETTE_CSS = `
   --ptw-hyp-lit-strong: var(--vscode-editor-wordHighlightStrongBackground, color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface)));
   --ptw-comment: #989898;
   --ptw-case: #8fa3bf;
-  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
+  --ptw-comment: color-mix(in srgb, var(--ptw-fg) 82%, var(--ptw-bg));
   --ptw-prose: #aeb6c0;
-  --ptw-prose: color-mix(in srgb, var(--ptw-fg) 75%, var(--ptw-surface));
+  --ptw-prose: color-mix(in srgb, var(--ptw-fg) 80%, var(--ptw-surface));
   --ptw-link: #696969;
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 43%, var(--ptw-bg));
   --ptw-muted: #989898;
-  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 70%, var(--ptw-bg));
+  --ptw-muted: color-mix(in srgb, var(--ptw-fg) 82%, var(--ptw-bg));
   --ptw-rail-pressed: #9ca3af;
   --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
   /* The comment green, lifted for AA (4.5:1) on a dark surface: at the shared
      72% the dark palette's raw green (#6a9955) mixed to 3.9:1. */
   --ptw-tok-comment: color-mix(in srgb, var(--ptw-raw-comment) 53%, var(--ptw-fg));
+  --ptw-tok-keyword: color-mix(in srgb, var(--ptw-raw-keyword) 62%, var(--ptw-fg));
 }
 
 /* THE CLASSIC APPEARANCE (appearance.ts, \`ramify.appearance: classic\`): the
@@ -538,6 +542,9 @@ export const HYP_LIT_STRONG_FILL = "var(--ptw-hyp-lit-strong)";
 /** The infoview's inks for a hypothesis name, `⊢` and a case label. */
 export const HYP_NAME_FILL = "var(--ptw-hypname)";
 export const TURNSTILE_FILL = "var(--ptw-turnstile)";
+/** A goal's target is drawn at this weight (paint only — a code font keeps
+ its advance across weights, so the regular-weight measure holds). */
+export const TARGET_WEIGHT = 600;
 export const INACCESSIBLE_FILL = "var(--ptw-inaccessible)";
 
 export type HypMarkStyle = "highlight" | "underline";
@@ -645,7 +652,12 @@ export const CHROME_FONT = "var(--vscode-font-family, system-ui, sans-serif)";
  a node box (bar, tabs, badges). Node boxes have their own (`nodeRx`). */
 export const CHROME_RADIUS = 3;
 /** The two opacities chrome dims with: a control that cannot be used now,
- and a value or hint that reads as secondary/off. */
+ and a value or hint that reads as secondary/off. ONE DIMMING PER ELEMENT
+ (2026-10-25): `DIM_OPACITY` goes only over a FULL ink (the foreground, the
+ chrome ink, a hue) — never over an already-dim token (`--ptw-comment`,
+ `--ptw-muted`, `--ptw-hyp-unused`, `--ptw-fold-ph`, ghost text…), which is
+ the secondary voice by itself. `probe contrast` resolves every text ink's
+ recipe over Light and Dark Modern and holds each at 4.5:1. */
 export const DISABLED_OPACITY = 0.35;
 export const DIM_OPACITY = 0.76;
 /** Tree-paint opacities (not chrome), named so each has its one reason. */
@@ -663,6 +675,9 @@ export const CHROME_TEXT = 12;
 /** Tree-ink stroke weights: a chip/outline border and the emphasised one. */
 export const TREE_INK_SW = 1.2;
 export const TREE_INK_SW_BOLD = 1.5;
+/** The cursor path's two links (every link is already `_BOLD`, so the path
+ needs one step more to read as heavier). Paint only. */
+export const TREE_INK_SW_PATH = 2;
 /** The drop-shadow behind a floating chip (the status strip is flat). */
 export const CHIP_SHADOW = "drop-shadow(0 1px 3px rgba(0,0,0,0.35))";
 /** The stacking table, by TIER. Effective order preserved from the scattered

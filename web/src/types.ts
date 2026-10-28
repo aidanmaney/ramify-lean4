@@ -28,6 +28,22 @@ export interface HypLine {
   /** The introducing step's line, 1-based as the editor counts. */
   originLine?: number;
 
+  /** FAR-ONLY ORIGIN ARROW (2026-10-25): the head word of the introducing
+      tactic (`obtain`, `induction`, `have`…), set only where that tactic is
+      NOT the goal's own producer — the box directly above says that much. The
+      line paints `← <arrow>` at its right in the dim ink; layout measures it
+      (`hypArrowW`) on the LAST wrapped piece only. */
+  arrow?: string;
+
+  /** Reserve the `•` LEAD COLUMN (`HYP_MARK_W`): set on every line of a goal
+      that has a consumer, outside the `used` breadth. A `used` line in such a
+      block wears the bullet. */
+  lead?: boolean;
+
+  /** The `+N more` line `used` draws for the hypotheses it left out — N. Not
+      a hypothesis: no name, no origin, no gestures; dim and inert. */
+  more?: number;
+
   /** D5 — the hypothesis this line prints, as the ELABORATOR gave it: the
       name the author bound and the type it stands for. Carried structurally
       rather than parsed back out of `text`, because the rename move must read

@@ -43,6 +43,8 @@ import {
   commentIndentOf,
   getCodeFontFamily,
   refreshCodeFontFamily,
+  refreshUiFontFamily,
+  getUiFontFamily,
   measureText,
   REFLOW_CHARS,
   REFLOW_MIN_CHARS,
@@ -260,6 +262,7 @@ import {
   chromeSurface,
   GHOST_TEXT_FILL,
   TURNSTILE_FILL,
+  TARGET_WEIGHT,
   LINK_STROKE,
   LINK_STROKE_GOAL,
   LINK_STROKE_TACTIC,
@@ -291,6 +294,7 @@ import {
   STUB_OPACITY,
   WASH_OPACITY,
   TREE_INK_SW_BOLD,
+  TREE_INK_SW_PATH,
   CHROME_TEXT_SM,
   CHROME_TEXT,
   FOCUS_INK,
@@ -1886,6 +1890,9 @@ export default function ProofTreeView({
   const zoomRef = useRef(zoom);
 
   const [codeFont, setCodeFont] = useState(getCodeFontFamily);
+  // The UI face measures the origin notes (`measureUiText`); a host font
+  // change re-keys the layout like the code font does.
+  const [uiFont, setUiFont] = useState(getUiFontFamily);
   const [themeKind, setThemeKind] = useState(resolveThemeKind);
   ensurePaletteStyle();
 
@@ -1898,6 +1905,7 @@ export default function ProofTreeView({
   useEffect(() => {
     const sync = () => {
       setCodeFont(refreshCodeFontFamily());
+      setUiFont(refreshUiFontFamily());
       setThemeKind(resolveThemeKind());
     };
     return observeThemeChange(sync);
@@ -2272,6 +2280,7 @@ export default function ProofTreeView({
     [
       narratedNodes,
       codeFont,
+      uiFont,
       reflow,
       forcedReflow,
       commentMode,
@@ -3475,6 +3484,24 @@ export default function ProofTreeView({
     commentOwner,
   ]);
 
+  // THE CURSOR PATH (2026-10-25): the LAST TWO LINKS above the accented node
+  // — the edge into it and the edge into its parent (for a goal: from its
+  // producing tactic, and into that tactic) — keyed `source>target` over the
+  // DRAWN tree. Paint only: the links take the accent and a heavier stroke,
+  // nothing is measured, nothing relayouts.
+  const cursorPathLinks = useMemo(() => {
+    const out = new Set<string>();
+    if (!cursorAccent || !cursorNodeId) return out;
+    let cur: string | undefined = cursorNodeId;
+    for (let k = 0; k < 2 && cur; k++) {
+      const up: string | undefined = placed.get(cur)?.data.parents[0]?.id;
+      if (!up || !placed.has(up)) break;
+      out.add(`${up}>${cur}`);
+      cur = up;
+    }
+    return out;
+  }, [cursorAccent, cursorNodeId, placed]);
+
   const basePaths = useMemo(() => pathKeys(baseNodes), [baseNodes]);
   const diag = useMemo(() => {
     const all = engine.allNodes();
@@ -3653,7 +3680,7 @@ export default function ProofTreeView({
     const goal = goalId ? placed.get(goalId)?.data : undefined;
     return {
       hyps: [...(goal?.hyps ?? [])]
-        .filter((h) => !h.cont)
+        .filter((h) => !h.cont && !h.more)
         .sort((a, b) => Number(b.used) - Number(a.used))
         .flatMap((h) => h.text.split(" : ")[0].trim().split(/\s+/))
         .filter((n) => n && n !== "⊢"),
@@ -6888,7 +6915,16 @@ export default function ProofTreeView({
           <g
             transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}
           >
-            {links.map((link, i) => {
+            {/* The cursor path's links paint LAST, so a sibling's neutral
+                link that shares the trunk's run cannot draw over the accent. */}
+            {links
+              .map((link, i) => ({ link, i }))
+              .sort(
+                (a, b) =>
+                  Number(cursorPathLinks.has(`${a.link.source.data.id}>${a.link.target.data.id}`)) -
+                  Number(cursorPathLinks.has(`${b.link.source.data.id}>${b.link.target.data.id}`)),
+              )
+              .map(({ link, i }) => {
               const startY =
                 link.source.y +
                 (link.source.data.h + bandTopH(link.source.data)) / 2;
@@ -7029,14 +7065,24 @@ export default function ProofTreeView({
               }
 
               const goalBound = link.target.data.type === "goal";
-              const stroke = linkTint
-                ? goalBound
-                  ? LINK_STROKE_GOAL
-                  : LINK_STROKE_TACTIC
-                : LINK_STROKE;
+              const onPath = cursorPathLinks.has(
+                `${link.source.data.id}>${link.target.data.id}`,
+              );
+              const stroke = onPath
+                ? SEQ_STROKE
+                : linkTint
+                  ? goalBound
+                    ? LINK_STROKE_GOAL
+                    : LINK_STROKE_TACTIC
+                  : LINK_STROKE;
               return (
                 <g key={i}>
-                  <path fill="none" stroke={stroke} strokeWidth={TREE_INK_SW_BOLD} d={d} />
+                  <path
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth={onPath ? TREE_INK_SW_PATH : TREE_INK_SW_BOLD}
+                    d={d}
+                  />
                   {linkMarks && startMark && (
                     <LinkMark {...startMark} goal={goalBound} stroke={stroke} />
                   )}
@@ -7356,7 +7402,7 @@ export default function ProofTreeView({
                 elidable,
                 focusable,
                 isFocusRoot,
-                anyUsedHyp: !!hyps?.some((l) => l.used),
+                anyUsedHyp: !!hyps?.some((l) => l.used && l.lead),
                 ledgerRows: !!node.data.ledger?.some(
                   (r) => r.goalId !== undefined,
                 ),
@@ -7467,6 +7513,20 @@ export default function ProofTreeView({
               // `renderCombinedLines([])` is TRUTHY, so without it the
               // fallback would be swallowed and an empty foreignObject hung
               // over the head.
+              // THE TARGET LINE IS HEAVIER (2026-10-25): a goal's statement
+              // — every line of it — at `TARGET_WEIGHT`, its `⊢` at the
+              // regular weight in the dim turnstile ink. PAINT ONLY: a code
+              // font keeps one advance across weights (measured: Menlo,
+              // Monaco, Courier New, JetBrains Mono, Fira Code, the fallback
+              // glyphs too — identical at 400/600/700), so `sizeOf`'s
+              // regular-weight measure is the painted width. Classic keeps
+              // the regular target.
+              const targetBold =
+                type === "goal" &&
+                !isMarker &&
+                !classic &&
+                !node.data.ledger &&
+                !node.data.proseLabel;
               const taggedLines = isMarker
                 ? null
                 : node.data.proseLabel
@@ -8573,7 +8633,7 @@ export default function ProofTreeView({
                       }
                       dy="0.32em"
                     >
-                      <tspan opacity={DIM_OPACITY}>{CASE_PREFIX}</tspan>
+                      <tspan fill={MUTED_FILL}>{CASE_PREFIX}</tspan>
                       {daggerSvg(node.data.caseLabel, CASE_FONT_PX)}
                     </text>
                   )}
@@ -9134,6 +9194,7 @@ export default function ProofTreeView({
                           letterSpacing: 0,
                           whiteSpace: "pre",
                           color: NODE_TEXT,
+                          fontWeight: targetBold ? TARGET_WEIGHT : undefined,
                         }}
                       >
                         {taggedLines.map((line, j) => (
@@ -9249,12 +9310,7 @@ export default function ProofTreeView({
                             : NODE_TEXT
                       }
 
-                      opacity={
-                        isMarker && !(accent || hoverId === id)
-                          ? 0.75
-                          : undefined
-                      }
-
+                      fontWeight={targetBold ? TARGET_WEIGHT : undefined}
                       style={{ letterSpacing: 0 }}
 
                       xmlSpace="preserve"
@@ -9275,7 +9331,9 @@ export default function ProofTreeView({
                           !isMarker &&
                           line.text.startsWith(TURNSTILE) ? (
                             <>
-                              <tspan fill={TURNSTILE_FILL}>{TURNSTILE.trim()}</tspan>
+                              <tspan fill={TURNSTILE_FILL} fontWeight={400}>
+                                {TURNSTILE.trim()}
+                              </tspan>
                               {daggerSvg(
                                 line.text.slice(TURNSTILE.trim().length),
                                 NODE_FONT_PX,

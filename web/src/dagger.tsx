@@ -1,5 +1,5 @@
 // THE DAGGER'S PAINT — Lean's inaccessible-name marker `✝` drawn raised,
-// smaller and dimmed, so `n✝` reads as a marked name rather than `nt`. The
+// and smaller (in its text's own ink: one dimming at most, 2026-10-25), so `n✝` reads as a marked name rather than `nt`. The
 // MEASURER is layout.ts `measureText` (it charges each dagger at
 // `DAGGER_SCALE`); these two painters are its pair, one per surface: SVG text
 // (the plain label and context paths) and HTML (the tagged/baked code path).
@@ -11,7 +11,6 @@ import {
   DAGGER_SCALE,
   smallDaggersOn,
 } from "./layout";
-import { DIM_OPACITY } from "./theme";
 
 /** `text` for an SVG `<text>`/`<tspan>` at `fontPx`: each dagger a raised,
  shrunk tspan, the baseline restored after it. */
@@ -27,7 +26,6 @@ export function daggerSvg(text: string, fontPx: number): ReactNode {
         key={`d${i}`}
         dy={up ? 0 : -lift}
         fontSize={DAGGER_SCALE * fontPx}
-        fillOpacity={DIM_OPACITY}
       >
         {DAGGER}
       </tspan>,
@@ -63,7 +61,6 @@ const daggerStyle = () =>
     position: "relative",
     // `top` is in the SPAN'S em; the lift is the surrounding text's.
     top: `-${(DAGGER_LIFT / DAGGER_SCALE).toFixed(3)}em`,
-    opacity: DIM_OPACITY,
   }) as const;
 
 /** `text` for HTML: each dagger a raised, shrunk span (`position: relative`,
