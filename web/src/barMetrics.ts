@@ -123,8 +123,8 @@ export const BAR_GROUP_GAP = 2 * STATUS_GAP;
 
 /* ONE HEIGHT. Every band row is a fixed height and every item a fixed
 `BAR_ITEM_H`, never a minimum and never a line box — because the row's content
-changes FONT: Context's compact glyphs are drawn in the tree's code font at
-their own `glyphPx` (up to 19 for `▸`), so an item sized by its line box grew and shrank
+changes FONT (Context's compact glyphs were once drawn in the tree's code font at
+their own `glyphPx`, up to 19 for `▸`), so an item sized by its line box grew and shrank
 as the row compacted and as `used` was swapped for `narrate`. A status bar that
 changes height when you change a setting is the report this rule answers.
 
@@ -159,12 +159,10 @@ export const BAR_ITEM: CSSProperties = {
   cursor: "pointer",
 };
 
-// Every glyph in the bar — a codicon (16px, the size they are drawn for), or
-// Context's compact mark in the code font — is painted inside a box of FIXED
-// size, so its font, its size and its own ink can never reach the item's box.
-// That is what makes both promises hold at once: ONE HEIGHT (the box is
-// `BAR_ITEM_H` tall whatever is in it) and a STABLE WIDTH (swapping `▸` for
-// `λ` moves nothing).
+// Every glyph in the bar — a codicon (16px, the size they are drawn for) — is
+// painted inside a box of FIXED size, so its own ink can never reach the
+// item's box. That is what makes both promises hold at once: ONE HEIGHT (the
+// box is `BAR_ITEM_H` tall whatever is in it) and a STABLE WIDTH.
 export const GLYPH_BOX_W = 16;
 
 export const BAR_ROW: CSSProperties = {
@@ -183,14 +181,13 @@ export const BAR_ROW: CSSProperties = {
   borderRadius: CHROME_RADIUS,
 };
 
-/* TWO ROW LOOKS, ONE PER KIND OF ROW (2026-09-22). A `pick` row is one of a
-set — Layout's four, Context's four, Comments' four — and wears the `●/○`
-radio; a `toggle` row turns ONE thing on or off independently of its
-neighbours (the reading options, the two mark lists, the modifiers below a
-divider) and wears the infoview's check-menu mark (codicon `check` when on,
-nothing when off, 2026-10-04); an `action` row does something once and wears
-neither. The look is what tells "pick one" from "turn on" before the reader
-has clicked anything. */
+/* THREE KINDS OF ROW. A `pick` row is one of a set — Layout's four,
+Context's four, Comments' four; a `toggle` row turns ONE thing on or off
+independently of its neighbours (the reading options, the two mark lists, the
+modifiers below a divider); an `action` row does something once. Since
+2026-10-04 both picks and toggles wear the infoview's check-menu mark (codicon
+`check` when on, blank when off) and an action the blank column, so the kind
+sets only the aria role. */
 export type BarRowKind = "pick" | "toggle" | "action";
 
 /* THE MARKS ARE CODICONS (2026-10-04). They were drawn SVG at one shared
@@ -205,27 +202,23 @@ export const CORNER_HIT_H = 18;
 
 /** One of the bar's VALUE items (Layout, Context, Comments and — only where
 the proof has marks — Marks), as data: the forms it can be drawn in and every
-value it could show. CLASSIC: the FULL form is `Name: value` — `prefix` is the
-NAME — the VALUE form drops the name (`outline`), and the GLYPH form is the
-mode's icon alone. VS CODE (2026-10-05): VS Code's status-item grammar,
-`$(icon) value` — `prefix` is the item's ONE CONSTANT icon (icons.ts
-`band.*`), the full and value forms are the same `[icon] value`, and the
-glyph form is that icon alone; either way the item's tip opens `Name: value —
-…`, so what a form drops is the first thing its tip says. `value` is the half
-that changes, and `values` is every string it could be, which is what
-reserves its width in the word forms. */
-export type BarForm = "full" | "value" | "glyph";
+value it could show. VS Code's status-item grammar (2026-10-05), `$(icon)
+value`: `glyph` is the item's ONE CONSTANT icon (icons.ts `band.*`), the FULL
+form is `[icon] value` and the GLYPH form is that icon alone; the item's tip
+opens `Name: value — …`, so what the glyph form drops is the first thing its
+tip says. `value` is the half that changes, and `values` is every string it
+could be, which is what reserves its width in the full form. */
+export type BarForm = "full" | "glyph";
 
 export interface BarValueItem {
   id: string;
-  prefix: ReactNode;
   glyph: ReactNode;
   value: string;
   values: string[];
   /** Where the item has no `Name: value` shape (the reading eye, which is a
-   menu and not a setting): what stands in the FULL and the VALUE forms. The
-   glyph form is `glyph` as ever, and `values` is empty (nothing reserved). */
-  words?: { full: ReactNode; value: ReactNode };
+   menu and not a setting): what stands in the FULL form. The glyph form is
+   `glyph` as ever, and `values` is empty (nothing reserved). */
+  words?: ReactNode;
   title: string;
   /** The VALUE reads as OFF — dimmed, the way the width readout dims at
    `full`. Paint only: the reserve is unchanged, so nothing moves when a

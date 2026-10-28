@@ -4,7 +4,6 @@ import { ICON } from "./icons";
 import { Fragment, useState, useRef, useLayoutEffect } from "react";
 import { type CodiconName } from "./codicon";
 import { Codicon } from "./codiconView";
-import { useClassic } from "./appearance";
 import { CodeText } from "./codeSpans";
 import { plainTicks } from "./ticks";
 import {
@@ -139,7 +138,6 @@ export function NodeActionBar({
   const { ctl } = useTip();
   // Which button the pointer is on: PAINT only (a hover fill, a danger move's
   // red) — it moves nothing, and the bar is measured off `w`/`h` alone.
-  const classic = useClassic();
   const [hovered, setHovered] = useState<number | null>(null);
   const x0 = Math.max(placement === "right" ? x : x - w, clearLeft ?? -Infinity);
   const y0 =
@@ -195,11 +193,7 @@ export function NodeActionBar({
         height={h}
         rx={CHROME_RADIUS}
         fill={CHROME_UNDERLAY}
-        style={
-          classic
-            ? undefined
-            : { filter: `drop-shadow(0 0 3px ${WIDGET_SHADOW})` }
-        }
+        style={{ filter: `drop-shadow(0 0 3px ${WIDGET_SHADOW})` }}
       />
       <rect
         x={x0}
@@ -210,25 +204,6 @@ export function NodeActionBar({
         fill={CHROME_BG}
         stroke={CHROME_BORDER}
       />
-      {/* CLASSIC (appearance.ts): no shadow, and a hairline between the
-          buttons, as the bar was drawn before it became VS Code's action
-          bar. Paint only, inside the same `w`/`h`. */}
-      {classic &&
-        actions.slice(1).map((a, i) => {
-          const lx = x0 + BAR_PAD + (i + 1) * (BAR_BTN + BAR_GAP) - BAR_GAP / 2;
-          return (
-            <line
-              key={`div:${a.glyph}`}
-              x1={lx}
-              x2={lx}
-              y1={y0 + BAR_PAD + 4}
-              y2={y0 + h - BAR_PAD - 4}
-              stroke={CHROME_BORDER}
-              strokeWidth={1}
-              pointerEvents="none"
-            />
-          );
-        })}
       {actions.map((a, i) => {
         const bx = x0 + BAR_PAD + i * (BAR_BTN + BAR_GAP);
         const cx = bx + BAR_BTN / 2;
@@ -276,7 +251,6 @@ export function NodeActionBar({
             {a.codicon ? (
               <Codicon
                 name={a.codicon}
-                set="node"
                 size={BAR_ICON}
                 x={cx - BAR_ICON / 2}
                 y={cy - BAR_ICON / 2}
@@ -614,7 +588,6 @@ export function NodeMenu({
                 {m.codicon ? (
                   <Codicon
                     name={m.codicon}
-                    set="node"
                     color={m.danger ? DANGER_FILL : "currentColor"}
                   />
                 ) : m.glyph.length <= 2 ? (
@@ -734,7 +707,7 @@ function MenuPin({
         cursor: "pointer",
       }}
     >
-      <Codicon name={on ? ICON["menu.pinned"] : ICON["menu.pin"]} set="node" />
+      <Codicon name={on ? ICON["menu.pinned"] : ICON["menu.pin"]} />
     </button>
   );
 }

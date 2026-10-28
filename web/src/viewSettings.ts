@@ -50,10 +50,9 @@ export interface ViewSettings {
 
 export type ViewSettingId = keyof ViewSettings;
 
-/** What the companion can be asked to write: every `ViewSettingId` plus
- `appearance` (the Layout panel's `classic look` row, its own setting since
- the classic skin landed). */
-export type SettingId = ViewSettingId | "appearance";
+/** What the companion can be asked to write: every `ViewSettingId` (until
+ 2026-10-28 also `appearance`, the removed classic skin's setting). */
+export type SettingId = ViewSettingId;
 
 /** The theme file's `prefs` key → the setting under `ramify.`. */
 export const SETTING_KEY: Record<SettingId, string> = {
@@ -70,7 +69,6 @@ export const SETTING_KEY: Record<SettingId, string> = {
   hypOrigins: "reading.hypOrigins",
   upToCursor: "reading.upToCursor",
   autoOpen: "diagnostics.autoOpen",
-  appearance: "appearance",
 };
 
 /** Code id → the setting's word. */
@@ -109,7 +107,6 @@ export const SETTING_DOMAIN: Record<SettingId, readonly string[] | "boolean" | "
   hypOrigins: "boolean",
   upToCursor: "boolean",
   autoOpen: "boolean",
-  appearance: ["vscode", "classic"],
 };
 
 const invert = <K extends string>(m: Record<K, string>): Map<string, K> =>

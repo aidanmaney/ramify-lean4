@@ -12,8 +12,8 @@
 //   traceable / opaque / suggestion heads
 //                       web/src/trace.ts  ==  lean/ProofTreeRecover.lean
 //   SETTING_WRITES      ext/ramify/settingWrites.js  ==  package.json's
-//                       ramify.view.* / reading.* / diagnostics.autoOpen /
-//                       appearance (keys, enums, scope, width range)
+//                       ramify.view.* / reading.* / diagnostics.autoOpen
+//                       (keys, enums, scope, width range)
 //
 //     node scripts/check-sync.mjs
 import { readFileSync } from "node:fs";

@@ -13,11 +13,8 @@ import {
   KEY_BORDER,
   KEY_BOTTOM,
   KEY_FG,
-  ACCENT_TEXT,
-  RAIL_PRESSED,
 } from "./theme";
 import { Codicon } from "./codiconView";
-import { useClassic } from "./appearance";
 import { focusFirstRow, panelKeys, useRestoreFocus } from "./panelKeys";
 import {
   BARE_BTN,
@@ -77,7 +74,6 @@ export function BarButton({
   onClick: (e: React.MouseEvent) => void;
   onHover?: (h: boolean) => void;
 }) {
-  const classic = useClassic();
   const { ctl } = useTip();
   return (
     <button
@@ -105,12 +101,7 @@ export function BarButton({
         cursor: disabled ? "default" : "pointer",
         // LIT while its panel is up: the toolbar's PRESSED wash, as VS Code
         // draws a status-bar item whose menu is open — not an inverted block.
-        // CLASSIC (appearance.ts): the inverted block it was before.
-        ...(accent
-          ? classic
-            ? { background: RAIL_PRESSED, color: ACCENT_TEXT }
-            : { background: "var(--ptw-toolbar-active)" }
-          : null),
+        ...(accent ? { background: "var(--ptw-toolbar-active)" } : null),
         ...style,
       }}
     >
@@ -196,38 +187,6 @@ export function StatusReadout({ info }: { info: StatusInfo }) {
   );
 }
 
-/** The classic toggle row's mark (`BarCheck` before 2026-10-04): a square at
- the chrome's stroke, outline at `DIM_OPACITY` when off, filled in
- `RAIL_PRESSED` with an `ACCENT_TEXT` tick when on, centred in the row's
- 16px mark column. */
-function ClassicCheck({ on }: { on: boolean }) {
-  return (
-    <svg width={16} height={10} viewBox="-3 0 16 10" aria-hidden>
-      <rect
-        x={1.5}
-        y={1.5}
-        width={7}
-        height={7}
-        rx={1.5}
-        fill={on ? RAIL_PRESSED : "none"}
-        stroke={on ? RAIL_PRESSED : "currentColor"}
-        strokeOpacity={on ? 1 : DIM_OPACITY}
-        strokeWidth={1.4}
-      />
-      {on && (
-        <path
-          d="M3.2 5.1 4.5 6.4 6.9 3.7"
-          fill="none"
-          stroke={ACCENT_TEXT}
-          strokeWidth={1.4}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      )}
-    </svg>
-  );
-}
-
 export function BarRow({
   label,
   title,
@@ -251,7 +210,6 @@ export function BarRow({
   onClick: () => void;
   onHover?: (h: boolean) => void;
 }) {
-  const classic = useClassic();
   const { ctl } = useTip();
   return (
     <button
@@ -298,27 +256,7 @@ export function BarRow({
           display: "inline-flex",
         }}
       >
-        {classic ? (
-          // CLASSIC: a toggle's drawn check square, a pick's `●/○` radio, an
-          // action's blank column — the look that told the two kinds apart.
-          kind === "toggle" ? (
-            <ClassicCheck on={!!on} />
-          ) : kind === "action" ? null : (
-            <span
-              style={{
-                width: ROW_MARK_W,
-                fontSize: 10,
-                textAlign: "center",
-                color: on ? RAIL_PRESSED : "inherit",
-                opacity: on ? 1 : DIM_OPACITY,
-              }}
-            >
-              {on ? "●" : "○"}
-            </span>
-          )
-        ) : (
-          <Codicon name={kind !== "action" && on ? ICON["row.on"] : ICON["row.off"]} />
-        )}
+        <Codicon name={kind !== "action" && on ? ICON["row.on"] : ICON["row.off"]} />
       </span>
       {icon !== undefined && (
         <span

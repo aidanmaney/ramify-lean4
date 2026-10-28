@@ -1756,10 +1756,6 @@ structure ThemeColors where
   /-- `ramify.experience`: `beginner`/`intermediate`/`expert`, or empty (the
   client's default). Passed through; the client owns the table. -/
   experience : String := ""
-  /-- `ramify.appearance`: `vscode`/`classic`, absent where the file predates
-  it. Passed through; the client owns the skins. An `Option` (a new optional
-  wire field). -/
-  appearance : Option String := none
   /-- `ramify.hoverBar.{tactic,goal}` where the reader SET them (`inspect()`),
   else absent. Passed through; the client owns the move ids. -/
   hoverBar : Json := Json.null
@@ -1786,8 +1782,6 @@ instance : FromJson ThemeColors where
           input := jsonField j "input" {},
           ai := jsonField j "ai" {},
           experience := jsonField j "experience" "",
-          appearance := (j.getObjVal? "appearance").toOption.bind
-            fun v => (fromJson? v : Except String String).toOption,
           hoverBar := (j.getObjVal? "hoverBar").toOption.getD Json.null,
           prefs := jsonField j "prefs" {},
           companion := (j.getObjVal? "companion").toOption.getD Json.null,

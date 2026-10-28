@@ -223,8 +223,8 @@ elaborate, behind the existing seam `answer(goalKey, tactic)` in
 ## 4. Working conventions the owner has asked for
 
 - Prefer VS Code's own idioms (codicons, theme tokens, menus, status bar).
-- Check EVERY surface after a change (menus, band, chips, header, panels, both
-  appearances, light and dark), not just the one you touched — `probe icons`
+- Check EVERY surface after a change (menus, band, chips, header, panels, in
+  light and dark), not just the one you touched — `probe icons`
   catches icon reuse and stray glyphs; screenshots catch the rest.
 - Commit messages end with the Co-Authored-By / Claude-Session lines used
   throughout this branch's history; stage files explicitly.

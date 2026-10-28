@@ -6,8 +6,7 @@
 // reader who learns an icon in one place can read it everywhere. `probe icons`
 // (in `npm test`) enforces both halves: no name in two slots outside an
 // allowed group, and no codicon name spelled as a string literal anywhere
-// else in web/src (the generated codicon.ts, codiconView.tsx's classic tables
-// and this file excepted).
+// else in web/src (the generated codicon.ts and this file excepted).
 //
 // The owner's report that started it: `list-tree` meant both the outline
 // layout and ⇑ "write out what `grind` used", `filter` meant the path move,
@@ -105,7 +104,6 @@ export const ICON = {
   // Disclosure and paging.
   "header.open": "chevron-down",
   "header.close": "chevron-up",
-  "reading.disclose": "chevron-down",
   "marks.prev": "chevron-left",
   "marks.next": "chevron-right",
   "gallery.prev": "chevron-left",
@@ -190,7 +188,7 @@ export const SAME_MEANING: { slots: IconSlot[]; why: string }[] = [
     why: "close, cancel, take off — VS Code's one dismiss mark",
   },
   {
-    slots: ["menu.hide", "goal.open", "header.open", "reading.disclose", "ledger.rowShown"],
+    slots: ["menu.hide", "goal.open", "header.open", "ledger.rowShown"],
     why: "a disclosure chevron pointing down: open, and closes on click",
   },
   {

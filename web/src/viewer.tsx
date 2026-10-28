@@ -439,7 +439,6 @@ function ViewerBody({
               renderTaggedTactic={renderTaggedTactic}
               diagnostics={diagnostics}
               experience={EXPERIENCE}
-              appearance={link.appearance ?? "vscode"}
               initialView={{
                 layout: link.layout,
                 context: link.context,

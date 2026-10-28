@@ -41,7 +41,6 @@ function block(sel) {
 }
 const BASE = block("[data-ptw-theme]");
 const DARK = block('[data-ptw-theme="dark"]');
-const CLASSIC = block('[data-ptw-theme][data-ptw-appearance="classic"]');
 
 const hex = (s) => {
   const h = s.slice(1);
@@ -170,24 +169,21 @@ const SITES = [
 let fails = 0;
 const rows = [];
 for (const [tname, th] of Object.entries(THEMES)) {
-  for (const classic of [false, true]) {
-    const vars = new Map();
-    for (const b of th.blocks) for (const [k, v] of b) vars.set(k, v);
-    if (classic) for (const [k, v] of CLASSIC) vars.set(k, v);
-    const col = (t) => evalColor(`var(${t})`, vars, th.host);
-    const page = col("--ptw-bg");
-    const ground = (g) => GROUNDS[g].reduce((acc, t) => over(col(t), acc), page);
-    for (const [label, tok, op, gs] of SITES) {
-      for (const g of gs) {
-        const gr = ground(g);
-        const r = ratio(over(col(tok), gr, op), gr);
-        const bad = r < 4.5;
-        if (bad) fails++;
-        if (bad || all) rows.push(`${bad ? "FAIL" : "ok  "}  ${tname.padEnd(12)} ${classic ? "classic" : "vscode "}  ${label.padEnd(36)} ${tok.padEnd(22)} ×${String(op).padEnd(4)} on ${g.padEnd(12)} ${r.toFixed(2)}`);
-      }
+  const vars = new Map();
+  for (const b of th.blocks) for (const [k, v] of b) vars.set(k, v);
+  const col = (t) => evalColor(`var(${t})`, vars, th.host);
+  const page = col("--ptw-bg");
+  const ground = (g) => GROUNDS[g].reduce((acc, t) => over(col(t), acc), page);
+  for (const [label, tok, op, gs] of SITES) {
+    for (const g of gs) {
+      const gr = ground(g);
+      const r = ratio(over(col(tok), gr, op), gr);
+      const bad = r < 4.5;
+      if (bad) fails++;
+      if (bad || all) rows.push(`${bad ? "FAIL" : "ok  "}  ${tname.padEnd(12)}  ${label.padEnd(36)} ${tok.padEnd(22)} ×${String(op).padEnd(4)} on ${g.padEnd(12)} ${r.toFixed(2)}`);
     }
   }
 }
 for (const r of rows) console.log(r);
-console.log(`${fails === 0 ? "contrast: every text ink ≥ 4.5:1" : `contrast: ${fails} below 4.5:1`} (${SITES.length} sites × 2 themes × 2 appearances)`);
+console.log(`${fails === 0 ? "contrast: every text ink ≥ 4.5:1" : `contrast: ${fails} below 4.5:1`} (${SITES.length} sites × 2 themes)`);
 process.exit(fails ? 1 : 0);

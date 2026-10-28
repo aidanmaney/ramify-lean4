@@ -132,11 +132,10 @@ for (const layout of Object.keys(LAYOUT_MODES))
       t.eq(JSON.stringify(parseLink(formatLink(l))), JSON.stringify(l), `link ${layout}/${context}/${comments}`);
     }
 t.eq(JSON.stringify(parseLink("#file=a&layout=nonsense")), JSON.stringify({ file: "a" }), "unknown view word dropped");
-{
-  const l = { file: "euclid", layout: "spine", appearance: "classic" };
-  t.eq(JSON.stringify(parseLink(formatLink(l))), JSON.stringify(l), "link appearance=classic");
-  t.eq(JSON.stringify(parseLink("#file=a&appearance=vscode")), JSON.stringify({ file: "a" }), "the default appearance is never named");
-}
+// A link from before the classic look was removed (2026-10-28) still loads,
+// its `appearance` ignored like any other unknown key.
+t.eq(JSON.stringify(parseLink("#file=euclid&layout=spine&appearance=classic")), JSON.stringify({ file: "euclid", layout: "spine" }), "an old appearance=classic link loads, the key ignored");
+t.eq(formatLink({ file: "euclid", layout: "spine" }), "#file=euclid&layout=spine", "no appearance is ever written");
 
 // The lexer.
 {
@@ -153,7 +152,7 @@ t.eq(JSON.stringify(parseLink("#file=a&layout=nonsense")), JSON.stringify({ file
 
 // The `?` panel in a reading-only session names no Lean-only move.
 {
-  const caps = { reveal: true, edit: false, add: false, popout: false, del: false, flags: false, restructure: false, undo: false, polish: false, restart: false, play: false, appearance: false };
+  const caps = { reveal: true, edit: false, add: false, popout: false, del: false, flags: false, restructure: false, undo: false, polish: false, restart: false, play: false };
   const shown = GESTURES.filter((g) => gestureShown(g, caps)).map(gestureText);
   const LEAN_ONLY = /\b(edit|flag|chip|undo|redo|model|reword|stub|add a tactic|lens|restart)\b/i;
   for (const s of shown) t.ok(!LEAN_ONLY.test(s), `? panel, reading only: "${s}"`);

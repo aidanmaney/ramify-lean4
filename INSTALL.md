@@ -164,12 +164,11 @@ The same `.vsix` is attached to each [GitHub release](https://github.com/aidanma
 
 ### Settings
 
-All settings live under `ramify.` in VS Code's settings UI; the extension's own descriptions there are the detailed ones. `ramify.experience`, `ramify.appearance`, `ramify.hoverBar.*`, `ramify.view.*`, `ramify.reading.*` and `ramify.diagnostics.autoOpen` can be set per workspace folder: each window (and each folder of a multi-root workspace) uses the value for the folder that holds the file being shown, so one workspace's choice does not change another window's tree.
+All settings live under `ramify.` in VS Code's settings UI; the extension's own descriptions there are the detailed ones. `ramify.experience`, `ramify.hoverBar.*`, `ramify.view.*`, `ramify.reading.*` and `ramify.diagnostics.autoOpen` can be set per workspace folder: each window (and each folder of a multi-root workspace) uses the value for the folder that holds the file being shown, so one workspace's choice does not change another window's tree.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `ramify.experience` | `intermediate` | `beginner`, `intermediate` or `expert`: how much the tree explains itself. A preset that only fills defaults (the hover bar's buttons, the automation trace, comments, context, lints, brief mode, and whether hovering a context line shows where the hypothesis came from — on for beginner) where the matching setting below is unset. Also **Ramify: Set experience level**. |
-| `ramify.appearance` | `vscode` | `vscode` or `classic`: how the tree and its chrome are drawn. `vscode` wears VS Code's own icons and colours (a squiggle under a line with a problem, fold chevrons, a `⋯` chip on a skipped run); `classic` is Ramify's earlier skin (drawn glyphs, a coloured ribbon down a box with a problem, the corner `−` and `+N`, a slanted break on a skipped run). Paint only — the layout is the same. The Layout panel's **classic look** row writes it. |
 | `ramify.hoverBar.tactic`, `ramify.hoverBar.goal` | source, focus, skip, path, fix, delete | Which icons each hover bar carries, in order. `⋯` is always last. `fix` is the lightbulb: it opens `⋯` at its Quick Fix and Refactor sections (also ⌘. / Ctrl+.). The `⋯` menu's pins write these; unset, the experience preset decides. |
 | `ramify.view.layout` | `outline` | The band's **Layout**: `outline`, `spine`, `tracks` or `wide`. |
 | `ramify.view.sideBySide`, `ramify.view.gallery` | off | The Layout panel's **side-by-side** (a split's subtrees as columns) and **gallery** (one subtree at a time, with a pager) rows. |

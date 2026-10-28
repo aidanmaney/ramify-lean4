@@ -27,8 +27,7 @@ const json = (x) => JSON.stringify(x);
 // 1. One table, two languages.
 const webKeys = Object.values(SETTING_KEY).sort();
 t.eq(json(webKeys), json(Object.keys(sw.SETTING_WRITES).sort()), "allow-list = viewSettings.ts SETTING_KEY");
-const prefIds = Object.keys(SETTING_KEY).filter((k) => k !== "appearance");
-t.eq(json(Object.entries(sw.PREF_KEYS).sort()), json(prefIds.map((k) => [k, SETTING_KEY[k]]).sort()), "PREF_KEYS = SETTING_KEY minus appearance");
+t.eq(json(Object.entries(sw.PREF_KEYS).sort()), json(Object.entries(SETTING_KEY).sort()), "PREF_KEYS = SETTING_KEY");
 for (const [id, key] of Object.entries(SETTING_KEY))
   t.eq(json(SETTING_DOMAIN[id]), json(sw.SETTING_WRITES[key]), `domain of ${key}`);
 
@@ -38,7 +37,6 @@ const views = {
   context: Object.keys(CONTEXT_SETTING),
   comments: Object.keys(COMMENTS_SETTING),
   width: ["off", 20, 44, 100],
-  appearance: ["vscode", "classic"],
 };
 let trips = 0;
 for (const id of Object.keys(SETTING_KEY)) {
@@ -46,7 +44,7 @@ for (const id of Object.keys(SETTING_KEY)) {
   for (const v of vals) {
     const sv = settingValue(id, v);
     t.ok(sw.validSetting(SETTING_KEY[id], sv), `companion refuses ${SETTING_KEY[id]} = ${json(sv)} (from ${json(v)})`);
-    if (id !== "appearance") t.eq(json(parseViewSettings({ [id]: sv })[id]), json(v), `round trip ${id} ${json(v)}`);
+    t.eq(json(parseViewSettings({ [id]: sv })[id]), json(v), `round trip ${id} ${json(v)}`);
     trips++;
   }
 }
@@ -59,7 +57,9 @@ const refused = [
   ["view.layout", "stacked"], ["view.layout", true], ["view.layout", null],
   ["view.context", "full"], ["view.comments", "in place"], ["view.comments", "show"],
   ["view.width", 19], ["view.width", 101], ["view.width", 44.5], ["view.width", "44"], ["view.width", "off"],
-  ["reading.brief", "true"], ["reading.brief", 1], ["diagnostics.autoOpen", null], ["appearance", "dark"],
+  ["reading.brief", "true"], ["reading.brief", 1], ["diagnostics.autoOpen", null],
+  // The classic look's setting, removed 2026-10-28: off the list entirely.
+  ["appearance", "classic"], ["appearance", "vscode"],
 ];
 for (const [k, v] of refused) t.ok(!sw.validSetting(k, v), `companion accepts ${json(k)} = ${json(v)}`);
 

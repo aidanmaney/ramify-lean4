@@ -10,13 +10,14 @@
 //     share one name) — else two meanings wear one icon.
 // (b) No codicon name is spelled as a literal in a `name=` / `codicon:` /
 //     `icon:` position anywhere else in web/src: every icon goes through
-//     `ICON`, or (a) cannot see it. (codicon.ts is generated, codiconView.tsx
-//     holds the classic tables keyed by name, icons.ts is the table.)
+//     `ICON`, or (a) cannot see it. (codicon.ts is generated, icons.ts is
+//     the table.)
 // (c) Every generated codicon is used by some slot (no dead path data).
-// (d) No render file paints a CLASSIC GLYPH as text. Every line of a .tsx
-//     file outside a comment that carries one of the old marks must be in
-//     `ALLOWED` with the reason it is not a painted chrome mark (prose that
-//     names a move by `MOVE_MARK`, a classic-only branch, a string that only
+// (d) No render file paints one of the PRE-CODICON GLYPHS as text (the marks
+//     the chrome wore before 2026-10-04, and the classic look until it was
+//     removed 2026-10-28). Every line of a .tsx file outside a comment that
+//     carries one must be in `ALLOWED` with the reason it is not a painted
+//     chrome mark (prose that names a move by `MOVE_MARK`, a string that only
 //     SIZES a chip whose paint is a codicon, the harness).
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -48,7 +49,7 @@ for (const g of SAME_MEANING) {
 }
 
 // (b)
-const EXEMPT = new Set(["codicon.ts", "codiconView.tsx", "icons.ts"]);
+const EXEMPT = new Set(["codicon.ts", "icons.ts"]);
 const files = readdirSync(src).filter((f) => /\.(ts|tsx)$/.test(f) && !EXEMPT.has(f));
 const names = new Set(Object.keys(CODICONS));
 /** `src` with comments blanked out (line structure kept). */
@@ -79,7 +80,7 @@ const used = new Set(Object.values(ICON));
 for (const n of names) t.ok(used.has(n), `codicon "${n}" is generated but no ICON slot uses it — drop it from scripts/gen-codicons.mjs`);
 
 // (d)
-const CLASSIC = /[»◎◌⊹⁇⇓⇑⤵⤴✎⧉⚑⊞⊟⛶×‹›●○◇✕⚠]/u;
+const OLD_GLYPHS = /[»◎◌⊹⁇⇓⇑⤵⤴✎⧉⚑⊞⊟⛶×‹›●○◇✕⚠]/u;
 /** file → [substring of the line, why it may carry the glyph]. */
 const ALLOWED = {
   "ProofTreeView.tsx": [
@@ -93,7 +94,6 @@ const ALLOWED = {
     ['push("cancel", "×"', "sizes the cancel chip; its paint is ICON chip.cancel"],
     ["— ‹ › to cycle", "a <title> naming the pager's keys (prose)"],
   ],
-  "barChrome.tsx": [['{on ? "●" : "○"}', "the classic look's radio, inside its classic branch"]],
   "matrix.tsx": [
     ["{z}×", "the render matrix's zoom caption (harness)"],
     ["«stub tactic»", "harness"],
@@ -105,10 +105,10 @@ let glyphLines = 0;
 for (const f of readdirSync(src).filter((x) => x.endsWith(".tsx") && !EXEMPT.has(x))) {
   const lines = uncomment(readFileSync(path.join(src, f), "utf8")).split("\n");
   lines.forEach((ln, i) => {
-    if (!CLASSIC.test(ln)) return;
+    if (!OLD_GLYPHS.test(ln)) return;
     glyphLines++;
     const ok = (ALLOWED[f] ?? []).some(([s]) => ln.includes(s));
-    t.ok(ok, `${f}:${i + 1} paints a classic glyph as text: ${ln.trim().slice(0, 90)} — draw it through Codicon (classic keeps it via codiconView's classic set), or allow it in probe/icons.mjs with the reason`);
+    t.ok(ok, `${f}:${i + 1} paints a pre-codicon glyph as text: ${ln.trim().slice(0, 90)} — draw it through Codicon, or allow it in probe/icons.mjs with the reason`);
   });
 }
 

@@ -6,29 +6,13 @@ import type { ReflowMode } from "./layout";
 import { type HypMode } from "./proofToTree";
 import { type CodiconName } from "./codicon";
 
-// The bar says every setting in WORDS: `Context: used ▾`, and `used ·
-// intro · diff · all` in the popover. Words are the bar's own vocabulary: a
-// reader who has to be told what Γ means is being charged for the abbreviation
-// twice.
-//
-// `glyph` is the COMPACT fallback, and only that. The bar is ONE ROW, always,
-// so at a frame too narrow for the words every menu drops to its glyph rather
-// than wrapping or losing items off the end (see StatusBar's `fit`). It is
-// drawn in the TREE's code font, never the bar's system UI font — measured on
-// the raster, at 13px `▸` inks 5px tall against `λ`'s 10, `Δ`'s 9 and `∀`'s 9,
-// and in the system font they are worse; the code font is where they were
-// designed to sit. Compact is why that second font stack is affordable now:
-// there are no words beside them to be out of key with.
-//
-// `glyphPx` is the rail's own rule — the target is equal INK HEIGHT, not equal
-// font size — and these marks need it badly, because they are drawn from
-// different corners of Unicode. Re-measured on the raster in the code font,
-// `▸` is a small solid triangle inking 6×5 at 13 against `λ`'s 8×10, `Δ`'s
-// 8×9 and `∀`'s 8×9, so it alone takes 19 (8×8) and the four then share a
-// width of 8 as well as a height.
-//
-// The LAYOUT and COMMENT marks are codicons (`icon` below, 2026-10-04) — the
-// infoview's own vocabulary, levelled by design at 16px.
+// The bar says every setting in WORDS: `[filter] used`, and `used · intro ·
+// diff · all` in the popover. Words are the bar's own vocabulary: a reader who
+// has to be told what Γ means is being charged for the abbreviation twice.
+// Where the row is too narrow for the words, an item drops to its band icon
+// (see StatusBar's `fit`); `icon` below is the PANEL row's codicon. (Context's
+// text glyphs `▸ λ Δ ∀` were the classic look's compact form, removed with it
+// 2026-10-28.)
 //
 // `next` is the ⌥-CLICK cycle: plain click opens the list, ⌥-click advances to
 // the next value through the same toasting wrapper. One coding, read by the
@@ -37,8 +21,6 @@ export const HYP_MODES: Record<
   HypMode,
   {
     name: string;
-    glyph: string;
-    glyphPx?: number;
     /** The Context panel row's icon (icons.ts `context.*`). */
     icon: CodiconName;
     next: HypMode;
@@ -47,8 +29,6 @@ export const HYP_MODES: Record<
 > = {
   used: {
     name: "used",
-    glyph: "▸",
-    glyphPx: 19,
     icon: ICON["context.used"],
     next: "new",
     title: "Context: used — only hypotheses the rest of the proof below actually uses",
@@ -60,7 +40,6 @@ export const HYP_MODES: Record<
     // is Lean's own word for the move that makes these hypotheses, and it is
     // one character off the other three.
     name: "intro",
-    glyph: "λ",
     icon: ICON["context.intro"],
     next: "delta",
     title:
@@ -68,14 +47,12 @@ export const HYP_MODES: Record<
   },
   delta: {
     name: "diff",
-    glyph: "Δ",
     icon: ICON["context.diff"],
     next: "full",
     title: "Context: diff — hypotheses this goal introduced, plus any its tactic uses",
   },
   full: {
     name: "all",
-    glyph: "∀",
     icon: ICON["context.all"],
     next: "used",
     title: "Context: all — every hypothesis in scope",
@@ -88,7 +65,7 @@ export const LAYOUT_MODES: Record<
   LayoutMode,
   {
     name: string;
-    /** The Layout panel row's icon (and the classic look's glyph form). */
+    /** The Layout panel row's icon. */
     icon: CodiconName;
     next: LayoutMode;
     title: string;

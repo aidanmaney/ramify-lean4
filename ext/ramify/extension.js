@@ -908,7 +908,6 @@ function ramifySettings(resource) {
     counterfactual: cfg.get("counterfactual") !== false,
     hypMarkStyle: cfg.get("hypMarkStyle"),
     experience: explicitValue(expInfo) ?? expInfo?.defaultValue ?? "intermediate",
-    appearance: cfg.get("appearance") === "classic" ? "classic" : "vscode",
     experienceSet: explicitValue(expInfo) !== undefined,
     hoverBar: { tactic: explicitBar("tactic"), goal: explicitBar("goal") },
     prefs: readPrefs((key) => explicitValue(cfg.inspect(key))),

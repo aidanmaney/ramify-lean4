@@ -8,7 +8,6 @@ import {
 import type { Lint } from "./lints";
 import type { TreeDiagnostic } from "./diagnostics";
 import { parseExperience } from "./experience";
-import { parseAppearance } from "./appearance";
 import {
   parseViewSettings,
   parseSettingsQuery,
@@ -113,9 +112,6 @@ const record = (name: string, v: unknown) => {
 /** `ramify.experience` without a companion: `?experience=beginner|intermediate|expert`
  (experience.ts). Absent or unknown, intermediate — the setting's default. */
 const EXPERIENCE = parseExperience(QUERY.get("experience"));
-/** `ramify.appearance` without a companion: `?appearance=classic` (appearance.ts).
- Absent or anything else, the VS Code look — the setting's default. */
-const APPEARANCE = parseAppearance(QUERY.get("appearance"));
 
 /** `ramify.hoverBar.tactic` / `.goal` without a companion:
  `?hoverbar-tactic=source,trace,delete` (moves.ts ids, comma-separated; an
@@ -374,11 +370,10 @@ function ProofHarness() {
   const [settingsEcho, setSettingsEcho] = useState<ViewSettings>(SETTINGS_STUB);
   const recordSetting = (id: SettingId, value: string | number | boolean) => {
     record("__settings", { key: `ramify.${SETTING_KEY[id]}`, value });
-    if (id !== "appearance")
-      setSettingsEcho((prev) => ({
-        ...prev,
-        ...parseViewSettings({ [id]: value }),
-      }));
+    setSettingsEcho((prev) => ({
+      ...prev,
+      ...parseViewSettings({ [id]: value }),
+    }));
   };
   // The harness DRIVER: `window.__ptw`, a small DOM-level API so a probe run
   // through the browser tools can select a proof, find a node by what it
@@ -447,7 +442,6 @@ function ProofHarness() {
       proof={proof!}
       ledger={!NO_LEDGER}
       experience={EXPERIENCE}
-      appearance={APPEARANCE}
       hoverBar={HOVER_BAR}
       onHoverBarChange={recordHoverBar}
       settings={settingsEcho}

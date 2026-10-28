@@ -31,7 +31,6 @@ import { BakedCode } from "./bakedCode";
 import { BakedPopups } from "./bakedPopups";
 import { filterDiagnostics, proofSpan } from "./diagnostics";
 import { WidgetBoundary } from "./errorBoundary";
-import { parseAppearance } from "./appearance";
 import { parseExperience } from "./experience";
 import type { DeleteSpec } from "./types";
 import type { ProofStepPosition } from "./paperproof";
@@ -92,9 +91,6 @@ import { TOKEN_PALETTE } from "./viewerTheme";
 
 const QUERY = new URLSearchParams(location.search);
 const EXPERIENCE = parseExperience(QUERY.get("experience"));
-// `?appearance=classic`: the classic skin, as the viewer's link takes it (the
-// Layout panel's `classic look` row is the session's switch either way).
-const APPEARANCE = parseAppearance(QUERY.get("appearance") ?? undefined);
 /** Per-browser conveniences (localStorage can throw or be empty: never relied on). */
 const stored = (k: string): string | null => {
   try {
@@ -1158,7 +1154,6 @@ function PlaygroundBody({
                 renderTaggedHyps={renderers.renderTaggedHyps}
                 diagnostics={diagnostics}
                 experience={EXPERIENCE}
-                appearance={APPEARANCE}
                 initialView={initialView}
                 onViewState={onViewState}
                 initialZoom={START_ZOOM}

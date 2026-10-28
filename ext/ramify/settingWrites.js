@@ -35,12 +35,9 @@ const SETTING_WRITES = {
   "reading.hypOrigins": "boolean",
   "reading.upToCursor": "boolean",
   "diagnostics.autoOpen": "boolean",
-  appearance: ["vscode", "classic"],
 };
 
-/** The theme file's `prefs` key → `ramify.<key>` (every SETTING_WRITES key
- but `appearance`, which the theme file has carried on its own since the
- classic skin). */
+/** The theme file's `prefs` key → `ramify.<key>` (every SETTING_WRITES key). */
 const PREF_KEYS = {
   layout: "view.layout",
   sideBySide: "view.sideBySide",

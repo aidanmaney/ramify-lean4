@@ -1121,8 +1121,8 @@ export interface LayoutEngineOptions {
 }
 
 /** A ledger continuation row's reserved gutter, and the row's DISCLOSURE
- mark drawn in it (the view's row paint: a `chevron-right`/`-down` codicon,
- classic `+`/`−`) — `LEDGER_MARK_PX` square at the gutter's left edge,
+ mark drawn in it (the view's row paint: a `chevron-right`/`-down` codicon)
+ — `LEDGER_MARK_PX` square at the gutter's left edge,
  vertically centred on its `LINE_H` row. Measurer and renderer share both. */
 export const LEDGER_MARK_PX = 12;
 /** The clear run between the mark's box and the row's relation glyph. The

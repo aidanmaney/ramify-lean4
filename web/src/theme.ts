@@ -218,8 +218,6 @@ const PALETTE_CSS = `
   --ptw-link-tactic: color-mix(in srgb, var(--ptw-hue-tactic) 45%, var(--ptw-link));
   --ptw-muted: #767676;
   --ptw-muted: color-mix(in srgb, var(--ptw-fg) 82%, var(--ptw-bg));
-  --ptw-rail-pressed: #4a5568;
-  --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
   /* THE CHROME'S INK (2026-09-22 taste pass). Every floater — status bar,
      rail, menus, tips, toasts, the hover bar — used to read VS Code's
      editor-widget variables straight, each with a LIGHT literal fallback
@@ -367,71 +365,10 @@ const PALETTE_CSS = `
   --ptw-link: color-mix(in srgb, var(--ptw-fg) 43%, var(--ptw-bg));
   --ptw-muted: #989898;
   --ptw-muted: color-mix(in srgb, var(--ptw-fg) 82%, var(--ptw-bg));
-  --ptw-rail-pressed: #9ca3af;
-  --ptw-rail-pressed: color-mix(in srgb, var(--ptw-fg) 68%, var(--ptw-bg));
   /* The comment green, lifted for AA (4.5:1) on a dark surface: at the shared
      72% the dark palette's raw green (#6a9955) mixed to 3.9:1. */
   --ptw-tok-comment: color-mix(in srgb, var(--ptw-raw-comment) 53%, var(--ptw-fg));
   --ptw-tok-keyword: color-mix(in srgb, var(--ptw-raw-keyword) 62%, var(--ptw-fg));
-}
-
-/* THE CLASSIC APPEARANCE (appearance.ts, \`ramify.appearance: classic\`): the
-   token layer of the skin before 2026-10-04 — the host's hover, menu,
-   notification, marker-navigation, sticky-scroll, word-highlight and
-   infoview inks are NOT read, and every token goes back to the recipe it had.
-   Two attribute selectors, so it outranks both theme blocks above whatever
-   the order. Paint only: no token here is measured. */
-[data-ptw-theme][data-ptw-appearance="classic"] {
-  --ptw-hyp-lit: color-mix(in srgb, var(--ptw-hue-accent) 22%, var(--ptw-surface));
-  --ptw-hyp-lit-strong: var(--ptw-hyp-lit);
-  --ptw-hypname: var(--ptw-hyp-used);
-  --ptw-inaccessible: var(--ptw-hyp-used);
-  --ptw-turnstile: var(--ptw-node-text);
-  --ptw-case-ink: var(--ptw-case);
-  --ptw-comment-text: var(--ptw-comment);
-  --ptw-ghost-text: var(--ptw-comment);
-  --ptw-chrome-btn: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--ptw-fg) 5%, var(--ptw-chrome-bg)));
-  --ptw-toolbar-hover: var(--ptw-chrome-btn);
-  --ptw-toolbar-active: var(--ptw-chrome-btn);
-  --ptw-hover-bg: var(--ptw-chrome-bg);
-  --ptw-hover-border: var(--ptw-chrome-border);
-  --ptw-hover-fg: var(--ptw-chrome-ink);
-  --ptw-menu-bg: var(--ptw-chrome-bg);
-  --ptw-menu-fg: var(--ptw-chrome-ink);
-  --ptw-menu-border: var(--ptw-chrome-border);
-  --ptw-menu-sep: color-mix(in srgb, var(--ptw-chrome-border) 76%, transparent);
-  --ptw-menu-sel-bg: var(--ptw-chrome-lit);
-  --ptw-menu-sel-fg: var(--ptw-chrome-ink);
-  --ptw-sticky-bg: var(--ptw-bg);
-  --ptw-sticky-border: var(--ptw-chrome-border);
-  --ptw-sticky-shadow: transparent;
-  --ptw-notif-bg: var(--ptw-chrome-bg);
-  --ptw-notif-fg: var(--ptw-chrome-ink);
-  --ptw-notif-border: var(--ptw-chrome-border);
-  --ptw-marker-bg: var(--ptw-chrome-bg);
-  --ptw-diag-error-edge: var(--ptw-danger);
-  --ptw-diag-warn-edge: var(--ptw-warn);
-  --ptw-diag-lint-edge: var(--ptw-comment);
-  --ptw-diag-error-wash: color-mix(in srgb, var(--ptw-danger) 13%, var(--ptw-chrome-bg));
-  --ptw-diag-warn-wash: color-mix(in srgb, var(--ptw-warn) 13%, var(--ptw-chrome-bg));
-  --ptw-diag-lint-wash: color-mix(in srgb, var(--ptw-comment) 11%, var(--ptw-chrome-bg));
-  /* The bar's marks were all chrome ink before the lightbulb. */
-  --ptw-lightbulb: var(--ptw-chrome-ink);
-  --ptw-lightbulb-autofix: var(--ptw-chrome-ink);
-  /* The band in the old chrome's inks, its emphasis the accent. */
-  --ptw-statusbar-bg: var(--ptw-chrome-bg);
-  --ptw-statusbar-fg: var(--ptw-chrome-ink);
-  --ptw-statusbar-border: var(--ptw-chrome-border);
-  --ptw-statusbar-hover: var(--ptw-chrome-btn);
-  --ptw-statusbar-on: var(--ptw-accent);
-  --ptw-statusbar-warn-bg: var(--ptw-warn);
-  --ptw-statusbar-warn-fg: var(--ptw-bg);
-}
-/* An inaccessible name drew like any other before the infoview's inks; the
-   rule outranks the plain path's presentation attributes too. */
-[data-ptw-appearance="classic"] .ptw-inaccessible {
-  font-style: normal;
-  opacity: 1;
 }
 
 /* Keyboard focus, one ring for every chrome button: 1px and INSET, VS Code's
@@ -572,7 +509,6 @@ export const LINK_STROKE_TACTIC = "var(--ptw-link-tactic)";
 export const MUTED_FILL = "var(--ptw-muted)";
 export const EDIT_BG = "var(--ptw-edit-bg)";
 export const EDIT_TEXT = "var(--ptw-edit-text)";
-export const RAIL_PRESSED = "var(--ptw-rail-pressed)";
 
 /** THE CHROME (2026-09-22 taste pass). One set of tokens for every floater,
  so a new one cannot pick its own literal fallback; see `--ptw-chrome-*`. */
