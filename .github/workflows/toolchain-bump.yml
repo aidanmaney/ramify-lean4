@@ -1,0 +1,130 @@
+# Keep Ramify on the current Lean release.
+#
+# Once a week (and on demand), find Lean's newest stable release. If Ramify is
+# not on it and Mathlib has tagged it, run scripts/bump-toolchain.sh on `dev`
+# (Lean, Mathlib, and the ProofWidgets that Mathlib pins), build the installable
+# package and elaborate Demo.lean and the tour (scripts/check-dist.sh), and open
+# a pull request into `dev` with the result. A failed build still opens the pull
+# request, as a draft, with the log, so the breakage is something to fix rather
+# than something nobody saw.
+#
+# This file must be on the DEFAULT branch (`main`) for the schedule and the Run
+# workflow button to exist; scripts/sync-main.sh carries it there. It always
+# works on `dev`.
+#
+# Needs: Settings → Actions → General → "Allow GitHub Actions to create and
+# approve pull requests". A pull request opened with the workflow's token does
+# not start other workflows, so ci.yml does not run on it by itself; the build
+# and elaboration it would check for the Lean side ran here, and the result is
+# in the pull request. Push to the branch (or close and reopen) to run ci.yml.
+name: Lean toolchain bump
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      lean:
+        description: "Lean tag to move to (empty: the newest stable release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: toolchain-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Which release
+        id: target
+        run: |
+          tag="${{ github.event.inputs.lean }}"
+          [ -n "$tag" ] || tag=$(gh api repos/leanprover/lean4/releases/latest --jq .tag_name)
+          current=$(sed 's/.*://' dist/lean-toolchain | tr -d '[:space:]')
+          branch="toolchain/lean-$tag"
+          echo "Lean: newest $tag, Ramify on $current"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          if [ "$tag" = "$current" ]; then
+            echo "Already on $tag."
+            echo "go=no" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "$branch already exists: its pull request is the open bump."
+            echo "go=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump the pins
+        id: bump
+        if: steps.target.outputs.go == 'yes'
+        run: |
+          set +e
+          scripts/bump-toolchain.sh "${{ steps.target.outputs.tag }}"
+          code=$?
+          set -e
+          if [ "$code" = 3 ]; then echo "go=no" >> "$GITHUB_OUTPUT"; exit 0; fi
+          [ "$code" = 0 ] || exit "$code"
+          echo "go=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Build dist/ and elaborate Demo.lean and the tour
+        id: check
+        if: steps.bump.outputs.go == 'yes'
+        run: |
+          set +e
+          scripts/check-dist.sh > check.log 2>&1
+          code=$?
+          set -e
+          cat check.log
+          if [ "$code" = 0 ]; then echo "ok=yes" >> "$GITHUB_OUTPUT"; else echo "ok=no" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Open the pull request
+        if: steps.bump.outputs.go == 'yes'
+        run: |
+          tag="${{ steps.target.outputs.tag }}"
+          branch="${{ steps.target.outputs.branch }}"
+          ok="${{ steps.check.outputs.ok }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f dist/tour.out
+          git switch -c "$branch"
+          git add -A -- lean dist INSTALL.md docs/README.main.md README.md CONTRIBUTING.md NOTICE CLAUDE.md
+          git commit -m "Lean $tag: toolchain, Mathlib and ProofWidgets"
+          git push -u origin "$branch"
+          {
+            echo "Moves Ramify to Lean \`$tag\`, with Mathlib \`$tag\` and the ProofWidgets that Mathlib pins (\`scripts/bump-toolchain.sh\`). Paperproof stays on its pinned commit; the playground's WebAssembly engine is not touched."
+            echo
+            if [ "$ok" = yes ]; then
+              echo "**dist/ builds, Demo.lean elaborates and the tour's errors are only the deliberate ones** (\`scripts/check-dist.sh\`)."
+            else
+              echo "**The build or the elaboration check failed.** This needs code changes before it can merge. The last 150 lines of \`scripts/check-dist.sh\`:"
+              echo
+              echo '```'
+              tail -n 150 check.log
+              echo '```'
+            fi
+            echo
+            echo "Before merging: run the widget once in VS Code on this toolchain (\`./dev.sh\`, then Restart File), and push to this branch so ci.yml runs. Opened by the weekly toolchain-bump workflow."
+          } > body.md
+          draft=""
+          [ "$ok" = yes ] || draft="--draft"
+          gh pr create --base dev --head "$branch" --title "Lean $tag" --body-file body.md $draft

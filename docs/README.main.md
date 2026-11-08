@@ -15,10 +15,10 @@ Add one dependency to your project's `lakefile.toml`:
 name = "ramify"
 git = "https://github.com/aidanmaney/ramify-lean4.git"
 subDir = "dist"
-rev = "v1.0.0"
+rev = "v1.1.0"
 ```
 
-then `lake update ramify && lake build`, and put `import Ramify` and `show_panel_widgets [Ramify]` at the top of a proof file. The tree follows your cursor in the infoview. The VS Code extension (`dist/ramify-1.0.0.vsix`) is optional and adds the lens, reveal in source, undo/redo from the tree and theme-accurate colours.
+then `lake update ramify && lake build`, and put `import Ramify` and `show_panel_widgets [Ramify]` at the top of a proof file. The tree follows your cursor in the infoview. The VS Code extension (`dist/ramify-1.1.0.vsix`) is optional and adds the lens, reveal in source, undo/redo from the tree and theme-accurate colours.
 
 To look at it first without touching a project, see the [Quickstart](INSTALL.md#quickstart). Full instructions, settings, troubleshooting and uninstall are in [INSTALL.md](INSTALL.md).
 

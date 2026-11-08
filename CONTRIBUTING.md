@@ -53,6 +53,7 @@ Before re-deriving a rule or "fixing" a number, grep `docs/design-record.md`: it
 
 - `dev` is where development happens; open pull requests against it.
 - `main` is the install branch, a subset of `dev`. Do not edit it by hand: `scripts/sync-main.sh` (a dry run by default; `--apply` writes into a worktree of `main`) builds it from the committed `dev`, and the user-facing `README.md` on `main` comes from `docs/README.main.md`.
-- A release is a `v*` tag on a `dev` commit whose `ext/ramify/package.json` version matches the tag. `./package.sh` builds `dist/` and the `.vsix`; CI attaches the `.vsix` to the GitHub release.
+- A release is a `v*` tag on a `dev` commit whose `ext/ramify/package.json` version matches the tag. `./package.sh` builds `dist/` and the `.vsix`; CI attaches the `.vsix` to the GitHub release and publishes it to the VS Code Marketplace and Open VSX where `VSCE_PAT` / `OVSX_PAT` are set. Add the release's row to the table between the `releases:` markers in INSTALL.md.
+- New Lean releases: `.github/workflows/toolchain-bump.yml` runs weekly (or from the Actions tab) and opens a pull request into `dev` made by `scripts/bump-toolchain.sh vX.Y.Z`, with the result of `scripts/check-dist.sh`. Run the same two scripts locally to bump by hand. The playground's WebAssembly engine (`scripts/wasm/`) is not part of a bump.
 
 By contributing you agree that your work is under the project's MIT licence (see [LICENSE](LICENSE)); Paperproof, ProofWidgets and `@leanprover/unicode-input` keep their own (see [NOTICE](NOTICE)).
