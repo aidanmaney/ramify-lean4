@@ -325,11 +325,6 @@
           "default": true,
           "markdownDescription": "Wrap long lines in the lens. Does not affect other editors or windows. Skipped when you already wrap globally."
         },
-        "ramify.lensHideChrome": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Hide editor tabs, breadcrumbs, the minimap and sticky scroll while the lens is open, so the small lens editor is mostly code. Ramify remembers the values it changes and restores them when the lens closes, and on the next start if VS Code quit with the lens open. These are user-level settings, so while the lens is open they change in every window. Turn this off to leave them alone."
-        },
         "ramify.counterfactual": {
           "type": "boolean",
           "default": true,

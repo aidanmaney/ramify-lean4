@@ -19,6 +19,7 @@ import type {
 } from "./types";
 import type { Rewrite, RewriteEdit, Pos as RewritePos } from "./rewrite";
 import type { TreeDiagnostic } from "./diagnostics";
+import type { SearchSuggestion } from "./searchFix";
 import type { Lint } from "./lints";
 import type { HypMode } from "./proofToTree";
 import type { HypMarkStyle } from "./theme";
@@ -273,6 +274,11 @@ export interface ProofTreeViewProps {
   abbrev?: AbbrevConfig;
 
   diagnostics?: TreeDiagnostic[];
+
+  /** H6 — what `exact?`/`apply?`/`rw?` found: the `Try this` info messages
+      (which `filterDiagnostics` drops), one line each. The view offers each as
+      the expand move on its step, checked by `checkRewrite` like any rewrite. */
+  searchSuggestions?: SearchSuggestion[];
 
   /** D4 — Mathlib's own style linters for THIS declaration. In the widget
       they arrive from `ProofTree.lintDecl` (a re-elaboration, so it is fired

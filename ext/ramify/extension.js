@@ -1027,17 +1027,19 @@ function publishThemeColors() {
   }
 }
 
-const STATIC_STRIP = {
-  "workbench.editor.showTabs": "none",
-  "breadcrumbs.enabled": false,
-
-  "editor.minimap.enabled": false,
-
-  "editor.stickyScroll.enabled": false,
+// X2 (audit 2026-11): the lens no longer changes any setting. Versions up to
+// 1.1.0 hid tabs, breadcrumbs, the minimap and sticky scroll by writing these
+// USER-level keys while the lens was open, with a pid-stamped backup in
+// CHROME_BACKUP. A crash, a reload or a second window could leave every
+// window stripped. All that is kept is the repair: a backup left by a window
+// that is gone is put back once, on activation, and deleted.
+const LEGACY_STRIP_TYPES = {
+  "workbench.editor.showTabs": "string",
+  "breadcrumbs.enabled": "boolean",
+  "editor.minimap.enabled": "boolean",
+  "editor.stickyScroll.enabled": "boolean",
 };
-
-const STRIP_KEYS = Object.keys(STATIC_STRIP);
-let strippedOriginals = null;
+const STRIP_KEYS = Object.keys(LEGACY_STRIP_TYPES);
 
 const readChromeBackup = () => readJsonFile(path.basename(CHROME_BACKUP));
 
@@ -1059,17 +1061,17 @@ function pidAlive(pid) {
 
 /** The `originals` of a backup file, cut down to what this module may write
  back: ONLY the STRIP_KEYS, each `null` (was unset) or a value of the type
- STATIC_STRIP gives that key. The file lives where any program of the user's
- can edit it, and each surviving entry becomes a `cfg.update(Global)` — so an
- unknown key, or a known one with the wrong type, is dropped and logged rather
- than written into the user's settings. */
+ LEGACY_STRIP_TYPES gives that key. The file lives where any program of the
+ user's can edit it, and each surviving entry becomes a `cfg.update(Global)` —
+ so an unknown key, or a known one with the wrong type, is dropped and logged
+ rather than written into the user's settings. */
 function sanitiseOriginals(raw) {
   const out = {};
   if (!isObj(raw)) return out;
   for (const key of STRIP_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
     const v = raw[key];
-    if (v === null || typeof v === typeof STATIC_STRIP[key]) out[key] = v;
+    if (v === null || typeof v === LEGACY_STRIP_TYPES[key]) out[key] = v;
     else say(`chrome backup: ignoring ${key} (unexpected ${typeof v})`);
   }
   for (const key of Object.keys(raw))
@@ -1077,46 +1079,14 @@ function sanitiseOriginals(raw) {
   return out;
 }
 
-async function stripEditorChrome() {
-  if (strippedOriginals) return;
-  const cfg = vscode.workspace.getConfiguration();
-
-  const prior = readChromeBackup();
-  let originals;
-  if (prior && backupPid(prior) !== process.pid && pidAlive(backupPid(prior))) {
-    originals = sanitiseOriginals(prior.originals);
-  } else {
-    originals = {};
-    for (const key of STRIP_KEYS) {
-      originals[key] = cfg.inspect(key)?.globalValue ?? null;
-    }
-  }
-  strippedOriginals = originals;
+/** Put back settings an older Ramify stripped and never restored. A backup
+ whose pid is alive belongs to a window still running an older version; it
+ restores its own when its lens closes. */
+async function repairLegacyChrome() {
   try {
-    writeJsonAtomic(CHROME_BACKUP, { pid: process.pid, originals });
-  } catch (e) {
-    say(`chrome backup not written: ${errText(e)}`);
-  }
-  for (const [key, val] of Object.entries(STATIC_STRIP)) {
-    try {
-      await cfg.update(key, val, vscode.ConfigurationTarget.Global);
-    } catch (e) {
-      say(`chrome: cannot set ${key}: ${errText(e)}`);
-    }
-  }
-}
-
-async function restoreEditorChrome(fromDisk) {
-  try {
-    let originals = strippedOriginals;
-    if (!originals && fromDisk) {
-      const prior = readChromeBackup();
-      // A dead pid means the window that stripped is gone (VS Code quit or
-      // crashed with the lens open); a live one still owns its strip.
-      if (prior && !pidAlive(backupPid(prior))) originals = sanitiseOriginals(prior.originals);
-    }
-    if (!originals) return;
-    strippedOriginals = null;
+    const prior = readChromeBackup();
+    if (!prior || pidAlive(backupPid(prior))) return;
+    const originals = sanitiseOriginals(prior.originals);
     const cfg = vscode.workspace.getConfiguration();
     let failed = false;
     for (const key of STRIP_KEYS) {
@@ -1140,7 +1110,7 @@ async function restoreEditorChrome(fromDisk) {
       fs.unlinkSync(CHROME_BACKUP);
     } catch {}
   } catch (e) {
-    say(`restoreEditorChrome failed: ${errStack(e)}`);
+    say(`repairLegacyChrome failed: ${errStack(e)}`);
   }
 }
 
@@ -1471,10 +1441,6 @@ async function popout(uri, selection) {
 
   await sizeLens(lensColumn);
   await showInLens(doc, selection, lensColumn);
-  // `ramify.lensHideChrome` (default on): off leaves tabs, breadcrumbs, the
-  // minimap and sticky scroll as the reader has them. A strip already in force
-  // is still undone when the lens closes.
-  if (flag("lensHideChrome", true)) await stripEditorChrome();
 }
 
 // D1 EXTRACT → RENAME SYMBOL (2026-09-17). The widget has just written
@@ -1676,9 +1642,9 @@ function activate(context) {
   );
   say(`activated (pid ${process.pid}), watching ${REQUEST_DIR}`);
 
-  // Undo a strip left by a window that quit (or died) with the lens open. Runs
-  // when the first Lean file opens — see `activationEvents`.
-  restoreEditorChrome(true).catch((e) => say(`restore on start: ${errText(e)}`));
+  // Undo a strip an older version left behind (a window that quit or died
+  // with the lens open). Never rejects.
+  void repairLegacyChrome();
   pruneClaims();
 
   // C4/D6 — the key lives in VS Code's own secret storage and nowhere else;
@@ -1792,10 +1758,9 @@ function activate(context) {
         say(`lens renumbered to column ${lensColumn}`);
         return;
       }
-      say("lens closed; restoring editor chrome");
+      say("lens closed");
       lensColumn = null;
       lensWrapped = false;
-      restoreEditorChrome(false).catch((e) => say(`restore on close: ${errText(e)}`));
     }),
   );
 
@@ -1913,9 +1878,6 @@ function activate(context) {
   });
 }
 
-function deactivate() {
-  // restoreEditorChrome guards itself and never rejects.
-  return restoreEditorChrome(false);
-}
+function deactivate() {}
 
 module.exports = { activate, deactivate };

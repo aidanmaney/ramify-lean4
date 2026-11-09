@@ -36,7 +36,7 @@ Edits you make from the tree do not go through these files; they are ordinary VS
 
 ## Your editor settings
 
-While the lens is open, and unless `ramify.lensHideChrome` is `false`, the extension changes four **user-level** settings: `workbench.editor.showTabs`, `breadcrumbs.enabled`, `editor.minimap.enabled` and `editor.stickyScroll.enabled`. It restores them when the lens closes, and on the next start if VS Code quit with the lens open.
+The extension does not change your editor settings. (Versions 1.0.x hid tabs, breadcrumbs, the minimap and sticky scroll through four **user-level** settings while the lens was open; if such a version quit with the lens open, the current one puts those settings back once, on start, from the backup it left.)
 
 ## The API key
 

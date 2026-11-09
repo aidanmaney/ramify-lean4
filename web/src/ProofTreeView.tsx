@@ -26,9 +26,10 @@ import {
   traceTip,
 } from "./trace";
 import { DEFAULT_EXPERIENCE, PRESETS, readingName, type ReadingId, type ReadingState } from "./experience";
-import { CHECKED_FIRST, MOVE_IDS, togglePinned, type BarKind, type MoveId, type Unavailable, type Availability, unavailableTip, EXTRACT_MOVE_LABEL, PROPOSE_MOVE_LABEL, collapseMoveLabel, fixMoveLabel, expandMoveLabel, inlineMoveLabel, lintMoveLabel, NAME_CASES_MOVE_LABEL, renameMoveLabel, traceMoveLabel } from "./moves";
+import { CHECKED_FIRST, MOVE_IDS, togglePinned, type BarKind, type MoveId, type Unavailable, type Availability, unavailableTip, EXTRACT_MOVE_LABEL, PROPOSE_MOVE_LABEL, collapseMoveLabel, fixMoveLabel, expandMoveLabel, searchMoveLabel, inlineMoveLabel, lintMoveLabel, NAME_CASES_MOVE_LABEL, renameMoveLabel, traceMoveLabel } from "./moves";
 import { stepGoalsAfter } from "./paperproof";
 import { nameCasesRewrite, splitStepAt } from "./nameCasesMove";
+import { searchFixes as searchFixesOf } from "./searchFix";
 import {
   PLACEHOLDER,
   calcOpenSlots,
@@ -226,6 +227,7 @@ export default function ProofTreeView({
   onUndo,
   abbrev = DEFAULT_ABBREV,
   diagnostics,
+  searchSuggestions,
   lints,
   onLints,
   experience = DEFAULT_EXPERIENCE,
@@ -2263,6 +2265,17 @@ export default function ProofTreeView({
     return out;
   }, [rewriteCtx, proof.steps]);
 
+  // H6 — what `exact?`/`apply?`/`rw?` found, as the expand move on that step:
+  // core's `Try this` verbatim over the tactic's tight range (searchFix.ts),
+  // offered without a round trip and checked on the click like every rewrite.
+  const searchFixes = useMemo(
+    () =>
+      rewriteCtx && searchSuggestions?.length
+        ? searchFixesOf(searchSuggestions, rewriteCtx)
+        : new Map<string, Rewrite>(),
+    [rewriteCtx, searchSuggestions],
+  );
+
   // D4 — the lints in hand for this proof, as the reader asked for them. The
   // SIBLING wins over the field (the `deleteSlots` rule) and the option gates
   // both: with the option off there are no lint diagnostics at all, so the
@@ -2441,8 +2454,10 @@ export default function ProofTreeView({
         out.push({ nodeId: id, kind: "rename", title: rn.rewrite.title, rewrite: rn.rewrite });
     for (const [id, r] of nameCaseFixes)
       out.push({ nodeId: id, kind: "namecases", title: r.title, rewrite: r });
+    for (const [id, r] of searchFixes)
+      out.push({ nodeId: id, kind: "expand", title: r.title, rewrite: r });
     return out;
-  }, [onPropose, rewrites, lintFixes, renames, nameCaseFixes]);
+  }, [onPropose, rewrites, lintFixes, renames, nameCaseFixes, searchFixes]);
 
   // The proof as the agent is shown it: the tree's own outline, one line per
   // node in DFS order. Not the file's bytes — this side does not hold them —
@@ -2609,6 +2624,8 @@ export default function ProofTreeView({
   };
 
   const proposeExpand = (id: string) => {
+    const found = searchFixes.get(id);
+    if (found) return proposeRewrite(id, found);
     const ctx = rewriteCtx;
     const n = treeNodes.find((t) => t.id === id);
     if (!ctx || !n?.position) return;
@@ -6429,13 +6446,16 @@ export default function ProofTreeView({
               // D4 — a lint on this node with an answer (or, for
               // `linter.flexible`, one the click can reach).
               const lintable = lintFixes.get(id);
+              // H6 — an `exact?`/`apply?`/`rw?` whose `Try this` is in hand.
+              const searchFix = searchFixes.get(id);
               const expandable =
                 !traceLeaf &&
                 !!onApplyRewrite &&
-                automation &&
-                (node.data.trace
-                  ? node.data.trace.kind === "lemmas"
-                  : !!onTrace);
+                (!!searchFix ||
+                  (automation &&
+                    (node.data.trace
+                      ? node.data.trace.kind === "lemmas"
+                      : !!onTrace)));
               // D5 — a context line here has a Mathlib-style name to offer.
               const renamable = (renames.get(id)?.size ?? 0) > 0;
               // An unnamed split whose cases can be named.
@@ -7307,8 +7327,10 @@ export default function ProofTreeView({
                           {
                             id: k,
                             ...MOVE_LOOK.expand,
-                            label: expandMoveLabel(stepHead),
-                            title: `${expandMoveLabel(stepHead)} — ${CHECKED_FIRST}`,
+                            label: searchFix
+                              ? searchMoveLabel(searchFix.name)
+                              : expandMoveLabel(stepHead),
+                            title: `${searchFix ? searchMoveLabel(searchFix.name) : expandMoveLabel(stepHead)} — ${CHECKED_FIRST}`,
                             onClick: () => proposeExpand(id),
                           },
                         ]

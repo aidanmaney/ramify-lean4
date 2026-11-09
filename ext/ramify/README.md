@@ -42,7 +42,6 @@ Under `ramify.` in VS Code's settings UI.
 
 - `ramify.lensGoals` — show each tactic's resulting goal inline
 - `ramify.lensWordWrap` — wrap long lines in the lens only
-- `ramify.lensHideChrome` — hide editor tabs, breadcrumbs, the minimap and sticky scroll while the lens is open (on by default; see below)
 
 **Editing**
 
@@ -56,7 +55,7 @@ Under `ramify.` in VS Code's settings UI.
 
 ## The lens and your settings
 
-While the lens is open, Ramify hides editor tabs, breadcrumbs, the minimap and sticky scroll so the small lens editor is mostly code. It does this by changing your **user-level** settings (`workbench.editor.showTabs`, `breadcrumbs.enabled`, `editor.minimap.enabled`, `editor.stickyScroll.enabled`), so the change applies to every VS Code window while the lens is open. It restores them when the lens closes, and on the next start if VS Code quit with the lens open. Set `ramify.lensHideChrome` to `false` to turn this off.
+The lens changes no settings. Versions before 1.1.0 hid tabs, breadcrumbs, the minimap and sticky scroll through your user-level settings while it was open; if one of those quit with the lens open, this version restores them on start.
 
 ## Privacy
 

@@ -48,6 +48,7 @@ import {
   type RawDiagnostic,
   type TreeDiagnostic,
 } from "./diagnostics";
+import { searchSuggestions, type SearchSuggestion } from "./searchFix";
 import { goalAnnotations, type GoalAnnotation } from "./lensGoals";
 import { posLE } from "./proofToTree";
 import ProofTreeView from "./ProofTreeView";
@@ -729,6 +730,16 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
             interactive?.diagnostics ?? [],
             proofSpan(stable.proof),
           ).kept
+        : [],
+    [interactive, stable],
+  );
+
+  // H6 — `Try this` answers of `exact?`/`apply?`/`rw?`, read off the RAW list
+  // (they are info messages, which `filterDiagnostics` drops).
+  const suggestions: SearchSuggestion[] = useMemo(
+    () =>
+      stable
+        ? searchSuggestions(interactive?.diagnostics ?? [], proofSpan(stable.proof))
         : [],
     [interactive, stable],
   );
@@ -1537,6 +1548,7 @@ export default function ProofTreeWidget(props: PanelWidgetProps) {
         onTryClose={tryClose}
         onApplyRewrite={applyRewrite}
         diagnostics={diagnostics}
+        searchSuggestions={suggestions}
         lints={shownLints}
         onLints={wantLints}
         onPolish={askPolish}

@@ -10,6 +10,7 @@ Released together with the Ramify Lake package `v1.1.0`.
 - Persistent view settings: `ramify.view.*`, `ramify.reading.*` and `ramify.diagnostics.autoOpen`, written from the tree's status band.
 - The model features default to `claude-haiku-5-5`.
 - Publishes the colour theme the window shows, not `workbench.colorTheme`.
+- The lens changes no settings: `ramify.lensHideChrome` and the tabs/breadcrumbs/minimap/sticky-scroll strip are removed. A strip an older version left behind is restored on start.
 
 ## 1.0.0 — 2026-09-28
 
