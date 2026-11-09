@@ -32,6 +32,16 @@ You also need the [Lean 4 VS Code extension](https://marketplace.visualstudio.co
 
 Other editors are not supported: the widget may work in them, but that is untested.
 
+### Which release for which Lean
+
+Each release is built for one Lean version. Use the newest release built for your project's `lean-toolchain`. A weekly job moves Ramify to each new Lean release once Mathlib has tagged it, so a release for the current Lean usually follows within a couple of weeks.
+
+<!-- releases:start -->
+| Ramify | Lean (and Mathlib) |
+| --- | --- |
+| `v1.0.0` | `v4.32.2` |
+<!-- releases:end -->
+
 ---
 
 ## 1. The Lean Package
@@ -43,17 +53,17 @@ Add one dependency to your project's `lakefile.toml`:
 name = "ramify"
 git = "https://github.com/aidanmaney/ramify-lean4.git"
 subDir = "dist"
-rev = "v1.0.0"
+rev = "v1.1.0"
 ```
 
-`rev = "v1.0.0"` pins your project to that release, so an update is a change you make on purpose. The `main` branch follows the latest release; use `rev = "main"` if you want each `lake update` to take the newest.
+`rev = "v1.1.0"` pins your project to that release, so an update is a change you make on purpose. The `main` branch follows the latest release; use `rev = "main"` if you want each `lake update` to take the newest.
 
 <details>
 <summary>lakefile.lean instead of lakefile.toml</summary>
 
 ```lean
 require ramify from git
-  "https://github.com/aidanmaney/ramify-lean4.git" @ "v1.0.0" / "dist"
+  "https://github.com/aidanmaney/ramify-lean4.git" @ "v1.1.0" / "dist"
 ```
 </details>
 
@@ -102,13 +112,13 @@ The extension ships as a `.vsix` file inside this package. Where that file is de
 
 ```bash
 # If you cloned this repository (the "try it" route above), from its root:
-code --install-extension dist/ramify-1.0.0.vsix
+code --install-extension dist/ramify-1.1.0.vsix
 
 # If you added ramify as a Lake dependency, from your project's root:
-code --install-extension .lake/packages/ramify/dist/ramify-1.0.0.vsix
+code --install-extension .lake/packages/ramify/dist/ramify-1.1.0.vsix
 ```
 
-Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-1.0.0.vsix`. Reload the window afterwards (command palette).
+Or via the VS Code GUI: Extensions &#8594; &#8943; &#8594; Install from VSIX… &#8594; pick `ramify-1.1.0.vsix`. Reload the window afterwards (command palette).
 
 The same `.vsix` is attached to each [GitHub release](https://github.com/aidanmaney/ramify-lean4/releases).
 
@@ -195,7 +205,7 @@ Each of the rows above is written by the tree itself: change a value in the band
 | `ramify.lensHideChrome` | on | Hide editor tabs, breadcrumbs, the minimap and sticky scroll while the lens is open (user-level settings, restored when it closes; see [The lens](#what-the-extension-adds)). Off leaves them alone. |
 | `ramify.restructure.renameAfterHoist` | on | Open Rename Symbol on `this` after an accepted `⤴` extract. |
 | `ramify.narration.polish` | off | Send the generated narration to a model to be rewritten. Needs a key. |
-| `ramify.narration.model` | `claude-haiku-4-5-20251001` | The model used for both model features. |
+| `ramify.narration.model` | `claude-haiku-5-5` | The model used for both model features. |
 | `ramify.restructure.propose` | off | Enable `suggest a rewrite`. Needs a key. |
 
 The extension also adds any custom `lean4.input.*` unicode abbreviations you have set, so they work in the tree's editors.

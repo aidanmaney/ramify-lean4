@@ -66,6 +66,9 @@ if [ "$(printf '%s\n' "$tracked_vsix" | grep -c .)" -ne 1 ]; then
 fi
 
 manifest=(
+  # the one workflow main carries: a schedule only runs from the default branch.
+  # It checks out and works on dev (see the file's header).
+  .github/workflows/toolchain-bump.yml
   LICENSE
   NOTICE
   INSTALL.md

@@ -11,11 +11,13 @@
 #              the lists that live in two files agree (scripts/check-sync.mjs)
 #   release    on a `v*` tag: attach the tracked dist/ramify-<version>.vsix (the one the
 #              extension job verified carries the current extension.js and package.json)
-#              to a GitHub release
+#              to a GitHub release, and publish it to the VS Code Marketplace and
+#              Open VSX where their tokens (VSCE_PAT, OVSX_PAT) are set
 #
-# `main` is the install branch (see scripts/sync-main.sh) and carries no
-# workflows and no web/ sources, so this file lives on dev and release tags are
-# pushed on a dev commit. The `main` trigger exists for pull requests into it.
+# `main` is the install branch (see scripts/sync-main.sh) and carries no web/
+# sources and no workflow but toolchain-bump.yml (a schedule only runs from the
+# default branch), so this file lives on dev and release tags are pushed on a
+# dev commit. The `main` trigger exists for pull requests into it.
 name: CI
 
 on:
@@ -84,9 +86,8 @@ jobs:
             ~/.elan/toolchains
             dist/.lake
           key: lake-${{ runner.os }}-${{ hashFiles('dist/lake-manifest.json', 'dist/lean-toolchain') }}
-      - name: Build the installable package (Ramify + Demo)
-        working-directory: dist
-        run: lake build
+      - name: Build the installable package; Demo.lean and the tour elaborate
+        run: scripts/check-dist.sh
       - name: Manifest is unchanged by the build
         run: |
           if ! git diff --exit-code dist/lake-manifest.json; then
@@ -99,35 +100,6 @@ jobs:
             echo "::error file=dist/ProofTreeTour.lean::dist/ProofTreeTour.lean differs from lean/ProofTreeTour.lean — run package.sh (or cp) and commit it"
             exit 1
           fi
-      - name: The tour and the demo elaborate
-        working-directory: dist
-        # Demo.lean must elaborate cleanly (a failure fails the job here).
-        #
-        # The tour imports only Ramify and Init. Its last two theorems
-        # (tour_frontier, tour_errors) are BROKEN ON PURPOSE, to show
-        # unfinished proofs and errors in the tree, so `lean` exits 1 by
-        # design. The check is that every error sits at or after
-        # `theorem tour_frontier`: an import failure or an error in the working
-        # proofs above it fails the job. At least one error must appear, or the
-        # file was not really elaborated.
-        run: |
-          lake env lean Demo.lean
-          set +e
-          lake env lean ProofTreeTour.lean > tour.out 2>&1
-          set -e
-          cat tour.out
-          first=$(grep -n '^theorem tour_frontier' ProofTreeTour.lean | head -1 | cut -d: -f1)
-          [ -n "$first" ] || { echo "::error::no 'theorem tour_frontier' in the tour — update this check"; exit 1; }
-          errs=$(sed -n 's/^ProofTreeTour\.lean:\([0-9][0-9]*\):[0-9][0-9]*: error.*/\1/p' tour.out)
-          [ -n "$errs" ] || { echo "::error::the tour produced no errors; its deliberate ones are missing, so it was probably not elaborated"; exit 1; }
-          bad=0
-          for l in $errs; do
-            if [ "$l" -lt "$first" ]; then
-              echo "::error file=lean/ProofTreeTour.lean,line=$l::unexpected error above the deliberately broken theorems"
-              bad=1
-            fi
-          done
-          exit $bad
 
   extension:
     runs-on: ubuntu-latest
@@ -215,3 +187,19 @@ jobs:
             --title "Ramify $GITHUB_REF_NAME" \
             --notes-file release-note.md \
             --verify-tag
+      # The marketplaces. Each step runs only where its token is set
+      # (Settings → Secrets and variables → Actions): VSCE_PAT for the VS Code
+      # Marketplace, OVSX_PAT for Open VSX (the registry VSCodium, Cursor and
+      # code-server use). `publisher` in ext/ramify/package.json must be a
+      # publisher that token can publish as. The tracked .vsix is what goes up,
+      # the same file the release attaches.
+      - name: Publish to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: env.VSCE_PAT != ''
+        run: npx --yes @vscode/vsce@${{ env.VSCE_VERSION }} publish --packagePath "dist/ramify-$(node -p "require('./ext/ramify/package.json').version").vsix"
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        if: env.OVSX_PAT != ''
+        run: npx --yes ovsx@1.3.0 publish "dist/ramify-$(node -p "require('./ext/ramify/package.json').version").vsix" -p "$OVSX_PAT"

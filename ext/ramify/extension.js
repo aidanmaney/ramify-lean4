@@ -359,7 +359,7 @@ function resolveTokenColors(file, custom) {
 const API_URL = "https://api.anthropic.com/v1/messages";
 const API_VERSION = "2023-06-01";
 const SECRET_KEY = "ramify.narrationApiKey";
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+const DEFAULT_MODEL = "claude-haiku-5-5";
 const API_TIMEOUT_MS = 30000;
 // Input caps: a request file is another process's data, and a model call is
 // money. Over the cap the input is TRUNCATED (and logged), never refused — the
@@ -1589,6 +1589,73 @@ async function renameAfterHoist(uri, range, nonce) {
   say(`${tag}: Rename Symbol opened in column ${ed.viewColumn} after ${Date.now() - t0}ms`);
 }
 
+// ─── Package and extension at the same version ─────────────────────────────
+// The Lean package and this extension are released together and talk through
+// files whose shape can change between releases, so a mismatch is the first
+// thing to rule out when something does nothing. Lake checks out the whole
+// repository under `.lake/packages/ramify/`, extension sources included, so
+// the package's own `ext/ramify/package.json` says which extension it was
+// released with. Warn once per folder and version a session; where the
+// package carries its .vsix, offer to install that one.
+const versionWarned = new Set();
+/** a > b, for dotted numeric versions ("1.10.0" > "1.9.2"). */
+function newerVersion(a, b) {
+  const pa = a.split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = b.split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}
+async function checkPackageVersions() {
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (folder.uri.scheme !== "file") continue;
+    const pkgRoot = path.join(folder.uri.fsPath, ".lake", "packages", "ramify");
+    let theirs;
+    try {
+      const pj = JSON.parse(await fs.promises.readFile(path.join(pkgRoot, "ext", "ramify", "package.json"), "utf8"));
+      theirs = typeof pj.version === "string" ? pj.version : null;
+    } catch {
+      continue; // not a project that depends on ramify, or an older layout
+    }
+    if (!theirs || theirs === companionVersion) continue;
+    const key = `${folder.uri.fsPath}@${theirs}`;
+    if (versionWarned.has(key)) continue;
+    versionWarned.add(key);
+    say(`version mismatch in ${folder.name}: Lean package ${theirs}, extension ${companionVersion}`);
+    // The package newer than the extension: offer its own .vsix. The
+    // extension newer (an update from the marketplace): the package is what
+    // moves, with `lake update ramify` — installing an older extension would
+    // only be undone by the next auto-update.
+    const packageNewer = newerVersion(theirs, companionVersion);
+    const vsix = path.join(pkgRoot, "dist", `ramify-${theirs}.vsix`);
+    const hasVsix = packageNewer && (await fs.promises.access(vsix).then(() => true, () => false));
+    const install = `Install extension ${theirs}`;
+    const pick = await vscode.window.showWarningMessage(
+      `Ramify: ${folder.name} uses the Ramify Lean package ${theirs}, but this extension is ${companionVersion}. ` +
+        "They are released together, and mismatched some actions may do nothing. " +
+        (packageNewer
+          ? hasVsix
+            ? "Install the extension that came with the package."
+            : `Update the extension to ${theirs}.`
+          : `Run \`lake update ramify\` in ${folder.name} (with \`rev\` in its lakefile set to v${companionVersion}), then Restart File.`),
+      ...(hasVsix ? [install] : []),
+    );
+    if (pick === install) {
+      try {
+        await vscode.commands.executeCommand("workbench.extensions.installExtension", vscode.Uri.file(vsix));
+        const reload = "Reload Window";
+        if ((await vscode.window.showInformationMessage(`Ramify ${theirs} installed.`, reload)) === reload)
+          await vscode.commands.executeCommand("workbench.action.reloadWindow");
+      } catch (e) {
+        say(`installing ${vsix}: ${errText(e)}`);
+        void vscode.window.showErrorMessage(`Ramify: could not install ${vsix}: ${errText(e)}`);
+      }
+    }
+  }
+}
+
 function activate(context) {
   companionVersion = String(context.extension?.packageJSON?.version ?? "0");
   companionAt = Date.now();
@@ -1680,8 +1747,12 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveColorTheme(() => publishThemeColors()),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => publishThemeColors()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      publishThemeColors();
+      checkPackageVersions().catch((e) => say(`version check: ${errText(e)}`));
+    }),
   );
+  checkPackageVersions().catch((e) => say(`version check: ${errText(e)}`));
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       const themeChanged =

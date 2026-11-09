@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — unreleased
+
+Released together with extension 1.1.0; the release-table row in INSTALL.md is added when it is tagged.
+
+**Follows Lean**
+- A weekly job moves Ramify to each new Lean release (with Mathlib's matching tag and the ProofWidgets it pins), builds the package, elaborates the demo and the tour, and opens a pull request (`scripts/bump-toolchain.sh`, `.github/workflows/toolchain-bump.yml`). INSTALL.md lists which release is built for which Lean.
+
+**The tree**
+- Programs draw as trees too: `def`, `instance` and `abbrev` go through the term walk, and `do` blocks draw as a spine.
+- A legibility pass: bold targets, the path to the cursor, and hypotheses that say which step introduced them.
+- VS Code's own idioms: codicons, the editor's squiggles for diagnostics (no left ribbon), its context menu and check menus, a lightbulb with Quick Fix and Refactor, and a docked status band with Restart File.
+- Name the cases: a Quick Fix that writes `cases … with | tag names =>` for an unnamed `cases` or `induction`, checked by the live server.
+- One appearance: the classic skin is gone.
+- Fold chevrons, a hop chip, and brief mode keeps the statement of a `have`.
+- Scrolling: no hover while the tree scrolls, and panning runs off the main thread.
+
+**Settings that stay**
+- Layout, context, comments, width and the reading options are now settings (`ramify.view.*`, `ramify.reading.*`, `ramify.diagnostics.autoOpen`), so a choice made in the tree persists across windows and sessions.
+
+**The extension**
+- Warns when the project's Ramify Lean package and the extension are different versions, and offers to install the extension the package came with.
+- The model features default to `claude-haiku-5-5`.
+- Publishes the theme the window actually shows, not `workbench.colorTheme`.
+
+**On the web**
+- The playground: a theorem, a source pane that is the source of truth, and the tree beside it, in the browser with nothing installed. Optional live Lean (a one-time ~47 MB download) checks any tactic with real Lean compiled to WebAssembly; elsewhere the playground answers from steps computed in advance.
 
 **The static viewer**
 - Proofs can be published as a static website, or as one self-contained HTML file, that draws the same tree as the infoview with no Lean server: hovers, comments, diagnostics, every layout and reading option, and a coloured source pane beside the tree that the tree follows. Lean runs once, on the author's machine (`web/scripts/publish.mjs`); see `docs/viewer.md`.

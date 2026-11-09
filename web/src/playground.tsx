@@ -90,6 +90,11 @@ import type { BakedTag } from "./viewerPayload";
 import { TOKEN_PALETTE } from "./viewerTheme";
 
 const QUERY = new URLSearchParams(location.search);
+/** `?embed`: the playground inside another page (the site index's hero). An
+ iframe cannot be cross-origin isolated unless its parent is, so live Lean is
+ not offered there; the header links out to the full page instead, where it is
+ (`EmbedLink`). */
+const EMBED = QUERY.has("embed");
 const EXPERIENCE = parseExperience(QUERY.get("experience"));
 /** Per-browser conveniences (localStorage can throw or be empty: never relied on). */
 const stored = (k: string): string | null => {
@@ -116,10 +121,10 @@ const LIVE = new LiveLean(LIVE_BASE ?? "live/");
  reader's ask installs a service worker that adds them and reloads once
  (coi-sw.js). Not offered without a live base, on a phone, or where neither
  route exists — and then nothing names a button that is not drawn. */
-const LIVE_OFFERED = LIVE_BASE !== null && liveRunnable();
+const LIVE_OFFERED = !EMBED && LIVE_BASE !== null && liveRunnable();
 /** Where a live base is set but this browser cannot run it: the reason, said once
  in the goal panel's offer line (else the offer would just be missing). */
-const LIVE_BLOCKED = LIVE_BASE !== null && !LIVE_OFFERED ? liveBlockedReason() : null;
+const LIVE_BLOCKED = !EMBED && LIVE_BASE !== null && !LIVE_OFFERED ? liveBlockedReason() : null;
 const ISOLATED = !!globalThis.crossOriginIsolated;
 /** The reader's ask: start at once where the page is isolated, else isolate it
  first (a reload that comes back and starts by itself). */
@@ -335,6 +340,15 @@ function LiveOffer() {
       stored(LIVE_KEY) === "on" ||
       !LIVE_OFFERED,
   );
+  if (EMBED && LIVE_BASE !== null && !narrow)
+    return (
+      <div className="ptw-pg-offer ptw-pg-dim">
+        <a href={fullPageHref()} target="_top" className="ptw-pg-linkish">
+          Open the playground on its own page
+        </a>{" "}
+        to check any tactic with real Lean
+      </div>
+    );
   if (!LIVE_OFFERED && LIVE_BLOCKED && !narrow && stored(NOTICE_KEY) !== "never")
     return <div className="ptw-pg-offer ptw-pg-dim" role="note">{LIVE_BLOCKED}</div>;
   if (hidden || narrow || !ready || st.kind !== "off") return null;
@@ -363,6 +377,13 @@ function LiveOffer() {
 }
 
 const RELEASE_URL ="https://github.com/aidanmaney/ramify-lean4/releases/latest";
+/** This page without `?embed`, the theorem (the hash) kept. */
+function fullPageHref(): string {
+  const q = new URLSearchParams(location.search);
+  q.delete("embed");
+  const qs = q.toString();
+  return `${location.pathname}${qs ? `?${qs}` : ""}${location.hash}`;
+}
 const NARROW_PX = 700;
 /** Where the reader starts: `wide`, so the tree fills the pane, and the
  context `diff` — each case box shows only what it gained (the view's `used`
@@ -513,6 +534,14 @@ body {
 .ptw-pg[data-narrow] .ptw-pg-desktop-note { display: block; padding: 6px 10px; font-size: ${CHROME_TEXT_SM}px; opacity: ${DIM_OPACITY}; border-bottom: 1px solid var(--ptw-chrome-border); }
 .ptw-pg[data-narrow] .ptw-pg-row { flex-wrap: wrap; }
 .ptw-pg[data-narrow] .ptw-pg-row select { flex: 1 1 100%; }
+/* A PHONE STACKS: the source (and its goal panel) over the tree, each the
+   full width, instead of two side-by-side panes the tree could not fit in. */
+.ptw-pg[data-narrow] .ptw-pg-main { flex-direction: column; overflow-y: auto; }
+.ptw-pg[data-narrow] .ptw-pg-side { flex: 0 0 auto !important; min-width: 0; max-width: none !important; }
+.ptw-pg[data-narrow] .ptw-pg-src { flex: 0 0 auto; min-height: 64px; }
+.ptw-pg[data-narrow] .ptw-pg-goal { max-height: none; }
+.ptw-pg[data-narrow] .ptw-pg-split { display: none; }
+.ptw-pg[data-narrow] .ptw-pg-tree { flex: 0 0 auto; height: 72vh; min-height: 280px; border-top: 1px solid ${CHROME_BORDER}; }
 /* iOS zooms into any field under 16px; a phone gets 16px fields */
 .ptw-pg[data-narrow] input, .ptw-pg[data-narrow] select { font-size: 16px; }
 .ptw-baked-lit { background: var(--ptw-chrome-lit); border-radius: 2px; }
@@ -1248,9 +1277,14 @@ export default function Playground() {
 
   const head = (extra: ReactNode) => (
     <header className="ptw-pg-head" {...chromeScopeProps()}>
-      <a href="./" className="ptw-pg-brand" title="Every published proof">
-        Ramify
-      </a>
+      {/* Embedded on the landing page, the page around the frame carries the
+          brand, the install link and the theme toggle (the theme follows
+          it through storage), so the frame's header is the playground's own. */}
+      {EMBED ? null : (
+        <a href="./" className="ptw-pg-brand" title="Every published proof">
+          Ramify
+        </a>
+      )}
       <span className="ptw-pg-dim">Playground</span>
       {entries && (
         <select
@@ -1268,23 +1302,37 @@ export default function Playground() {
       {extra}
       <span className="ptw-pg-spacer" />
       <LiveButton />
-      <a
-        className="ptw-pg-wide"
-        data-ptw-btn=""
-        href={RELEASE_URL}
-        title="Here Lean's answers were computed in advance, or come from Lean running in this tab. In VS Code the same tree follows your own files as you type."
-      >
-        Get Ramify for VS Code
-      </a>
-      <button
-        type="button"
-        className="ptw-pg-quiet ptw-pg-icon"
-        title={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        aria-label={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        onClick={toggleTheme}
-      >
-        <Codicon name={ICON["page.theme"]} />
-      </button>
+      {EMBED ? (
+        <a
+          className="ptw-pg-quiet ptw-pg-wide"
+          href={fullPageHref()}
+          target="_top"
+          title="The playground on a page of its own, where Lean can also run in your browser"
+        >
+          Open full page
+        </a>
+      ) : null}
+      {EMBED ? null : (
+        <>
+          <a
+            className="ptw-pg-wide"
+            data-ptw-btn=""
+            href={RELEASE_URL}
+            title="Here Lean's answers were computed in advance, or come from Lean running in this tab. In VS Code the same tree follows your own files as you type."
+          >
+            Get Ramify for VS Code
+          </a>
+          <button
+            type="button"
+            className="ptw-pg-quiet ptw-pg-icon"
+            title={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            aria-label={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            onClick={toggleTheme}
+          >
+            <Codicon name={ICON["page.theme"]} />
+          </button>
+        </>
+      )}
     </header>
   );
 

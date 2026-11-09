@@ -2,6 +2,15 @@
 
 The full changelog is [CHANGELOG.md](https://github.com/aidanmaney/ramify-lean4/blob/main/CHANGELOG.md) in the repository. The 0.0.x releases were pre-release builds.
 
+## 1.1.0 — unreleased
+
+Released together with the Ramify Lake package `v1.1.0`.
+
+- Warns when the project's Ramify Lean package (under `.lake/packages/ramify`) is a different version from this extension, and offers to install the extension that came with a newer package.
+- Persistent view settings: `ramify.view.*`, `ramify.reading.*` and `ramify.diagnostics.autoOpen`, written from the tree's status band.
+- The model features default to `claude-haiku-5-5`.
+- Publishes the colour theme the window shows, not `workbench.colorTheme`.
+
 ## 1.0.0 — 2026-09-28
 
 The first stable release of the extension, released together with the Ramify Lake package `v1.0.0`; install the two at matching versions.
