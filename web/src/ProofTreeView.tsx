@@ -12,72 +12,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { plainTicks } from "./ticks";
-import {
-  createLayoutEngine,
-  hypLineOffset,
-  LINE_H,
-  LEDGER_MARK_PX,
-  NODE_FONT_PX,
-  NODE_PAD,
-  CLOSED_MARK_H,
-  CLOSED_MARK_BASELINE,
-  caseBadgeLifts,
-  CLOSED_MARK_W,
-  closedMarkX,
-  NODE_PAD_Y,
-  ARROW_GAP,
-  LINK_MARK_OFF,
-  TRUNK_INSET,
-  CHIP_TOP_GAP,
-  COMMENT_FONT_PX,
-  COMMENT_LINE_H,
-  COMMENT_GAP,
-  COMMENT_INDENT,
-  COMMENT_MORE_PAD,
-  COMMENT_RULE_INDENT,
-  CASE_FONT_PX,
-  CASE_LINE_H,
-  bandTopH,
-  inkExtent,
-  commentStripTop,
-  commentIndentOf,
-  getCodeFontFamily,
-  refreshCodeFontFamily,
-  refreshUiFontFamily,
-  getUiFontFamily,
-  measureText,
-  REFLOW_CHARS,
-  REFLOW_MIN_CHARS,
-  REFLOW_MAX_CHARS,
-  CHAR_W,
-  TRUNK_GAP_BRANCH,
-  isGhostNode,
-  BADGE_FONT_PX,
-  CORNER_W,
-  FOLD_ICON,
-  FOLD_PH_DROP,
-  FOLD_PH_X,
-  topLineMid,
-  CASE_PREFIX,
-  BADGE_H,
-  badgeWidth,
-  tourTabWidth,
-} from "./layout";
+import { createLayoutEngine, hypLineOffset, LINE_H, LEDGER_MARK_PX, NODE_FONT_PX, NODE_PAD, CLOSED_MARK_H, CLOSED_MARK_BASELINE, caseBadgeLifts, CLOSED_MARK_W, closedMarkX, NODE_PAD_Y, TRUNK_INSET, CHIP_TOP_GAP, COMMENT_FONT_PX, COMMENT_LINE_H, COMMENT_GAP, COMMENT_INDENT, COMMENT_MORE_PAD, COMMENT_RULE_INDENT, CASE_FONT_PX, CASE_LINE_H, bandTopH, inkExtent, commentStripTop, commentIndentOf, getCodeFontFamily, refreshCodeFontFamily, refreshUiFontFamily, getUiFontFamily, measureText, REFLOW_CHARS, REFLOW_MIN_CHARS, REFLOW_MAX_CHARS, CHAR_W, TRUNK_GAP_BRANCH, isGhostNode, BADGE_FONT_PX, CORNER_W, FOLD_ICON, FOLD_PH_DROP, FOLD_PH_X, topLineMid, CASE_PREFIX, BADGE_H, badgeWidth, tourTabWidth } from "./layout";
 import type { ReflowMode } from "./layout";
-import {
-  AbbrevSession,
-  DEFAULT_ABBREV,
-  underlineRuns,
-  type AbbrevConfig,
-  type AbbrevSpan,
-} from "./abbreviation";
-import type {
-  AutomationTrace,
-  CalcRelOption,
-  Proof,
-  ProofStepPosition,
-  TacticSlot,
-} from "./paperproof";
+import { AbbrevSession, DEFAULT_ABBREV, type AbbrevSpan } from "./abbreviation";
+import type { CalcRelOption, ProofStepPosition } from "./paperproof";
 import {
   applyTraces,
   TRACEABLE_HEADS,
@@ -87,35 +25,8 @@ import {
   traceKey,
   traceTip,
 } from "./trace";
-import {
-  DEFAULT_EXPERIENCE,
-  PRESETS,
-  readingName,
-  type Experience,
-  type ReadingId,
-  type ReadingState,
-} from "./experience";
-import {
-  CHECKED_FIRST,
-  MOVE_IDS,
-  togglePinned,
-  type BarKind,
-  type MoveId,
-  type Unavailable,
-  type Availability,
-  unavailableTip,
-  EXTRACT_MOVE_LABEL,
-  PROPOSE_MOVE_LABEL,
-  collapseMoveLabel,
-  fixMoveLabel,
-  expandMoveLabel,
-  inlineMoveLabel,
-  lintMoveLabel,
-  NAME_CASES_MOVE_LABEL,
-  pillMove,
-  renameMoveLabel,
-  traceMoveLabel,
-} from "./moves";
+import { DEFAULT_EXPERIENCE, PRESETS, readingName, type ReadingId, type ReadingState } from "./experience";
+import { CHECKED_FIRST, MOVE_IDS, togglePinned, type BarKind, type MoveId, type Unavailable, type Availability, unavailableTip, EXTRACT_MOVE_LABEL, PROPOSE_MOVE_LABEL, collapseMoveLabel, fixMoveLabel, expandMoveLabel, inlineMoveLabel, lintMoveLabel, NAME_CASES_MOVE_LABEL, renameMoveLabel, traceMoveLabel } from "./moves";
 import { stepGoalsAfter } from "./paperproof";
 import { nameCasesRewrite, splitStepAt } from "./nameCasesMove";
 import {
@@ -124,57 +35,14 @@ import {
   calcOpenText,
   dedupLeadingBy,
 } from "./calcEdit";
-import {
-  GLOBAL_MAX,
-  MIN_GLOBAL_PREFIX,
-  completionsAt,
-  identPrefixAt,
-  type CompletionItem,
-  type CompletionPools,
-} from "./completion";
+import { MIN_GLOBAL_PREFIX, completionsAt, identPrefixAt, type CompletionItem, type CompletionPools } from "./completion";
 import { layoutKeys, pathKeys, remapIds } from "./layoutKey";
-import type {
-  AddResult,
-  AddSpec,
-  CombinedPart,
-  DeleteSpec,
-  TextSlot,
-  TreeNode,
-  WrappedLine,
-} from "./types";
+import type { AddSpec, CombinedPart, DeleteSpec, TreeNode, WrappedLine } from "./types";
 import { deleteExtent, type DeleteExtent } from "./deleteEdit";
-import {
-  inlineRewrite,
-  extractRewrite,
-  collapseRewrite,
-  expandRewrite,
-  linearRuns,
-  runForFold,
-  hasSlot,
-  ctxNode,
-  AUTOMATION_CANDIDATES,
-  type LinearRun,
-  type Rewrite,
-  type RewriteCtx,
-  type RewriteEdit,
-  type Pos as RewritePos,
-} from "./rewrite";
+import { inlineRewrite, extractRewrite, collapseRewrite, expandRewrite, linearRuns, runForFold, hasSlot, ctxNode, AUTOMATION_CANDIDATES, type LinearRun, type Rewrite, type RewriteCtx } from "./rewrite";
 import { renamesFor, type NameRule } from "./rename";
-import {
-  attachDiagnostics,
-  lintDiagnostics,
-  splitLinterName,
-  type TreeDiagnostic,
-} from "./diagnostics";
-import { CodeText } from "./codeSpans";
-import {
-  LINT_FIXES,
-  firstLintFix,
-  lintFixesFor,
-  lintName,
-  lintsByNode,
-  type Lint,
-} from "./lints";
+import { attachDiagnostics, lintDiagnostics } from "./diagnostics";
+import { LINT_FIXES, firstLintFix, lintFixesFor, lintsByNode, type Lint } from "./lints";
 import {
   positionContains,
   proofToTree,
@@ -186,7 +54,6 @@ import {
   cmpPos,
 } from "./proofToTree";
 import { TURNSTILE, type HypMode } from "./proofToTree";
-import type { HypMarkStyle } from "./theme";
 import {
   type ElideCut,
   applyElisions,
@@ -248,82 +115,10 @@ import {
 } from "./narrate";
 import { collapseLabel, headerPrefix, type KeepSeg } from "./briefLabel";
 import { lineOffsets } from "./taggedText";
-import {
-  ACCENT_TEXT,
-  CASE_FILL,
-  COMMENT_FILL,
-  PROSE_FILL,
-  EDIT_BG,
-  EDIT_TEXT,
-  HYP_LIT_STRONG_FILL,
-  HOVER_BG,
-  HOVER_BORDER,
-  HOVER_FG,
-  chromeSurface,
-  GHOST_TEXT_FILL,
-  TURNSTILE_FILL,
-  TARGET_WEIGHT,
-  LINK_STROKE,
-  LINK_STROKE_GOAL,
-  LINK_STROKE_TACTIC,
-  MUTED_FILL,
-  NODE_STYLES,
-  NODE_TEXT,
-  SEQ_STROKE,
-  SORRY_FILL,
-  DANGER_FILL,
-  POPUP_CHROME,
-  STICKY_BG,
-  STICKY_BORDER,
-  STICKY_SHADOW,
-  CHROME_BG,
-  CHROME_UNDERLAY,
-  CHROME_BORDER,
-  CHROME_INK,
-  CHROME_FONT,
-  CHROME_RADIUS,
-  DIM_OPACITY,
-  TOKEN_VARS,
-  ensurePaletteStyle,
-  observeThemeChange,
-  resolveThemeKind,
-  Z,
-  CHIP_SHADOW,
-  FAINT_OPACITY,
-  PREVIEW_OPACITY,
-  STUB_OPACITY,
-  WASH_OPACITY,
-  TREE_INK_SW_BOLD,
-  TREE_INK_SW_PATH,
-  CHROME_TEXT_SM,
-  CHROME_TEXT,
-  FOCUS_INK,
-  CLOSED_FILL,
-  LIGHTBULB_INK,
-  LIGHTBULB_AUTOFIX_INK,
-} from "./theme";
+import { ACCENT_TEXT, CASE_FILL, COMMENT_FILL, PROSE_FILL, EDIT_BG, EDIT_TEXT, HYP_LIT_STRONG_FILL, GHOST_TEXT_FILL, TURNSTILE_FILL, TARGET_WEIGHT, MUTED_FILL, NODE_STYLES, NODE_TEXT, SEQ_STROKE, SORRY_FILL, DANGER_FILL, STICKY_BG, STICKY_BORDER, STICKY_SHADOW, CHROME_BG, CHROME_UNDERLAY, CHROME_BORDER, CHROME_INK, CHROME_FONT, CHROME_RADIUS, DIM_OPACITY, TOKEN_VARS, ensurePaletteStyle, observeThemeChange, resolveThemeKind, Z, CHIP_SHADOW, FAINT_OPACITY, PREVIEW_OPACITY, STUB_OPACITY, WASH_OPACITY, TREE_INK_SW_BOLD, FOCUS_INK, CLOSED_FILL, LIGHTBULB_INK, LIGHTBULB_AUTOFIX_INK } from "./theme";
 import { HypBlock } from "./hypBlock";
 import { daggerSvg } from "./dagger";
-import {
-  COMPACT_LEFT,
-  EDIT_STROKE,
-  type FollowAnim,
-  MARGIN,
-  ARRIVAL_TOP,
-  IN_VIEW_PAD,
-  IN_VIEW_TOP,
-  animateScroll,
-  cancelFollow,
-  cfStubNodeId,
-  clampScroll,
-  clampZoom,
-  EDIT_CELL,
-  EDIT_SPILL_CELL,
-  editOverlayLayer,
-  inViewScroll,
-  nodeBoxFill,
-  nodeRx,
-} from "./scrollHelpers";
+import { COMPACT_LEFT, type FollowAnim, MARGIN, ARRIVAL_TOP, IN_VIEW_PAD, IN_VIEW_TOP, animateScroll, cancelFollow, cfStubNodeId, clampScroll, clampZoom, inViewScroll, nodeBoxFill, nodeRx } from "./scrollHelpers";
 import {
   COMMENT_MODES,
   type CommentMode,
@@ -339,21 +134,14 @@ import {
 } from "./barMetrics";
 import { Codicon } from "./codiconView";
 import { type CodiconName } from "./codicon";
-import { DiagIcon } from "./diagBar";
 import { PillPlace } from "./selectionPill";
 import { pillCandidates } from "./pillPlace";
 import { DiagMark, SquigglePatterns } from "./squiggle";
 import { ringPath } from "./ringPath";
 import { diagGlyphOf, diagWordOf } from "./diagInk";
-import { HopChip, LinkMark, TopCentre, TourTab, ZoomRail } from "./topChrome";
-import { type BandPlace, type RestartInfo, StatusBar } from "./statusBar";
-import {
-  CHIP_FONT_PX,
-  CHIP_GAP,
-  CHIP_H,
-  CHIP_W_ADD,
-  chipWidth,
-} from "./chipMetrics";
+import { TopCentre, TourTab, ZoomRail } from "./topChrome";
+import { type BandPlace, StatusBar } from "./statusBar";
+import { CHIP_GAP, CHIP_H, CHIP_W_ADD, chipWidth } from "./chipMetrics";
 import { FrontierChip, GalleryPager, PickerRow } from "./pickChips";
 import { BAR_GAP, BAR_OVERLAP } from "./hoverBarMetrics";
 import { appliesToKind, disabledSlot, MOVE_LOOK } from "./moveSlots";
@@ -362,442 +150,18 @@ import { clipText } from "./clipText";
 import { injectStyleOnce } from "./taggedCore";
 import { useOverride } from "./useOverride";
 import { settingValue, type SettingId, type ViewSettings } from "./viewSettings";
-import { addChipGlyph, chipCopy, chipRows, HOLE_GLYPH } from "./chipMoves";
+import { addChipGlyph, chipCopy, chipRows } from "./chipMoves";
 import { NodeActionBar, NodeMenu, type NodeMove } from "./nodeBar";
-
-interface Anchor {
-  id: string;
-  key: string;
-  x: number;
-  y: number;
-}
-
-const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
-
-// A mode change confirms itself top-centre for this long, then vanishes.
-// `window.setTimeout`, never rAF: a hidden webview fires no animation frames.
-const TOAST_MS = 1500;
-/** How long the first half of a key chord (`${CMD}K`) waits for its second. */
-const CHORD_MS = 1000;
-/** A toast that carries a button (Undo) stays long enough to reach it. */
-const TOAST_ACTION_MS = 6000;
-
-const errMessage = (e: unknown): string =>
-  e instanceof Error ? e.message : String(e);
-
-const TRACE_ASK_FAILED =
-  "Could not ask Lean what this step used — the request failed; try again once the file finishes loading";
-
-/** The first line of `s`, clipped to `n` characters with `…` where it was cut
- (never a bare slice, which stops mid-word and says nothing about it). */
-const clipLine = (s: string, n: number): string =>
-  clipText((s.split("\n")[0] ?? "").trim(), n);
-
-const CARD_PAD = 4;
-
-const CHIP_W_SORRY = 36;
-
-const addChipWidth = (spec: AddSpec | undefined) =>
-  spec?.kind === "hole" ? chipWidth(HOLE_GLYPH, CHIP_FONT_PX) : CHIP_W_ADD;
-
-const chipLaneXs = (spec: AddSpec | undefined): [number, number, number] => {
-  const x0 = -CHIP_W_ADD / 2;
-  const x1 = x0 + addChipWidth(spec) + CHIP_GAP;
-  return [x0, x1, x1 + CHIP_W_SORRY + CHIP_GAP];
-};
-const CHIP_W_STEP = 30;
-
-const CLOSE_RHS = "_";
-
-/** The empty editor's placeholder (what Enter will do): italic comment ink. */
-// While the frame scrolls, the tree takes no pointer events: boxes slide
-// under a resting pointer during a pan, and each one entered ran the node's
-// hover (a re-render for its bar) — Firefox also sends a synthetic mousemove
-// per scroll step, whose handler reads two rects (a forced layout of the tree).
-// Hit testing returns ~150ms after the last scroll, with one hover update.
-const SCROLLING_CSS = `[data-ptw-scrolling] > svg{pointer-events:none}`;
-const SCROLL_SETTLE_MS = 150;
-
-const HINT_CSS = `textarea[data-ptw-hint]::placeholder{color:${COMMENT_FILL};font-style:italic;opacity:1}`;
-
-const PILL_FONT_PX = 11;
-
-const FOLLOW_TOP_FRAC = 1 / 3;
-
-const GLOBAL_DEBOUNCE_MS = 160;
-
-const globalNameCache = new Map<string, string[]>();
-
-function cachedGlobals(ident: string): string[] | null {
-  let best: { q: string; names: string[] } | null = null;
-  for (const [q, names] of globalNameCache)
-    if (
-      ident.startsWith(q) &&
-      (names.length < GLOBAL_MAX || q === ident) &&
-      (best === null || q.length > best.q.length)
-    )
-      best = { q, names };
-  return best?.names ?? null;
-}
-
-// How far the tour nub's invisible hit region reaches beyond the tab's own
-// rect, on every side. Wide enough that a pointer travelling towards the
-// corner from OUTSIDE the box crosses it (the tab straddles the corner, so
-// half the region already lies outside), and small enough that inside the box
-// it stops at the tab's own height — the first hyp line's text is not covered.
-const NUB_SLACK = 8;
-
-const FLOATER_H = 36;
-
-// The signature header's height AT REST, as the header itself codes it: one
-// `pre` line of `LINE_H`, 6px of padding above and below, and the 1px bottom
-// border. Measured 29 in the harness, which is what this comes to. It is the
-// floor under the measured `hdrH`, so nothing that reads the header's height —
-// the rail's `floaterTop(0)` above all — can be told the header is 0 tall
-// while one is drawn.
-const HDR_REST_H = LINE_H + 13;
-
-// The header's `▾` (open the full signature): a fixed box at the band's right
-// edge, and the right padding both header states keep clear for it. Drawn
-// only where the resting line HIDES something (2026-09-22): where the whole
-// signature fits, there is nothing to open and the lane goes back to the
-// ordinary `HDR_PAD_X`. The box is the status bar's item height (20) — the
-// hit target — and the mark inside it the codicon `chevron-down`/`-up`
-// (2026-10-04; it was a drawn 8×5 chevron). The lane reserves the BOX, so the
-// ink can change without touching the measure.
-const HDR_BTN_W = 20;
-const HDR_BTN_RIGHT = 6;
-const HDR_BTN_LANE = HDR_BTN_W + HDR_BTN_RIGHT + 8;
-const HDR_PAD_X = 10;
-// The resting text's right-edge fade where it is wider than the band.
-const HDR_FADE = "linear-gradient(to right, #000 calc(100% - 24px), transparent)";
-
-/** Screen px the zoom rail stands in at the frame's bottom right (its two
- groups and its gap above the band): the least padding below the last node,
- zoomed far out, so it can always be scrolled clear of the rail. */
-const RAIL_CLEAR = 140;
-
-/** How far LEFT of both boxes the provenance connector's vertical run sits,
- so the elbow clears the node it leaves and the node it arrives at. */
-const ORIGIN_CHANNEL = 12;
-
-/** The in-place editor's completion list: its largest box (the editor's
- foreignObject grows to hold it — Gecko clips what spills out). */
-const COMPLETION_MAX_W = 520;
-const COMPLETION_MAX_H = 168;
-
-export interface ProofTreeViewProps {
-  proof: Proof;
-
-  onReveal?: (pos: ProofStepPosition) => void;
-
-  getTacticEdit?: (
-    pos: ProofStepPosition,
-  ) => {
-    pos: ProofStepPosition;
-    text: string;
-    /** D1 — the column the tactic's own line starts it at, which is where a
-     hoisted `have` goes and what an inlined block is re-indented under. */
-    indent?: number;
-  } | null;
-
-  onEditTactic?: (pos: ProofStepPosition, newText: string) => void;
-
-  getGoalTerms?: (goalId: string) => string[];
-
-  fetchGlobalNames?: (query: string) => Promise<string[]>;
-
-  tokenColors?: Record<string, string>;
-
-  outline?: boolean;
-
-  hypMarkStyle?: HypMarkStyle;
-
-  linkTint?: boolean;
-  linkMarks?: boolean;
-
-  onPopoutEdit?: (pos: ProofStepPosition) => void;
-
-  highlightPos?: { line: number; character: number } | null;
-
-  declHeader?: string;
-  /** Where `declHeader` starts in the source, and the two positions the
-   positions the server found in it by syntax KIND (paperproof.ts): the
-   signature's start (the name ends there), the type spec's `:` (binders end
-   there) and the body's `:=`/`|`/`where` (the whole signature ends there).
-   The resting header is the LONGEST of those cuts that fits on one line.
-   Absent → the header falls back to its first source line. */
-  declHeaderStart?: { line: number; character: number };
-  declHeaderNameStop?: { line: number; character: number };
-  declHeaderSigStop?: { line: number; character: number };
-  declHeaderBodyStop?: { line: number; character: number };
-
-  renderDeclHeader?: (
-    lines: string[],
-
-    label?: string,
-    /** A label that is not the source verbatim (the collapsed one-line rest
-     text) maps back to source offsets through this. */
-    elision?: { original: string; keep: KeepSeg[]; marks: [] },
-  ) => ReactNode[] | null;
-
-  onRevealHeader?: () => void;
-  cfStub?: {
-    line: number;
-    pos?: { line: number; character: number };
-    draft: string;
-    col?: number;
-
-    render?: (draft: string, line: number, col: number) => ReactNode[] | null;
-  } | null;
-
-  headerExtra?: ReactNode;
-
-  height?: string | number;
-
-  renderTaggedGoal?: (
-    goalId: string,
-    lines: string[],
-    hiddenLhs?: string,
-
-    prefix?: string,
-  ) => ReactNode[] | null;
-
-  renderTaggedHyps?: (
-    goalId: string,
-    lines: string[],
-  ) => (ReactNode | null)[] | null;
-
-  renderTaggedTactic?: (
-    pos: ProofStepPosition,
-    label: string,
-    lines: string[],
-    elision?: TreeNode["elision"],
-  ) => ReactNode[] | null;
-
-  onAddTactic?: (
-    spec: AddSpec,
-    text: string,
-    slots?: { lhs: TextSlot; rhs: TextSlot },
-  ) => AddResult | null | void;
-
-  deleteSlots?: TacticSlot[];
-
-  /** THE PLAYGROUND (playground.tsx) — try a tactic under an OPEN goal and let
-      the host answer it; nothing is written anywhere. The frontier `+` chip
-      opens the same in-place editor `onAddTactic`'s does, and its commit hands
-      the goal's id and the typed text here. Narrower than `onAddTactic` by
-      construction: only the `+` chip is offered (no `sorry`, `calc` or
-      `step`, which write source), on a goal with an `addSpec`; the `play`
-      capability gates its `?` row. */
-  onTryTactic?: (goalId: string, text: string) => void;
-  /** The editor's completion list for one goal (the playground: what is baked
-      under it). Absent, the list is `proof.tacticNames`. */
-  getGoalTactics?: (goalId: string) => string[];
-
-  /** B4 — the automation traces already in hand. In the WIDGET this is the
-      RPC's answers, held by the caller and passed as a sibling (the payload
-      does not carry them: a proof with ten `simp`s must not re-elaborate on
-      every cursor move); offline it falls back to `proof.automationTraces`,
-      which `ppharness --traces` puts on the wire. */
-  automationTraces?: AutomationTrace[];
-
-  /** Ask for one step's trace. Resolving with `false` means the server said
-      nothing useful and the reader should be told; absent, the affordance is
-      offered only where a trace is already in hand (the harness). */
-  onTrace?: (pos: ProofStepPosition) => Promise<boolean>;
-
-  /** The text signature the held traces are OUT OF DATE against (an edit
-      landed since they were read), else null. While a trace is open — the
-      reader's `⁇` or the beginner preset's auto-open — the view re-asks
-      through `onTrace`, once per signature; with none open nothing is
-      asked, so an edit pause costs no re-elaboration. */
-  automationTracesStaleVer?: string | null;
-
-  ledger?: boolean;
-
-  onDeleteTactic?: (spec: DeleteSpec) => void;
-
-  /** D1 — ask the ELABORATOR whether a candidate rewrite still checks
-      (`ProofTree.checkRewrite`). Nothing is written: the edits are applied to
-      a copy of the file's text and the declaration re-elaborated through the
-      cf seam. Absent (the harness) the proposal is shown with a stubbed ✓ so
-      the gesture can still be seen. */
-  onCheckRewrite?: (edits: RewriteEdit[]) => Promise<{
-    verdict: string;
-    ok: boolean;
-    message?: string;
-    steps: number;
-    before: number;
-  }>;
-
-  /** D2a — ask the elaborator whether ONE automation tactic closes a linear
-      run (`ProofTree.tryClose`). The run is named by its first and last
-      step's start; the server splices the run's own extent and tries each
-      candidate in order. Absent (the harness) the offer is stubbed with the
-      first candidate so the gesture and the pill can still be seen. */
-  onTryClose?: (
-    from: { line: number; character: number },
-    to: { line: number; character: number },
-  ) => Promise<{
-    tactic?: string;
-    verdict: string;
-    message?: string;
-    tried?: string[];
-    before?: number;
-    steps?: number;
-  }>;
-
-  /** D1 — write an ACCEPTED rewrite, through the one `applyEdit` every other
-      write goes through. Every intermediate state is a valid file and the
-      editor's own undo takes it back. `renameAt` is an extract's `this`
-      binder in the WRITTEN text: the widget follows the write with the
-      companion's Rename Symbol there (best-effort — the write never waits on
-      it, and without a companion nothing more happens). */
-  onApplyRewrite?: (edits: RewriteEdit[], renameAt?: RewritePos) => void;
-
-  /** C4 — LLM POLISH of the templated narration, through the companion. The
-      widget cannot reach the network; the companion can, so the view hands it
-      the templated lines and is handed sentences back. Absent, or with
-      `polishReady` false, the `polish` row is NOT DRAWN (2026-09-22: a
-      reader with no key should not meet a feature that needs one). */
-  onPolish?: (lines: PolishLine[]) => Promise<{ nodeId: string; text: string }[]>;
-  /** Is there a companion with an API key behind `onPolish`? */
-  polishReady?: boolean;
-  /** The `ramify.narration.polish` setting — the SESSION's default, which the
-      row then overrides for this session alone. */
-  polishDefault?: boolean;
-
-  /** `ramify.experience` (experience.ts): fills the DEFAULTS of the hover
-      bar's buttons, the cursor's automation trace, the `⇓` offer, and the
-      lints/comments/context/brief rows. Each row the reader changes is a
-      session OVERRIDE and wins. Absent: intermediate. */
-  experience?: Experience;
-
-  /** `ramify.hoverBar.tactic` / `.goal` — the hover bar's buttons per node
-      kind, in order, where the reader SET them (the companion sends a list
-      only when `inspect()` finds one; the harness takes `?hoverbar-tactic=`).
-      Absent, the preset's list stands. A pin in the `⋯` menu wins over both
-      for the session and calls `onHoverBarChange` so the setting follows. */
-  hoverBar?: { tactic?: readonly MoveId[] | null; goal?: readonly MoveId[] | null };
-  onHoverBarChange?: (kind: BarKind, ids: MoveId[]) => void;
-
-  /** The SETTINGS BEHIND THE BAND (viewSettings.ts, batch 5): `ramify.view.*`,
-      `ramify.reading.*`, `ramify.diagnostics.autoOpen`, each present only
-      where the reader SET it. Each row's default is the setting, else the
-      preset's, else the view's own; the row the reader changes is a session
-      override on top (`useOverride`). */
-  settings?: ViewSettings;
-  /** Persist a band / panel change: the widget asks the companion to write
-      `ramify.<key>` (`popoutEdit` action `setting`). Absent (no companion,
-      the static viewer) a change is session-only, as before. */
-  onSettingChange?: (id: SettingId, value: string | number | boolean) => void;
-  /** RESTART FILE (2026-10-05): the band's rightmost item, where the host can
-      restart the file (the widget: `ec.api.restartFile`). Absent (the
-      harness without `?restart-stub`, the static viewer), no item, and the
-      host's own button is left alone. */
-  restart?: RestartInfo;
-
-  /** D6 — ASK AN AGENT to choose among the rewrites the primitives already
-      offer. The view hands over the offered rewrites (never free text) and is
-      handed back one node id, one kind and a one-line reason; the choice then
-      goes through `onCheckRewrite` like every other proposal. */
-  onPropose?: (req: {
-    text: string;
-    primitives: { nodeId: string; kind: Rewrite["kind"]; title: string }[];
-  }) => Promise<{ nodeId?: string; kind?: string; reason?: string; note?: string }>;
-  /** Is `ramify.restructure.propose` on, with a companion and a key behind it?
-      False, the `suggest a rewrite` row is not drawn. */
-  proposeReady?: boolean;
-
-  onPreviewRange?: (range: ProofStepPosition | null) => void;
-
-  /** The undo relay. What only the Ramify extension can do — this, the lens
-      (`onPopoutEdit`), the hover highlight and the range previews — is passed
-      only where the extension is there: absent, the lens is gone from the bar
-      and the `⋯` menu, and ⌘Z says why instead of nothing. */
-  onUndo?: (redo: boolean) => void;
-
-  onHoverTactic?: (pos: ProofStepPosition | null) => void;
-
-  abbrev?: AbbrevConfig;
-
-  diagnostics?: TreeDiagnostic[];
-
-  /** D4 — Mathlib's own style linters for THIS declaration. In the widget
-      they arrive from `ProofTree.lintDecl` (a re-elaboration, so it is fired
-      only when the reader asks) and are passed as a SIBLING; offline they fall
-      back to `proof.lints`, which `ppharness --lint` puts on the wire. The
-      `deleteSlots` rule, said again: read the argument, fall back to the
-      field. */
-  lints?: Lint[];
-
-  /** Tell the caller the `lints` reading option went on or off. Turning it ON
-      is what asks the server; nothing here fires it unasked. Absent (the
-      harness) the option simply draws whatever `lints` already holds. */
-  onLints?: (on: boolean) => void;
-
-  /** The reading state to START in, where a caller has one to restore (the
-      static viewer's deep links): the layout, the context mode and the
-      comment mode. Each is the DEFAULT of the same session state the status
-      bar changes (`useOverride`), ahead of the setting and the preset, so the
-      reader's own choice wins over it and a caller that follows the reader
-      (the viewer's hash, via `onViewState`) only moves it to what is shown.
-      Absent, the defaults (the setting, else outline / the preset's). */
-  initialView?: {
-    layout?: LayoutMode;
-    context?: HypMode;
-    comments?: CommentMode;
-  };
-
-  /** THE TARGET GOAL — the open goal the host is addressing (the
-      playground: the goal its goal panel shows and its caret writes under).
-      That goal's box wears a plain 2px border in `--ptw-focus`. Paint only:
-      no relayout, nothing reserved, and nothing drawn when the id is not on
-      screen. Absent or null, no box is marked. */
-  targetGoalId?: string | null;
-
-  /** CLOSING MARKS — every tactic that closes its goal (no goal after it in
-      the base tree; not a failed or recovered step, not `sorry`) wears a
-      tombstone `∎` after its last line in `--ptw-closed`. The layout reserves
-      its width (`closedMarks`, layout.ts), so it overlaps nothing. Off by
-      default (the probes' fingerprint reads the defaults, and so does the
-      harness); the widget, the viewer and the playground turn it on. */
-  closedMarks?: boolean;
-
-  /** Draw the ACCENT on the node the cursor (`highlightPos`) or a click
-      picked. Default true. False keeps everything else the cursor does —
-      following, peeking — and drops only the accent stroke (the playground:
-      once the proof is complete, the last step need not stay lit). A
-      marquee selection still accents. */
-  cursorAccent?: boolean;
-
-  /** The zoom to START at (and to return to on a proof with no stash). The
-      rail's steps are ×1.25. Default 1. */
-  initialZoom?: number;
-
-  /** OFF-MAP goals — open goals the host cannot answer past (the
-      playground: a state the bake never explored). Each is drawn DASHED and
-      at `STUB_OPACITY`, the stub idiom, and its `<title>` says why. Paint
-      only: no relayout, nothing reserved. Default empty. */
-  offMapGoalIds?: ReadonlySet<string>;
-  /** The `<title>` line an off-map goal carries. */
-  offMapNote?: string;
-
-  /** Draw the SIGNATURE HEADER from `declHeader`. Default true. False (the
-      playground, whose editor already shows the signature) keeps the header
-      text for what reads it — the status readout still omits the name — and
-      draws no header band. */
-  signatureHeader?: boolean;
-
-  /** Told the three `initialView` values whenever one changes, so a caller
-      can keep a shareable link in step (the viewer writes its URL hash). */
-  onViewState?: (s: {
-    layout: LayoutMode;
-    context: HypMode;
-    comments: CommentMode;
-  }) => void;
-}
+import type { ProofTreeViewProps } from "./proofTreeViewProps";
+import { TreeLinks } from "./treeLinks";
+import { NodeEditor, type Editing } from "./nodeEditor";
+import { DiagPopover } from "./diagPopover";
+import { ProposalPill, type Proposal } from "./proposalPill";
+import { ArmPill } from "./armPill";
+import { type Anchor, EMPTY_IDS, TOAST_MS, CHORD_MS, TOAST_ACTION_MS, errMessage, TRACE_ASK_FAILED, clipLine, CARD_PAD, CHIP_W_SORRY, addChipWidth, chipLaneXs, CHIP_W_STEP, CLOSE_RHS, SCROLLING_CSS, SCROLL_SETTLE_MS, HINT_CSS, PILL_FONT_PX, FOLLOW_TOP_FRAC, GLOBAL_DEBOUNCE_MS, globalNameCache, cachedGlobals, NUB_SLACK, FLOATER_H, HDR_REST_H, HDR_BTN_W, HDR_BTN_RIGHT, HDR_BTN_LANE, HDR_PAD_X, HDR_FADE, RAIL_CLEAR, ORIGIN_CHANNEL } from "./viewConstants";
+
+
+export type { ProofTreeViewProps };
 
 /** No setting set: every row reads the preset / the view's own default. */
 const NO_SETTINGS: ViewSettings = {};
@@ -1205,36 +569,7 @@ export default function ProofTreeView({
 
   const [hlDismissed, setHlDismissed] = useState(false);
 
-  const [editing, setEditing] = useState<{
-    id: string;
-    pos: ProofStepPosition;
-    original: string;
-    value: string;
-
-    add?: AddSpec;
-
-    calcStage?: {
-      stage: "lhs" | "rhs";
-      lhs: ProofStepPosition;
-      rhs: ProofStepPosition;
-
-      stub: ProofStepPosition | null;
-
-      anchor: { line: number; character: number };
-
-      closes: boolean;
-    };
-
-    fill?: boolean;
-
-    tokPos?: ProofStepPosition;
-
-    comment?: boolean;
-
-    commentIndent?: number;
-
-    cfIndent?: number;
-  } | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
 
   const [pendingFill, setPendingFill] = useState<ProofStepPosition | null>(
     null,
@@ -1258,22 +593,7 @@ export default function ProofTreeView({
   // proof loses) or `bad` (with the first error's first line). The pill is the
   // armed delete's pill — a rewrite is the same kind of promise, and it should
   // look like one.
-  const [proposal, setProposal] = useState<{
-    id: string;
-    kind: Rewrite["kind"];
-    rewrite: Rewrite;
-    phase: "checking" | "ok" | "bad";
-    message?: string;
-    delta?: number;
-    /** D2a — a collapse has no title until the server names the candidate
-     that closed the run, so the pill's line is set when the answer lands. */
-    title?: string;
-    /** D6 — where an AGENT chose this move, the one line it gave for why.
-     It rides the `<title>`, not the pill's own label: the label says what
-     will be written and whether the elaborator agreed, which is the promise,
-     and the reason is the thing you hover to read. */
-    why?: string;
-  } | null>(null);
+  const [proposal, setProposal] = useState<Proposal | null>(null);
 
   const [pendingVerb, setPendingVerb] = useState<SelVerb | null>(null);
 
@@ -6883,189 +6203,15 @@ export default function ProofTreeView({
           >
             {/* The cursor path's links paint LAST, so a sibling's neutral
                 link that shares the trunk's run cannot draw over the accent. */}
-            {links
-              .map((link, i) => ({ link, i }))
-              .sort(
-                (a, b) =>
-                  Number(cursorPathLinks.has(`${a.link.source.data.id}>${a.link.target.data.id}`)) -
-                  Number(cursorPathLinks.has(`${b.link.source.data.id}>${b.link.target.data.id}`)),
-              )
-              .map(({ link, i }) => {
-              const startY =
-                link.source.y +
-                (link.source.data.h + bandTopH(link.source.data)) / 2;
-              const bandTop =
-                link.target.y -
-                (link.target.data.h + bandTopH(link.target.data)) / 2;
-
-              const contentTop = bandTop + bandTopH(link.target.data);
-              // A wide case badge raised to its siblings' line
-              // (`caseBadgeLifts`): the link ends above it, not through it.
-              const endY =
-                bandTop -
-                (caseLifts?.get(link.target.data.id) ?? 0) -
-                ARROW_GAP;
-
-              const sLeft = link.source.x - link.source.data.w / 2;
-              const tLeft = link.target.x - link.target.data.w / 2;
-
-              const MARK_FIT = LINK_MARK_OFF + 5;
-              const MARK_FIT2 = 2 * LINK_MARK_OFF + 9;
-
-              const MARK_MIN = 10;
-              type Mark = { x: number; y: number; horiz?: boolean };
-              let startMark: Mark | null = null;
-              let endMark: Mark | null = null;
-
-              const markAt = (run: number, fromStart: boolean) =>
-                run >= MARK_FIT
-                  ? fromStart
-                    ? LINK_MARK_OFF
-                    : run - LINK_MARK_OFF
-                  : run >= MARK_MIN
-                    ? run / 2
-                    : null;
-
-              const sharedMarks = (x: number, y0: number, y1: number) => {
-                const run = y1 - y0;
-                if (run >= MARK_FIT2) {
-                  startMark = { x, y: y0 + LINK_MARK_OFF };
-                  endMark = { x, y: y1 - LINK_MARK_OFF };
-                } else {
-                  const o = markAt(run, true);
-                  if (o !== null) startMark = { x, y: y0 + o };
-                }
-              };
-
-              const branchMarks = (x0: number, x1: number, y: number) => {
-                const run = x1 - x0;
-                if (run >= MARK_FIT2) {
-                  startMark = { x: x0 + LINK_MARK_OFF, y, horiz: true };
-                  endMark = { x: x1 - LINK_MARK_OFF, y, horiz: true };
-                } else {
-                  const o = markAt(run, true);
-                  if (o !== null) startMark = { x: x0 + o, y, horiz: true };
-                }
-              };
-              let d: string;
-              // Where the link LEAVES its source and where that first
-              // vertical run ends, for the hop break drawn at its midpoint.
-              let hopX = link.source.x;
-              let hopY = startY;
-              let hopEnd = endY;
-              if (compact && link.col) {
-                const col = sLeft + TRUNK_INSET;
-                const childLane = tLeft + TRUNK_INSET;
-                const hy = bandTop - ARROW_GAP * 2;
-                hopX = col;
-                hopEnd = hy;
-                d = `M${col},${startY} L${col},${hy} L${childLane},${hy} L${childLane},${contentTop - ARROW_GAP}`;
-
-                const o1 = markAt(childLane - col, true);
-                if (o1 !== null)
-                  startMark = { x: col + o1, y: hy, horiz: true };
-                const o2 = markAt(contentTop - ARROW_GAP - hy, false);
-                if (o2 !== null) endMark = { x: childLane, y: hy + o2 };
-              } else if (compact && link.lane !== undefined) {
-                const lane = link.lane;
-                const srcBoxMid =
-                  link.source.y + bandTopH(link.source.data) / 2;
-                hopX = lane;
-                hopY = srcBoxMid;
-                hopEnd = contentTop - ARROW_GAP;
-                if (Math.abs(tLeft - (lane - TRUNK_INSET)) < 0.5) {
-                  d = `M${lane},${srcBoxMid} L${lane},${contentTop - ARROW_GAP}`;
-
-                  const o = markAt(contentTop - ARROW_GAP - srcBoxMid, false);
-                  if (o !== null) endMark = { x: lane, y: srcBoxMid + o };
-                } else {
-                  const landY = contentTop + link.target.data.h / 2;
-                  d = `M${lane},${srcBoxMid} L${lane},${landY} L${tLeft - ARROW_GAP},${landY}`;
-                  if (tLeft - ARROW_GAP > lane)
-                    branchMarks(lane, tLeft - ARROW_GAP, landY);
-                  else {
-                    const o = markAt(landY - srcBoxMid, true);
-                    if (o !== null) startMark = { x: lane, y: srcBoxMid + o };
-                  }
-                }
-              } else if (compact) {
-                const col = sLeft + TRUNK_INSET;
-                hopX = col;
-                hopEnd = contentTop - ARROW_GAP;
-                if (Math.abs(tLeft - sLeft) < 0.5) {
-                  d = `M${col},${startY} L${col},${contentTop - ARROW_GAP}`;
-                  sharedMarks(col, startY, contentTop - ARROW_GAP);
-                } else {
-                  const landY = contentTop + link.target.data.h / 2;
-                  d = `M${col},${startY} L${col},${landY} L${tLeft - ARROW_GAP},${landY}`;
-
-                  if (tLeft - ARROW_GAP > col)
-                    branchMarks(col, tLeft - ARROW_GAP, landY);
-                  else {
-                    const o = markAt(landY - startY, true);
-                    if (o !== null) startMark = { x: col, y: startY + o };
-                  }
-                }
-              } else {
-                const startX = link.source.x;
-                const endX = link.target.x;
-                const k = (endY - startY) * 0.7;
-                // ⑃ wide, a HOP whose kept goal sits off to one side: the
-                // break is drawn for a VERTICAL line at the midpoint below the
-                // goal, so the link drops straight through it (and past the
-                // caption beside it) before it curves away — otherwise the
-                // strokes stood beside a curve that had already left.
-                const breakRun =
-                  link.source.data.folded?.kind === "hop" &&
-                  Math.abs(endX - startX) > 0.5;
-                const y1 = (startY + endY) / 2 + BADGE_H / 2 + 2;
-                d = breakRun
-                  ? `M${startX},${startY} L${startX},${y1}
-                    C${startX},${(y1 + endY) / 2}
-                     ${endX},${(y1 + endY) / 2}
-                     ${endX},${endY}`
-                  : `M${startX},${startY}
-                    C${startX},${(startY + endY) / 2}
-                     ${endX},${endY - k}
-                     ${endX},${endY}`;
-              }
-
-              const goalBound = link.target.data.type === "goal";
-              const onPath = cursorPathLinks.has(
-                `${link.source.data.id}>${link.target.data.id}`,
-              );
-              const stroke = onPath
-                ? SEQ_STROKE
-                : linkTint
-                  ? goalBound
-                    ? LINK_STROKE_GOAL
-                    : LINK_STROKE_TACTIC
-                  : LINK_STROKE;
-              return (
-                <g key={i}>
-                  <path
-                    fill="none"
-                    stroke={stroke}
-                    strokeWidth={onPath ? TREE_INK_SW_PATH : TREE_INK_SW_BOLD}
-                    d={d}
-                  />
-                  {linkMarks && startMark && (
-                    <LinkMark {...startMark} goal={goalBound} stroke={stroke} />
-                  )}
-                  {linkMarks && endMark && (
-                    <LinkMark {...endMark} goal={goalBound} stroke={stroke} />
-                  )}
-                  {link.source.data.folded?.kind === "hop" && (
-                    <HopChip
-                      x={hopX}
-                      y={(hopY + hopEnd) / 2}
-                      folded={link.source.data.folded}
-                      onRestore={() => onNodeClick(link.source.data.id)}
-                    />
-                  )}
-                </g>
-              );
-            })}
+            <TreeLinks
+              links={links}
+              compact={compact}
+              caseLifts={caseLifts}
+              cursorPathLinks={cursorPathLinks}
+              linkMarks={linkMarks}
+              linkTint={linkTint}
+              onNodeClick={onNodeClick}
+            />
 
             {nodes.map((node) => {
               const {
@@ -9659,70 +8805,16 @@ export default function ProofTreeView({
                 );
               })()}
 
-            {arming &&
-              (() => {
-                const an = placed.get(arming.id);
-                const ext = armExtent;
-                if (!an || !ext) return null;
-                const { w, h } = an.data;
-
-                const boxTop = (bandTopH(an.data) - h) / 2;
-
-                const label = ext.empties
-                  ? `replace ${ext.lines} with sorry`
-                  : `delete ${ext.lines} line${ext.lines === 1 ? "" : "s"}`;
-                const wide = chipWidth(label, CHIP_FONT_PX);
-                const x0 = -CHIP_W_ADD / 2;
-                const rowW = wide + CHIP_GAP + CHIP_W_ADD;
-
-                const shift = drawnParentIds.has(arming.id)
-                  ? CHIP_W_ADD / 2 + 6 + CARD_PAD
-                  : 0;
-                return (
-                  <g
-                    transform={`translate(${
-                      an.x - w / 2 + TRUNK_INSET + shift
-                    }, ${an.y + boxTop + h + CHIP_TOP_GAP})`}
-                  >
-                    <rect
-                      x={x0 - CARD_PAD}
-                      y={-CARD_PAD}
-                      width={rowW + 2 * CARD_PAD}
-                      height={CHIP_H + 2 * CARD_PAD}
-                      rx={CHROME_RADIUS}
-                      fill="var(--ptw-surface)"
-                      stroke={CHROME_BORDER}
-                      strokeWidth={1}
-                      style={{
-                        filter: CHIP_SHADOW,
-                      }}
-                    />
-                    <FrontierChip
-                      glyph={label}
-                      title={`Confirm — ${CMD}Z in the editor undoes it`}
-                      x={x0}
-                      width={wide}
-                      color={DANGER_FILL}
-                      fontSize={CHIP_FONT_PX}
-
-                      solid
-                      fontFamily={getCodeFontFamily()}
-
-                      onPick={() => commitDelete(arming.id, arming.spec)}
-                    />
-                    <FrontierChip
-                      glyph="×"
-                      icon={ICON["chip.cancel"]}
-                      title="Cancel"
-                      x={x0 + wide + CHIP_GAP}
-                      width={CHIP_W_ADD}
-                      color="var(--ptw-comment)"
-                      fontFamily={getCodeFontFamily()}
-                      onPick={() => setArming(null)}
-                    />
-                  </g>
-                );
-              })()}
+            {arming && (
+              <ArmPill
+                arming={arming}
+                armExtent={armExtent}
+                placed={placed}
+                drawnParentIds={drawnParentIds}
+                commitDelete={commitDelete}
+                setArming={setArming}
+              />
+            )}
 
             {/* D1 — THE PROPOSAL PILL. The armed delete's pill, in the same
                 place and the same idiom, because a rewrite is the same kind
@@ -9731,119 +8823,15 @@ export default function ProofTreeView({
                 clicks it. `checking…` while the RPC is out; then the move,
                 how much shorter the proof gets and `✓ elaborates`, or `✗`
                 with the first error's first line. */}
-            {proposal &&
-              (() => {
-                const an = placed.get(proposal.id);
-                if (!an) return null;
-                const { w, h } = an.data;
-                const boxTop = (bandTopH(an.data) - h) / 2;
-                const d = proposal.delta ?? 0;
-                const shorter =
-                  d > 0
-                    ? `${d} step${d === 1 ? "" : "s"} fewer`
-                    : d < 0
-                      ? `${-d} step${d === -1 ? "" : "s"} more`
-                      : "same length";
-                // A COLLAPSE has no title until the server names the tactic
-                // that closed the run, so while it is out the pill says what
-                // is being asked (`proposal.title`) and the answer replaces
-                // it with the move itself.
-                const said = pillMove(
-                  proposal.kind,
-                  proposal.title ?? proposal.rewrite.title,
-                );
-                // An EXPAND is not about length — it writes out what the
-                // automation used and the proof is the same proof — so it
-                // does not carry the step-count clause the other three do.
-                // …and neither is a LINT FIX: `write \`·\` for the focusing
-                // dot → same length` was true and beside the point. Only the
-                // moves that claim to shorten the proof carry the clause.
-                // …and neither is a COLLAPSE (2026-09-22): "Replace these 4
-                // steps with `omega`" already says how many go.
-                const lenClause =
-                  proposal.kind === "expand" ||
-                  proposal.kind === "rename" ||
-                  proposal.kind === "lint" ||
-                  proposal.kind === "namecases" ||
-                  proposal.kind === "collapse"
-                    ? ""
-                    : ` → ${shorter}`;
-                // The pill is code font throughout, so a code span cannot be
-                // told apart by face: its ticks are stripped (ticks.ts),
-                // and `chipWidth` measures exactly the string painted.
-                const label = plainTicks(
-                  proposal.phase === "checking"
-                    ? `${said} — checking with Lean…`
-                    : proposal.phase === "ok"
-                      ? `${pillMove(proposal.kind, proposal.rewrite.title)}${lenClause} · ✓ elaborates`
-                      : `✗ ${clipLine(proposal.message ?? "it does not check", 72)}`,
-                );
-                const live = proposal.phase === "ok";
-                const wide = chipWidth(label, CHIP_FONT_PX);
-                const x0 = -CHIP_W_ADD / 2;
-                const rowW = wide + CHIP_GAP + CHIP_W_ADD;
-                const shift = drawnParentIds.has(proposal.id)
-                  ? CHIP_W_ADD / 2 + 6 + CARD_PAD
-                  : 0;
-                return (
-                  <g
-                    transform={`translate(${
-                      an.x - w / 2 + TRUNK_INSET + shift
-                    }, ${an.y + boxTop + h + CHIP_TOP_GAP})`}
-                  >
-                    <rect
-                      x={x0 - CARD_PAD}
-                      y={-CARD_PAD}
-                      width={rowW + 2 * CARD_PAD}
-                      height={CHIP_H + 2 * CARD_PAD}
-                      rx={CHROME_RADIUS}
-                      fill="var(--ptw-surface)"
-                      stroke={CHROME_BORDER}
-                      strokeWidth={1}
-                      style={{
-                        filter: CHIP_SHADOW,
-                      }}
-                    />
-                    <FrontierChip
-                      glyph={label}
-                      title={
-                        (proposal.why ? `Proposed: ${proposal.why}\n` : "") +
-                        (live
-                          ? `Write it — ${CMD}Z in the editor undoes it`
-                          : proposal.phase === "checking"
-                            ? "Lean is re-checking the proof with this change in place"
-                            : "Lean rejected this change; nothing was written")
-                      }
-                      x={x0}
-                      width={wide}
-                      color={live ? SEQ_STROKE : "var(--ptw-comment)"}
-                      fontSize={CHIP_FONT_PX}
-                      solid={live}
-                      fontFamily={getCodeFontFamily()}
-                      onPick={() => {
-                        if (!live) return;
-                        onApplyRewrite?.(
-                          proposal.rewrite.edits,
-                          proposal.rewrite.kind === "extract"
-                            ? proposal.rewrite.renameAt
-                            : undefined,
-                        );
-                        setProposal(null);
-                      }}
-                    />
-                    <FrontierChip
-                      glyph="×"
-                      icon={ICON["chip.cancel"]}
-                      title="Cancel"
-                      x={x0 + wide + CHIP_GAP}
-                      width={CHIP_W_ADD}
-                      color="var(--ptw-comment)"
-                      fontFamily={getCodeFontFamily()}
-                      onPick={() => setProposal(null)}
-                    />
-                  </g>
-                );
-              })()}
+            {proposal && (
+              <ProposalPill
+                proposal={proposal}
+                placed={placed}
+                drawnParentIds={drawnParentIds}
+                onApplyRewrite={onApplyRewrite}
+                setProposal={setProposal}
+              />
+            )}
 
             {seamEl}
 
@@ -9866,656 +8854,40 @@ export default function ProofTreeView({
             {flagPromptEl}
             {cfStubEl}
 
-            {hoverDiag &&
-              (() => {
-                const dn = placed.get(hoverDiag);
-                const list = diag?.byNode.get(hoverDiag);
-                if (!dn || !list || list.length === 0) return null;
-                const { w, h } = dn.data;
-                const boxTop = (bandTopH(dn.data) - h) / 2;
-                return (
-                  <foreignObject
-                    x={dn.x - w / 2 + NODE_PAD}
-                    y={dn.y + boxTop + h + 4}
-                    width={1}
-                    height={1}
-                    style={{ overflow: "visible", pointerEvents: "none" }}
-                  >
-                    <div
-                      style={{
-                        // The editor's own diagnostic hover: the hover
-                        // widget's surface, border and ink.
-                        ...POPUP_CHROME,
-                        background: chromeSurface(HOVER_BG),
-                        width: "max-content",
-                        maxWidth: 460,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 6,
-                        borderWidth: 1,
-                        borderStyle: "solid",
-                        borderColor: HOVER_BORDER,
-                      }}
-                    >
-                      {list.map((d, i) => {
-                        // A LINT reads as VS Code's hover does (2026-10-05):
-                        // the linter's sentence in the UI face with its
-                        // `code` spans in the code font (ticks.ts, the one
-                        // rule), and the linter's name moved OUT of the
-                        // sentence into a dim source line under it. Errors
-                        // and warnings are Lean's own text (goals and all),
-                        // kept as they are, in the code font.
-                        const lint = d.linter ? splitLinterName(d.message) : null;
-                        return (
-                          <div
-                            key={i}
-                            style={{
-                              display: "flex",
-                              gap: 6,
-                              alignItems: "flex-start",
-                            }}
-                          >
-                            <DiagIcon sev={d.severity} size={15} />
-                            {lint ? (
-                              <span
-                                style={{
-                                  display: "flex",
-                                  flexDirection: "column",
-                                  gap: 4,
-                                  fontFamily: CHROME_FONT,
-                                  fontSize: CHROME_TEXT,
-                                  lineHeight: "16px",
-                                  whiteSpace: "pre-wrap",
-                                  color: HOVER_FG,
-                                }}
-                              >
-                                <span>
-                                  <CodeText text={lint.text} />
-                                </span>
-                                <span
-                                  data-ptw-diag-source=""
-                                  style={{ opacity: DIM_OPACITY, fontSize: CHROME_TEXT_SM }}
-                                >
-                                  {`Lean 4 · ${lint.name ?? lintName(d.linter!)}`}
-                                </span>
-                              </span>
-                            ) : (
-                              <span
-                                style={{
-                                  fontFamily: getCodeFontFamily(),
-                                  fontSize: CHROME_TEXT_SM,
-                                  lineHeight: "15px",
-                                  whiteSpace: "pre-wrap",
-                                  color: HOVER_FG,
-                                }}
-                              >
-                                {d.message}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </foreignObject>
-                );
-              })()}
+            {hoverDiag && (
+              <DiagPopover
+                hoverDiag={hoverDiag}
+                diag={diag}
+                placed={placed}
+              />
+            )}
 
-            {editing &&
-              (() => {
-                const en = placed.get(editing.id);
-                if (!en) return null;
-                const { w, h } = en.data;
-                const editTab = tourTabs.get(editing.id);
-
-                const topH = bandTopH(en.data);
-                const boxTop = (topH - h) / 2;
-
-                const proseEdit = !!editing.comment && !!en.data.proseLabel;
-
-                const overlayY = proseEdit
-                  ? boxTop
-                  : editing.comment
-                    ? commentStripTop(en.data) - NODE_PAD_Y
-                    : editing.add || editing.calcStage
-                      ? boxTop + h + 4
-                      : boxTop;
-                const valueLines = editing.value.split("\n");
-
-                // A REPLACE STANDS IN FOR THE BOX, so at edit start — where
-                // the draft IS the label — its rect must BE the box's rect,
-                // and that is an arithmetic identity, not a tolerance: the
-                // textarea's border + padding is exactly the box's own text
-                // inset (2 + 10 = NODE_PAD across, 2 + 3 = NODE_PAD_Y down),
-                // so `measureText(draft) + 2 * NODE_PAD` is `sizeOf`'s own
-                // width rule and comes out equal. What broke it was a floor
-                // and a slack the box knows nothing about: a 320px minimum and
-                // a spare 12px, which on a narrow tactic (`rw [ih]`, measured
-                // at 74.6px) opened a 320px editor — the reported "smaller but
-                // wider". Both belong to the overlays that stand in for NO
-                // box: the (+) add, the calc stage, and a comment STRIP, whose
-                // text is not the node's.
-                //
-                // In NARRATION mode the prose IS the box — drawn at the node's
-                // own metrics (NODE_FONT_PX italic, LINE_H) by proseLabelSize
-                // — so a comment edit there stands in for the box exactly as a
-                // tactic replace does: no floor, no slack, the box's metrics.
-                // Applying the strip's (COMMENT_FONT_PX 11, COMMENT_LINE_H 18)
-                // there was the reported "smaller text in a wider box".
-                const standsInForBox =
-                  !editing.add &&
-                  !editing.calcStage &&
-                  (!editing.comment || proseEdit);
-                const editFontPx =
-                  editing.comment && !proseEdit
-                    ? COMMENT_FONT_PX
-                    : NODE_FONT_PX;
-                const editLineH =
-                  editing.comment && !proseEdit ? COMMENT_LINE_H : LINE_H;
-                // The (+) add and the calc stage hang under their GOAL, so
-                // they open at the goal's width (w) and grow with the draft;
-                // the 320 floor ran a field under a short goal off the pane's
-                // edge (2026-10-25). A comment strip keeps the 320.
-                const fw = Math.max(
-                  w,
-                  standsInForBox || editing.add || editing.calcStage ? 0 : 320,
-                  ...valueLines.map(
-                    (l) =>
-                      measureText(l, editFontPx, !!editing.comment) +
-                      2 * NODE_PAD +
-                      (standsInForBox ? 0 : 12),
-                  ),
-                );
-
-                const openLines =
-                  editing.add || editing.calcStage
-                    ? 1
-                    : editing.comment && !proseEdit
-                      ? editing.original.split("\n").length
-                      : valueLines.length;
-
-                // Height follows the DRAFT's line count and never falls below
-                // the box's own: at edit start the draft is the original, so
-                // the two agree, and a wrapped label whose source is one line
-                // keeps the box's height rather than drawing a half-height
-                // editor inside the box it replaced. Shift+Enter grows it.
-                const fh =
-                  editing.add || editing.calcStage
-                    ? openLines * LINE_H + 2 * NODE_PAD_Y
-                    : editing.comment && !proseEdit
-                      ? Math.max(1, openLines) * COMMENT_LINE_H + 2 * NODE_PAD_Y
-                      : Math.max(h, openLines * LINE_H + 2 * NODE_PAD_Y);
-
-                // The overlay's border COINCIDES WITH THE BOX'S STROKE — the
-                // foreignObject is the rect grown by EDIT_STROKE/2 on every
-                // side, so the editor's 2px border lands exactly on the drawn
-                // outline of the accented box (a stroke is centred on the edge,
-                // so its outer edge is at rect ± 1). Placed on the rect itself
-                // the border sat entirely INSIDE it and the outline stepped
-                // inward by 1px per side — at the reader's 2-2.5× tree zoom,
-                // ~10 device px, reported as the box getting smaller. The state
-                // is still said by the border's COLOUR (accent for a tactic,
-                // prose ink for a comment) rather than by a rectangle sitting
-                // inside another one. Width is the exception: it grows with the
-                // draft. The radius follows the outer curve of that stroke.
-                const editRx = nodeRx(en.data.type);
-                const editOuterRx = editRx + EDIT_STROKE / 2;
-
-                // An overlay standing in for the box wears the BOX'S fill: in
-                // VS Code the editor's input background is visibly darker than
-                // a tactic box, so EDIT_BG made the box change colour as it
-                // "shrank". Overlays standing in for NO box (the (+) add, the
-                // calc stage, a comment STRIP) keep the input background.
-                const editBg = standsInForBox ? nodeBoxFill(en.data) : EDIT_BG;
-
-                const mirrorPos = editing.tokPos ?? en.data.position;
-
-                const editHighlight =
-                  !editing.add &&
-                  !editing.calcStage &&
-                  !editing.comment &&
-                  editing.cfIndent === undefined &&
-                  mirrorPos
-                    ? (renderTaggedTactic?.(
-                        mirrorPos,
-                        editing.value,
-                        valueLines,
-                      ) ?? null)
-                    : null;
-                // WHAT AN EMPTY COMMIT DOES, said where the reader is looking
-                // (2026-09-28): Enter on an empty comment deletes the line,
-                // on an empty tactic it cancels — two behaviours behind one
-                // gesture. The textarea's own placeholder carries it where it
-                // fits the editor's width; a narrow tactic box (`rw [ih]`)
-                // cannot hold the sentence and the editor's size is not ours
-                // to change, so the hint hangs BELOW it instead. Both are
-                // paint: nothing here is measured.
-                const emptyHint =
-                  editing.value !== "" || editing.add || editing.calcStage
-                    ? null
-                    : editing.comment
-                      ? editing.original === ""
-                        ? "Enter with nothing adds no comment · Esc cancels"
-                        : "Enter deletes this comment · Esc keeps it"
-                      : "Enter with nothing cancels — the trash deletes a step";
-                const hintFits =
-                  emptyHint !== null &&
-                  measureText(emptyHint, editFontPx, !!editing.comment) <=
-                    fw - 2 * NODE_PAD;
-                // Gecko CLIPS a foreignObject's content to its box whatever
-                // its `overflow` (Blink and WebKit paint the spill), so the
-                // box grows to hold what hangs below the editor — the
-                // completion list, the empty-commit label — and lets clicks
-                // through where it is empty (pointer-events on the editor's
-                // own div only).
-                const boxW = fw + EDIT_STROKE;
-                const boxH = fh + EDIT_STROKE;
-                const spillH = completion
-                  ? EDIT_STROKE + 2 + COMPLETION_MAX_H + 12
-                  : emptyHint !== null && !hintFits
-                    ? LINE_H + 12
-                    : 0;
-                const spillW = completion
-                  ? Math.max(0, COMPLETION_MAX_W + 12 - boxW)
-                  : emptyHint !== null && !hintFits
-                    ? Math.max(0, measureText(emptyHint, COMMENT_FONT_PX, true) + 24 - boxW)
-                    : 0;
-                return (
-                  <g transform={`translate(${en.x},${en.y})`}>
-                    <foreignObject
-                      x={-w / 2 - EDIT_STROKE / 2}
-                      y={overlayY - EDIT_STROKE / 2}
-                      width={boxW + spillW}
-                      height={boxH + spillH}
-                      style={{ overflow: "visible", pointerEvents: "none" }}
-                    >
-                      <div
-                        data-ptw-edit=""
-
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: `${boxW}px`,
-                          gridTemplateRows: `${boxH}px auto`,
-                          width: boxW,
-                          pointerEvents: "auto",
-                        }}
-                      >
-                        {editHighlight && (
-                          <div
-                            data-ptw-mirror=""
-                            aria-hidden
-                            style={{
-                              ...editOverlayLayer(),
-
-                              borderRadius: editOuterRx,
-                              background: editBg,
-                              color: EDIT_TEXT,
-                            }}
-                          >
-                            {valueLines.map((line, j) => (
-                              <div key={j} style={{ height: LINE_H }}>
-                                {editHighlight[j] ?? line}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <textarea
-                          key={editing.calcStage?.stage ?? "edit"}
-                          autoFocus
-                          value={editing.value}
-                          spellCheck={false}
-
-                          data-ptw-hint=""
-                          placeholder={hintFits ? (emptyHint ?? "") : ""}
-
-                          onScroll={(e) => {
-                            const m =
-                              e.currentTarget.parentElement?.querySelector(
-                                "[data-ptw-mirror]",
-                              );
-                            if (m instanceof HTMLElement) {
-                              m.scrollTop = e.currentTarget.scrollTop;
-                              m.scrollLeft = e.currentTarget.scrollLeft;
-                            }
-                          }}
-                          onChange={(e) => {
-                            const { value, selectionStart } = e.target;
-                            setEditing((cur) => cur && { ...cur, value });
-
-                            if (!editing.comment)
-                              refreshCompletion(
-                                editing.id,
-                                value,
-                                selectionStart,
-                              );
-                            syncAbbrev(
-                              editKey(editing)!,
-                              value,
-                              selectionStart,
-                            );
-                          }}
-
-                          onSelect={(e) => {
-                            const ta = e.currentTarget;
-                            if (completion)
-                              refreshCompletion(
-                                editing.id,
-                                ta.value,
-                                ta.selectionStart,
-                              );
-
-                            syncAbbrev(
-                              editKey(editing)!,
-                              ta.value,
-                              ta.selectionStart,
-                            );
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-
-                            syncAbbrev(
-                              editKey(editing)!,
-                              e.currentTarget.value,
-                              e.currentTarget.selectionStart,
-                            );
-                          }}
-                          onKeyUp={(e) =>
-                            syncAbbrev(
-                              editKey(editing)!,
-                              e.currentTarget.value,
-                              e.currentTarget.selectionStart,
-                            )
-                          }
-                          onDoubleClick={(e) => e.stopPropagation()}
-                          onCopy={() => (nativeClip.current = true)}
-                          onCut={() => (nativeClip.current = true)}
-                          onPaste={() => (nativeClip.current = true)}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            const mod = e.metaKey || e.ctrlKey;
-                            const k = e.key.toLowerCase();
-                            const ta = e.currentTarget;
-                            if (mod && k === "a") {
-                              e.preventDefault();
-                              ta.setSelectionRange(0, ta.value.length);
-                              return;
-                            }
-                            if (mod && (k === "c" || k === "x" || k === "v")) {
-                              nativeClip.current = false;
-                              window.setTimeout(() => {
-                                if (!nativeClip.current)
-                                  void clipboardFallback(k, ta, editing);
-                              }, 0);
-                              return;
-                            }
-
-                            if (e.key === "Tab" && !mod) {
-                              if (abbrevSess?.session.expand()) {
-                                e.preventDefault();
-                                putSpans([]);
-                                return;
-                              }
-                            }
-
-                            if (completion && !mod) {
-                              const n = completion.items.length;
-                              if (
-                                e.key === "ArrowDown" ||
-                                e.key === "ArrowUp"
-                              ) {
-                                e.preventDefault();
-                                const d = e.key === "ArrowDown" ? 1 : n - 1;
-                                setCompletion({
-                                  ...completion,
-                                  index: (completion.index + d) % n,
-                                });
-                                return;
-                              }
-                              if (e.key === "Enter" || e.key === "Tab") {
-                                const sel = completion.items[completion.index];
-
-                                if (e.key === "Enter" && sel.exact) {
-                                  setCompletion(null);
-                                } else {
-                                  e.preventDefault();
-                                  acceptCompletion(editing, sel, ta);
-                                  return;
-                                }
-                              }
-                              if (e.key === "Escape") {
-                                e.preventDefault();
-                                setCompletion(null);
-                                return;
-                              }
-                            }
-                            if (e.key === "Escape") {
-                              e.preventDefault();
-                              setEditing(null);
-                            } else if (
-                              e.key === "Enter" &&
-                              (e.metaKey ||
-                                e.ctrlKey ||
-                                (!e.shiftKey &&
-                                  !editing.original.includes("\n")))
-                            ) {
-                              e.preventDefault();
-                              commitEdit();
-                            }
-                          }}
-
-                          onBlur={() => {
-                            if (editingRef.current?.calcStage) return;
-                            // The playground is a page in a browser: a blur
-                            // because the WINDOW went to the back (the reader
-                            // left to look something up) is not a commit — the
-                            // editor keeps its text and the browser hands it
-                            // focus back on return. The widget's webview loses
-                            // window focus to its own source editor, where the
-                            // blur has always meant commit, so it keeps that.
-                            if (caps.play && !document.hasFocus()) return;
-                            commitEdit();
-                          }}
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            boxSizing: "border-box",
-                            fontFamily: getCodeFontFamily(),
-
-                            fontSize: editFontPx,
-                            fontStyle: editing.comment ? "italic" : undefined,
-                            lineHeight: `${editLineH}px`,
-                            letterSpacing: 0,
-                            padding: `${NODE_PAD_Y + EDIT_STROKE / 2}px ${NODE_PAD + EDIT_STROKE / 2}px`,
-
-                            gridArea: EDIT_CELL,
-                            background: editHighlight ? "transparent" : editBg,
-
-                            color:
-                              editHighlight && editing.value !== ""
-                                ? "transparent"
-                                : EDIT_TEXT,
-                            caretColor: EDIT_TEXT,
-
-                            // EDIT_STROKE is the ACCENTED box's own stroke, and
-                            // the foreignObject is grown by half of it on every
-                            // side, so this border lands exactly on the outline
-                            // the box was drawing.
-                            border: 0,
-                            boxShadow: `inset 0 0 0 ${EDIT_STROKE}px ${
-                              editing.comment ? PROSE_FILL : FOCUS_INK
-                            }`,
-                            borderRadius: editOuterRx,
-                            outline: "none",
-                            resize: "none",
-                            whiteSpace: "pre",
-                            overflowX: "hidden",
-
-                            overflowY: "auto",
-
-                            userSelect: "text",
-                          }}
-                        />
-                        {emptyHint !== null && !hintFits && (
-                          <div
-                            aria-hidden
-                            style={{
-                              gridArea: EDIT_SPILL_CELL,
-                              justifySelf: "start",
-                              alignSelf: "start",
-                              marginTop: 4,
-                              pointerEvents: "none",
-                              whiteSpace: "nowrap",
-                              padding: "1px 6px",
-                              borderRadius: CHROME_RADIUS,
-                              background: "var(--ptw-bg)",
-                              color: "var(--ptw-comment)",
-                              fontStyle: "italic",
-                              fontFamily: getCodeFontFamily(),
-                              fontSize: COMMENT_FONT_PX,
-                            }}
-                          >
-                            {emptyHint}
-                          </div>
-                        )}
-                        {abbrevSpans.length > 0 && (
-                          <div
-                            aria-hidden
-                            style={{
-                              ...editOverlayLayer(),
-
-                              color: "transparent",
-                            }}
-                          >
-                            {underlineRuns(editing.value, abbrevSpans).map(
-                              (runs, j) => (
-                                <div key={j} style={{ height: LINE_H }}>
-                                  {runs.map((r, k) =>
-                                    r.mark ? (
-                                      <span
-                                        key={k}
-                                        style={{
-                                          textDecoration: "underline",
-                                          textDecorationColor: EDIT_TEXT,
-                                        }}
-                                      >
-                                        {r.text}
-                                      </span>
-                                    ) : (
-                                      <span key={k}>{r.text}</span>
-                                    ),
-                                  )}
-                                </div>
-                              ),
-                            )}
-                          </div>
-                        )}
-                        {completion && (
-                          <div
-                            onMouseDown={(e) => e.preventDefault()}
-                            style={{
-                              gridArea: EDIT_SPILL_CELL,
-                              justifySelf: "start",
-                              alignSelf: "start",
-                              // The foreignObject starts EDIT_STROKE/2 outside
-                              // the rect and the spill row starts at the box's
-                              // bottom (boxH = fh + EDIT_STROKE), so these keep
-                              // the list where it was: flush with the box's
-                              // left edge, 2px under its outline.
-                              marginTop: 2,
-                              marginLeft: EDIT_STROKE / 2,
-                              minWidth: Math.min(fw, 240),
-                              maxWidth: COMPLETION_MAX_W,
-                              maxHeight: COMPLETION_MAX_H,
-                              overflowY: "auto",
-
-                              background: EDIT_BG,
-                              color: EDIT_TEXT,
-                              border: `1px solid ${NODE_STYLES.tactic.stroke}`,
-                              borderRadius: CHROME_RADIUS,
-                              fontFamily: getCodeFontFamily(),
-                              fontSize: NODE_FONT_PX,
-                              lineHeight: `${LINE_H}px`,
-                              letterSpacing: 0,
-                              boxShadow: POPUP_CHROME.boxShadow,
-                            }}
-                          >
-                            {completion.items.map((it, i) => (
-                              <div
-                                key={`${it.kind}:${it.label}`}
-                                onClick={(e) =>
-                                  acceptCompletion(
-                                    editing,
-                                    it,
-
-                                    e.currentTarget
-                                      .closest("[data-ptw-edit]")
-                                      ?.querySelector("textarea") ?? null,
-                                  )
-                                }
-                                onMouseEnter={() =>
-                                  setCompletion((c) => c && { ...c, index: i })
-                                }
-                                style={{
-                                  display: "flex",
-                                  gap: 8,
-                                  alignItems: "baseline",
-                                  padding: "1px 6px",
-                                  cursor: "pointer",
-                                  whiteSpace: "pre",
-
-                                  background:
-                                    i === completion.index
-                                      ? "var(--ptw-accent)"
-                                      : "transparent",
-                                  color:
-                                    i === completion.index
-                                      ? "var(--ptw-accent-text)"
-                                      : EDIT_TEXT,
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                  }}
-                                >
-                                  {it.label}
-                                </span>
-                                <span
-                                  style={{
-                                    marginLeft: "auto",
-                                    opacity: DIM_OPACITY,
-                                    fontSize: COMMENT_FONT_PX,
-                                  }}
-                                >
-                                  {it.kind}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </foreignObject>
-                    {/* The node's MARK stays on screen while it is edited:
-                        the same tab, ABOVE the editor and fully inert, so
-                        the edit neither hides the mark (which read as it
-                        being deleted) nor lets it take a click meant for
-                        the caret. */}
-                    {editTab && (
-                      <TourTab
-                        inert
-                        cx={-w / 2}
-                        cy={boxTop}
-                        n={editTab.n}
-                        total={tabStops.length}
-                        mine={editTab.who === "mine"}
-                        on={editing.id === currentStopId}
-                        font={codeFont}
-                      />
-                    )}
-                  </g>
-                );
-              })()}
+            {editing && (
+              <NodeEditor
+                editing={editing}
+                placed={placed}
+                tourTabs={tourTabs}
+                tabStops={tabStops}
+                currentStopId={currentStopId}
+                caps={caps}
+                codeFont={codeFont}
+                renderTaggedTactic={renderTaggedTactic}
+                completion={completion}
+                setCompletion={setCompletion}
+                refreshCompletion={refreshCompletion}
+                acceptCompletion={acceptCompletion}
+                abbrevSess={abbrevSess}
+                abbrevSpans={abbrevSpans}
+                putSpans={putSpans}
+                syncAbbrev={syncAbbrev}
+                editKey={editKey}
+                editingRef={editingRef}
+                setEditing={setEditing}
+                commitEdit={commitEdit}
+                nativeClip={nativeClip}
+                clipboardFallback={clipboardFallback}
+              />
+            )}
           </g>
         </svg>
       </div>
