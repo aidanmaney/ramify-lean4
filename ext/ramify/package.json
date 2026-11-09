@@ -3,7 +3,7 @@
   "displayName": "Ramify",
   "description": "Lean proofs-as-trees visualizer and editor that lives in the infoview",
   "publisher": "aidan",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -351,7 +351,7 @@
         },
         "ramify.narration.model": {
           "type": "string",
-          "default": "claude-haiku-4-5-20251001",
+          "default": "claude-haiku-5-5",
           "markdownDescription": "The model that does the rewriting. Polish is a rewriting task, not a reasoning one, so the cheap model is the default."
         },
         "ramify.restructure.propose": {

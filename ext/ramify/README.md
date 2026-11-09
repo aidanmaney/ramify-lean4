@@ -52,7 +52,7 @@ Under `ramify.` in VS Code's settings UI.
 
 - `ramify.narration.polish` — send the generated narration to a model to be rewritten
 - `ramify.restructure.propose` — enable `suggest a rewrite`
-- `ramify.narration.model` — which model both features use (`claude-haiku-4-5-20251001` by default)
+- `ramify.narration.model` — which model both features use (`claude-haiku-5-5` by default)
 
 ## The lens and your settings
 
