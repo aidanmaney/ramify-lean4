@@ -2,7 +2,7 @@
 // playground, `playground.tsx`): the page theme and the narrow breakpoint.
 import { useEffect, useState } from "react";
 import type { ThemeKind } from "./theme";
-import { applyTheme, storeTheme, storedTheme, systemTheme } from "./viewerTheme";
+import { THEME_STORE_KEY, applyTheme, storeTheme, storedTheme, systemTheme } from "./viewerTheme";
 
 /** Under `px` wide (live: follows resizes). */
 export function useNarrow(px: number): boolean {
@@ -28,7 +28,16 @@ export function useTheme(): [ThemeKind, () => void] {
     }
     const on = () => setSystem(mq!.matches ? "dark" : "light");
     mq.addEventListener("change", on);
-    return () => mq!.removeEventListener("change", on);
+    // Another page of the site changed the pick (the landing page around an
+    // embedded playground, or the playground inside it): follow it.
+    const stored = (e: StorageEvent) => {
+      if (e.key === null || e.key === THEME_STORE_KEY) setPicked(storedTheme());
+    };
+    window.addEventListener("storage", stored);
+    return () => {
+      mq!.removeEventListener("change", on);
+      window.removeEventListener("storage", stored);
+    };
   }, []);
   const kind = picked ?? system;
   // Before paint would be nicer, but the view re-resolves on the attribute

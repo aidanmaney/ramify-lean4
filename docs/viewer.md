@@ -375,6 +375,18 @@ cd web && node scripts/publish.mjs --playground ../demos/playground.txt --live-b
   `DecompressionStream("gzip")` (skipped where the bytes are not gzip, i.e. a
   server already decoded them). No manifest (serve-playground's `/live/`) = the
   old uncompressed layout, unchanged.
+- **A host that sends headers** (Cloudflare Pages, Netlify): publish.mjs also
+  writes `_headers`, which gives `playground.html` the same COOP/COEP/CORP the
+  service worker adds, so the page starts isolated (no service worker, no
+  reload) and GitHub Pages simply ignores the file. Live assets must then be
+  SAME-ORIGIN as the page — the worker `importScripts` them in no-cors mode,
+  which `require-corp` blocks from another origin without a CORP header that
+  GitHub Pages cannot send — so copy package-live.mjs's folder into the site
+  (`live/`) and publish with `--live-base live/`, the default. Such a host also
+  compresses `.wasm` itself and has no 1 GB repository to outgrow.
+  `scripts/wasm/deploy-live.sh` keeps the GitHub Pages layout lean meanwhile:
+  it replaces `ramify-live`'s history with ONE commit of the current assets
+  (each deploy that changes the engine adds ~47 MB of history no reader fetches).
 - **Isolation** (`web/public/coi-sw.js`, copied beside playground.html by
   publish.mjs): a service worker that re-serves the PLAYGROUND navigation with
   COOP `same-origin` + COEP `require-corp`, and every same-origin response with
