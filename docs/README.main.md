@@ -27,7 +27,6 @@ To look at it first without touching a project, see the [Quickstart](INSTALL.md#
 > - The first build takes a few minutes, almost all of it ProofWidgets compiling its own widget JS.
 > - `ProofTreeTour.lean` purposefully does not compile, since it shows errors/proofs in progress.
 > - Nothing is sent anywhere unless you turn on one of the two optional model features (narration polish, suggest a rewrite) and give it an API key; see [Privacy](INSTALL.md#privacy-and-the-optional-model-features) and [SECURITY.md](SECURITY.md).
-> - While the lens is open the extension hides tabs, breadcrumbs, the minimap and sticky scroll through your user settings, and restores them when it closes; `ramify.lensHideChrome` turns that off.
 
 Release notes: [CHANGELOG.md](CHANGELOG.md).
 

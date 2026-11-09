@@ -128,7 +128,7 @@ The same `.vsix` is attached to each [GitHub release](https://github.com/aidanma
 	- Opens the proof in an editor pane split below the infoview.
 	- A tactic's resulting goals are drawn inline after the tactic.
 	- Uses the same window, document, and Lean server as your original pane so vim/LSP suggestions/keybindings work.
-	- **While the lens is open, Ramify hides editor tabs, breadcrumbs, the minimap and sticky scroll.** It does this by changing your *user-level* VS Code settings (`workbench.editor.showTabs`, `breadcrumbs.enabled`, `editor.minimap.enabled`, `editor.stickyScroll.enabled`), so the change applies to every VS Code window, not only the one with the lens. It remembers what those settings were, restores them when the lens closes, and restores them on the next start if VS Code quit or crashed with the lens open. Set `ramify.lensHideChrome` to `false` to leave them alone. If you ever find them still changed after the lens has closed, see [Troubleshooting](#troubleshooting).
+	- The lens changes no settings: tabs, breadcrumbs, the minimap and sticky scroll stay as you have them.
 - **Theme-accurate syntax colours**
 	- Otherwise defaults to generic Light/Dark themes.
 - **Show in source** (a node click, `»` on the hover bar, ⌘-click, or a message in the status bar's diagnostics strip)
@@ -202,7 +202,6 @@ Each of the rows above is written by the tree itself: change a value in the band
 | `ramify.typingHoldMs` | `600` | How long the cursor must sit still after you type before the tree redraws (0 to 5000; `0` redraws on every change). Edits made from the tree always redraw at once. |
 | `ramify.lensGoals` | on | Show each tactic's resulting goal inline after its line in the lens. |
 | `ramify.lensWordWrap` | on | Wrap long lines in the lens only. Skipped when you already wrap globally. |
-| `ramify.lensHideChrome` | on | Hide editor tabs, breadcrumbs, the minimap and sticky scroll while the lens is open (user-level settings, restored when it closes; see [The lens](#what-the-extension-adds)). Off leaves them alone. |
 | `ramify.restructure.renameAfterHoist` | on | Open Rename Symbol on `this` after an accepted `⤴` extract. |
 | `ramify.narration.polish` | off | Send the generated narration to a model to be rewritten. Needs a key. |
 | `ramify.narration.model` | `claude-haiku-5-5` | The model used for both model features. |
@@ -277,7 +276,7 @@ Some Linux window managers reserve `Alt`-click for moving windows; if `Alt`-clic
 
 **A model row (`polish`, `suggest a rewrite`) is missing from the reading options.** It is drawn only when its setting is on and a key is available: turn on `ramify.narration.polish` or `ramify.restructure.propose`, and run **Ramify: Set model API key** (or set `ANTHROPIC_API_KEY` before starting VS Code).
 
-**Tabs, breadcrumbs, the minimap or sticky scroll are gone after using the lens.** They come back when the lens closes, or on the next start if VS Code quit with it open. If they do not, restore them in your user settings by hand (`workbench.editor.showTabs`, `breadcrumbs.enabled`, `editor.minimap.enabled`, `editor.stickyScroll.enabled`), and set `ramify.lensHideChrome` to `false` so it does not happen again. Please report it with the Ramify output channel.
+**Tabs, breadcrumbs, the minimap or sticky scroll are gone after using the lens.** Older versions hid them through your user settings while the lens was open. The current extension puts them back on start from the backup an older version left; if they are still missing, restore them in your user settings by hand (`workbench.editor.showTabs`, `breadcrumbs.enabled`, `editor.minimap.enabled`, `editor.stickyScroll.enabled`) and please report it with the Ramify output channel.
 
 **The package and the extension are different versions.** They are released together and should match. Check the extension's version in the Extensions view against the `rev` in your `lakefile`; after `lake update ramify`, reinstall the `.vsix` from `.lake/packages/ramify/dist/` and reload the window.
 
