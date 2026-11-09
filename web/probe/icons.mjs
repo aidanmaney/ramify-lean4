@@ -90,6 +90,8 @@ const ALLOWED = {
     ['glyph="×"', "sizes a pill's cancel chip; its paint is ICON chip.cancel"],
     ["a 7 × 1 dash", "a dimension in a comment-like JSX expression"],
   ],
+  "armPill.tsx": [['glyph="×"', "sizes a pill's cancel chip; its paint is ICON chip.cancel"]],
+  "proposalPill.tsx": [['glyph="×"', "sizes a pill's cancel chip; its paint is ICON chip.cancel"]],
   "pickChips.tsx": [
     ['push("cancel", "×"', "sizes the cancel chip; its paint is ICON chip.cancel"],
     ["— ‹ › to cycle", "a <title> naming the pager's keys (prose)"],
