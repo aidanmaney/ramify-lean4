@@ -2349,3 +2349,164 @@ def haveUses (steps : List Paperproof.Services.ProofStep) : Array HaveUse :=
     return out
 
 end ProofTree
+
+/-! ## W2 (audit 2026-11) — the harvest, with each hypothesis printed once
+
+`Paperproof.Services.BetterParser_Tree` prints every hypothesis of every goal
+before and after every step (`printGoalInfo`, one `ppExprWithInfos` and one
+`isProof` check per hypothesis per goal), so a 250-step proof whose context
+grows by one `have` a step prints ~31 k hypotheses — 23.5 s cold, measured on
+the audit's `audit_long`. The context of hypothesis `h3` is the same print in
+all 247 goals that carry it.
+
+`betterParserTree` is that parser with ONE change: `printGoalInfoMemo` looks
+each hypothesis up in a table that lives for one call (one declaration) before
+printing it. Everything else — the goal matching, `prettifySteps`, the
+orphaned goals, the order of steps — is the vendored code verbatim, through
+the helpers it already exports, so the output is the same strings.
+
+THE KEY is everything the print reads: the type and value with the print
+context's metavariables INSTANTIATED (the print instantiates them itself, so
+two raw types that instantiate alike print alike), compared with BINDER NAMES
+(`Expr`'s own `BEq` is alpha equivalence and `∀ x, …` does not print as
+`∀ y, …`), plus the display name the sanitized context gives every free
+variable the expression mentions (`x✝` versus `x`). Shadowing is the only way
+another name in the context changes a print, and under `pp.safeShadowing`
+(the default) that happens only for a variable the expression mentions, which
+is in the key. -/
+
+namespace ProofTree.Parse
+
+/-- An expression compared WITH binder names (`Expr.equal`). -/
+structure StrictExpr where
+  e : Expr
+
+instance : BEq StrictExpr := ⟨fun a b => a.e.equal b.e⟩
+instance : Hashable StrictExpr := ⟨fun a => hash a.e⟩
+
+structure HypKey where
+  type  : StrictExpr
+  value : Option StrictExpr
+  names : Array (FVarId × Name)
+  deriving BEq, Hashable
+
+structure HypPrint where
+  type    : String
+  value   : Option String
+  isProof : String
+
+abbrev Memo := IO.Ref (Std.HashMap HypKey HypPrint)
+
+/-- The display name of every free variable `es` mention, in a fixed order. -/
+private def freeNames (lctx : LocalContext) (es : List Expr) : Array (FVarId × Name) :=
+  let s := es.foldl (fun s e => collectFVars s e) {}
+  s.fvarIds.filterMap fun id => (lctx.find? id).map fun d => (id, d.userName)
+
+/-- `Paperproof.Services.printGoalInfo`, each hypothesis through `memo`. -/
+def printGoalInfoMemo (memo : Memo) (printCtx : ContextInfo) (id : MVarId) :
+    MetaM GoalInfo := do
+  let some decl := printCtx.mctx.findDecl? id
+    | throwError "goalNotFoundInMctx"
+  -- to get tombstones in name ✝ for unreachable hypothesis
+  let lctx := decl.lctx |>.sanitizeNames.run' {options := {}}
+  let ppContext := printCtx.toPPContext lctx
+  let inst (e : Expr) : Expr :=
+    if e.hasMVar then (instantiateMVarsCore printCtx.mctx e).1 else e
+  let hyps ← lctx.foldrM (init := []) (fun hypDecl acc => do
+    if hypDecl.isAuxDecl || hypDecl.isImplementationDetail then
+      return acc
+    let ty := inst hypDecl.type
+    let val := hypDecl.value?.map inst
+    let key : HypKey :=
+      { type := ⟨ty⟩, value := val.map (⟨·⟩), names := freeNames lctx (ty :: val.toList) }
+    let p ← match (← memo.get)[key]? with
+      | some p => pure p
+      | none => do
+        let type ← ppExprWithInfos ppContext hypDecl.type
+        let value ← hypDecl.value?.mapM (fun expr => ppExprWithInfos ppContext expr)
+        let isProof : String ← printCtx.runMetaM decl.lctx (mayBeProof hypDecl.toExpr)
+        let p : HypPrint :=
+          { type := type.fmt.pretty, value := value.map (·.fmt.pretty), isProof }
+        memo.modify (·.insert key p)
+        pure p
+    return ({
+      username := hypDecl.userName.toString,
+      type     := p.type,
+      value    := p.value,
+      id       := hypDecl.fvarId.name.toString,
+      isProof  := p.isProof
+    } : Hypothesis) :: acc)
+  return {
+    username := decl.userName.toString
+    type     := (← ppExprWithInfos ppContext decl.type).fmt.pretty
+    hyps     := hyps
+    id       := id
+  }
+
+/-- `Paperproof.Services.getGoalsChange`, printing through `memo`. -/
+def goalsChangeMemo (memo : Memo) (ctx : ContextInfo) (tInfo : TacticInfo) :
+    MetaM (List (List String × GoalInfo × List GoalInfo)) := do
+  let goalMVars := tInfo.goalsBefore ++ tInfo.goalsAfter
+  let printCtx := {ctx with mctx := tInfo.mctxAfter}
+  let mut goalsBefore ← getUnassignedGoals goalMVars tInfo.mctxBefore
+  let mut goalsAfter ← getUnassignedGoals goalMVars tInfo.mctxAfter
+  let commonGoals := goalsBefore.filter fun g => goalsAfter.contains g
+  goalsBefore := goalsBefore.filter (!commonGoals.contains ·)
+  goalsAfter :=  goalsAfter.filter (!commonGoals.contains ·)
+  let mut result : List (List String × GoalInfo × List GoalInfo) := []
+  for goalBefore in goalsBefore do
+    if let some goalDecl := tInfo.mctxBefore.findDecl? goalBefore then
+      let assignedMVars ← ctx.runMetaM goalDecl.lctx (findMVarsAssigned goalBefore tInfo.mctxAfter)
+      let tacticDependsOn ← ctx.runMetaM goalDecl.lctx
+          (findHypsUsedByTactic goalBefore goalDecl tInfo.mctxAfter)
+      result := (
+        tacticDependsOn,
+        ← printGoalInfoMemo memo printCtx goalBefore,
+        ← goalsAfter.filter assignedMVars.contains |>.mapM (printGoalInfoMemo memo printCtx)
+      ) :: result
+  return result
+
+/-- `Paperproof.Services.parseTacticBody`, printing through `memo`. -/
+def tacticBodyMemo (memo : Memo) (fileMap : FileMap) (ctx : ContextInfo)
+    (tInfo : TacticInfo) (tacticSubstring : Substring.Raw) (steps : List ProofStep)
+    (allGoals : Std.HashSet GoalInfo) (tacticString : String) : MetaM Result := do
+  let steps := prettifySteps tInfo.stx steps tacticString
+  let position := getProofStepPosition fileMap tacticSubstring
+  let proofTreeEdges ← goalsChangeMemo memo ctx tInfo
+  let currentGoals := proofTreeEdges.map (fun ⟨ _, g₁, gs ⟩ => g₁ :: gs) |>.flatten
+  let allGoals := allGoals.insertMany $ currentGoals
+  let orphanedGoals := currentGoals.foldl Std.HashSet.erase (noInEdgeGoals allGoals steps)
+    |>.toArray.insertionSort (nameNumLt ·.id.name ·.id.name) |>.toList
+  let newSteps := proofTreeEdges.filterMap fun ⟨ tacticDependsOn, goalBefore, goalsAfter ⟩ =>
+    if steps.map (·.goalBefore) |>.elem goalBefore then
+      none
+    else
+      some {
+        tacticString,
+        goalBefore,
+        goalsAfter,
+        tacticDependsOn,
+        spawnedGoals := orphanedGoals
+        position,
+        theorems := []
+      }
+  return { steps := newSteps ++ steps, allGoals }
+
+/-- `Paperproof.Services.BetterParser_Tree` with one hypothesis table for the
+whole call. Both wires and every re-elaboration (cf, `checkRewrite`'s counts)
+use this, so their step lists stay comparable. -/
+def betterParserTree (fileMap : FileMap) (infoTree : InfoTree) : MetaM (Option Result) := do
+  let memo : Memo ← IO.mkRef {}
+  infoTree.visitM (postNode := fun ctx info _ results => do
+    let results : List Result := results.filterMap id
+    let steps : List ProofStep := (results.map (λ result => result.steps)).flatten
+    let allGoals : Std.HashSet GoalInfo :=
+      Std.HashSet.ofList ((results.map (λ result => result.allGoals.toList)).flatten)
+    let .some ctx := info.updateContext? ctx              | panic! "unexpected context node"
+    let .ofTacticInfo tInfo := info                       | return { steps, allGoals }
+    let .some tacticSubstring := getTacticSubstring tInfo | return { steps, allGoals }
+    let tacticString := prettifyTacticString (Substring.Raw.toString tacticSubstring)
+    tacticBodyMemo memo fileMap ctx tInfo tacticSubstring steps allGoals tacticString
+  )
+
+end ProofTree.Parse
