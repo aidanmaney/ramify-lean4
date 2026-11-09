@@ -324,12 +324,58 @@ instance : FromJson GetProofTreeParams where
     let pos ← j.getObjValAs? Lsp.Position "pos"
     return { pos, cf := jsonField j "cf" true }
 
+/-! ### W3 — a few entries per cache, not one
+
+Every per-declaration cache below used to be one slot, so alternating the
+cursor between two theorems re-ran the harvest (or the lint, or the trace)
+for both every time.  `SmallLru` keeps the last `capacity` answers, most
+recent first.  Every key starts `(uri, version, …)` and a version only ever
+moves forward, so `put` also drops entries of any other version: the cache
+holds the current document's declarations and nothing that can no longer be
+hit.  The counterfactual's two caches stay single-slot on purpose (one
+elaboration in flight, see `cfCancel`). -/
+
+structure SmallLru (κ α : Type) where
+  entries : Array (κ × α) := #[]
+
+namespace SmallLru
+
+def capacity : Nat := 8
+
+def find? {κ α : Type} [BEq κ] (c : SmallLru κ α) (k : κ) : Option α :=
+  (c.entries.find? (·.1 == k)).map (·.2)
+
+/-- `k ↦ v` at the front; entries `keep` rejects, a previous `k`, and
+anything past `capacity` go. -/
+def put {κ α : Type} [BEq κ] (c : SmallLru κ α) (keep : κ → Bool) (k : κ) (v : α) :
+    SmallLru κ α :=
+  ⟨#[(k, v)] ++ (c.entries.filter fun e => keep e.1 && !(e.1 == k)).extract 0 (capacity - 1)⟩
+
+end SmallLru
+
+/-- A hit moves its entry to the front. -/
+def lruGet? {m : Type → Type} [Monad m] [MonadLiftT (ST IO.RealWorld) m]
+    {κ α : Type} [BEq κ] (r : IO.Ref (SmallLru κ α)) (k : κ) : m (Option α) := do
+  let c ← r.get
+  match c.find? k with
+  | some v =>
+    r.set (c.put (fun _ => true) k v)
+    return some v
+  | none => return none
+
+/-- Store `k ↦ v`, dropping entries of any other document version (keys begin
+`(uri, version, …)`). -/
+def lruPut {m : Type → Type} [Monad m] [MonadLiftT (ST IO.RealWorld) m]
+    {β α : Type} [BEq β] (r : IO.Ref (SmallLru (String × Nat × β) α))
+    (k : String × Nat × β) (v : α) : m Unit :=
+  r.modify (·.put (fun e => e.1 == k.1 && e.2.1 == k.2.1) k v)
+
 -- Keyed on the document version, the declaration's start and a HASH of the
--- diagnostics (range, severity, message text) — not their count, which a
--- message that changed under the same count would leave stale.
+-- declaration's own diagnostics (range, severity, message text) — not their
+-- count, which a message that changed under the same count would leave stale.
 initialize proofTreeCache :
 
-    IO.Ref (Option ((String × Nat × Nat × UInt64) × ProofTreeData)) ← IO.mkRef none
+    IO.Ref (SmallLru (String × Nat × Nat × UInt64) ProofTreeData) ← IO.mkRef {}
 
 /-- The message's own text nodes; an embedded expression or goal is not
 walked (a change there is a change in the source, hence in the version). -/
@@ -873,14 +919,19 @@ private def realPayloadFor (doc : FileWorker.EditableDocument) (fileMap : FileMa
     (snap : Snapshots.Snapshot) : RequestM ProofTreeData := do
     let snapStart := (snap.stx.getRange?.map (·.start.byteIdx)).getD 0
 
-    let interactiveDiags := (← doc.collectCurrentDiagnostics).toArray
+    -- W4: only the diagnostics touching THIS declaration — the same cut the
+    -- CLI wire makes in `widgetDataFor` (start ≤ decl stop, decl start ≤
+    -- stop), so both wires agree.  A message in another theorem neither rides
+    -- the payload nor changes the cache key, and the strip stops opening for it.
+    let declLspRange? := snap.stx.getRange?.map fun r =>
+      (fileMap.utf8PosToLspPos r.start, fileMap.utf8PosToLspPos r.stop)
+    let interactiveDiags := (← doc.collectCurrentDiagnostics).toArray.filter fun d =>
+      match declLspRange? with
+      | some (ds, de) => posLE d.range.start de && posLE ds d.range.end
+      | none => true
     let cacheKey := (doc.meta.uri, doc.meta.version, snapStart, diagnosticsHash interactiveDiags)
 
-    let cachedReal? : Option ProofTreeData :=
-      match ← proofTreeCache.get with
-      | some (key, payload) => if key == cacheKey then some payload else none
-      | none => none
-    match cachedReal? with
+    match ← lruGet? proofTreeCache cacheKey with
       | some real => pure real
       | none => do
         let parsed ← (do
@@ -893,7 +944,7 @@ private def realPayloadFor (doc : FileWorker.EditableDocument) (fileMap : FileMa
           if d.severity? == some .error then acc.push d.range.start else acc
         let treeDiags : Array TreeDiag := interactiveDiags.map treeDiagOf
         let real ← mkTreePayload snap fileMap parsed errorPositions treeDiags
-        proofTreeCache.set <| some (cacheKey, real)
+        lruPut proofTreeCache cacheKey real
         pure real
 
 @[server_rpc_method]
@@ -959,8 +1010,8 @@ structure AutomationTraces where
   deriving Server.RpcEncodable
 
 initialize automationTraceCache :
-    IO.Ref (Option ((String × Nat × Nat) × AutomationTraces)) ←
-  IO.mkRef none
+    IO.Ref (SmallLru (String × Nat × Nat) AutomationTraces) ←
+  IO.mkRef {}
 
 private def computeTraces (doc : FileWorker.EditableDocument)
     (snap : Snapshots.Snapshot) (real : ProofTreeData) (declByte : Nat) :
@@ -995,10 +1046,9 @@ def getAutomationTrace (params : GetAutomationTraceParams) :
         return ({ note := some "no steps to trace" } : AutomationTraces)
       let declByte := declByteOf fileMap snap real
       let key := (doc.meta.uri, doc.meta.version, declByte)
-      if let some (k, cached) ← automationTraceCache.get then
-        if k == key then return cached
+      if let some cached ← lruGet? automationTraceCache key then return cached
       let out ← computeTraces doc snap real declByte
-      automationTraceCache.set (some (key, out))
+      lruPut automationTraceCache key out
       return out)
 
 /-! ## D4 — the linters, asked of the elaborator (`lintDecl`)
@@ -1039,8 +1089,8 @@ structure LintDeclResult where
   deriving Server.RpcEncodable
 
 initialize lintCache :
-    IO.Ref (Option ((String × Nat × Nat) × LintDeclResult)) ←
-  IO.mkRef none
+    IO.Ref (SmallLru (String × Nat × Nat) LintDeclResult) ←
+  IO.mkRef {}
 
 @[server_rpc_method]
 def lintDecl (params : LintDeclParams) :
@@ -1058,15 +1108,14 @@ def lintDecl (params : LintDeclParams) :
       -- needs the payload.
       let declByte := declAnchorByte snap
       let key := (doc.meta.uri, doc.meta.version, declByte)
-      if let some (k, cached) ← lintCache.get then
-        if k == key then return cached
+      if let some cached ← lruGet? lintCache key then return cached
       let some re ← reElabDecl doc fileMap.source declByte
           (needInfoTree := false) (opts := ProofTree.withLinters)
         | return ({ note := some "the declaration could not be re-elaborated"
                     linters := names } : LintDeclResult)
       let out : LintDeclResult :=
         { lints := ← ProofTree.lintsOf re.map re.msgs, linters := names }
-      lintCache.set (some (key, out))
+      lruPut lintCache key out
       return out)
 
 /-! ## D1 — verify a candidate rewrite before it is offered (`checkRewrite`)
@@ -1249,8 +1298,8 @@ def withCandidateBudget (o : Options) : Options :=
 was computed for: a call with its own `tactics` is not answered from the
 default list's result. -/
 initialize tryCloseCache :
-    IO.Ref (Option ((String × Nat × Nat × Nat × Array String) × TryCloseResult)) ←
-  IO.mkRef none
+    IO.Ref (SmallLru (String × Nat × Nat × Nat × Array String) TryCloseResult) ←
+  IO.mkRef {}
 
 /-- The newest `tryClose`'s cancel token, as `cfCancel` is the newest
 counterfactual's: a click is abandoned when another replaces it, and the older
@@ -1284,8 +1333,7 @@ def tryClose (params : TryCloseParams) :
         | some c => if c.isEmpty then closingCandidates else c
         | none => closingCandidates
       let key := (doc.meta.uri, doc.meta.version, s, t, cands)
-      if let some (k, cached) ← tryCloseCache.get then
-        if k == key then return cached
+      if let some cached ← lruGet? tryCloseCache key then return cached
       if let some old ← tryCloseCancel.get then old.set
       let tk ← IO.CancelToken.new
       tryCloseCancel.set (some tk)
@@ -1333,7 +1381,7 @@ def tryClose (params : TryCloseParams) :
       if !out.ok then
         let msg := out.message.orElse fun _ => lastMsg
         out := { out with tried := tried, ms := times, message := msg }
-      tryCloseCache.set (some (key, out))
+      lruPut tryCloseCache key out
       return out)
 
 structure CompletionNamesParams where
