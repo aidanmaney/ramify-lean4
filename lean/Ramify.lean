@@ -340,6 +340,9 @@ structure SmallLru (κ α : Type) where
 
 namespace SmallLru
 
+/-- `initialize … : IO.Ref (SmallLru …)` needs it. -/
+instance {κ α : Type} : Nonempty (SmallLru κ α) := ⟨{}⟩
+
 def capacity : Nat := 8
 
 def find? {κ α : Type} [BEq κ] (c : SmallLru κ α) (k : κ) : Option α :=
