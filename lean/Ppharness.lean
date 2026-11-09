@@ -64,7 +64,7 @@ def runParser (env : Environment) (fileMap : FileMap) (tree : InfoTree) :
   let coreCtx   : Core.Context := { fileName := "<ppharness>", fileMap := fileMap, options := {} }
   let coreState : Core.State   := { env := env }
 
-  let (res, _) ← ((BetterParser_Tree fileMap tree).run' (ctx := {}) (s := {})).toIO coreCtx coreState
+  let (res, _) ← ((ProofTree.Parse.betterParserTree fileMap tree).run' (ctx := {}) (s := {})).toIO coreCtx coreState
   return res
 
 /-- B4 — the automation traces for a whole FILE, in one extra elaboration.

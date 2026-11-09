@@ -743,7 +743,7 @@ rewritten text gets no recovery pass, so comparing the two would report a
 saving that is really a difference of pipelines. -/
 private def rawStepsIn (sn : Snapshots.Snapshot) (fm : FileMap) : RequestM Nat := do
   match ← RequestM.runTermElabM sn
-    (liftM <| Paperproof.Services.BetterParser_Tree fm sn.infoTree) with
+    (liftM <| ProofTree.Parse.betterParserTree fm sn.infoTree) with
   | some r => pure r.steps.length
   | none => pure 0
 
@@ -776,7 +776,7 @@ private def computeCf (doc : FileWorker.EditableDocument) (pos : Lsp.Position)
     if sev == 1 then errPos := errPos.push s
   let parsed ← (do
     match ← RequestM.runTermElabM synth
-      (liftM <| Paperproof.Services.BetterParser_Tree cfMap synth.infoTree) with
+      (liftM <| ProofTree.Parse.betterParserTree cfMap synth.infoTree) with
     | some res => pure res
     | none => pure { steps := [], allGoals := {} })
   let payload ← mkTreePayload synth cfMap parsed errPos cfDiags
@@ -939,7 +939,7 @@ private def realPayloadFor (doc : FileWorker.EditableDocument) (fileMap : FileMa
       | none => do
         let parsed ← (do
           match ← RequestM.runTermElabM snap
-            (liftM <| Paperproof.Services.BetterParser_Tree fileMap snap.infoTree) with
+            (liftM <| ProofTree.Parse.betterParserTree fileMap snap.infoTree) with
           | some r => pure r
           | none => pure { steps := [], allGoals := {} })
 
