@@ -15,8 +15,11 @@ Released together with extension 1.1.0; the release-table row in INSTALL.md is a
 - One appearance: the classic skin is gone.
 - Fold chevrons, a hop chip, and brief mode keeps the statement of a `have`.
 - Scrolling: no hover while the tree scrolls, and panning runs off the main thread.
+- `exact?`, `apply?` and `rw?` offer what they found as a Quick Fix on their step (`Write what exact? found`), checked by Lean before it is written.
+- Long files: the server keeps the last few proofs, lints and traces per file instead of one, and a proof's payload carries only its own diagnostics, so a message elsewhere in the file no longer re-harvests the proof under the cursor.
 
 **Settings that stay**
+- The lens no longer hides tabs, breadcrumbs, the minimap and sticky scroll: it did so by changing four user-level settings, which a crash or a second window could leave changed. `ramify.lensHideChrome` is gone; a strip an older version left behind is repaired on start.
 - Layout, context, comments, width and the reading options are now settings (`ramify.view.*`, `ramify.reading.*`, `ramify.diagnostics.autoOpen`), so a choice made in the tree persists across windows and sessions.
 
 **The extension**

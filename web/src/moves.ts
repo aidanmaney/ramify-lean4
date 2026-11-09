@@ -221,6 +221,10 @@ export const expandMoveLabel = (head: string) =>
 
 export const expandTitle = (head: string) => `write out what ${tick(head)} used`;
 
+/** H6 — the same move on an `exact?`/`apply?`/`rw?`: what the search FOUND. */
+export const searchMoveLabel = (head: string) =>
+  `Write what ${tick(head)} found`;
+
 /** D1's `⤵`. */
 export const inlineMoveLabel = (name: string) =>
   `Move ${tick(name)} into its one use`;

@@ -45,3 +45,4 @@ export * from "../src/playgroundText";
 // Name the cases, a Quick Fix (`probe namecases`).
 export * from "../src/nameCases";
 export * from "../src/nameCasesMove";
+export * from "../src/searchFix";
