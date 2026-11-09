@@ -328,11 +328,34 @@ export class LiveLean {
     if (!p || !this.ready) return Promise.resolve({ error: "live Lean is not running", ms: 0 });
     const id = this.next++;
     return new Promise((ok) => {
-      this.pending.set(id, ok as (r: LiveResult) => void);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      this.pending.set(id, (r: LiveResult) => {
+        if (timer !== undefined) clearTimeout(timer);
+        (ok as (r: LiveResult) => void)(r);
+      });
       p.post({ id, answer: JSON.stringify(req) });
+      // A WATCHDOG, in a worker only. Heartbeats bound most tactics, but not
+      // every loop (kernel reduction, a `decide` on a big instance), and a
+      // worker that never answers left the step pending for good. A worker
+      // can be terminated from here, so it is, and a fresh one starts from
+      // the cache. On the page's own thread nothing can interrupt Lean: this
+      // timer only fires once it is done.
+      if (this.host === "worker")
+        timer = setTimeout(() => {
+          const k = this.pending.get(id);
+          if (!k || this.port !== p) return;
+          this.pending.delete(id);
+          k({ error: `Lean took more than ${LIVE_ANSWER_MS / 1000} s on this step, so it was stopped and is restarting`, ms: LIVE_ANSWER_MS });
+          this.stop();
+          this.start();
+        }, LIVE_ANSWER_MS);
     });
   }
 }
+
+/** How long one live answer may take in a worker before Lean is restarted.
+ The slowest baked step measured well under a second; this is for loops. */
+const LIVE_ANSWER_MS = 20_000;
 
 /** A quiet-screen wait shorter than this is not worth a console line. */
 const QUIET_LOG_MS = 200;

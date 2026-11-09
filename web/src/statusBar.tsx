@@ -308,6 +308,7 @@ export function StatusBar({
   const valueItems: BarValueItem[] = [
     {
       id: "layout",
+      name: "Layout",
       glyph: bandIcon("band.layout"),
       value: LAYOUT_MODES[layout].name,
       values: Object.values(LAYOUT_MODES).map((m) => m.name),
@@ -320,6 +321,7 @@ export function StatusBar({
     },
     {
       id: "context",
+      name: "Context",
       glyph: bandIcon("band.context"),
       value: HYP_MODES[hypMode].name,
       values: Object.values(HYP_MODES).map((m) => m.name),
@@ -331,6 +333,7 @@ export function StatusBar({
     },
     {
       id: "comments",
+      name: "Comments",
       glyph: bandIcon("band.comments"),
       value: commentName,
       values: Object.values(COMMENT_MODES).map((m) => m.name),
@@ -369,6 +372,7 @@ export function StatusBar({
     // (`hasMarks`).
     ...(!hasMarks ? [] : [{
       id: "tour",
+      name: "Marks",
       glyph: bandIcon("band.marks"),
       value: tourValue,
       // Every value it could show: the widest is what the row reserves, so
@@ -435,18 +439,21 @@ export function StatusBar({
   wrap: the whole left group moves above the button row, and the frame gives
   that row up, so it is never over the tree.
 
-  So compaction is PER ITEM, in TWO FORMS: `[icon] outline` → the icon. It
-  runs RIGHT TO LEFT (Marks, Reading, Comments, Context, Layout): `words` is
-  how many LEADING items keep their word, and the ladder walks it down to 0.
-  (Until 2026-10-28 there was a third form in between, the classic look's
-  `Layout: outline` → `outline`; VS Code's grammar has one word form.) Only
-  `?` is always a glyph.
+  So compaction is PER ITEM, in THREE FORMS: `[icon] Layout: outline` →
+  `[icon] outline` → the icon. Each step runs RIGHT TO LEFT (Marks, Reading,
+  Comments, Context, Layout): `named` is how many LEADING items keep their
+  name, `words` how many keep their value, and the ladder walks `named` down
+  to 0 before it touches `words`. The names came back 2026-11-09: where the
+  row has room (the playground, a wide infoview) a reader new to the tree
+  reads `Context: diff`, not a bare `diff`; where it has not, the row is
+  VS Code's `$(icon) value` as before. Only `?` is always a glyph.
 
   It is MEASURED, never guessed from a breakpoint, off a hidden GHOST of both
   forms of every item, keyed by the item's id:
 
     chromeW   the word form with an EMPTY value — padding, icon, gap, i.e.
               everything the value is not
+    namedW    the same for the named form (the name and its colon too)
     resv      the widest that item's value could ever be, over EVERY value
               it can take (`outline` vs `tracks`, `intro`, `narrate`, `–/99`; none for Reading)
     glyphW    the glyph form
@@ -461,6 +468,7 @@ export function StatusBar({
   whole value set), and the room comes from the FRAME, not from the strip's own
   content — so neither input moves when the output flips. No hysteresis. */
   const [words, setWords] = useState(99);
+  const [named, setNamed] = useState(99);
   // Restart File hides the host's own button while this band carries it.
   useHostButtonHidden(!!restart);
   // Reached through a ref so `fit` (a stable callback) need not re-create
@@ -503,6 +511,8 @@ export function StatusBar({
     const ids = pick("order").map((el) => el.dataset.id ?? "");
     const n = ids.length;
     const chromeW = ids.map((id) => wide(pick(`c:${id}`)));
+    // Items with no name measure their word form here: `named` changes nothing.
+    const namedW = ids.map((id, i) => wide(pick(`n:${id}`)) || chromeW[i]);
     const glyphW = ids.map((id) => wide(pick(`g:${id}`)));
     const resvW = ids.map((id) => Math.ceil(wide(pick(`v:${id}`))));
     const helpW = wide(pick("help"));
@@ -528,10 +538,15 @@ export function StatusBar({
         : Object.fromEntries(ids.map((id, i) => [id, resvW[i]])),
     );
 
-    // Item `i`'s width at a stage: the first `words` items wear the word
-    // form (`[icon] outline`), the rest the glyph.
-    const itemW = (i: number, words: number) =>
-      i < words ? chromeW[i] + resvW[i] : glyphW[i];
+    // Item `i`'s width at a stage: the first `named` items wear the named
+    // form (`[icon] Layout: outline`), the first `words` the word form
+    // (`[icon] outline`), the rest the glyph.
+    const itemW = (i: number, words: number, named = 0) =>
+      i < named
+        ? namedW[i] + resvW[i]
+        : i < words
+          ? chromeW[i] + resvW[i]
+          : glyphW[i];
     // A flex row of these parts, one STATUS_GAP between neighbours.
     const rowW = (parts: number[]) =>
       parts.length === 0
@@ -543,15 +558,15 @@ export function StatusBar({
     diagnostics count (when there is one) and `?`. Marks is the LAST item of
     the ladder (it sheds first) and the left end of the right group. */
     const tIdx = ids.indexOf("tour");
-    const groups = (words: number, dw: number, sw = 0) => {
+    const groups = (words: number, dw: number, sw = 0, named = 0) => {
       const left: number[] = [];
       ids.forEach((_, i) => {
-        if (i !== tIdx) left.push(itemW(i, words));
+        if (i !== tIdx) left.push(itemW(i, words, named));
       });
       const right: number[] = [];
       // The readout, where it is shown, is the LEFT END of the right group.
       if (sw > 0) right.push(sw);
-      if (tIdx >= 0) right.push(itemW(tIdx, words));
+      if (tIdx >= 0) right.push(itemW(tIdx, words, named));
       if (dw > 0) right.push(dw);
       right.push(helpW);
       if (restartW > 0) right.push(restartW);
@@ -561,8 +576,8 @@ export function StatusBar({
     // `BAR_GROUP_GAP` apart. ONE ROW ALWAYS (2026-10-05): with no host
     // button to set beside, the all-glyph floor holds at 300px; a frame
     // narrower still clips at the row's ends (`ROW_STYLE`).
-    const fitsWith = (words: number, dw: number, sw = 0) => {
-      const g = groups(words, dw, sw);
+    const fitsWith = (words: number, dw: number, sw = 0, named = 0) => {
+      const g = groups(words, dw, sw, named);
       return g.l + g.r + BAR_GROUP_GAP <= lane;
     };
     // The diagnostics COUNT compacts LAST: every value item goes to its glyph
@@ -585,13 +600,21 @@ export function StatusBar({
     let got = n;
     while (got > 0 && !fitsWith(got, dw, swLadder)) got--;
     setWords(got);
+    // Names only on top of a row whose every value already fits: they are
+    // the first thing to go, before any value does.
+    let gotNamed = 0;
+    if (got === n) {
+      gotNamed = n;
+      while (gotNamed > 0 && !fitsWith(n, dw, swLadder, gotNamed)) gotNamed--;
+    }
+    setNamed(gotNamed);
     /* THE STATUS READOUT IS THE LAST ITEM TO GO. It is state, not a setting,
     so it keeps its place until the settings have compacted as far as they
     go: the ladder above is walked with the readout at its full ACTUAL width,
     and only where even the all-glyph floor cannot hold it does it shed its
     name (where it has one), then go to nothing. */
     const fits = (sw: number) =>
-      sw > 0 && fitsWith(got, dw, sw);
+      sw > 0 && fitsWith(got, dw, sw, gotNamed);
     setStatusForm(fits(statusW) ? 2 : fits(statusShortW) ? 1 : 0);
     /* What the view needs: the band's height (the frame gives it up) and the
     open message strip's, which floats above the band across the frame and
@@ -652,13 +675,16 @@ export function StatusBar({
                 color: it.on ? STATUSBAR_ON : undefined,
               }}
             >
-              {form === "full" ? it.words : it.glyph}
+              {form === "glyph" ? it.glyph : it.words}
             </span>
-          ) : form === "full" ? (
+          ) : form === "full" || form === "named" ? (
             <span
               style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
             >
               {it.glyph}
+              {form === "named" && it.name ? (
+                <span style={{ opacity: DIM_OPACITY }}>{it.name}:</span>
+              ) : null}
               {valueSpan}
             </span>
           ) : (
@@ -720,7 +746,7 @@ export function StatusBar({
   // groups. LEFT: the settings, Reading. RIGHT: the readout, Marks, the
   // count, `?`.
   const formOf = (i: number): BarForm =>
-    i < words ? "full" : "glyph";
+    i < named ? "named" : i < words ? "full" : "glyph";
   const drawItem = (id: string) => {
     const i = valueItems.findIndex((it) => it.id === id);
     return i < 0 ? null : valueMenu(valueItems[i], formOf(i));
@@ -868,6 +894,15 @@ export function StatusBar({
             {valueMenu(it, "full", "")}
           </span>
         ))}
+        {/* …its named form (`Layout:` before the value), where it has a
+            name… */}
+        {valueItems.map((it) =>
+          it.name ? (
+            <span key={`n:${it.id}`} data-g={`n:${it.id}`}>
+              {valueMenu(it, "named", "")}
+            </span>
+          ) : null,
+        )}
         {/* …and its glyph form. */}
         {valueItems.map((it) => (
           <span key={`g:${it.id}`} data-g={`g:${it.id}`}>

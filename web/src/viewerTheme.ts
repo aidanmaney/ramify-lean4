@@ -97,7 +97,8 @@ export const TOKEN_PALETTE: Record<ThemeKind, Record<string, string>> = {
   },
 };
 
-const STORE_KEY = "ramify-viewer-theme";
+export const THEME_STORE_KEY = "ramify-viewer-theme";
+const STORE_KEY = THEME_STORE_KEY;
 
 /** The reader's remembered pick, if any. */
 export function storedTheme(): ThemeKind | null {

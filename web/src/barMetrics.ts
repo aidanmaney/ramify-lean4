@@ -208,11 +208,17 @@ form is `[icon] value` and the GLYPH form is that icon alone; the item's tip
 opens `Name: value — …`, so what the glyph form drops is the first thing its
 tip says. `value` is the half that changes, and `values` is every string it
 could be, which is what reserves its width in the full form. */
-export type BarForm = "full" | "glyph";
+/** `named` is `[icon] Layout: outline` (where the row has room), `full`
+ `[icon] outline`, `glyph` the icon alone. */
+export type BarForm = "named" | "full" | "glyph";
 
 export interface BarValueItem {
   id: string;
   glyph: ReactNode;
+  /** The item's name, drawn before the value in the `named` form
+   (`Layout: outline`) where the row has room for it. None for Reading,
+   whose word form already is its name. */
+  name?: string;
   value: string;
   values: string[];
   /** Where the item has no `Name: value` shape (the reading eye, which is a

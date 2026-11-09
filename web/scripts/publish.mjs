@@ -324,14 +324,20 @@ function indexPage(entries, hero, pg = null) {
     if (e.group || groups.length === 0) groups.push({ head: e.group ?? null, items: [] });
     groups.at(-1).items.push(e);
   }
-  // The playground leads the cards: the one page where the reader writes.
-  const play = pg
-    ? `<h2>Try it</h2>\n<div class="grid">\n<div class="card">
-<a class="go" href="playground.html" title="Pick a small theorem and type tactics under its goals: the tree grows, and every goal and error is what Lean said (computed in advance, or by Lean in your browser — no server)"><span class="thumb">${pic("playground", "The playground: a proof tree growing as tactics are typed")}</span>
-<span class="cap"><span class="t">Playground — type a tactic, watch the tree grow</span><span class="n">${pg.count} theorems</span></span></a>
-</div>\n</div>\n`
-    : "";
-  const body = play + groups
+  // The playground IS the hero where there is one: the one page where the
+  // reader writes, embedded (`?embed`: no live tier inside a frame, which
+  // cannot be cross-origin isolated, so it links out instead). The frame is
+  // made by the script below only on a wide screen; a phone gets the picture
+  // and a link to the full page. The VS Code picture moves below it.
+  const vscode = `<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured} as a Ramify tree in VS Code`)}<span class="open">Open this proof</span></a>`;
+  const top = pg
+    ? `<div class="play" id="play"><a class="hero" href="playground.html" title="Pick a small theorem and type tactics under its goals: the tree grows, and every goal and error is what Lean said">${pic("playground", "The playground: a proof tree growing as tactics are typed")}<span class="open">Try it — type a tactic</span></a></div>
+<p class="sub">Pick a theorem and type tactics under its goals: every goal and error is what Lean said, computed in advance or by Lean running in your browser. ${pg.count} theorems, no install. <a href="playground.html">Open the playground on its own page</a>.</p>
+<h2>In VS Code</h2>
+<p class="sub">The same tree lives in the Lean infoview, beside your proof: edit it, see diagnostics as you type, restructure with Lean checking each change. <a href="${RELEASE_URL}">Get Ramify for VS Code</a>.</p>
+${vscode}`
+    : vscode;
+  const body = groups
     .map(
       (g) =>
         `${g.head ? `<h2>${inlineMd(g.head)}</h2>\n` : ""}<div class="grid">\n${g.items.map(card).join("\n")}\n</div>`,
@@ -370,6 +376,9 @@ h1 { font-size: clamp(24px, 4vw, 34px); font-weight: 600; letter-spacing: -.01em
 .hero .dk, .thumb .dk { display: none; }
 .hero .open { position: absolute; right: 14px; bottom: 14px; background: var(--link); color: var(--page-bg); border-radius: 6px; padding: 6px 14px; font-weight: 600; opacity: .92; }
 .hero:hover .open { opacity: 1; }
+.play iframe { display: block; width: 100%; height: min(78vh, 760px); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--lift); background: var(--page-bg); }
+.sub { color: var(--dim); margin: 12px 0 0; max-width: 72ch; }
+.sub + .hero { margin-top: 16px; }
 h2 { font-size: 13px; font-weight: 600; text-transform: none; color: var(--dim); margin: 44px 0 12px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .card { position: relative; }
@@ -401,16 +410,31 @@ footer a { color: inherit; text-decoration: underline; text-underline-offset: 2p
 </header>
 <main>
 <h1>Lean proofs, drawn as trees.</h1>
-<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured} as a Ramify tree in VS Code`)}<span class="open">Preview</span></a>
-${body}
+${top}
+${pg && !groups[0]?.head ? `<h2>Examples</h2>\n` : ""}${body}
 </main>
 <footer><a href="${INSTALL_URL}">Install guide</a> · <a href="${REPO_URL}">Source</a></footer>
 <script>
+(function () {
+  var p = document.getElementById("play");
+  if (!p || !matchMedia("(min-width: 900px)").matches) return;
+  var f = document.createElement("iframe");
+  f.src = "playground.html?embed";
+  f.title = "The Ramify playground";
+  f.loading = "lazy";
+  p.replaceChildren(f);
+})();
 document.getElementById("theme").onclick = function () {
   var r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   r.dataset.theme = dark ? "light" : "dark";
   try { localStorage.setItem("ramify-viewer-theme", r.dataset.theme); } catch (e) {}
 };
+// The embedded playground's own toggle: follow it.
+addEventListener("storage", function (e) {
+  if (e.key !== "ramify-viewer-theme") return;
+  if (e.newValue) document.documentElement.dataset.theme = e.newValue;
+  else delete document.documentElement.dataset.theme;
+});
 </script>
 </body>
 </html>
@@ -623,6 +647,15 @@ async function publishPlayground(o) {
   // live Lean's isolation (COOP/COEP from a service worker, for a host that
   // sends no headers) sits BESIDE the page, so its scope covers it
   fs.copyFileSync(path.join(web, "public/coi-sw.js"), path.join(o.out, "coi-sw.js"));
+  // ... and for a host that DOES send headers (Cloudflare Pages, Netlify read
+  // `_headers`; GitHub Pages ignores it), the same three the service worker
+  // adds, so the page starts isolated and live Lean needs no reload. The
+  // embedded copy (`?embed`) is the same file: a frame inside an unisolated
+  // page is never isolated, which is why embed mode offers no live tier.
+  fs.writeFileSync(
+    path.join(o.out, "_headers"),
+    `/playground.html\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n  Cross-Origin-Resource-Policy: same-origin\n`,
+  );
   fs.writeFileSync(
     path.join(o.out, "playground.html"),
     viewerPage({
