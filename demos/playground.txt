@@ -3,6 +3,11 @@
 # Each file is core Lean (no imports) with ONE theorem and a worked solution;
 # `-- @try <tactic>` lines add candidates (routes and mistakes), `-- @depth N`
 # moves the cap (default 4; `intro` steps are free). See lean/PlaygroundBake.lean.
+# The FIRST theorem is the one the page (and the landing page's hero) opens on;
+# `## Heading` starts a group in the page's picker.
+playground/Cantor.lean
+
+## Warm-ups
 playground/ZeroAdd.lean
 playground/Double.lean
 playground/AndSwap.lean

@@ -163,6 +163,10 @@ const NARROW_PX = 860;
 
 const QUERY = new URLSearchParams(location.search);
 const EXPERIENCE = parseExperience(QUERY.get("experience"));
+/** `?embed`: inside the playground's frame (its read-only picks). The page
+ around it carries the brand, the install link and the theme toggle (the
+ theme follows it through storage), so the header keeps the file's own. */
+const EMBED = QUERY.has("embed");
 
 const PAGE_CSS = `
 html, body, #root { height: 100%; margin: 0; }
@@ -562,7 +566,7 @@ export default function Viewer() {
 
   const head = (picker: ReactNode) => (
     <header className="ptw-viewer-head" {...chromeScopeProps()}>
-      {!inline && (
+      {!inline && !EMBED && (
         <a href="./" className="ptw-viewer-brand" title="Every published file">
           Ramify
         </a>
@@ -571,16 +575,20 @@ export default function Viewer() {
       {payload && <span className="ptw-viewer-file">{payload.file}</span>}
       {picker}
       <span className="ptw-viewer-spacer" />
-      <a
-        data-ptw-btn=""
-        href={RELEASE_URL}
-        title="This page is for reading. In VS Code the same tree is live: edit in the tree, see diagnostics as you type, and restructure a proof with Lean checking each change."
-      >
-        Get Ramify for VS Code
-      </a>
-      <a href={INSTALL_URL} className="ptw-viewer-dim ptw-viewer-install">
-        install guide
-      </a>
+      {EMBED ? null : (
+        <>
+          <a
+            data-ptw-btn=""
+            href={RELEASE_URL}
+            title="This page is for reading. In VS Code the same tree is live: edit in the tree, see diagnostics as you type, and restructure a proof with Lean checking each change."
+          >
+            Get Ramify for VS Code
+          </a>
+          <a href={INSTALL_URL} className="ptw-viewer-dim ptw-viewer-install">
+            install guide
+          </a>
+        </>
+      )}
       <button
         type="button"
         className="ptw-viewer-quiet"
@@ -590,15 +598,17 @@ export default function Viewer() {
       >
         Source
       </button>
-      <button
-        type="button"
-        className="ptw-viewer-quiet ptw-viewer-icon"
-        title={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        aria-label={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        onClick={toggleTheme}
-      >
-        <Codicon name={ICON["page.theme"]} />
-      </button>
+      {EMBED ? null : (
+        <button
+          type="button"
+          className="ptw-viewer-quiet ptw-viewer-icon"
+          title={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          aria-label={kind === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          onClick={toggleTheme}
+        >
+          <Codicon name={ICON["page.theme"]} />
+        </button>
+      )}
     </header>
   );
 

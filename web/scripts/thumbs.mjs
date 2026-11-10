@@ -11,7 +11,8 @@
 //                                      than WIDE_MAX), cropped to its ink, at most
 //                                      CARD_W pixels wide (2× a card)
 //   <site>/thumbs/playground-<theme>.webp  the playground page a few tactics
-//                                      into `Double` (when publish wrote one)
+//                                      into its first theorem, `Cantor` (when
+//                                      publish wrote one)
 //   <site>/thumbs/hero-<theme>.webp    the hero: demos/hero-<theme>.png where it
 //                                      exists (a VS Code screenshot — the
 //                                      extension is the product; dark falls back
@@ -161,7 +162,15 @@ async function treeShot(page, url, out) {
 /** The playground's card: the page itself with a proof under way in its
  source pane — seeded through the page's own per-theorem text (the key its
  editor keeps), so the picture is the page replaying real text, not a mock. */
-const PLAYGROUND_BODY = ["  intro n", "  induction n with", "  | zero => rfl", "  | succ k ih =>", "    rw [double]", "    omega"];
+const PLAYGROUND_BODY = [
+  "  intro α f h",
+  "  obtain ⟨d, hd⟩ := h (fun x => ¬ f x x)",
+  "  by_cases hdd : f d d",
+  "  · apply absurd hdd",
+  "    rw [hd] at hdd",
+  "    exact hdd",
+  "  · apply hdd",
+];
 async function playgroundShot(page, url, out) {
   await page.setViewportSize({ width: 900, height: 640 });
   await page.goto(url);

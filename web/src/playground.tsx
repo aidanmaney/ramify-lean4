@@ -413,13 +413,38 @@ function hashFor(t: string): string {
 }
 const OFF_MAP_NOTE = "Not explored in this demo — Undo to go back";
 
-/** `playground/index.json`: the theorems, in the list's order. */
+/** `playground/index.json`: the theorems, in the list's order (`group`: the
+ list's `## Heading` above it). */
 interface Entry {
   name: string;
   theorem: string;
   title: string;
   blurb: string;
   statement: string;
+  group?: string;
+}
+/** `index.json`'s `read`: the site's published proofs, offered read-only —
+ picking one shows the static viewer in the playground's place. Its picker
+ value (and hash `t=`) is `read:<name>`. Absent when only the playground was
+ published. */
+interface ReadEntry {
+  name: string;
+  proof: string;
+  title: string;
+  group?: string;
+}
+const READ_PREFIX = "read:";
+const viewerHref = (r: ReadEntry, embed: boolean) =>
+  `view.html${embed ? "?embed" : ""}#file=${encodeURIComponent(r.name)}&proof=${encodeURIComponent(r.proof)}`;
+/** Entries in runs of one group, in order (a group heads its first run). */
+function grouped<T extends { group?: string }>(xs: T[]): { group: string | null; items: T[] }[] {
+  const out: { group: string | null; items: T[] }[] = [];
+  for (const x of xs) {
+    const g = x.group ?? null;
+    if (out.length === 0 || out[out.length - 1].group !== g) out.push({ group: g, items: [] });
+    out[out.length - 1].items.push(x);
+  }
+  return out;
 }
 
 const PAGE_CSS = `
@@ -443,6 +468,7 @@ body {
 /* QUIET buttons (the header's Undo / Reset / Source / Vim / Run real Lean, the
    offer line): text, no box until hover — the toolbar's hover wash. */
 .ptw-pg .ptw-pg-quiet { background: transparent; border-color: transparent; }
+.ptw-pg-read { flex: 1; min-height: 0; width: 100%; border: 0; display: block; }
 .ptw-pg .ptw-pg-quiet:not(:disabled):hover { background: var(--ptw-toolbar-hover); }
 .ptw-pg-head a { text-decoration: none; }
 .ptw-pg-brand { font-weight: 600; color: inherit; }
@@ -1211,6 +1237,7 @@ export default function Playground() {
   const [kind, toggleTheme] = useTheme();
   const narrow = useNarrow(NARROW_PX);
   const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [reads, setReads] = useState<ReadEntry[]>([]);
   const [name, setName] = useState<string | null>(
     () => new URLSearchParams(location.hash.slice(1)).get("t"),
   );
@@ -1227,7 +1254,11 @@ export default function Playground() {
         if (!r.ok) throw new Error(`No playground list (${r.status}).`);
         return r.json();
       })
-      .then((j: { theorems: Entry[] }) => live && setEntries(j.theorems))
+      .then((j: { theorems: Entry[]; read?: ReadEntry[] }) => {
+        if (!live) return;
+        setEntries(j.theorems);
+        setReads(j.read ?? []);
+      })
       .catch(
         (e: unknown) =>
           live &&
@@ -1238,7 +1269,10 @@ export default function Playground() {
     };
   }, []);
 
-  const entry = entries?.find((e) => e.name === name) ?? entries?.[0] ?? null;
+  const read = name?.startsWith(READ_PREFIX)
+    ? (reads.find((r) => r.name === name.slice(READ_PREFIX.length)) ?? null)
+    : null;
+  const entry = read ? null : (entries?.find((e) => e.name === name) ?? entries?.[0] ?? null);
   const want = entry?.name ?? null;
   useEffect(() => {
     if (!want) return;
@@ -1261,11 +1295,17 @@ export default function Playground() {
 
   // The hash names the theorem (an external system: no state is set here).
   useEffect(() => {
+    if (read) {
+      const h = `#t=${encodeURIComponent(READ_PREFIX + read.name)}`;
+      if (location.hash !== h) history.replaceState(null, "", h);
+      document.title = `${read.title} — Ramify playground`;
+      return;
+    }
     if (!want) return;
     const h = hashFor(want);
     if (location.hash !== h) history.replaceState(null, "", h);
     document.title = `${entry?.title ?? want} — Ramify playground`;
-  }, [want, entry]);
+  }, [want, entry, read]);
   useEffect(() => {
     const on = () => {
       viewWords.now = viewWordsOf(location.hash);
@@ -1289,13 +1329,31 @@ export default function Playground() {
       {entries && (
         <select
           aria-label="Theorem"
-          value={want ?? ""}
+          value={read ? READ_PREFIX + read.name : (want ?? "")}
           onChange={(e) => setName(e.target.value)}
         >
-          {entries.map((e) => (
-            <option key={e.name} value={e.name}>
-              {e.title}
-            </option>
+          {grouped(entries).map((g, i) => {
+            const opts = g.items.map((e) => (
+              <option key={e.name} value={e.name}>
+                {e.title}
+              </option>
+            ));
+            return g.group ? (
+              <optgroup key={`p${i}`} label={g.group}>
+                {opts}
+              </optgroup>
+            ) : (
+              opts
+            );
+          })}
+          {grouped(reads).map((g, i) => (
+            <optgroup key={`r${i}`} label={`${g.group ?? "More proofs"} — to read`}>
+              {g.items.map((r) => (
+                <option key={r.name} value={READ_PREFIX + r.name}>
+                  {r.title}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       )}
@@ -1347,7 +1405,29 @@ export default function Playground() {
         Object.entries(TOKEN_PALETTE[kind]).map(([k, v]) => [`--ptw-tok-${k}`, v]),
       )}
     >
-      {ready && entry ? (
+      {read ? (
+        <>
+          {head(
+            <>
+              <span className="ptw-pg-dim ptw-pg-wide">Read-only: a published proof</span>
+              <a
+                className="ptw-pg-quiet"
+                href={viewerHref(read, false)}
+                target={EMBED ? "_top" : undefined}
+                title="This proof in the viewer, on a page of its own"
+              >
+                Open in viewer
+              </a>
+            </>,
+          )}
+          <iframe
+            key={read.name}
+            className="ptw-pg-read"
+            src={viewerHref(read, true)}
+            title={`${read.title}, read-only`}
+          />
+        </>
+      ) : ready && entry ? (
         <PlaygroundBody key={entry.name} entry={entry} table={ready.table} head={head} kind={kind} />
       ) : (
         <>

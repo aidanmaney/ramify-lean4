@@ -315,7 +315,7 @@ function indexPage(entries, hero, pg = null) {
       ? `<a class="dl" href="export/${encodeURIComponent(e.name)}.html" download title="One-file copy (${kb(e.exportBytes)})" aria-label="Download ${esc(title)} as one file">${DOWNLOAD_SVG}</a>`
       : "";
     return `<div class="card">
-<a class="go" href="${viewHref(e.name, e.featured)}" title="${esc(tip)}"><span class="thumb">${pic(e.name, `The proof tree of ${e.featured}`)}</span>
+<a class="go" href="${viewHref(e.name, e.featured)}" data-read="${esc(e.name)}" title="${esc(tip)}"><span class="thumb">${pic(e.name, `The proof tree of ${e.featured}`)}</span>
 <span class="cap"><span class="t">${inlineMd(title)}</span>${n > 1 ? `<span class="n">${n} proofs</span>` : ""}</span></a>${dl}
 </div>`;
   };
@@ -326,21 +326,27 @@ function indexPage(entries, hero, pg = null) {
   }
   // The playground IS the hero where there is one: the one page where the
   // reader writes, embedded (`?embed`: no live tier inside a frame, which
-  // cannot be cross-origin isolated, so it links out instead). The frame is
-  // made by the script below only on a wide screen; a phone gets the picture
-  // and a link to the full page. The VS Code picture moves below it.
+  // cannot be cross-origin isolated, so it links out instead) and opened on
+  // the list's first theorem (Cantor). The frame is made by the script below
+  // only on a wide screen; a phone gets the picture and a link to the full
+  // page. The VS Code picture comes next, as the step after playing; the
+  // published proofs last, as more ways into the same frame (a card loads its
+  // proof there, read-only, where there is a frame — else it opens the viewer).
   const vscode = `<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured} as a Ramify tree in VS Code`)}<span class="open">Open this proof</span></a>`;
+  const first = pg?.theorems?.[0];
+  const warmups = pg ? pg.count - 1 : 0;
   const top = pg
-    ? `<div class="play" id="play"><a class="hero" href="playground.html" title="Pick a small theorem and type tactics under its goals: the tree grows, and every goal and error is what Lean said">${pic("playground", "The playground: a proof tree growing as tactics are typed")}<span class="open">Try it — type a tactic</span></a></div>
-<p class="sub">Pick a theorem and type tactics under its goals: every goal and error is what Lean said, computed in advance or by Lean running in your browser. ${pg.count} theorems, no install. <a href="playground.html">Open the playground on its own page</a>.</p>
+    ? `<p class="lede">${first ? `<b>${inlineMd(first.title)}</b>, live. ` : ""}Type the next tactic and watch the tree grow: every goal and every error is what Lean said, with nothing to install. The menu has ${warmups > 0 ? `${warmups} warm-ups to play with, and ` : ""}every proof on this page to read, from the classics to Mathlib.</p>
+<div class="play" id="play"><a class="hero" href="playground.html" title="Type tactics under a theorem's goals: the tree grows, and every goal and error is what Lean said">${pic("playground", "The playground: a proof tree growing as tactics are typed")}<span class="open">Try it — type a tactic</span></a></div>
+<p class="sub"><a href="playground.html">Open the playground on its own page</a>, where Lean can also run in your browser and answer tactics this demo did not compute in advance.</p>
 <h2>In VS Code</h2>
-<p class="sub">The same tree lives in the Lean infoview, beside your proof: edit it, see diagnostics as you type, restructure with Lean checking each change. <a href="${RELEASE_URL}">Get Ramify for VS Code</a>.</p>
+<p class="sub">The same tree lives in the Lean infoview, beside your own proofs: edit it, see diagnostics as you type, restructure with Lean checking each change. <a href="${RELEASE_URL}">Get Ramify for VS Code</a>.</p>
 ${vscode}`
     : vscode;
   const body = groups
     .map(
       (g) =>
-        `${g.head ? `<h2>${inlineMd(g.head)}</h2>\n` : ""}<div class="grid">\n${g.items.map(card).join("\n")}\n</div>`,
+        `${g.head ? `<h${pg ? 3 : 2}>${inlineMd(g.head)}</h${pg ? 3 : 2}>\n` : ""}<div class="grid">\n${g.items.map(card).join("\n")}\n</div>`,
     )
     .join("\n");
   return `<!doctype html>
@@ -376,8 +382,13 @@ h1 { font-size: clamp(24px, 4vw, 34px); font-weight: 600; letter-spacing: -.01em
 .hero .dk, .thumb .dk { display: none; }
 .hero .open { position: absolute; right: 14px; bottom: 14px; background: var(--link); color: var(--page-bg); border-radius: 6px; padding: 6px 14px; font-weight: 600; opacity: .92; }
 .hero:hover .open { opacity: 1; }
+.play { scroll-margin-top: 12px; }
 .play iframe { display: block; width: 100%; height: min(78vh, 760px); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--lift); background: var(--page-bg); }
 .sub { color: var(--dim); margin: 12px 0 0; max-width: 72ch; }
+.lede { margin: -6px 0 16px; max-width: 72ch; font-size: 16px; }
+h3 { font-size: 12px; font-weight: 600; color: var(--dim); margin: 22px 0 10px; }
+h3 + .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+h3 + .grid .thumb { height: 150px; }
 .sub + .hero { margin-top: 16px; }
 h2 { font-size: 13px; font-weight: 600; text-transform: none; color: var(--dim); margin: 44px 0 12px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
@@ -411,7 +422,7 @@ footer a { color: inherit; text-decoration: underline; text-underline-offset: 2p
 <main>
 <h1>Lean proofs, drawn as trees.</h1>
 ${top}
-${pg && !groups[0]?.head ? `<h2>Examples</h2>\n` : ""}${body}
+${pg ? `<h2>More proofs</h2>\n<p class="sub">Every one is also in the playground's menu, to read beside the proof you are writing.</p>\n` : ""}${body}
 </main>
 <footer><a href="${INSTALL_URL}">Install guide</a> · <a href="${REPO_URL}">Source</a></footer>
 <script>
@@ -423,6 +434,17 @@ ${pg && !groups[0]?.head ? `<h2>Examples</h2>\n` : ""}${body}
   f.title = "The Ramify playground";
   f.loading = "lazy";
   p.replaceChildren(f);
+  // A proof's card opens it in the frame (the playground's read-only pick),
+  // a modified click still opens the viewer.
+  document.querySelectorAll("a[data-read]").forEach(function (a) {
+    a.addEventListener("click", function (e) {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      try { f.contentWindow.location.hash = "t=" + encodeURIComponent("read:" + a.dataset.read); }
+      catch (err) { f.src = "playground.html?embed#t=" + encodeURIComponent("read:" + a.dataset.read); }
+      p.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
 })();
 document.getElementById("theme").onclick = function () {
   var r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
@@ -589,12 +611,22 @@ async function replaySolutionText(lib, bake, source) {
 /** `--playground LIST`: every theorem's bake → `<out>/playground/`, its index,
  the page and its bundle. Returns what the index card needs. */
 async function publishPlayground(o) {
-  const files = fs
-    .readFileSync(o.playground, "utf8")
-    .split("\n")
-    .map((l) => l.replace(/#.*/, "").trim())
-    .filter(Boolean)
-    .map((f) => path.resolve(path.dirname(o.playground), f));
+  // One file per line; `## Heading` starts a group in the page's picker.
+  const files = [];
+  const groupOf = new Map();
+  let group = null;
+  for (const line of fs.readFileSync(o.playground, "utf8").split("\n")) {
+    const g = /^##\s+(.+)$/.exec(line.trim());
+    if (g) {
+      group = g[1].trim();
+      continue;
+    }
+    const f = line.replace(/#.*/, "").trim();
+    if (!f) continue;
+    const abs = path.resolve(path.dirname(o.playground), f);
+    files.push(abs);
+    if (group) groupOf.set(abs, group);
+  }
   const dir = path.join(o.out, "playground");
   fs.mkdirSync(dir, { recursive: true });
   const gz = (b) => zlib.gzipSync(b, { level: 9 }).length;
@@ -622,7 +654,8 @@ async function publishPlayground(o) {
     fs.writeFileSync(path.join(dir, `${name}.json`), json);
     const z = gz(json);
     dataGz += z;
-    theorems.push({ name, theorem: bake.theorem, title, blurb, statement: bake.statement });
+    const group = groupOf.get(file);
+    theorems.push({ name, theorem: bake.theorem, title, blurb, statement: bake.statement, ...(group ? { group } : {}) });
     const ok = bake.steps.filter((r) => Array.isArray(r[2])).length;
     rows.push(
       `  ${`playground/${name}.json`.padEnd(32)} ${String(bake.goals.length).padStart(4)} states  ${String(bake.steps.length).padStart(5)} steps (${ok} ok)  ${kb(Buffer.byteLength(json)).padStart(8)}  gz ${kb(z)}`,
@@ -673,7 +706,7 @@ async function publishPlayground(o) {
     if (!parts.eager.has(name)) console.log(`  ${name} (loaded on demand: vim mode) gz ${kb(gz(text))}`);
   if (dataGz > PLAYGROUND_BUDGET)
     throw new Error(`the playground's data is ${kb(dataGz)} gzipped, over the ${kb(PLAYGROUND_BUDGET)} budget — lower a theorem's @depth or drop @try lines`);
-  return { count: theorems.length, dataGz };
+  return { count: theorems.length, dataGz, theorems, first: theorems[0]?.name ?? null };
 }
 
 // -------------------------------------------------------------------- main
@@ -741,13 +774,30 @@ export async function publish(o) {
   }
   const hero = entries.find((e) => e.name === o.hero) ?? entries[0];
   if (o.hero && hero.name !== o.hero) console.warn(`@hero ${o.hero}: no such file — using ${hero.name}`);
+  // The published proofs are the playground's other way in: its picker lists
+  // them under their index groups, read-only (they open the static viewer in
+  // the playground's frame). Written here, after the files are published, so
+  // `--playground` alone leaves them out.
+  if (pg) {
+    let g = null;
+    const read = entries.map((e) => {
+      g = e.group ?? g;
+      const doc = fileDoc(e.payload.source);
+      const title = (doc ? doc.title : e.payload.file).replace(/[`*]/g, "");
+      return { name: e.name, proof: e.featured, title, ...(g ? { group: g } : {}) };
+    });
+    fs.writeFileSync(
+      path.join(o.out, "playground", "index.json"),
+      JSON.stringify({ version: PLAYGROUND_VERSION, theorems: pg.theorems, read }),
+    );
+  }
   fs.writeFileSync(path.join(o.out, "index.html"), indexPage(entries, hero, pg));
   fs.writeFileSync(
     path.join(o.out, "cards.json"),
     JSON.stringify({
       hero: { file: hero.name, proof: hero.featured },
       cards: entries.map((e) => ({ file: e.name, proof: e.featured })),
-      ...(pg ? { playground: { theorem: "Double" } } : {}),
+      ...(pg?.first ? { playground: { theorem: pg.first } } : {}),
     }),
   );
 
