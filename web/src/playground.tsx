@@ -52,7 +52,7 @@ import {
 } from "./playgroundAnswer";
 import { PlaygroundEditor, type EditorHandle } from "./playgroundEditor";
 import { isInaccessible, isUnnamedSplit, nameCasesText } from "./nameCases";
-import { freshDoc, replayText, type PlayCache, type TextRun } from "./playgroundText";
+import { freshDoc, replayText, startDoc, type PlayCache, type StartKind, type TextRun } from "./playgroundText";
 import { Codicon } from "./codiconView";
 import { DIAG_ICON, type Severity } from "./diagInk";
 import { daggerHtml } from "./dagger";
@@ -96,6 +96,11 @@ const QUERY = new URLSearchParams(location.search);
  (`EmbedLink`). */
 const EMBED = QUERY.has("embed");
 const EXPERIENCE = parseExperience(QUERY.get("experience"));
+/** `?start=solved|almost`: the theorem's text begins as its own worked proof
+ (or that proof minus its last line) instead of an empty body — the landing
+ page's frame opens on a tree, not on a bare goal. A text the reader already
+ saved for the theorem still wins; Reset still starts fresh. */
+const START: StartKind = ((s) => (s === "solved" || s === "almost" ? s : "fresh"))(QUERY.get("start"));
 /** Per-browser conveniences (localStorage can throw or be empty: never relied on). */
 const stored = (k: string): string | null => {
   try {
@@ -393,6 +398,9 @@ const NARROW_PX = 700;
  static viewer's words, viewerLink.ts) and win over these on a reload. */
 const START_VIEW = { layout: "wide", context: "delta" } as const;
 const START_ZOOM = 1.25;
+/** A tree that is already standing (`?start=`) begins one step out, so more
+ of it is in the frame it opens in. */
+const STANDING_ZOOM = 1;
 type ViewWords = Pick<ViewerLink, "layout" | "context" | "comments">;
 /** The reader's view words, as the hash carries them (an external system). */
 const viewWords: { now: ViewWords } = { now: viewWordsOf(location.hash) };
@@ -914,7 +922,7 @@ function PlaygroundBody({
   // is an edit to it, and each edit replays it (playgroundText.ts)
   const [initialDoc] = useState(() => {
     const saved = stored(docKey(entry.name));
-    return saved && saved.split("\n")[0] === header ? saved : freshDoc(header);
+    return saved && saved.split("\n")[0] === header ? saved : startDoc(header, table.bake.source, START);
   });
   const editor = useRef<EditorHandle>(null);
   const docRef = useRef(initialDoc);
@@ -1211,7 +1219,7 @@ function PlaygroundBody({
                 experience={EXPERIENCE}
                 initialView={initialView}
                 onViewState={onViewState}
-                initialZoom={START_ZOOM}
+                initialZoom={START === "fresh" ? START_ZOOM : STANDING_ZOOM}
                 offMapGoalIds={offMap}
                 offMapNote={OFF_MAP_NOTE}
                 onTryTactic={onTryTactic}

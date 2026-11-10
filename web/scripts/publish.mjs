@@ -327,20 +327,24 @@ function indexPage(entries, hero, pg = null) {
   // The playground IS the hero where there is one: the one page where the
   // reader writes, embedded (`?embed`: no live tier inside a frame, which
   // cannot be cross-origin isolated, so it links out instead) and opened on
-  // the list's first theorem (Cantor). The frame is made by the script below
-  // only on a wide screen; a phone gets the picture and a link to the full
-  // page. The VS Code picture comes next, as the step after playing; the
-  // published proofs last, as more ways into the same frame (a card loads its
-  // proof there, read-only, where there is a frame — else it opens the viewer).
+  // the list's first theorem (Cantor) with its proof all but finished
+  // (`?start=almost`), so the first thing on the page is a tree, with one
+  // goal left to type for. The frame is made by the script below only on a
+  // wide screen; a phone gets the picture and a link to the full page. The
+  // page says as little as it can: the tree, the VS Code picture and the
+  // cards carry it. The VS Code picture comes next, as the step after
+  // playing; the published proofs last, as more ways into the same frame (a
+  // card loads its proof there, read-only, where there is a frame — else it
+  // opens the viewer).
   const vscode = `<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured} as a Ramify tree in VS Code`)}<span class="open">Open this proof</span></a>`;
   const first = pg?.theorems?.[0];
   const warmups = pg ? pg.count - 1 : 0;
   const top = pg
-    ? `<p class="lede">${first ? `<b>${inlineMd(first.title)}</b>, live. ` : ""}Type the next tactic and watch the tree grow: every goal and every error is what Lean said, with nothing to install. The menu has ${warmups > 0 ? `${warmups} warm-ups to play with, and ` : ""}every proof on this page to read, from the classics to Mathlib.</p>
-<div class="play" id="play"><a class="hero" href="playground.html" title="Type tactics under a theorem's goals: the tree grows, and every goal and error is what Lean said">${pic("playground", "The playground: a proof tree growing as tactics are typed")}<span class="open">Try it — type a tactic</span></a></div>
-<p class="sub"><a href="playground.html">Open the playground on its own page</a>, where Lean can also run in your browser and answer tactics this demo did not compute in advance.</p>
+    ? `<p class="lede">${first ? `<b>${inlineMd(first.title)}</b>, live. ` : ""}Edit a line or type the next tactic: the tree follows, and every goal and error is Lean's own.</p>
+<div class="play" id="play"><a class="hero" href="playground.html?start=almost" title="Type tactics under a theorem's goals: the tree grows, and every goal and error is what Lean said">${pic("playground", "The playground: a proof tree, one goal still open")}<span class="open">Try it</span></a></div>
+<p class="sub"><a href="playground.html">Open the playground on its own page</a>${warmups > 0 ? ` — ${warmups} warm-ups` : ""}, and real Lean in your browser for any tactic this demo did not compute in advance.</p>
 <h2>In VS Code</h2>
-<p class="sub">The same tree lives in the Lean infoview, beside your own proofs: edit it, see diagnostics as you type, restructure with Lean checking each change. <a href="${RELEASE_URL}">Get Ramify for VS Code</a>.</p>
+<p class="sub">The same tree beside your own proofs. <a href="${RELEASE_URL}">Get Ramify for VS Code</a>.</p>
 ${vscode}`
     : vscode;
   const body = groups
@@ -383,7 +387,7 @@ h1 { font-size: clamp(24px, 4vw, 34px); font-weight: 600; letter-spacing: -.01em
 .hero .open { position: absolute; right: 14px; bottom: 14px; background: var(--link); color: var(--page-bg); border-radius: 6px; padding: 6px 14px; font-weight: 600; opacity: .92; }
 .hero:hover .open { opacity: 1; }
 .play { scroll-margin-top: 12px; }
-.play iframe { display: block; width: 100%; height: min(78vh, 760px); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--lift); background: var(--page-bg); }
+.play iframe { display: block; width: 100%; height: min(86vh, 900px); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--lift); background: var(--page-bg); }
 .sub { color: var(--dim); margin: 12px 0 0; max-width: 72ch; }
 .lede { margin: -6px 0 16px; max-width: 72ch; font-size: 16px; }
 h3 { font-size: 12px; font-weight: 600; color: var(--dim); margin: 22px 0 10px; }
@@ -422,7 +426,7 @@ footer a { color: inherit; text-decoration: underline; text-underline-offset: 2p
 <main>
 <h1>Lean proofs, drawn as trees.</h1>
 ${top}
-${pg ? `<h2>More proofs</h2>\n<p class="sub">Every one is also in the playground's menu, to read beside the proof you are writing.</p>\n` : ""}${body}
+${pg ? `<h2>More proofs</h2>\n<p class="sub" id="more-sub" hidden>Click one to read it in the frame above.</p>\n` : ""}${body}
 </main>
 <footer><a href="${INSTALL_URL}">Install guide</a> · <a href="${REPO_URL}">Source</a></footer>
 <script>
@@ -430,10 +434,12 @@ ${pg ? `<h2>More proofs</h2>\n<p class="sub">Every one is also in the playground
   var p = document.getElementById("play");
   if (!p || !matchMedia("(min-width: 900px)").matches) return;
   var f = document.createElement("iframe");
-  f.src = "playground.html?embed";
+  f.src = "playground.html?embed&start=almost";
   f.title = "The Ramify playground";
   f.loading = "lazy";
   p.replaceChildren(f);
+  var more = document.getElementById("more-sub");
+  if (more) more.hidden = false;
   // A proof's card opens it in the frame (the playground's read-only pick),
   // a modified click still opens the viewer.
   document.querySelectorAll("a[data-read]").forEach(function (a) {
@@ -591,14 +597,8 @@ async function replaySolution(lib, bake, source) {
  proof body, indentation, bullets and all, under the page's header line,
  replayed through the baked table alone. Null when it closes, else why. */
 async function replaySolutionText(lib, bake, source) {
-  const at = source.indexOf(":= by");
-  const body = source
-    .slice(at + 5)
-    .split("\n")
-    .slice(1)
-    .filter((l) => !/^\s*$/.test(l));
   const header = `theorem ${bake.theorem} : ${bake.statement} := by`;
-  const doc = [header, ...body].join("\n");
+  const doc = lib.startDoc(header, source, "solved");
   const t = lib.loadTable(lib.checkBake(bake));
   const answer = lib.makeAnswer([lib.bakedEngine(t)]);
   const run = await lib.replayText(t, answer, doc, new Map());

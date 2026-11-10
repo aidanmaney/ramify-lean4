@@ -184,11 +184,18 @@ no source files it rewrites only the playground; with them the playground
 leads the index (below).
 
 **The landing page** (2026-11-10) leads with the playground, embedded
-(`playground.html?embed`, wide screens; a phone gets its picture, which
-`thumbs.mjs` takes a few tactics into the first theorem) and opened on the
+(`playground.html?embed&start=almost`, wide screens; a phone gets its picture,
+which `thumbs.mjs` takes of the same `?start=almost` page) and opened on the
 list's FIRST theorem — `Cantor.lean`, a core-Lean diagonal argument (`f : α →
 α → Prop`, the predicates standing in for Mathlib's `Set α`), the one proof a
-visitor plays first. The rest of `demos/playground.txt` sits under `## Warm-ups`
+visitor plays first. **`?start=solved|almost`** begins the theorem's text as
+its own worked proof, or that proof minus its last line (`startDoc`,
+playgroundText.ts — the same lines `publish.mjs` replays to check the demo),
+so the frame opens on a standing tree with one goal left to type for, at zoom
+1 instead of the fresh start's 1.25; a text the reader saved for the theorem
+still wins, and Reset still starts fresh. The page itself says one line above
+the frame and one below each picture: the tree, the VS Code picture and the
+cards carry it ("show, don't tell"). The rest of `demos/playground.txt` sits under `## Warm-ups`
 (a `## Heading` is an `<optgroup>` in the picker). Then "In VS Code" (the hero
 picture and the install link), then the published proofs under "More proofs".
 Those are also the playground's **read-only picks**: `publish.mjs` writes them
