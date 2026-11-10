@@ -180,9 +180,24 @@ while it is newer than the source and the baker), checks that the theorem's
 client, writes `playground/<name>.json`, `playground/index.json`,
 `playground.html` and its bundle `playground-<hash>.js`, prints the sizes and
 **fails over 2 MB gzipped** (the data; the bundle is printed beside it). With
-no source files it rewrites only the playground; with them the index gets a
-**Try it** card above every group (its picture: `thumbs.mjs` types five
-tactics into `Double` through the page's own input).
+no source files it rewrites only the playground; with them the playground
+leads the index (below).
+
+**The landing page** (2026-11-10) leads with the playground, embedded
+(`playground.html?embed`, wide screens; a phone gets its picture, which
+`thumbs.mjs` takes a few tactics into the first theorem) and opened on the
+list's FIRST theorem — `Cantor.lean`, a core-Lean diagonal argument (`f : α →
+α → Prop`, the predicates standing in for Mathlib's `Set α`), the one proof a
+visitor plays first. The rest of `demos/playground.txt` sits under `## Warm-ups`
+(a `## Heading` is an `<optgroup>` in the picker). Then "In VS Code" (the hero
+picture and the install link), then the published proofs under "More proofs".
+Those are also the playground's **read-only picks**: `publish.mjs` writes them
+into `playground/index.json` as `read` (only on a full publish, after the files)
+and the picker lists them under their index groups ("Classics — to read");
+picking one (`#t=read:<name>`) shows `view.html?embed` in the playground's place
+(the viewer without brand, install link or theme toggle) with "Open in viewer".
+On the landing page a card's plain click opens its proof in the frame the same
+way.
 
 The page opens in layout `wide`, context `diff`, one rail zoom step in
 (`initialZoom` 1.25); the reader's own layout, context and comments ride the
