@@ -11,7 +11,7 @@
 //              (playgroundText.ts: Lean's block rules; play() per tactic: table, then live)
 //
 // The TEXT is the source of truth (playgroundEditor.tsx): every gesture the
-// tree offers here is an edit to it — the `+ tactic` slot and the goal panel's
+// tree offers here is an edit to it — the empty next-tactic slot and the goal panel's
 // hints through an open goal's anchor, double-click and the trash over a
 // step's real range, the Quick Fixes through `onApplyRewrite`, ⌘Z as the
 // editor's undo. The view is otherwise the static viewer's (BakedCode,
@@ -880,7 +880,7 @@ function GoalPanel({
           <span className="ptw-pg-dim">This goal waits on a line above it that did not succeed.</span>
         ) : !atCaret ? (
           <span className="ptw-pg-dim">
-            Type the next tactic, or click <code>+ tactic</code> in the tree.
+            Type the next tactic, or click the empty box in the tree.
           </span>
         ) : null}
       </div>
@@ -1009,7 +1009,7 @@ function PlaygroundBody({
   }, [table, run, entry.name]);
 
   // A STANDING start (`?start=`) arrives with the goal that is still open in
-  // the frame: its `+ tactic` slot is what the page asks the reader to fill,
+  // the frame: its empty tactic box (the slot) is what the page asks the reader to fill,
   // and a tree taller than the frame would open on its top with the slot out
   // of sight. Once, after the first replay is drawn and the view's own
   // arrival has settled; the least scroll that shows it (an external system:

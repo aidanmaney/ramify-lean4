@@ -6,6 +6,7 @@ import type { CalcRelOption } from "./paperproof";
 import { useTip } from "./tipController";
 import {
   NODE_STYLES,
+  NODE_TEXT,
   CHROME_BG,
   CHROME_UNDERLAY,
   CHROME_BORDER,
@@ -15,7 +16,7 @@ import {
   TREE_INK_SW_BOLD,
   FOCUS_INK,
 } from "./theme";
-import { CHIP_GAP, CHIP_H, CHIP_W_ADD, FRONTIER_FONT_PX, FRONTIER_H, SLOT_WORD, chipWidth } from "./chipMetrics";
+import { CHIP_GAP, CHIP_H, CHIP_W_ADD, FRONTIER_H, SLOT_PAD_X, chipWidth } from "./chipMetrics";
 import { Codicon } from "./codiconView";
 import { type CodiconName } from "./codicon";
 import { ICON } from "./icons";
@@ -207,13 +208,18 @@ export function FrontierChip({
   );
 }
 
-/** THE NEXT-STEP SLOT under an open goal: a tactic-shaped placeholder in the
- tactic's own fill and ink, dashed because nothing stands there yet, reading
- `+ tactic` — the place the next tactic will take, hung from the goal by a
- stub of trunk the view draws. It answers the pointer by paint alone (the
- fill and the outline firm up); a click opens the editor in its place. The
- `?_` hole keeps `FrontierChip`: what is typed there replaces the hole where
- it sits, not a step below. Measured by `slotWidth` × `FRONTIER_H`. */
+/** THE NEXT-STEP SLOT under an open goal: an EMPTY TACTIC BOX, in the
+ tactic's own fill, outline and corner, holding nothing but a blinking caret
+ where a tactic's text would start — an input at rest, hung from the goal by
+ a stub of trunk the view draws. No word and no glyph: the box is the place
+ and the caret says it takes typing. It answers the pointer by paint alone
+ (the outline firms up); a click opens the editor in its place. The `?_`
+ hole keeps `FrontierChip`: what is typed there replaces the hole where it
+ sits, not a step below. Measured by `slotWidth` × `FRONTIER_H`; the blink
+ is theme.ts's `[data-ptw-caret]` (still under reduced motion). */
+const CARET_W = 1.5;
+const CARET_H = 13;
+
 export function NextStepSlot({
   title,
   x,
@@ -249,24 +255,18 @@ export function NextStepSlot({
         height={FRONTIER_H}
         rx={SLOT_RX}
         fill={NODE_STYLES.tactic.fill}
-        fillOpacity={over ? 1 : 0.6}
         stroke={ink}
         strokeWidth={over ? TREE_INK_SW_BOLD : TREE_INK_SW}
-        strokeDasharray={over ? undefined : "4 3"}
       />
-      <text
-        x={width / 2}
-        y={FRONTIER_H / 2}
-        textAnchor="middle"
-        dy="0.34em"
-        fontSize={FRONTIER_FONT_PX}
-        fontFamily={getCodeFontFamily()}
-        fill={ink}
-        style={{ userSelect: "none", letterSpacing: 0 }}
-      >
-        <tspan fontWeight={700}>+</tspan>
-        {` ${SLOT_WORD}`}
-      </text>
+      <rect
+        data-ptw-caret=""
+        x={SLOT_PAD_X}
+        y={(FRONTIER_H - CARET_H) / 2}
+        width={CARET_W}
+        height={CARET_H}
+        fill={NODE_TEXT}
+        style={{ pointerEvents: "none" }}
+      />
     </g>
   );
 }

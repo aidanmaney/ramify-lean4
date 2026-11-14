@@ -10,11 +10,10 @@ export const CHIP_H = 15;
  so the next-step slot stands as tall as the lane layout reserves for it. */
 export const FRONTIER_H = CHIP_LANE_H;
 export const FRONTIER_FONT_PX = 11;
-/** The next-step slot's word: `+ tactic`, where the next tactic will stand. */
-export const SLOT_WORD = "tactic";
-const SLOT_PAD_X = 9;
-export const slotWidth = () =>
-  Math.ceil(measureText(`+ ${SLOT_WORD}`, FRONTIER_FONT_PX)) + 2 * SLOT_PAD_X;
+/** The next-step slot: an EMPTY tactic box with a caret in it, so its width
+ is a short tactic's, not a label's (it carries no words). */
+export const SLOT_PAD_X = 9;
+export const slotWidth = () => 96;
 
 export const CHIP_GAP = 6;
 

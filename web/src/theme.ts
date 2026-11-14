@@ -408,6 +408,11 @@ const PALETTE_CSS = `
 }
 /* A codicon that spins (VS Code's \`~spin\` modifier: 1.5s, 30 steps). */
 @keyframes ptw-spin { to { transform: rotate(360deg); } }
+[data-ptw-theme] [data-ptw-caret] { animation: ptw-caret 1.06s steps(1) infinite; }
+@keyframes ptw-caret { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  [data-ptw-theme] [data-ptw-caret] { animation: none; }
+}
 [data-ptw-theme] [data-ptw-spin] {
   animation: ptw-spin 1.5s steps(30) infinite;
 }

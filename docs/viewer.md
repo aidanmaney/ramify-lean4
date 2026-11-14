@@ -194,7 +194,7 @@ playgroundText.ts — the same lines `publish.mjs` replays to check the demo),
 so the frame opens on a standing tree with one goal left to type for, at zoom
 1 instead of the fresh start's 1.25; a text the reader saved for the theorem
 still wins, and Reset still starts fresh. A standing start also scrolls the
-tree, once, by the least that puts the open goal's `+ tactic` slot in the
+tree, once, by the least that puts the open goal's next-tactic slot (an empty tactic box with a caret) in the
 frame. The page's whole prose is the headline and a
 heading per section: the tree, the VS Code picture and the cards say the rest
 ("show, don't tell"). A card's title is its file's own, or the short one
@@ -279,7 +279,7 @@ drops them all.
 
 Exactly the viewer's inputs (`BakedCode`, `BakedPopups` — the bake's popups
 plus renamed copies — the viewer theme) and ONE narrow hook, `onTryTactic`
-(+ `getGoalTactics`, the in-place editor's completion pool): the `+ tactic` slot on an
+(+ `getGoalTactics`, the in-place editor's completion pool): the next-tactic slot on an
 open goal opens the in-place editor and its commit comes to the page; `sorry`,
 `calc` and `step` are not offered (they write source). Every Lean-only move is
 absent through `caps`/`availability` as on the viewer; `caps.play` gates the
@@ -315,7 +315,7 @@ tactic), `next`, `all_goals` and other combinators with blocks.
 
 The tree **writes the text**: each open goal has an `Anchor` (where its next
 tactic goes: a new line under the block, `case tag =>` for a later goal,
-a `sorry` replaced, a missing alternative added), the `+ tactic` slot, the goal
+a `sorry` replaced, a missing alternative added), the next-tactic slot, the goal
 panel's hints and the Quick Fix rows write through it; double-click edits a
 step's line (`getTacticEdit`/`onEditTactic` over the step's real range); the
 trash deletes it (`deleteSlots`, the widget's `deleteEdit.ts`); ⌘Z in the tree

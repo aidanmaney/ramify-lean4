@@ -16,7 +16,7 @@ Released together with extension 1.1.0; the release-table row in INSTALL.md is a
 - Fold chevrons, a hop chip, and brief mode keeps the statement of a `have`.
 - Scrolling: no hover while the tree scrolls, and panning runs off the main thread.
 - `exact?`, `apply?` and `rw?` offer what they found as a Quick Fix on their step (`Write what exact? found`), checked by Lean before it is written.
-- An open goal's `+` is now a slot for the next step: a tactic-shaped `+ tactic` box hung from the goal, in place of the small dashed chip.
+- An open goal's `+` is now a slot for the next step: an empty tactic box with a blinking caret, hung from the goal, in place of the small dashed chip.
 - Long files: the server keeps the last few proofs, lints and traces per file instead of one, and a proof's payload carries only its own diagnostics, so a message elsewhere in the file no longer re-harvests the proof under the cursor.
 
 **Settings that stay**
