@@ -195,7 +195,7 @@ so the frame opens on a standing tree with one goal left to type for, at zoom
 1 instead of the fresh start's 1.25; a text the reader saved for the theorem
 still wins, and Reset still starts fresh. A standing start also scrolls the
 tree, once, by the least that puts the open goal's `+ tactic` slot in the
-frame. The page's whole prose is the headline, one line above the frame and a
+frame. The page's whole prose is the headline and a
 heading per section: the tree, the VS Code picture and the cards say the rest
 ("show, don't tell"). A card's title is its file's own, or the short one
 `demos/site.txt` gives after ` = `. The rest of `demos/playground.txt` sits under `## Warm-ups`

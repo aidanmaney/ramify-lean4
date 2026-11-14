@@ -340,18 +340,16 @@ function indexPage(entries, hero, pg = null) {
   // (`?start=almost`), so the first thing on the page is a tree, with one
   // goal left to type for. The frame is made by the script below only on a
   // wide screen; a phone gets the picture and a link to the full page.
-  // THE PAGE'S WHOLE PROSE is the headline, one line above the frame and a
-  // heading per section: the tree, the VS Code picture and the cards say the
+  // THE PAGE'S WHOLE PROSE is the headline and a heading per
+  // section: the tree, the VS Code picture and the cards say the
   // rest. The VS Code picture comes after the frame, as the step after
   // playing; the published proofs last, as more ways into the same frame (a
   // card loads its proof there, read-only, where there is a frame — else it
   // opens the viewer).
   const vscode = `<a class="hero" href="${viewHref(hero.name, hero.featured)}">${pic("hero", `${hero.featured} as a Ramify tree in VS Code`)}<span class="open">Open this proof</span></a>`;
-  const first = pg?.theorems?.[0];
   const top = pg
-    ? `<p class="lede">${first ? `<b>${inlineMd(first.title)}</b>, one tactic short. ` : ""}Finish it, or take it apart.</p>
-<div class="play" id="play"><a class="hero" href="playground.html?start=almost" title="Open the playground">${pic("playground", "The playground: a proof tree with one goal still open")}<span class="open">Try it</span></a></div>
-<h2>In VS Code, on your own proofs · <a href="${RELEASE_URL}">install</a></h2>
+    ? `<div class="play" id="play"><a class="hero" href="playground.html?start=almost" title="Open the playground">${pic("playground", "The playground: a proof tree with one goal still open")}<span class="open">Open the playground</span></a></div>
+<h2>In VS Code · <a href="${RELEASE_URL}">install</a></h2>
 ${vscode}`
     : vscode;
   const body = groups
@@ -395,7 +393,6 @@ h1 { font-size: clamp(24px, 4vw, 34px); font-weight: 600; letter-spacing: -.01em
 .hero:hover .open { opacity: 1; }
 .play { scroll-margin-top: 12px; }
 .play iframe { display: block; width: 100%; height: min(86vh, 900px); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--lift); background: var(--page-bg); }
-.lede { margin: -6px 0 16px; max-width: 72ch; font-size: 16px; }
 .grid.small { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .grid.small .thumb { height: 150px; }
 h2 { font-size: 13px; font-weight: 600; text-transform: none; color: var(--dim); margin: 44px 0 12px; }
