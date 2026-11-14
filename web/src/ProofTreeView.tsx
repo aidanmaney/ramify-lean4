@@ -116,7 +116,7 @@ import {
 } from "./narrate";
 import { collapseLabel, headerPrefix, type KeepSeg } from "./briefLabel";
 import { lineOffsets } from "./taggedText";
-import { ACCENT_TEXT, CASE_FILL, COMMENT_FILL, PROSE_FILL, EDIT_BG, EDIT_TEXT, HYP_LIT_STRONG_FILL, GHOST_TEXT_FILL, TURNSTILE_FILL, TARGET_WEIGHT, MUTED_FILL, NODE_STYLES, NODE_TEXT, SEQ_STROKE, SORRY_FILL, DANGER_FILL, STICKY_BG, STICKY_BORDER, STICKY_SHADOW, CHROME_BG, CHROME_UNDERLAY, CHROME_BORDER, CHROME_INK, CHROME_FONT, CHROME_RADIUS, DIM_OPACITY, TOKEN_VARS, ensurePaletteStyle, observeThemeChange, resolveThemeKind, Z, CHIP_SHADOW, FAINT_OPACITY, PREVIEW_OPACITY, STUB_OPACITY, WASH_OPACITY, TREE_INK_SW_BOLD, FOCUS_INK, CLOSED_FILL, LIGHTBULB_INK, LIGHTBULB_AUTOFIX_INK } from "./theme";
+import { ACCENT_TEXT, CASE_FILL, COMMENT_FILL, PROSE_FILL, EDIT_BG, EDIT_TEXT, HYP_LIT_STRONG_FILL, GHOST_TEXT_FILL, TURNSTILE_FILL, TARGET_WEIGHT, MUTED_FILL, NODE_STYLES, NODE_TEXT, SEQ_STROKE, SORRY_FILL, DANGER_FILL, STICKY_BG, STICKY_BORDER, STICKY_SHADOW, CHROME_BG, CHROME_UNDERLAY, CHROME_BORDER, CHROME_INK, CHROME_FONT, CHROME_RADIUS, DIM_OPACITY, TOKEN_VARS, ensurePaletteStyle, observeThemeChange, resolveThemeKind, Z, CHIP_SHADOW, FAINT_OPACITY, PREVIEW_OPACITY, STUB_OPACITY, WASH_OPACITY, TREE_INK_SW_BOLD, TREE_INK_SW, LINK_STROKE_TACTIC, FOCUS_INK, CLOSED_FILL, LIGHTBULB_INK, LIGHTBULB_AUTOFIX_INK } from "./theme";
 import { HypBlock } from "./hypBlock";
 import { daggerSvg } from "./dagger";
 import { COMPACT_LEFT, type FollowAnim, MARGIN, ARRIVAL_TOP, IN_VIEW_PAD, IN_VIEW_TOP, animateScroll, cancelFollow, cfStubNodeId, clampScroll, clampZoom, inViewScroll, nodeBoxFill, nodeRx } from "./scrollHelpers";
@@ -142,8 +142,8 @@ import { ringPath } from "./ringPath";
 import { diagGlyphOf, diagWordOf } from "./diagInk";
 import { TopCentre, TourTab, ZoomRail } from "./topChrome";
 import { type BandPlace, StatusBar } from "./statusBar";
-import { CHIP_GAP, CHIP_H, CHIP_W_ADD, chipWidth } from "./chipMetrics";
-import { FrontierChip, GalleryPager, PickerRow } from "./pickChips";
+import { CHIP_GAP, CHIP_H, CHIP_W_ADD, FRONTIER_FONT_PX, FRONTIER_H, chipWidth } from "./chipMetrics";
+import { FrontierChip, GalleryPager, NextStepSlot, PickerRow } from "./pickChips";
 import { BAR_GAP, BAR_OVERLAP } from "./hoverBarMetrics";
 import { appliesToKind, disabledSlot, MOVE_LOOK } from "./moveSlots";
 import { MENU_ICON } from "./menuIcons";
@@ -8558,11 +8558,50 @@ export default function ProofTreeView({
                   {chipsOffered && (
                       <g
                         transform={`translate(${
-                          -w / 2 +
-                          TRUNK_INSET +
-                          (drawnParentIds.has(id) ? CHIP_W_ADD / 2 + 6 : 0)
+                          // wide hangs a goal's steps from its middle, so the
+                          // slot stands centred there; the compact layouts
+                          // run the trunk down the left lane
+                          compact
+                            ? -w / 2 +
+                              TRUNK_INSET +
+                              (drawnParentIds.has(id) ? CHIP_W_ADD / 2 + 6 : 0)
+                            : -(
+                                chipLaneXs(node.data.addSpec)[0] +
+                                (node.data.addSpec
+                                  ? addChipWidth(node.data.addSpec)
+                                  : CHIP_W_STEP) /
+                                  2
+                              )
                         }, ${boxTop + h + CHIP_TOP_GAP})`}
                       >
+                        {/* the stub of trunk the lane hangs from: the tree
+                            goes on here (paint only, inside the lane's own
+                            reserved gap) */}
+                        <line
+                          x1={
+                            compact
+                              ? 0
+                              : chipLaneXs(node.data.addSpec)[0] +
+                                (node.data.addSpec
+                                  ? addChipWidth(node.data.addSpec)
+                                  : CHIP_W_STEP) /
+                                  2
+                          }
+                          x2={
+                            compact
+                              ? 0
+                              : chipLaneXs(node.data.addSpec)[0] +
+                                (node.data.addSpec
+                                  ? addChipWidth(node.data.addSpec)
+                                  : CHIP_W_STEP) /
+                                  2
+                          }
+                          y1={-CHIP_TOP_GAP}
+                          y2={0}
+                          stroke={LINK_STROKE_TACTIC}
+                          strokeWidth={TREE_INK_SW}
+                          style={{ pointerEvents: "none" }}
+                        />
                         {picking?.id === id ? (
                           <PickerRow
                             options={picking.options}
@@ -8580,22 +8619,33 @@ export default function ProofTreeView({
                           <>
                             {node.data.addSpec && (
                               <>
-                                <FrontierChip
-                                  glyph={addChipGlyph(node.data.addSpec)}
-                                  title={chips.add!.title}
-
-                                  x={chipLaneXs(node.data.addSpec)[0]}
-                                  width={addChipWidth(node.data.addSpec)}
-                                  color={NODE_STYLES.tactic.stroke}
-                                  onPick={chipAdd}
-                                />
+                                {node.data.addSpec.kind === "hole" ? (
+                                  <FrontierChip
+                                    glyph={addChipGlyph(node.data.addSpec)}
+                                    title={chips.add!.title}
+                                    x={chipLaneXs(node.data.addSpec)[0]}
+                                    width={addChipWidth(node.data.addSpec)}
+                                    height={FRONTIER_H}
+                                    fontSize={FRONTIER_FONT_PX}
+                                    color={NODE_STYLES.tactic.stroke}
+                                    onPick={chipAdd}
+                                  />
+                                ) : (
+                                  <NextStepSlot
+                                    title={chips.add!.title}
+                                    x={chipLaneXs(node.data.addSpec)[0]}
+                                    width={addChipWidth(node.data.addSpec)}
+                                    onPick={chipAdd}
+                                  />
+                                )}
                                 {onAddTactic && (
                                 <FrontierChip
                                   glyph="sorry"
                                   title={chips.sorry!.title}
                                   x={chipLaneXs(node.data.addSpec)[1]}
                                   width={CHIP_W_SORRY}
-                                  fontSize={9}
+                                  height={FRONTIER_H}
+                                  fontSize={10}
                                   color={SORRY_FILL}
 
                                   onPick={chipSorry}
@@ -8611,7 +8661,8 @@ export default function ProofTreeView({
                                 title={chips.calc!.title}
                                 x={chipLaneXs(node.data.addSpec)[2]}
                                 width={CHIP_W_STEP}
-                                fontSize={9}
+                                height={FRONTIER_H}
+                                fontSize={10}
                                 color={NODE_STYLES.tactic.stroke}
                                 onPick={chipCalc}
                               />
@@ -8627,7 +8678,8 @@ export default function ProofTreeView({
                                   ]
                                 }
                                 width={CHIP_W_STEP}
-                                fontSize={9}
+                                height={FRONTIER_H}
+                                fontSize={10}
                                 color={NODE_STYLES.tactic.stroke}
                                 onPick={chipStep}
                               />

@@ -5,7 +5,7 @@ import { LINE_H } from "./layout";
 import { GLOBAL_MAX } from "./completion";
 import type { AddSpec } from "./types";
 import { COMMENT_FILL } from "./theme";
-import { CHIP_FONT_PX, CHIP_GAP, CHIP_W_ADD, chipWidth } from "./chipMetrics";
+import { CHIP_FONT_PX, CHIP_GAP, CHIP_W_ADD, chipWidth, slotWidth } from "./chipMetrics";
 import { clipText } from "./clipText";
 import { HOLE_GLYPH } from "./chipMoves";
 
@@ -42,7 +42,7 @@ export const CARD_PAD = 4;
 export const CHIP_W_SORRY = 36;
 
 export const addChipWidth = (spec: AddSpec | undefined) =>
-  spec?.kind === "hole" ? chipWidth(HOLE_GLYPH, CHIP_FONT_PX) : CHIP_W_ADD;
+  spec?.kind === "hole" ? chipWidth(HOLE_GLYPH, CHIP_FONT_PX) : slotWidth();
 
 export const chipLaneXs = (
   spec: AddSpec | undefined,

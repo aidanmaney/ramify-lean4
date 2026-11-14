@@ -303,8 +303,11 @@ export function commentIndentOf(d: {
   return d.parents.length > 0 || d.commentBelow ? COMMENT_INDENT : 0;
 }
 
-export const CHIP_TOP_GAP = 8;
-export const CHIP_LANE_H = 15;
+/** The frontier lane under an open goal: a stub of trunk (`CHIP_TOP_GAP`)
+ down to the next-step slot, which is `CHIP_LANE_H` tall — a tactic-shaped
+ placeholder where the next tactic will stand, not a 15px afterthought. */
+export const CHIP_TOP_GAP = 10;
+export const CHIP_LANE_H = 22;
 const TRUNK_GAP_STEP = 14;
 export const TRUNK_GAP_BRANCH = 24;
 /** The run below a HOPPED goal: room for the hop chip (`HOP_CHIP_H`) with

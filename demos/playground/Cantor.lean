@@ -1,10 +1,9 @@
 /-!
 # Cantor's diagonal argument
 
-No function `f` from `α` onto the predicates on `α` (its subsets): some set is
-always missed. Suppose `f` were onto and build the diagonal set — the points
-`x` with `¬ f x x`, not in their own image. Some `d` reaches it, and asking
-whether `f d d` holds contradicts itself either way.
+No `f` maps `α` onto its predicates (its subsets). If one did, some `d` would
+hit the diagonal, `fun x => ¬ f x x`, and `f d d` could be neither true nor
+false.
 -/
 -- @depth 5
 -- @try exact hdd
