@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkBake, loadTable, bakedEngine, makeAnswer, play, buildProof, NOT_BAKED,
   normalise, goalKey, proofToTree, flattenTaggedText, filterDiagnostics, proofSpan,
-  replayText, applyDocEdit, freshDoc, deleteEdit, rankedCompletions, completions,
+  replayText, applyDocEdit, freshDoc, startDoc, deleteEdit, rankedCompletions, completions,
   swallowed, swallowedMessage,
 } from "./lib.mjs";
 
@@ -313,6 +313,14 @@ const textTree = async (doc) => {
     const exact = t.byKey.get(t.keys.find((k, i) => completions(t, i, []).some((c) => c.startsWith("exact"))) ?? "");
     if (exact !== undefined) check(rankedCompletions(t, exact, []).closes.some((c) => c.startsWith("exact")), "an `exact` that closes is ranked first");
   }
+  // `?start=`: the file's own proof as the editor's text (the landing page's
+  // frame opens on it, one line short), and a file with no body starts fresh
+  const src = fs.readFileSync(path.join(here, "../../demos/playground/AndSwap.lean"), "utf8");
+  const solved = await textTree(startDoc(header, src, "solved"));
+  check(solved.b.closed && startDoc(header, src, "solved").split("\n").length === 6, `start=solved is the file's proof and closes (${solved.b.open.length} open)`);
+  const almost = await textTree(startDoc(header, src, "almost"));
+  check(!almost.b.closed && almost.b.open.length === 1 && almost.r.editorDiagnostics.every((d) => d.severity > 2), "start=almost leaves exactly its last goal open, with no error");
+  check(startDoc(header, src, "fresh") === freshDoc(header) && startDoc(header, undefined, "solved") === freshDoc(header), "start=fresh, and no source, is the fresh body");
   // the delete gesture's slots: the last step's line goes, its goal reopens
   const last = x.r.attempts.at(-1);
   const e = deleteEdit({ kind: "tactic", anchors: [last.at], comments: [] }, x.r.slots);

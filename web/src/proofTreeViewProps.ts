@@ -125,10 +125,10 @@ export interface ProofTreeViewProps {
   deleteSlots?: TacticSlot[];
 
   /** THE PLAYGROUND (playground.tsx) — try a tactic under an OPEN goal and let
-      the host answer it; nothing is written anywhere. The frontier `+` chip
+      the host answer it; nothing is written anywhere. The frontier next-tactic slot
       opens the same in-place editor `onAddTactic`'s does, and its commit hands
       the goal's id and the typed text here. Narrower than `onAddTactic` by
-      construction: only the `+` chip is offered (no `sorry`, `calc` or
+      construction: only the next-tactic slot is offered (no `sorry`, `calc` or
       `step`, which write source), on a goal with an `addSpec`; the `play`
       capability gates its `?` row. */
   onTryTactic?: (goalId: string, text: string) => void;

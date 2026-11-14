@@ -11,7 +11,7 @@
 //              (playgroundText.ts: Lean's block rules; play() per tactic: table, then live)
 //
 // The TEXT is the source of truth (playgroundEditor.tsx): every gesture the
-// tree offers here is an edit to it — the `+` chip and the goal panel's
+// tree offers here is an edit to it — the empty next-tactic slot and the goal panel's
 // hints through an open goal's anchor, double-click and the trash over a
 // step's real range, the Quick Fixes through `onApplyRewrite`, ⌘Z as the
 // editor's undo. The view is otherwise the static viewer's (BakedCode,
@@ -52,7 +52,7 @@ import {
 } from "./playgroundAnswer";
 import { PlaygroundEditor, type EditorHandle } from "./playgroundEditor";
 import { isInaccessible, isUnnamedSplit, nameCasesText } from "./nameCases";
-import { freshDoc, replayText, type PlayCache, type TextRun } from "./playgroundText";
+import { freshDoc, replayText, startDoc, type PlayCache, type StartKind, type TextRun } from "./playgroundText";
 import { Codicon } from "./codiconView";
 import { DIAG_ICON, type Severity } from "./diagInk";
 import { daggerHtml } from "./dagger";
@@ -96,6 +96,11 @@ const QUERY = new URLSearchParams(location.search);
  (`EmbedLink`). */
 const EMBED = QUERY.has("embed");
 const EXPERIENCE = parseExperience(QUERY.get("experience"));
+/** `?start=solved|almost`: the theorem's text begins as its own worked proof
+ (or that proof minus its last line) instead of an empty body — the landing
+ page's frame opens on a tree, not on a bare goal. A text the reader already
+ saved for the theorem still wins; Reset still starts fresh. */
+const START: StartKind = ((s) => (s === "solved" || s === "almost" ? s : "fresh"))(QUERY.get("start"));
 /** Per-browser conveniences (localStorage can throw or be empty: never relied on). */
 const stored = (k: string): string | null => {
   try {
@@ -344,9 +349,9 @@ function LiveOffer() {
     return (
       <div className="ptw-pg-offer ptw-pg-dim">
         <a href={fullPageHref()} target="_top" className="ptw-pg-linkish">
-          Open the playground on its own page
+          Open the full page
         </a>{" "}
-        to check any tactic with real Lean
+        to run real Lean on any tactic
       </div>
     );
   if (!LIVE_OFFERED && LIVE_BLOCKED && !narrow && stored(NOTICE_KEY) !== "never")
@@ -393,6 +398,13 @@ const NARROW_PX = 700;
  static viewer's words, viewerLink.ts) and win over these on a reload. */
 const START_VIEW = { layout: "wide", context: "delta" } as const;
 const START_ZOOM = 1.25;
+/** A tree that is already standing (`?start=`) begins one step out, so more
+ of it is in the frame it opens in. */
+const STANDING_ZOOM = 1;
+/** The standing start's arrival: how long the view's own arrival is given to
+ settle, and the room left under the open goal's slot (the rail and band). */
+const ARRIVE_SETTLE_MS = 700;
+const ARRIVE_CLEAR = 56;
 type ViewWords = Pick<ViewerLink, "layout" | "context" | "comments">;
 /** The reader's view words, as the hash carries them (an external system). */
 const viewWords: { now: ViewWords } = { now: viewWordsOf(location.hash) };
@@ -857,9 +869,9 @@ function GoalPanel({
           </span>
         ) : built.proved && !atCaret ? (
           <span>
-            <span className="ptw-pg-done">Proof complete — every goal closed.</span>{" "}
+            <span className="ptw-pg-done">Proof complete.</span>{" "}
             <span className="ptw-pg-dim">
-              Every goal and error is what Lean said. <a href={RELEASE_URL}>Get Ramify for VS Code</a> to write your own.
+              <a href={RELEASE_URL}>Get Ramify for VS Code</a> and write your own.
             </span>
           </span>
         ) : offMapTarget ? (
@@ -868,7 +880,7 @@ function GoalPanel({
           <span className="ptw-pg-dim">This goal waits on a line above it that did not succeed.</span>
         ) : !atCaret ? (
           <span className="ptw-pg-dim">
-            Write the next tactic in the source, or use <code>+</code> under a goal in the tree.
+            Type the next tactic, or click the empty box in the tree.
           </span>
         ) : null}
       </div>
@@ -914,7 +926,7 @@ function PlaygroundBody({
   // is an edit to it, and each edit replays it (playgroundText.ts)
   const [initialDoc] = useState(() => {
     const saved = stored(docKey(entry.name));
-    return saved && saved.split("\n")[0] === header ? saved : freshDoc(header);
+    return saved && saved.split("\n")[0] === header ? saved : startDoc(header, table.bake.source, START);
   });
   const editor = useRef<EditorHandle>(null);
   const docRef = useRef(initialDoc);
@@ -995,6 +1007,26 @@ function PlaygroundBody({
     const proved = b.closed && !run.editorDiagnostics.some((d) => (d.severity ?? 1) === 1);
     return { ...b, proved, proof: { ...b.proof, comments: run.comments } };
   }, [table, run, entry.name]);
+
+  // A STANDING start (`?start=`) arrives with the goal that is still open in
+  // the frame: its empty tactic box (the slot) is what the page asks the reader to fill,
+  // and a tree taller than the frame would open on its top with the slot out
+  // of sight. Once, after the first replay is drawn and the view's own
+  // arrival has settled; the least scroll that shows it (an external system:
+  // the tree's scroll frame).
+  const arrived = useRef(START === "fresh");
+  useEffect(() => {
+    if (arrived.current || run === EMPTY_RUN) return;
+    const t = window.setTimeout(() => {
+      arrived.current = true;
+      const slot = document.querySelector("[data-ptw-slot]");
+      const frame = slot?.closest("[data-ptw-scroll]");
+      if (!slot || !frame) return;
+      const over = slot.getBoundingClientRect().bottom + ARRIVE_CLEAR - frame.getBoundingClientRect().bottom;
+      if (over > 0) frame.scrollTop += over;
+    }, ARRIVE_SETTLE_MS);
+    return () => window.clearTimeout(t);
+  }, [run]);
 
   const renderers = useMemo(
     () => makeTaggedRenderersWith(built.proof, built.proof.taggedGoals, codeOf),
@@ -1211,7 +1243,7 @@ function PlaygroundBody({
                 experience={EXPERIENCE}
                 initialView={initialView}
                 onViewState={onViewState}
-                initialZoom={START_ZOOM}
+                initialZoom={START === "fresh" ? START_ZOOM : STANDING_ZOOM}
                 offMapGoalIds={offMap}
                 offMapNote={OFF_MAP_NOTE}
                 onTryTactic={onTryTactic}
@@ -1347,7 +1379,7 @@ export default function Playground() {
             );
           })}
           {grouped(reads).map((g, i) => (
-            <optgroup key={`r${i}`} label={`${g.group ?? "More proofs"} — to read`}>
+            <optgroup key={`r${i}`} label={/to read$/i.test(g.group ?? "") ? g.group! : `${g.group ?? "More proofs"} — to read`}>
               {g.items.map((r) => (
                 <option key={r.name} value={READ_PREFIX + r.name}>
                   {r.title}

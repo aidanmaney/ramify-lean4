@@ -3,28 +3,27 @@
 # thumbs.mjs for the pictures). Each card's title comes from its file's
 # leading `/-! # … -/` block; a `## Heading` line starts a group.
 # `<file> <proof>` names the proof the card opens and pictures (else the
-# file's longest); `@hero <name>` is the picture the index opens with.
+# file's longest); ` = Title` after it is the card's title where the file's
+# own is long; `@hero <name>` is the picture the index opens with.
 
 @hero Cantor
 
-## Start here
+## Proofs to read
 ReadingTour.lean                          tour_reading            # how to read a tree
-
-## Classics
 Irrationality.lean                        sqrt_two_irrational     # √2, and an irrational power that is rational
 Cantor.lean                               cantor                  # the diagonal argument
-Euclid.lean                               infinitude_of_primes    # infinitely many primes
+Euclid.lean                               infinitude_of_primes = Infinitely many primes
 Induction.lean                            two_pow_mul_odd         # Gauss, Bernoulli, strong induction
 Limits.lean                               convergesTo_unique      # ε–N: sums of limits, uniqueness
 Groups.lean                               mul_comm_of_sq_eq_one   # calc chains from the group axioms
-SchroederBernstein.lean                   sb_injective            # the showcase
+SchroederBernstein.lean                   sb_injective = Schröder–Bernstein, from the ground up
 
 ## From Mathlib
-mathlib-archive/Konigsberg.lean           not_even_degree_iff     # Euler's bridges
-mathlib-archive/InverseTriangleSum.lean
-mathlib-archive/BirthdayProblem.lean      birthday_measure
-mathlib-archive/PerfectNumbers.lean       eq_two_pow_mul_odd      # Euclid–Euler
-mathlib-archive/HeronsFormula.lean
+mathlib-archive/Konigsberg.lean           not_even_degree_iff = The bridges of Königsberg
+mathlib-archive/InverseTriangleSum.lean = Reciprocals of the triangular numbers
+mathlib-archive/BirthdayProblem.lean      birthday_measure = The birthday problem
+mathlib-archive/PerfectNumbers.lean       eq_two_pow_mul_odd = Perfect numbers
+mathlib-archive/HeronsFormula.lean = Heron's formula
 mathlib-archive/AscendingDescendingSequences.lean   erdos_szekeres
-mathlib-archive/SumOfPrimeReciprocalsDiverges.lean  Real.tendsto_sum_one_div_prime_atTop
-mathlib-archive/ZagierTwoSquares.lean     Nat.Prime.sq_add_sq'    # Fermat's two squares, Zagier's proof
+mathlib-archive/SumOfPrimeReciprocalsDiverges.lean  Real.tendsto_sum_one_div_prime_atTop = The prime reciprocals diverge
+mathlib-archive/ZagierTwoSquares.lean     Nat.Prime.sq_add_sq' = Fermat's two squares, Zagier's proof

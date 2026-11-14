@@ -16,6 +16,7 @@ Released together with extension 1.1.0; the release-table row in INSTALL.md is a
 - Fold chevrons, a hop chip, and brief mode keeps the statement of a `have`.
 - Scrolling: no hover while the tree scrolls, and panning runs off the main thread.
 - `exact?`, `apply?` and `rw?` offer what they found as a Quick Fix on their step (`Write what exact? found`), checked by Lean before it is written.
+- An open goal's `+` is now a slot for the next step: an empty tactic box with a blinking caret, hung from the goal, in place of the small dashed chip.
 - Long files: the server keeps the last few proofs, lints and traces per file instead of one, and a proof's payload carries only its own diagnostics, so a message elsewhere in the file no longer re-harvests the proof under the cursor.
 
 **Settings that stay**
@@ -29,6 +30,7 @@ Released together with extension 1.1.0; the release-table row in INSTALL.md is a
 
 **On the web**
 - The playground: a theorem, a source pane that is the source of truth, and the tree beside it, in the browser with nothing installed. Optional live Lean (a one-time ~47 MB download) checks any tactic with real Lean compiled to WebAssembly; elsewhere the playground answers from steps computed in advance.
+- The landing page opens on a standing tree: the playground's frame starts with Cantor's proof all but finished (`playground.html?start=almost`, also `solved`), one goal left to type for and scrolled into the frame. The page's prose is the headline and a heading per section; long card titles are shortened in `demos/site.txt`.
 
 **The static viewer**
 - Proofs can be published as a static website, or as one self-contained HTML file, that draws the same tree as the infoview with no Lean server: hovers, comments, diagnostics, every layout and reading option, and a coloured source pane beside the tree that the tree follows. Lean runs once, on the author's machine (`web/scripts/publish.mjs`); see `docs/viewer.md`.

@@ -184,16 +184,27 @@ no source files it rewrites only the playground; with them the playground
 leads the index (below).
 
 **The landing page** (2026-11-10) leads with the playground, embedded
-(`playground.html?embed`, wide screens; a phone gets its picture, which
-`thumbs.mjs` takes a few tactics into the first theorem) and opened on the
+(`playground.html?embed&start=almost`, wide screens; a phone gets its picture,
+which `thumbs.mjs` takes of the same `?start=almost` page) and opened on the
 list's FIRST theorem — `Cantor.lean`, a core-Lean diagonal argument (`f : α →
 α → Prop`, the predicates standing in for Mathlib's `Set α`), the one proof a
-visitor plays first. The rest of `demos/playground.txt` sits under `## Warm-ups`
+visitor plays first. **`?start=solved|almost`** begins the theorem's text as
+its own worked proof, or that proof minus its last line (`startDoc`,
+playgroundText.ts — the same lines `publish.mjs` replays to check the demo),
+so the frame opens on a standing tree with one goal left to type for, at zoom
+1 instead of the fresh start's 1.25; a text the reader saved for the theorem
+still wins, and Reset still starts fresh. A standing start also scrolls the
+tree, once, by the least that puts the open goal's next-tactic slot (an empty tactic box with a caret) in the
+frame. The page's whole prose is the headline and a
+heading per section: the tree, the VS Code picture and the cards say the rest
+("show, don't tell"). A card's title is its file's own, or the short one
+`demos/site.txt` gives after ` = `. The rest of `demos/playground.txt` sits under `## Warm-ups`
 (a `## Heading` is an `<optgroup>` in the picker). Then "In VS Code" (the hero
-picture and the install link), then the published proofs under "More proofs".
+picture and the install link), then the published proofs under their own
+group headings ("Proofs to read", "From Mathlib").
 Those are also the playground's **read-only picks**: `publish.mjs` writes them
 into `playground/index.json` as `read` (only on a full publish, after the files)
-and the picker lists them under their index groups ("Classics — to read");
+and the picker lists them under their index groups ("Proofs to read", "From Mathlib — to read");
 picking one (`#t=read:<name>`) shows `view.html?embed` in the playground's place
 (the viewer without brand, install link or theme toggle) with "Open in viewer".
 On the landing page a card's plain click opens its proof in the frame the same
@@ -268,7 +279,7 @@ drops them all.
 
 Exactly the viewer's inputs (`BakedCode`, `BakedPopups` — the bake's popups
 plus renamed copies — the viewer theme) and ONE narrow hook, `onTryTactic`
-(+ `getGoalTactics`, the in-place editor's completion pool): the `+` chip on an
+(+ `getGoalTactics`, the in-place editor's completion pool): the next-tactic slot on an
 open goal opens the in-place editor and its commit comes to the page; `sorry`,
 `calc` and `step` are not offered (they write source). Every Lean-only move is
 absent through `caps`/`availability` as on the viewer; `caps.play` gates the
@@ -304,7 +315,7 @@ tactic), `next`, `all_goals` and other combinators with blocks.
 
 The tree **writes the text**: each open goal has an `Anchor` (where its next
 tactic goes: a new line under the block, `case tag =>` for a later goal,
-a `sorry` replaced, a missing alternative added), the `+` chip, the goal
+a `sorry` replaced, a missing alternative added), the next-tactic slot, the goal
 panel's hints and the Quick Fix rows write through it; double-click edits a
 step's line (`getTacticEdit`/`onEditTactic` over the step's real range); the
 trash deletes it (`deleteSlots`, the widget's `deleteEdit.ts`); ⌘Z in the tree

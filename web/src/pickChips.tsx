@@ -6,15 +6,17 @@ import type { CalcRelOption } from "./paperproof";
 import { useTip } from "./tipController";
 import {
   NODE_STYLES,
+  NODE_TEXT,
   CHROME_BG,
   CHROME_UNDERLAY,
   CHROME_BORDER,
   CHROME_INK,
   CHROME_RADIUS,
   TREE_INK_SW,
+  TREE_INK_SW_BOLD,
   FOCUS_INK,
 } from "./theme";
-import { CHIP_GAP, CHIP_H, CHIP_W_ADD, chipWidth } from "./chipMetrics";
+import { CHIP_GAP, CHIP_H, CHIP_W_ADD, FRONTIER_H, SLOT_PAD_X, chipWidth } from "./chipMetrics";
 import { Codicon } from "./codiconView";
 import { type CodiconName } from "./codicon";
 import { ICON } from "./icons";
@@ -24,6 +26,9 @@ import { ICON } from "./icons";
 const CHIP_ICON = 12;
 
 const PICK_FONT_PX = 12;
+
+/** The next-step slot's corner: a tactic box's own (`nodeRx`). */
+const SLOT_RX = 4;
 
 const PAGER_H = 15;
 
@@ -96,6 +101,7 @@ export function FrontierChip({
 
   fontFamily = "monospace",
   solid,
+  height = CHIP_H,
   onPick,
   keyboard,
 }: {
@@ -111,6 +117,8 @@ export function FrontierChip({
   fontFamily?: string;
 
   solid?: boolean;
+  /** The chip's height: a pill's `CHIP_H`, or the frontier lane's own. */
+  height?: number;
   onPick: () => void;
   /** A chip the KEYBOARD reaches (the selection pill's): a tab stop with
    `role="button"`, Enter/Space run `keyboard.activate` (default `onPick`),
@@ -167,7 +175,7 @@ export function FrontierChip({
         x={0}
         y={0}
         width={width}
-        height={CHIP_H}
+        height={height}
         rx={CHROME_RADIUS}
         fill="transparent"
         stroke={focused ? FOCUS_INK : color}
@@ -179,13 +187,13 @@ export function FrontierChip({
           name={icon}
           size={CHIP_ICON}
           x={width / 2 - CHIP_ICON / 2}
-          y={CHIP_H / 2 - CHIP_ICON / 2}
+          y={height / 2 - CHIP_ICON / 2}
           color={color}
         />
       ) : (
         <text
           x={width / 2}
-          y={CHIP_H / 2}
+          y={height / 2}
           textAnchor="middle"
           dy="0.32em"
           fontSize={fontSize}
@@ -196,6 +204,69 @@ export function FrontierChip({
           {glyph}
         </text>
       )}
+    </g>
+  );
+}
+
+/** THE NEXT-STEP SLOT under an open goal: an EMPTY TACTIC BOX, in the
+ tactic's own fill, outline and corner, holding nothing but a blinking caret
+ where a tactic's text would start — an input at rest, hung from the goal by
+ a stub of trunk the view draws. No word and no glyph: the box is the place
+ and the caret says it takes typing. It answers the pointer by paint alone
+ (the outline firms up); a click opens the editor in its place. The `?_`
+ hole keeps `FrontierChip`: what is typed there replaces the hole where it
+ sits, not a step below. Measured by `slotWidth` × `FRONTIER_H`; the blink
+ is theme.ts's `[data-ptw-caret]` (still under reduced motion). */
+const CARET_W = 1.5;
+const CARET_H = 13;
+
+export function NextStepSlot({
+  title,
+  x,
+  width,
+  onPick,
+}: {
+  title: string;
+  x: number;
+  width: number;
+  onPick: () => void;
+}) {
+  const tip = useTip();
+  const [over, setOver] = useState(false);
+  const ink = NODE_STYLES.tactic.stroke;
+  return (
+    <g
+      transform={`translate(${x},0)`}
+      style={{ cursor: "pointer" }}
+      data-ptw-slot=""
+      {...tip.props(title)}
+      onPointerEnter={() => setOver(true)}
+      onPointerLeave={() => setOver(false)}
+      onClick={(e) => {
+        e.stopPropagation();
+        onPick();
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <rect
+        x={0}
+        y={0}
+        width={width}
+        height={FRONTIER_H}
+        rx={SLOT_RX}
+        fill={NODE_STYLES.tactic.fill}
+        stroke={ink}
+        strokeWidth={over ? TREE_INK_SW_BOLD : TREE_INK_SW}
+      />
+      <rect
+        data-ptw-caret=""
+        x={SLOT_PAD_X}
+        y={(FRONTIER_H - CARET_H) / 2}
+        width={CARET_W}
+        height={CARET_H}
+        fill={NODE_TEXT}
+        style={{ pointerEvents: "none" }}
+      />
     </g>
   );
 }

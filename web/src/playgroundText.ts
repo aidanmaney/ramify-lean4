@@ -630,6 +630,31 @@ export async function replayText(
 /** A fresh body for a theorem: its header and an indented empty line. */
 export const freshDoc = (header: string) => `${header}\n  `;
 
+/** The theorem file's own worked proof, as the editor reads it: the lines
+ after the `:= by` line, indentation, bullets and all, blank lines dropped
+ (publish.mjs replays exactly this under the page's header line). */
+export function solutionBody(source: string): string[] {
+  const at = source.indexOf(":= by");
+  if (at < 0) return [];
+  return source
+    .slice(at + 5)
+    .split("\n")
+    .slice(1)
+    .filter((l) => !/^\s*$/.test(l));
+}
+
+/** Where a theorem's text starts (`playground.html?start=`): `fresh` (the
+ default — the header and an empty line), `solved` (the file's own proof,
+ for a tree to read and take apart) or `almost` (that proof minus its last
+ line: a tree already standing, and one goal left to type for). A file with
+ no proof body starts fresh whatever was asked. */
+export type StartKind = "fresh" | "solved" | "almost";
+export function startDoc(header: string, source: string | undefined, start: StartKind): string {
+  const body = source ? solutionBody(source) : [];
+  const keep = start === "solved" ? body : start === "almost" ? body.slice(0, -1) : [];
+  return keep.length === 0 ? freshDoc(header) : [header, ...keep].join("\n");
+}
+
 /** Apply a `DocEdit` to a text (line/character positions). */
 export function applyDocEdit(doc: string, e: DocEdit): string {
   const lines = doc.split("\n");
