@@ -18,7 +18,7 @@ import type { HypLine } from "./types";
 import type { HypMarkStyle } from "./theme";
 import { HYP_MARK } from "./gestures";
 import { isInaccessibleName } from "./proofToTree";
-import { daggerHtml, daggerSvg } from "./dagger";
+import { daggerHtml } from "./dagger";
 import {
   HYP_LIT_FILL,
   HYP_NAME_FILL,
@@ -46,31 +46,39 @@ const HYP_LIT_PAD = 2;
 const hypNameEnd = (line: HypLine): number =>
   line.cont ? -1 : line.text.indexOf(" : ");
 
-function hypLineText(line: HypLine, dimmed: boolean): ReactNode {
+/** A plain line's text as HTML, its NAMES inked as the infoview inks them. */
+function hypLineHtml(line: HypLine, dimmed: boolean): ReactNode {
   const cut = hypNameEnd(line);
-  if (cut <= 0) return daggerSvg(line.text, HYP_FONT_PX);
+  if (cut <= 0) return daggerHtml(line.text);
   const names = line.text.slice(0, cut).split(" ");
   return (
     <>
       {names.map((n, i) => {
         const gone = isInaccessibleName(n);
         return (
-          <tspan
+          <span
             key={i}
             className={gone ? "ptw-inaccessible" : undefined}
-            fill={dimmed ? undefined : gone ? INACCESSIBLE_FILL : HYP_NAME_FILL}
-            fontStyle={gone ? "italic" : undefined}
+            style={{
+              color: dimmed ? undefined : gone ? INACCESSIBLE_FILL : HYP_NAME_FILL,
+              fontStyle: gone ? "italic" : undefined,
+            }}
           >
-            {daggerSvg(i > 0 ? ` ${n}` : n, HYP_FONT_PX)}
-          </tspan>
+            {daggerHtml(i > 0 ? ` ${n}` : n)}
+          </span>
         );
       })}
-      {daggerSvg(line.text.slice(cut), HYP_FONT_PX)}
+      {daggerHtml(line.text.slice(cut))}
     </>
   );
 }
 
+/** The block is drawn in TWO PARTS (the HTML-node rewrite, stage 2): `ink`
+ is the SVG under the text — the separator, the used-hyp washes and the
+ lead bullets — and `text` is the lines themselves as HTML, placed in the
+ node's HTML layer at the same coordinates. Both take the same props. */
 export function HypBlock({
+  part = "ink",
   lines,
   x,
   y,
@@ -82,6 +90,7 @@ export function HypBlock({
   lineTitle,
   onLineClick,
 }: {
+  part?: "ink" | "text";
   lines: HypLine[];
   x: number;
   y: number;
@@ -121,20 +130,71 @@ export function HypBlock({
   const lineFill = (line: HypLine) =>
     line.more || (anyUsed && !line.used) ? HYP_UNUSED_FILL : HYP_USED_FILL;
 
-  // The far-origin arrow, after the line's text (`HYP_ARROW_GAP`; layout's
-  // `hypLineInkW` measured exactly this), in the dim ink — one dimming.
-  const arrowSvg = (line: HypLine) =>
-    line.arrow ? (
-      <tspan
-        dx={HYP_ARROW_GAP}
-        fill={HYP_UNUSED_FILL}
-        fontStyle="normal"
-        fontFamily={getUiFontFamily()}
-        fontSize={HYP_FROM_PX}
+  if (part === "text")
+    return (
+      <div
+        data-ptw-hyps=""
+        style={{
+          position: "absolute",
+          left: textX,
+          top: y,
+          width: Math.max(0, x + width - textX),
+          textAlign: "left",
+          fontFamily: getCodeFontFamily(),
+          fontSize: HYP_FONT_PX,
+          lineHeight: `${HYP_LINE_H}px`,
+          letterSpacing: 0,
+          whiteSpace: "pre",
+        }}
       >
-        {hypArrowText(line.arrow)}
-      </tspan>
-    ) : null;
+        {lines.map((line, j) => (
+          // The provenance hover rides the LINE'S OWN `<div>`: it covers the
+          // line's whole row, so the gaps between glyphs are hit too, and
+          // nothing is laid over the tagged path's `InteractiveCode`.
+          <div
+            key={j}
+            data-ptw-hyp={line.more ? undefined : j}
+            title={line.more ? undefined : lineTitle?.(j)}
+            onMouseEnter={onLine && !line.more ? () => onLine(j) : undefined}
+            onMouseLeave={onLine && !line.more ? () => onLine(null) : undefined}
+            onClick={
+              onLineClick
+                ? (e) => {
+                    if (!e.altKey) return;
+                    e.stopPropagation();
+                    onLineClick(j, true);
+                  }
+                : undefined
+            }
+            style={{
+              height: HYP_LINE_H,
+              color: lineFill(line),
+              paddingLeft: line.indent ?? 0,
+              marginTop: line.sep ? HYP_SEP_H : 0,
+            }}
+          >
+            {line.more
+              ? line.text
+              : taggedLines
+                ? (taggedLines[j] ?? daggerHtml(line.text))
+                : hypLineHtml(line, anyUsed && !line.used)}
+            {line.arrow ? (
+              <span
+                style={{
+                  marginLeft: HYP_ARROW_GAP,
+                  color: HYP_UNUSED_FILL,
+                  fontStyle: "normal",
+                  fontFamily: getUiFontFamily(),
+                  fontSize: HYP_FROM_PX,
+                }}
+              >
+                {hypArrowText(line.arrow)}
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    );
 
   return (
     <>
@@ -213,127 +273,6 @@ export function HypBlock({
             ) : null,
           )}
         </text>
-      )}
-      {taggedLines ? (
-        <foreignObject
-          x={textX}
-          y={y}
-          width={Math.max(0, x + width - textX)}
-          height={lines.length * HYP_LINE_H + (sepIndex >= 0 ? HYP_SEP_H : 0)}
-          style={{ overflow: "visible" }}
-        >
-          <div
-            style={{
-              fontFamily: getCodeFontFamily(),
-              fontSize: HYP_FONT_PX,
-              lineHeight: `${HYP_LINE_H}px`,
-              letterSpacing: 0,
-              whiteSpace: "pre",
-            }}
-          >
-            {lines.map((line, j) => (
-              // The provenance hover rides the LINE'S OWN `<div>` here rather
-              // than an SVG rect over it: a rect on top would swallow the
-              // `InteractiveCode` popups the tagged hyp types carry, and the
-              // div's own enter/leave fire just the same when the pointer is
-              // inside one of them.
-              <div
-                key={j}
-                title={line.more ? undefined : lineTitle?.(j)}
-                onMouseEnter={onLine && !line.more ? () => onLine(j) : undefined}
-                onMouseLeave={onLine && !line.more ? () => onLine(null) : undefined}
-                onClick={
-                  onLineClick
-                    ? (e) => {
-                        if (!e.altKey) return;
-                        e.stopPropagation();
-                        onLineClick(j, true);
-                      }
-                    : undefined
-                }
-                style={{
-                  height: HYP_LINE_H,
-                  color: lineFill(line),
-                  paddingLeft: line.indent ?? 0,
-
-                  marginTop: line.sep ? HYP_SEP_H : 0,
-                }}
-              >
-                {line.more ? line.text : (taggedLines[j] ?? daggerHtml(line.text))}
-                {line.arrow ? (
-                  <span
-                    style={{
-                      marginLeft: HYP_ARROW_GAP,
-                      color: HYP_UNUSED_FILL,
-                      fontFamily: getUiFontFamily(),
-                      fontSize: HYP_FROM_PX,
-                    }}
-                  >
-                    {hypArrowText(line.arrow)}
-                  </span>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </foreignObject>
-      ) : (
-        <text
-          textAnchor="start"
-          fontSize={HYP_FONT_PX}
-          fontFamily={getCodeFontFamily()}
-
-          style={{ letterSpacing: 0 }}
-        >
-          {lines.map((line, j) => (
-            <tspan
-              key={j}
-              x={textX + (line.indent ?? 0)}
-              y={y + sepOff(j) + (j + 0.5) * HYP_LINE_H}
-              dy="0.32em"
-              fill={lineFill(line)}
-            >
-              {line.more ? line.text : hypLineText(line, anyUsed && !line.used)}
-              {arrowSvg(line)}
-            </tspan>
-          ))}
-        </text>
-      )}
-
-      {/* PER-LINE HIT STRIPS — only on the plain `<text>` path, where the
-          glyphs alone are hit-testable and the gaps between them are not (a
-          rect BEHIND the text would flicker as the pointer crossed a letter).
-          On the tagged path the line's own `<div>` carries the hover instead,
-          so nothing is laid over `InteractiveCode`. Geometry is the block's
-          own: `hypLineOffset` and `HYP_LINE_H`, the numbers the measurer
-          sized the block with. */}
-      {onLine && !taggedLines && (
-        <g>
-          {lines.map((line, j) => line.more ? null : (
-            <rect
-              key={j}
-              x={x}
-              y={hypLineMid(j) - HYP_LINE_H / 2}
-              width={width}
-              height={HYP_LINE_H}
-              fill="transparent"
-              data-ptw-hyp={j}
-              style={{ pointerEvents: "all" }}
-              onMouseEnter={() => onLine(j)}
-              onMouseLeave={() => onLine(null)}
-              onClick={
-                onLineClick
-                  ? (e) => {
-                      if (!e.altKey) return;
-                      e.stopPropagation();
-                      onLineClick(j, true);
-                    }
-                  : undefined
-              }
-            >
-              {lineTitle?.(j) ? <title>{lineTitle(j)}</title> : null}
-            </rect>
-          ))}
-        </g>
       )}
     </>
   );
