@@ -78,7 +78,7 @@ type Target = KindDef["target"];
 /** A scoped `window.__ptw`: every query starts at one cell's root, since a page
  of a hundred views repeats every node id a hundred times. */
 function driver(root: HTMLElement) {
-  const nodes = () => [...root.querySelectorAll<SVGGElement>("g[data-node]")];
+  const nodes = () => [...root.querySelectorAll<HTMLElement>("[data-node]")];
   const nodeEl = (id: string) => nodes().find((g) => g.getAttribute("data-node") === id) ?? null;
   const resolve = (t: Target): string | null => {
     if ("id" in t) return t.id;
@@ -196,7 +196,7 @@ function driver(root: HTMLElement) {
     async frameTree() {
       const f = frame();
       if (!f) return;
-      const boxes = [...root.querySelectorAll("g[data-node] [data-ptw-box]")].map((b) => b.getBoundingClientRect());
+      const boxes = [...root.querySelectorAll("[data-node] [data-ptw-box]")].map((b) => b.getBoundingClientRect());
       if (!boxes.length) return;
       const top = Math.min(...boxes.map((r) => r.top));
       const left = Math.min(...boxes.map((r) => r.left));
@@ -602,7 +602,7 @@ export default function Matrix() {
       },
       ready: () => document.querySelector(".mx-page")?.getAttribute("data-matrix-ready") === "1",
       texts: (k: string, s: string) =>
-        [...(cell(k, s)?.querySelectorAll("g[data-node]") ?? [])].map((g) => `${g.getAttribute("data-node")}: ${(g.textContent ?? "").slice(0, 60)}`),
+        [...(cell(k, s)?.querySelectorAll("[data-node]") ?? [])].map((g) => `${g.getAttribute("data-node")}: ${(g.textContent ?? "").slice(0, 60)}`),
     };
   }, []);
 

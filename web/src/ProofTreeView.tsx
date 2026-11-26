@@ -6116,7 +6116,7 @@ export default function ProofTreeView({
           // keys' place there, so the arrows resume from what was clicked.
           setTreeFocus((f) => (f === "none" ? f : "mouse"));
           const nid = (e.target as Element)
-            .closest?.("g[data-node]")
+            .closest?.("[data-node]")
             ?.getAttribute("data-node");
           if (nid) setActiveId(nid);
         }}
@@ -6142,7 +6142,7 @@ export default function ProofTreeView({
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           const target = e.target as Element;
-          if (target.closest("g[data-node], [data-ptw-edit]")) return;
+          if (target.closest("[data-node], [data-ptw-edit]")) return;
           const svg = scrollRef.current?.querySelector("svg");
           if (!svg) return;
           const toContent = (cx: number, cy: number) => {
@@ -6209,10 +6209,27 @@ export default function ProofTreeView({
           for (const l of layers) if (l.bg && l.up) l.off();
         }}
       >
+        {/* THREE LAYERS (the HTML-node rewrite, stage 1): the LINKS in one
+            SVG underneath; the NODES as HTML elements above it, one
+            absolutely placed element per node (its ink still SVG for now, in
+            a 1px svg that paints past its own box); and the OVERLAYS (pills,
+            marquee, editor, popovers) in a top SVG whose root takes no
+            pointer events, so only what it paints is hit. The links SVG is
+            the frame's FIRST svg: the marquee and the seam map client
+            coordinates through it. One scale, `zoom`, for all three. */}
+        <div
+          data-ptw-stage=""
+          style={{
+            position: "relative",
+            width: svgW * zoom,
+            height: svgH * zoom,
+          }}
+        >
         <svg
           width={svgW * zoom}
           height={svgH * zoom}
           viewBox={`0 0 ${svgW} ${svgH}`}
+          style={{ position: "absolute", left: 0, top: 0 }}
         >
           <SquigglePatterns />
           <g
@@ -6229,7 +6246,21 @@ export default function ProofTreeView({
               linkTint={linkTint}
               onNodeClick={onNodeClick}
             />
-
+          </g>
+        </svg>
+        <div
+          data-ptw-nodes=""
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: svgW,
+            height: svgH,
+            transform: zoom === 1 ? undefined : `scale(${zoom})`,
+            transformOrigin: "0 0",
+            pointerEvents: "none",
+          }}
+        >
             {nodes.map((node) => {
               const {
                 w,
@@ -7039,7 +7070,7 @@ export default function ProofTreeView({
                 ...chipMoves,
               ];
 
-              const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
+              const handleClick = (e: ReactMouseEvent<Element>) => {
                 e.stopPropagation();
 
                 if (isMarker) {
@@ -7595,7 +7626,7 @@ export default function ProofTreeView({
                     : `Tactic: ${said}${recovered === "failed" ? ", failed" : ""}`;
 
               return (
-                <g
+                <div
                   key={id}
 
                   data-node={id}
@@ -7619,9 +7650,17 @@ export default function ProofTreeView({
                       ? ""
                       : undefined
                   }
-                  transform={`translate(${node.x},${node.y})`}
-
-                  opacity={
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    // A transform, not left/top: layout boxes snap to whole
+                    // pixels and would shift the ink by up to half a pixel
+                    // against the SVG it replaced.
+                    transform: `translate(${MARGIN.left + PAD_X + node.x}px,${MARGIN.top + PAD_Y + node.y}px)`,
+                    pointerEvents: "auto",
+                    cursor: clickable && !isEditing ? "pointer" : "default",
+                    opacity: 
                     (arming && armedIds.has(id) && id !== arming.id) ||
                     (elidePreview &&
                       elidePreview.anchor !== id &&
@@ -7632,8 +7671,8 @@ export default function ProofTreeView({
                       ? 0.35
                       : offMap
                         ? STUB_OPACITY
-                        : undefined
-                  }
+                        : undefined,
+                  }}
                   onClick={clickable && !isEditing ? handleClick : undefined}
                   // Right-click: the move menu at the pointer (VS Code's
                   // context menu; ⇧F10 and ${CMD}. from the keys).
@@ -7685,7 +7724,7 @@ export default function ProofTreeView({
                     elidable || hasBar || hypLights
                       ? (e) => {
                           if (hasBar || hypLights) {
-                            const g = e.currentTarget as SVGGElement;
+                            const g = e.currentTarget as Element;
                             const hit = (sel: string) => {
                               const r = g
                                 .querySelector(sel)
@@ -7723,10 +7762,19 @@ export default function ProofTreeView({
                         }
                       : undefined
                   }
-                  style={{
-                    cursor: clickable && !isEditing ? "pointer" : "default",
-                  }}
                 >
+                  <svg
+                    width={1}
+                    height={1}
+                    overflow="visible"
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      overflow: "visible",
+                    }}
+                  >
+                  <g>
                   {!taggedLines && nodeTooltip !== "" && (
                     <title>{nodeTooltip}</title>
                   )}
@@ -8784,9 +8832,27 @@ export default function ProofTreeView({
                       ]}
                     />
                   )}
-                </g>
+                  </g>
+                  </svg>
+                </div>
               );
             })}
+        </div>
+        <svg
+          width={svgW * zoom}
+          height={svgH * zoom}
+          viewBox={`0 0 ${svgW} ${svgH}`}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            pointerEvents: "none",
+          }}
+        >
+          <g
+            transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}
+            style={{ pointerEvents: "auto" }}
+          >
 
             {/* B2 — THE PROVENANCE CONNECTOR. Drawn ABOVE every node so it
                 reads as one continuous line from the hypothesis to the step
@@ -8912,6 +8978,7 @@ export default function ProofTreeView({
             )}
           </g>
         </svg>
+        </div>
       </div>
       {/* THE IN-PAGE TOOLTIP, above every floater (tip.tsx). */}
       <TipLayer />
