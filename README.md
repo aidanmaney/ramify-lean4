@@ -144,7 +144,7 @@ pushes. See [Distribution](#distribution).
 
 ## Toolchain
 
-Pinned to **Lean v4.32.2** (`lean/lean-toolchain`), with Mathlib at the matching
+Pinned to **Lean v4.35.0** (`lean/lean-toolchain`), with Mathlib at the matching
 tag and Paperproof pinned to an exact commit — never a floating `rev`, since
 upstream moved to the module system in 2026-07.
 

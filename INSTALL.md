@@ -14,7 +14,7 @@ Ramify comes in two parts: a Lean 4 widget and a VS Code extension.[^1] ([Quicks
 
 ## Prerequisites
 
-**Your project must be on Lean `v4.32.2`.** The package pins its toolchain and its dependencies to that release; projects on a different toolchain will fail to resolve them cleanly. Mathlib `v4.32.2` is the matching release.
+**Your project must be on Lean `v4.35.0`.** The package pins its toolchain and its dependencies to that release; projects on a different toolchain will fail to resolve them cleanly. Mathlib `v4.35.0` is the matching release.
 
 You also need the [Lean 4 VS Code extension](https://marketplace.visualstudio.com/items?itemName=leanprover.lean4) since the tree widget operates in the infoview panel. The Ramify extension declares it as a dependency.
 
@@ -22,9 +22,9 @@ You also need the [Lean 4 VS Code extension](https://marketplace.visualstudio.co
 
 | Component | Version |
 | --- | --- |
-| Lean | `v4.32.2` (the package's `lean-toolchain`) |
-| Mathlib, if your project uses it | `v4.32.2` |
-| ProofWidgets | `v0.0.105` (what Mathlib `v4.32.2` pins, so the two resolve to one copy) |
+| Lean | `v4.35.0` (the package's `lean-toolchain`) |
+| Mathlib, if your project uses it | `v4.35.0` |
+| ProofWidgets | `v0.0.116` (what Mathlib `v4.35.0` pins, so the two resolve to one copy) |
 | Paperproof | pinned by commit in `dist/lakefile.toml`; never a floating `rev` |
 | VS Code | 1.85 or later |
 | Lean 4 VS Code extension (`leanprover.lean4`) | required |
@@ -73,7 +73,7 @@ Then:
 lake update ramify && lake build
 ```
 
-This will pull the **Paperproof** Lean 4 library, whose parser is where every Ramify tree starts (see [NOTICE](NOTICE)), and **ProofWidgets v0.0.105**, needed for rendering javascript in the infoview (this is the same version Mathlib `v4.32.2` pins, so Mathlib projects resolve to one copy rather than conflicting). Note: neither pulls Mathlib.
+This will pull the **Paperproof** Lean 4 library, whose parser is where every Ramify tree starts (see [NOTICE](NOTICE)), and **ProofWidgets v0.0.116**, needed for rendering javascript in the infoview (this is the same version Mathlib `v4.35.0` pins, so Mathlib projects resolve to one copy rather than conflicting). Note: neither pulls Mathlib.
 
 A fresh build will take a few minutes; mostly building ProofWidgets. Further builds will be much faster since they need only rebuild Ramify.
 
@@ -303,7 +303,7 @@ Release notes are in [CHANGELOG.md](CHANGELOG.md); to report a security problem 
 ```python
 dist/                       the Lake package and sample files
   lakefile.toml             requires Paperproof + ProofWidgets, no Mathlib
-  lean-toolchain            v4.32.2
+  lean-toolchain            v4.35.0
   lake-manifest.json        pinned dependency set
   Demo.lean                 the try-it file
   ProofTreeTour.lean        the guided tour

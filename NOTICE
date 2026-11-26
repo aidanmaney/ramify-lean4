@@ -60,8 +60,8 @@ per-file headers of that project).
 <https://github.com/leanprover-community/ProofWidgets4>
 
 Ramify's panel widget is a ProofWidgets `Component`, and the infoview loads the
-renderer through ProofWidgets' widget machinery. Pinned to v0.0.105, which is
-what Mathlib v4.32.2 itself pins, so a Mathlib project resolves to one copy.
+renderer through ProofWidgets' widget machinery. Pinned to v0.0.116, which is
+what Mathlib v4.35.0 itself pins, so a Mathlib project resolves to one copy.
 Used as published; not modified.
 
 The full licence text is reproduced at the end of this file.
