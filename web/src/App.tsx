@@ -251,15 +251,22 @@ const HYP_MARK_STUB =
 function installDriver() {
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const gs = () => [...document.querySelectorAll<HTMLElement>("[data-node]")];
-  // One entry per drawn LINE: a hyp block is one <text> with a <tspan> per
-  // hypothesis, so a per-<text> split would glue `n : ℕ` and `key : …`.
-  const textsOf = (g: Element) =>
-    [...g.querySelectorAll("text")].flatMap((t) => {
+  // One entry per drawn LINE. The words are HTML (one `<div>` per line in the
+  // context block, the label and the comment strip); what is still SVG text
+  // (the case badge, `+N`) is one entry per `<tspan>`, or per `<text>`.
+  const textsOf = (g: Element) => [
+    ...[
+      ...g.querySelectorAll(
+        "[data-ptw-hyps] > div, [data-ptw-label] > div > div, [data-ptw-strip] > div",
+      ),
+    ].map((d) => d.textContent ?? ""),
+    ...[...g.querySelectorAll("text")].flatMap((t) => {
       const spans = [...t.querySelectorAll("tspan")];
       return spans.length
         ? spans.map((s) => s.textContent ?? "")
         : [t.textContent ?? ""];
-    });
+    }),
+  ];
   type Node = { id: string; texts: string[]; goal: boolean; brk: boolean };
   const node = (g: Element): Node => {
     const id = g.getAttribute("data-node") ?? "";

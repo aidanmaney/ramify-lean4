@@ -8200,114 +8200,6 @@ export default function ProofTreeView({
                     />
                   )}
 
-                  {/* The goal's corner control, top-right (user direction),
-                      VS Code's fold control (2026-10-04). OPEN: a
-                      `chevron-down` in the gutter's folding ink, faded in
-                      while the box is hovered (theme.ts, the editor's
-                      `showFoldingControls: mouseover` with its 0.5s fade —
-                      no dwell: it is the control itself, not a preview of
-                      what it would take) or keyboard-active. FOLDED: a
-                      `chevron-right`, always, then `+N` in the fold
-                      placeholder's ink and the box washed in the folded
-                      range's — the editor's folded line. Both sit on the
-                      top line's middle (`topLineMid`). A HOP's goal is not
-                      folded (its continuation is still drawn; the `⋯` chip on
-                      the line says what went), so it wears `+N` alone, in the
-                      same place, and no chevron. Seeded: italic `+N`.
-                      `sizeOf` reserves `CORNER_W` on the top line for all of
-                      it; `FOLD_ICON`/`FOLD_PH_X`/`topLineMid` place it. */}
-                  {cuttable &&
-                    !hideForEdit && (
-                    <>
-                      {folded?.kind !== "hop" && (
-                        <g
-                          data-ptw-foldctl={folded ? "folded" : "open"}
-                          style={
-                            treeFocus === "kb" && id === activeNow
-                              ? { opacity: 1 }
-                              : undefined
-                          }
-                          pointerEvents="none"
-                        >
-                          <Codicon
-                            name={folded ? ICON["goal.folded"] : ICON["goal.open"]}
-                            size={FOLD_ICON}
-                            x={w / 2 - CORNER_W}
-                            y={
-                              boxTop +
-                              topLineMid(!!hyps && hyps.length > 0) -
-                              FOLD_ICON / 2
-                            }
-                            color="var(--ptw-fold-ctl)"
-                          />
-                        </g>
-                      )}
-                      {folded && (
-                        <text
-                          x={w / 2 - CORNER_W + FOLD_PH_X}
-                          y={
-                            boxTop +
-                            topLineMid(!!hyps && hyps.length > 0) +
-                            FOLD_PH_DROP
-                          }
-                          fontSize={BADGE_FONT_PX + 1}
-                          fontFamily={getCodeFontFamily()}
-                          fontStyle={folded.seeded ? "italic" : undefined}
-                          fill="var(--ptw-fold-ph)"
-                          pointerEvents="none"
-                          style={{ letterSpacing: 0 }}
-                        >
-                          {`+${folded.tactics.length}`}
-                        </text>
-                      )}
-                      {/* THE HIT AREA: an invisible rect over the corner the
-                          top line leaves free (`CORNER_W` wide, the reserve
-                          `sizeOf` makes, so it lies over no text) and
-                          `CORNER_HIT_H` tall. The glyph alone was the target
-                          before — a 7 × 1 dash. Paint only, like the nub's
-                          region: the click is the node's own (a goal's click
-                          folds or opens), the rect adds the pointer cursor and
-                          carries the open face's fade preview (after the
-                          dwell, as before). */}
-                      <rect
-                        data-ptw-corner=""
-                        x={w / 2 - CORNER_W}
-                        y={boxTop}
-                        width={CORNER_W}
-                        height={CORNER_HIT_H}
-                        fill="transparent"
-                        pointerEvents="all"
-                        style={{ cursor: "pointer" }}
-                        // Hovering the open chevron fades exactly what the click would
-                        // take — the skip button's preview, by the same rule
-                        // and sparing the anchor (this node) for the same
-                        // reason: the control under the pointer must not read
-                        // disabled. `+N` has no preview: nothing it stands
-                        // for is drawn.
-                        onPointerEnter={
-                          !folded && myCut
-                            ? () => {
-                                const ids = cutExtentIds(myCut);
-                                afterDwell(() =>
-                                  setElidePreview({
-                                    anchor: id,
-                                    ids,
-                                    from: "bar",
-                                  }),
-                                );
-                              }
-                            : undefined
-                        }
-                        //
-                        // Leaving and pressing are wired on BOTH faces: the
-                        // press folds the goal, and a `+N` face with no
-                        // leave handler would strand a preview (or a pending
-                        // dwell) that the open face started.
-                        onPointerLeave={dropCornerPreview}
-                        onPointerDown={dropCornerPreview}
-                      />
-                    </>
-                  )}
 
                   </g>
                   </svg>
@@ -8594,6 +8486,117 @@ export default function ProofTreeView({
                     }}
                   >
                   <g>
+                  {/* (The corner sits in the OVER-text svg: the label and
+                      context blocks are HTML above the first svg and span the
+                      box's width, so a hit rect under them took no pointer.) */}
+                  {/* The goal's corner control, top-right (user direction),
+                      VS Code's fold control (2026-10-04). OPEN: a
+                      `chevron-down` in the gutter's folding ink, faded in
+                      while the box is hovered (theme.ts, the editor's
+                      `showFoldingControls: mouseover` with its 0.5s fade —
+                      no dwell: it is the control itself, not a preview of
+                      what it would take) or keyboard-active. FOLDED: a
+                      `chevron-right`, always, then `+N` in the fold
+                      placeholder's ink and the box washed in the folded
+                      range's — the editor's folded line. Both sit on the
+                      top line's middle (`topLineMid`). A HOP's goal is not
+                      folded (its continuation is still drawn; the `⋯` chip on
+                      the line says what went), so it wears `+N` alone, in the
+                      same place, and no chevron. Seeded: italic `+N`.
+                      `sizeOf` reserves `CORNER_W` on the top line for all of
+                      it; `FOLD_ICON`/`FOLD_PH_X`/`topLineMid` place it. */}
+                  {cuttable &&
+                    !hideForEdit && (
+                    <>
+                      {folded?.kind !== "hop" && (
+                        <g
+                          data-ptw-foldctl={folded ? "folded" : "open"}
+                          style={
+                            treeFocus === "kb" && id === activeNow
+                              ? { opacity: 1 }
+                              : undefined
+                          }
+                          pointerEvents="none"
+                        >
+                          <Codicon
+                            name={folded ? ICON["goal.folded"] : ICON["goal.open"]}
+                            size={FOLD_ICON}
+                            x={w / 2 - CORNER_W}
+                            y={
+                              boxTop +
+                              topLineMid(!!hyps && hyps.length > 0) -
+                              FOLD_ICON / 2
+                            }
+                            color="var(--ptw-fold-ctl)"
+                          />
+                        </g>
+                      )}
+                      {folded && (
+                        <text
+                          x={w / 2 - CORNER_W + FOLD_PH_X}
+                          y={
+                            boxTop +
+                            topLineMid(!!hyps && hyps.length > 0) +
+                            FOLD_PH_DROP
+                          }
+                          fontSize={BADGE_FONT_PX + 1}
+                          fontFamily={getCodeFontFamily()}
+                          fontStyle={folded.seeded ? "italic" : undefined}
+                          fill="var(--ptw-fold-ph)"
+                          pointerEvents="none"
+                          style={{ letterSpacing: 0 }}
+                        >
+                          {`+${folded.tactics.length}`}
+                        </text>
+                      )}
+                      {/* THE HIT AREA: an invisible rect over the corner the
+                          top line leaves free (`CORNER_W` wide, the reserve
+                          `sizeOf` makes, so it lies over no text) and
+                          `CORNER_HIT_H` tall. The glyph alone was the target
+                          before — a 7 × 1 dash. Paint only, like the nub's
+                          region: the click is the node's own (a goal's click
+                          folds or opens), the rect adds the pointer cursor and
+                          carries the open face's fade preview (after the
+                          dwell, as before). */}
+                      <rect
+                        data-ptw-corner=""
+                        x={w / 2 - CORNER_W}
+                        y={boxTop}
+                        width={CORNER_W}
+                        height={CORNER_HIT_H}
+                        fill="transparent"
+                        pointerEvents="all"
+                        style={{ cursor: "pointer" }}
+                        // Hovering the open chevron fades exactly what the click would
+                        // take — the skip button's preview, by the same rule
+                        // and sparing the anchor (this node) for the same
+                        // reason: the control under the pointer must not read
+                        // disabled. `+N` has no preview: nothing it stands
+                        // for is drawn.
+                        onPointerEnter={
+                          !folded && myCut
+                            ? () => {
+                                const ids = cutExtentIds(myCut);
+                                afterDwell(() =>
+                                  setElidePreview({
+                                    anchor: id,
+                                    ids,
+                                    from: "bar",
+                                  }),
+                                );
+                              }
+                            : undefined
+                        }
+                        //
+                        // Leaving and pressing are wired on BOTH faces: the
+                        // press folds the goal, and a `+N` face with no
+                        // leave handler would strand a preview (or a pending
+                        // dwell) that the open face started.
+                        onPointerLeave={dropCornerPreview}
+                        onPointerDown={dropCornerPreview}
+                      />
+                    </>
+                  )}
 
                   {/* THE CLOSING MARK: `∎` after the last line, where the
                       layout reserved it (`closedMarkX`, the measurer's own

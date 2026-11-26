@@ -136,9 +136,11 @@ export function HypBlock({
         data-ptw-hyps=""
         style={{
           position: "absolute",
-          left: textX,
+          // From the block's left edge, the lead gutter included, so the
+          // whole row is the line's hover target (as the SVG strips were).
+          left: x,
           top: y,
-          width: Math.max(0, x + width - textX),
+          width: Math.max(0, width),
           textAlign: "left",
           fontFamily: getCodeFontFamily(),
           fontSize: HYP_FONT_PX,
@@ -169,7 +171,7 @@ export function HypBlock({
             style={{
               height: HYP_LINE_H,
               color: lineFill(line),
-              paddingLeft: line.indent ?? 0,
+              paddingLeft: textX - x + (line.indent ?? 0),
               marginTop: line.sep ? HYP_SEP_H : 0,
             }}
           >
