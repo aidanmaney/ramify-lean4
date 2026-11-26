@@ -4,7 +4,7 @@ Thanks for looking. This file is the short version; [README.md](README.md) expla
 
 ## Setup
 
-- Install [elan](https://github.com/leanprover/elan). The toolchain is pinned in `lean/lean-toolchain` (Lean `v4.32.2`) and elan fetches it.
+- Install [elan](https://github.com/leanprover/elan). The toolchain is pinned in `lean/lean-toolchain` (Lean `v4.35.0`) and elan fetches it.
 - Node 22 and npm for `web/`.
 
 ```bash

@@ -118,7 +118,7 @@ import { collapseLabel, headerPrefix, type KeepSeg } from "./briefLabel";
 import { lineOffsets } from "./taggedText";
 import { ACCENT_TEXT, CASE_FILL, COMMENT_FILL, PROSE_FILL, EDIT_BG, EDIT_TEXT, HYP_LIT_STRONG_FILL, GHOST_TEXT_FILL, TURNSTILE_FILL, TARGET_WEIGHT, MUTED_FILL, NODE_STYLES, NODE_TEXT, SEQ_STROKE, SORRY_FILL, DANGER_FILL, STICKY_BG, STICKY_BORDER, STICKY_SHADOW, CHROME_BG, CHROME_UNDERLAY, CHROME_BORDER, CHROME_INK, CHROME_FONT, CHROME_RADIUS, DIM_OPACITY, TOKEN_VARS, ensurePaletteStyle, observeThemeChange, resolveThemeKind, Z, CHIP_SHADOW, FAINT_OPACITY, PREVIEW_OPACITY, STUB_OPACITY, WASH_OPACITY, TREE_INK_SW_BOLD, FOCUS_INK, CLOSED_FILL, LIGHTBULB_INK, LIGHTBULB_AUTOFIX_INK } from "./theme";
 import { HypBlock } from "./hypBlock";
-import { daggerSvg } from "./dagger";
+import { daggerHtml, daggerSvg } from "./dagger";
 import { COMPACT_LEFT, type FollowAnim, MARGIN, ARRIVAL_TOP, IN_VIEW_PAD, IN_VIEW_TOP, animateScroll, cancelFollow, cfStubNodeId, clampScroll, clampZoom, inViewScroll, nodeBoxFill, nodeRx } from "./scrollHelpers";
 import {
   COMMENT_MODES,
@@ -169,6 +169,10 @@ const NO_SETTINGS: ViewSettings = {};
 const NO_IDS: ReadonlySet<string> = new Set();
 /** How long the Width slider must rest before its value is written. */
 const PERSIST_SETTLE_MS = 500;
+/** At or above this many drawn nodes the view mounts only those near the
+ visible part of the frame (`windowed`). The whole corpus is ≤ 85 nodes, so
+ nothing the probes and the harness draw is ever windowed. */
+const WINDOW_MIN_NODES = 300;
 
 /** A key pressed while TYPING somewhere — a text field, or a contenteditable
  such as the playground's CodeMirror — belongs to that surface, never to the
@@ -3629,11 +3633,20 @@ export default function ProofTreeView({
     return () => ro.disconnect();
   }, []);
 
+  // WINDOWING (the HTML-node rewrite, stage 3): which TILE of the scroll
+  // the frame is in, half a viewport per tile. Only the tile goes into state,
+  // so a scroll re-renders the view only when it crosses a tile boundary.
+  const [scrollTile, setScrollTile] = useState({ x: 0, y: 0 });
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onScroll = () => {
       lastScrollRef.current = { x: el.scrollLeft, y: el.scrollTop };
+      const tx = Math.floor(el.scrollLeft / Math.max(1, el.clientWidth / 2));
+      const ty = Math.floor(el.scrollTop / Math.max(1, el.clientHeight / 2));
+      setScrollTile((prev) =>
+        prev.x === tx && prev.y === ty ? prev : { x: tx, y: ty },
+      );
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
@@ -5689,6 +5702,50 @@ export default function ProofTreeView({
     );
   };
 
+  // WHICH NODES ARE MOUNTED (stage 3). Under `WINDOW_MIN_NODES` drawn
+  // nodes, all of them, as before. Above it, the ones whose ink lies within
+  // one viewport of the visible part of the frame, plus every node some
+  // piece of state is holding on to (the keys' place, the hover bar, the
+  // editor, the menu, an armed delete, a proposal, the cursor, the current
+  // mark, the selection), so no gesture loses its element. Placement is
+  // the layout's, so a node mounted late lands exactly where it would have
+  // been; the links stay whole in their own layer.
+  const windowed = (all: typeof nodes): typeof nodes => {
+    if (all.length < WINDOW_MIN_NODES || viewport.w === 0) return all;
+    const vw = viewport.w;
+    const vh = viewport.h;
+    const offX = MARGIN.left + PAD_X;
+    const offY = MARGIN.top + PAD_Y;
+    const x0 = (scrollTile.x * (vw / 2) - vw) / zoom - offX;
+    const x1 = (scrollTile.x * (vw / 2) + 2.5 * vw) / zoom - offX;
+    const y0 = (scrollTile.y * (vh / 2) - vh) / zoom - offY;
+    const y1 = (scrollTile.y * (vh / 2) + 2.5 * vh) / zoom - offY;
+    const keep = new Set<string>();
+    for (const k of [
+      activeNow,
+      hoverId,
+      nubHoverId,
+      editing?.id,
+      menuFor,
+      arming?.id,
+      proposal?.id,
+      cursorNodeId,
+      currentStopId,
+    ])
+      if (k) keep.add(k);
+    return all.filter((n) => {
+      if (keep.has(n.data.id) || selection?.has(n.data.id)) return true;
+      const half = Math.max(n.data.w, n.data.commentW ?? 0) / 2;
+      const ink = inkExtent(n.data);
+      return (
+        n.x + half >= x0 &&
+        n.x - half <= x1 &&
+        n.y + ink.down >= y0 &&
+        n.y - ink.up <= y1
+      );
+    });
+  };
+
   return (
     <TipContext.Provider value={tipCtl}>
     <div
@@ -6116,7 +6173,7 @@ export default function ProofTreeView({
           // keys' place there, so the arrows resume from what was clicked.
           setTreeFocus((f) => (f === "none" ? f : "mouse"));
           const nid = (e.target as Element)
-            .closest?.("g[data-node]")
+            .closest?.("[data-node]")
             ?.getAttribute("data-node");
           if (nid) setActiveId(nid);
         }}
@@ -6142,7 +6199,7 @@ export default function ProofTreeView({
         onMouseDown={(e) => {
           if (e.button !== 0) return;
           const target = e.target as Element;
-          if (target.closest("g[data-node], [data-ptw-edit]")) return;
+          if (target.closest("[data-node], [data-ptw-edit]")) return;
           const svg = scrollRef.current?.querySelector("svg");
           if (!svg) return;
           const toContent = (cx: number, cy: number) => {
@@ -6209,10 +6266,27 @@ export default function ProofTreeView({
           for (const l of layers) if (l.bg && l.up) l.off();
         }}
       >
+        {/* THREE LAYERS (the HTML-node rewrite, stage 1): the LINKS in one
+            SVG underneath; the NODES as HTML elements above it, one
+            absolutely placed element per node (its ink still SVG for now, in
+            a 1px svg that paints past its own box); and the OVERLAYS (pills,
+            marquee, editor, popovers) in a top SVG whose root takes no
+            pointer events, so only what it paints is hit. The links SVG is
+            the frame's FIRST svg: the marquee and the seam map client
+            coordinates through it. One scale, `zoom`, for all three. */}
+        <div
+          data-ptw-stage=""
+          style={{
+            position: "relative",
+            width: svgW * zoom,
+            height: svgH * zoom,
+          }}
+        >
         <svg
           width={svgW * zoom}
           height={svgH * zoom}
           viewBox={`0 0 ${svgW} ${svgH}`}
+          style={{ position: "absolute", left: 0, top: 0 }}
         >
           <SquigglePatterns />
           <g
@@ -6229,8 +6303,22 @@ export default function ProofTreeView({
               linkTint={linkTint}
               onNodeClick={onNodeClick}
             />
-
-            {nodes.map((node) => {
+          </g>
+        </svg>
+        <div
+          data-ptw-nodes=""
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: svgW,
+            height: svgH,
+            transform: zoom === 1 ? undefined : `scale(${zoom})`,
+            transformOrigin: "0 0",
+            pointerEvents: "none",
+          }}
+        >
+            {windowed(nodes).map((node) => {
               const {
                 w,
                 h,
@@ -7039,7 +7127,7 @@ export default function ProofTreeView({
                 ...chipMoves,
               ];
 
-              const handleClick = (e: ReactMouseEvent<SVGGElement>) => {
+              const handleClick = (e: ReactMouseEvent<Element>) => {
                 e.stopPropagation();
 
                 if (isMarker) {
@@ -7595,7 +7683,7 @@ export default function ProofTreeView({
                     : `Tactic: ${said}${recovered === "failed" ? ", failed" : ""}`;
 
               return (
-                <g
+                <div
                   key={id}
 
                   data-node={id}
@@ -7619,9 +7707,17 @@ export default function ProofTreeView({
                       ? ""
                       : undefined
                   }
-                  transform={`translate(${node.x},${node.y})`}
-
-                  opacity={
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    // A transform, not left/top: layout boxes snap to whole
+                    // pixels and would shift the ink by up to half a pixel
+                    // against the SVG it replaced.
+                    transform: `translate(${MARGIN.left + PAD_X + node.x}px,${MARGIN.top + PAD_Y + node.y}px)`,
+                    pointerEvents: "auto",
+                    cursor: clickable && !isEditing ? "pointer" : "default",
+                    opacity: 
                     (arming && armedIds.has(id) && id !== arming.id) ||
                     (elidePreview &&
                       elidePreview.anchor !== id &&
@@ -7632,8 +7728,8 @@ export default function ProofTreeView({
                       ? 0.35
                       : offMap
                         ? STUB_OPACITY
-                        : undefined
-                  }
+                        : undefined,
+                  }}
                   onClick={clickable && !isEditing ? handleClick : undefined}
                   // Right-click: the move menu at the pointer (VS Code's
                   // context menu; ⇧F10 and ${CMD}. from the keys).
@@ -7685,7 +7781,7 @@ export default function ProofTreeView({
                     elidable || hasBar || hypLights
                       ? (e) => {
                           if (hasBar || hypLights) {
-                            const g = e.currentTarget as SVGGElement;
+                            const g = e.currentTarget as Element;
                             const hit = (sel: string) => {
                               const r = g
                                 .querySelector(sel)
@@ -7723,10 +7819,19 @@ export default function ProofTreeView({
                         }
                       : undefined
                   }
-                  style={{
-                    cursor: clickable && !isEditing ? "pointer" : "default",
-                  }}
                 >
+                  <svg
+                    width={1}
+                    height={1}
+                    overflow="visible"
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      overflow: "visible",
+                    }}
+                  >
+                  <g>
                   {!taggedLines && nodeTooltip !== "" && (
                     <title>{nodeTooltip}</title>
                   )}
@@ -7757,54 +7862,6 @@ export default function ProofTreeView({
                     </text>
                   )}
 
-                  {node.data.commentLines.length > 0 && (
-                    <text
-                      textAnchor="start"
-                      fontSize={COMMENT_FONT_PX}
-                      fontFamily={getCodeFontFamily()}
-                      fontStyle="italic"
-                      fill={
-                        node.data.commentGenerated ? GHOST_TEXT_FILL : COMMENT_FILL
-                      }
-
-                      style={{ letterSpacing: 0 }}
-                      visibility={
-                        isEditing && editing?.comment ? "hidden" : undefined
-                      }
-
-                      onClick={
-                        commentEditable && !isEditing
-                          ? (e) => e.stopPropagation()
-                          : undefined
-                      }
-                      onDoubleClick={
-                        commentEditable && !isEditing
-                          ? (e) => {
-                              e.stopPropagation();
-                              openCommentEdit();
-                            }
-                          : undefined
-                      }
-                    >
-                      {node.data.commentLines.map((line, j) => (
-                        <tspan
-                          key={j}
-
-                          x={
-                            stripX + line.indent
-                          }
-
-                          y={
-                            stripTop +
-                            (j + 0.5) * COMMENT_LINE_H
-                          }
-                          dy="0.32em"
-                        >
-                          {daggerSvg(line.text, COMMENT_FONT_PX)}
-                        </tspan>
-                      ))}
-                    </text>
-                  )}
 
                   {/* WIDE: the strip floats centred above its step with only the
                       gap between them, so a hairline in comment ink runs across
@@ -8105,6 +8162,7 @@ export default function ProofTreeView({
 
                   {hyps && hyps.length > 0 && !hideForEdit && (
                     <HypBlock
+                      part="ink"
                       lines={hyps}
                       x={-w / 2 + NODE_PAD}
                       y={contentTop}
@@ -8142,6 +8200,295 @@ export default function ProofTreeView({
                     />
                   )}
 
+
+                  </g>
+                  </svg>
+                  {/* THE COMMENT STRIP's words, HTML (stage 2): one line box
+                      per wrapped line at `COMMENT_LINE_H`, from the strip's
+                      top-left that layout.ts owns (`commentStripTop`). Its
+                      rule and `⋯ more` stay in the svg above. */}
+                  {node.data.commentLines.length > 0 && (
+                    <div
+                      data-ptw-strip=""
+                      onClick={
+                        commentEditable && !isEditing
+                          ? (e) => e.stopPropagation()
+                          : undefined
+                      }
+                      onDoubleClick={
+                        commentEditable && !isEditing
+                          ? (e) => {
+                              e.stopPropagation();
+                              openCommentEdit();
+                            }
+                          : undefined
+                      }
+                      style={{
+                        position: "absolute",
+                        left: stripX,
+                        top: stripTop,
+                        textAlign: "left",
+                        fontSize: COMMENT_FONT_PX,
+                        fontFamily: getCodeFontFamily(),
+                        fontStyle: "italic",
+                        lineHeight: `${COMMENT_LINE_H}px`,
+                        letterSpacing: 0,
+                        whiteSpace: "pre",
+                        color: node.data.commentGenerated
+                          ? GHOST_TEXT_FILL
+                          : COMMENT_FILL,
+                        visibility:
+                          isEditing && editing?.comment ? "hidden" : undefined,
+                      }}
+                    >
+                      {node.data.commentLines.map((line, j) => (
+                        <div
+                          key={j}
+                          style={{
+                            height: COMMENT_LINE_H,
+                            paddingLeft: line.indent,
+                          }}
+                        >
+                          {daggerHtml(line.text)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {hyps && hyps.length > 0 && !hideForEdit && (
+                    <HypBlock
+                      part="text"
+                      lines={hyps}
+                      x={-w / 2 + NODE_PAD}
+                      y={contentTop}
+                      width={w - 2 * NODE_PAD}
+                      taggedLines={taggedHyps}
+                      lit={hypLitGoalId === id}
+                      markStyle={hypMarkStyle}
+                      onLine={(j) =>
+                        setHoverHyp(j === null ? null : `${id}\u0000${j}`)
+                      }
+                      lineTitle={(j) => {
+                        const l = hyps[j];
+                        const from = l?.originText
+                          ? `introduced by \`${l.originText}\` (line ${l.originLine})`
+                          : undefined;
+                        // D5 — the offer lives here rather than in a glyph of
+                        // its own: a context line already has a hit target and
+                        // a title (B2), and a ✎ on every renamable line would
+                        // put chrome on the one part of the box that is a list
+                        // of the author's own words.
+                        const rn = renames.get(id)?.get(j);
+                        const ren = rn
+                          ? `⌥-click: ${renameMoveLabel(rn.rewrite.name, rn.to)} — Mathlib's name for ${rn.rule.what}`
+                          : undefined;
+                        return [from, ren].filter(Boolean).join(" — ") || undefined;
+                      }}
+                      onLineClick={
+                        renames.has(id)
+                          ? (j, alt) => {
+                              const rn = alt ? renames.get(id)?.get(j) : undefined;
+                              if (rn) proposeRewrite(id, rn.rewrite);
+                            }
+                          : undefined
+                      }
+                    />
+                  )}
+                  {/* THE LABEL IS HTML (the HTML-node rewrite, stage 2): one
+                      block at the label's top-left, one line box per wrapped
+                      line at `LINE_H`, the code font — the tagged path's old
+                      `foreignObject` body as it was, and the plain path's
+                      `<text>` as the same lines. It paints ABOVE the box's
+                      ink and BELOW what the node draws after it (corner,
+                      mark tab, hover bar: the second svg below), as in the
+                      all-SVG paint order. */}
+                  <div
+                    data-ptw-label=""
+                    title={
+                      !taggedLines && nodeTooltip !== ""
+                        ? nodeTooltip
+                        : undefined
+                    }
+                    style={{
+                      position: "absolute",
+                      left: -w / 2 + NODE_PAD,
+                      top: labelTop,
+                      width: w - 2 * NODE_PAD,
+                      // The host page's own alignment must not reach in (the
+                      // harness's root centres its text; SVG ignored it).
+                      textAlign: "left",
+                      visibility: hideForEdit ? "hidden" : undefined,
+                    }}
+                  >
+                  {taggedLines ? (
+                      <div
+                        style={{
+                          fontFamily: getCodeFontFamily(),
+                          fontSize: NODE_FONT_PX,
+                          lineHeight: `${LINE_H}px`,
+                          letterSpacing: 0,
+                          whiteSpace: "pre",
+                          color: NODE_TEXT,
+                          fontWeight: targetBold ? TARGET_WEIGHT : undefined,
+                        }}
+                      >
+                        {taggedLines.map((line, j) => (
+                          <div
+                            key={j}
+
+                            data-ptw-lineidx={j}
+
+                            onClick={
+                              rowKeys?.[j] ? (e) => toggleRow(e, j) : undefined
+                            }
+                            onDoubleClick={
+                              rowKeys?.[j]
+                                ? (e) => e.stopPropagation()
+                                : undefined
+                            }
+                            onMouseEnter={
+                              rowKeys?.[j]
+                                ? () => setMoreHover(rowKeys[j])
+                                : undefined
+                            }
+                            onMouseLeave={
+                              rowKeys?.[j]
+                                ? () =>
+                                    setMoreHover((h) =>
+                                      h === rowKeys[j] ? null : h,
+                                    )
+                                : undefined
+                            }
+                            title={rowKeys?.[j] ? rowTitle(j) : undefined}
+                            style={{
+                              height: LINE_H,
+
+                              paddingLeft: lines[j].indent,
+                              ...(rowKeys?.[j]
+                                ? {
+                                    position: "relative" as const,
+                                    cursor: "pointer",
+
+                                    backgroundColor:
+                                      moreHover === rowKeys[j]
+                                        ? `color-mix(in srgb, ${style.stroke} 16%, transparent)`
+                                        : chainOpen.has(rowKeys[j])
+                                          ? `color-mix(in srgb, ${style.stroke} 9%, transparent)`
+                                          : undefined,
+                                    borderRadius: CHROME_RADIUS,
+                                  }
+                                : null),
+                            }}
+                          >
+                            {rowKeys?.[j] ? (
+                              // The row's DISCLOSURE in its reserved gutter
+                              // (layout.ts `LEDGER_INDENT`/`LEDGER_MARK_PX`):
+                              // the fold chevrons, dim until the row is
+                              // hovered — a `+` beside arithmetic read as a
+                              // plus sign.
+                              <span
+                                style={{
+                                  position: "absolute",
+                                  left: 0,
+                                  top: (LINE_H - LEDGER_MARK_PX) / 2,
+                                }}
+                              >
+                                <Codicon
+                                  name={
+                                    chainOpen.has(rowKeys[j])
+                                      ? ICON["ledger.rowShown"]
+                                      : ICON["ledger.rowHidden"]
+                                  }
+                                  size={LEDGER_MARK_PX}
+                                  color={style.stroke}
+                                  opacity={
+                                    moreHover === rowKeys[j] ? 1 : DIM_OPACITY
+                                  }
+                                />
+                              </span>
+                            ) : null}
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontFamily: getCodeFontFamily(),
+                        fontSize: NODE_FONT_PX,
+                        lineHeight: `${LINE_H}px`,
+                        letterSpacing: 0,
+                        whiteSpace: "pre",
+                        fontStyle:
+                          node.data.proseLabel ||
+                          // A ghost leans for the author's sentence (`.none`)
+                          // and for any SEEDED cut — `ghostSize` measures it
+                          // italic under exactly the same test.
+                          (isMarker &&
+                            (!!node.data.elidedCut?.note ||
+                              !!node.data.elidedCut?.seeded))
+                            ? "italic"
+                            : undefined,
+                        color: node.data.proseLabel
+                          ? PROSE_FILL
+                          : // A B4 TRACE LEAF is not the author's text — it
+                            // is the elaborator's report — so it reads in
+                            // comment ink inside its dashed box, the same
+                            // voice a ghost speaks in.
+                            isMarker || node.data.traceLeaf
+                            ? accent
+                              ? SEQ_STROKE
+                              : "var(--ptw-comment)"
+                            : NODE_TEXT,
+                        fontWeight: targetBold ? TARGET_WEIGHT : undefined,
+                      }}
+                    >
+                      {lines.map((line, j) => (
+                        <div
+                          key={j}
+                          style={{ height: LINE_H, paddingLeft: line.indent }}
+                        >
+                          {/* The goal's `⊢` in the infoview's turnstile ink
+                              (colour only: the characters are unchanged). */}
+                          {j === 0 &&
+                          type === "goal" &&
+                          !isMarker &&
+                          line.text.startsWith(TURNSTILE) ? (
+                            <>
+                              <span
+                                style={{
+                                  color: TURNSTILE_FILL,
+                                  fontWeight: 400,
+                                }}
+                              >
+                                {TURNSTILE.trim()}
+                              </span>
+                              {daggerHtml(
+                                line.text.slice(TURNSTILE.trim().length),
+                              )}
+                            </>
+                          ) : (
+                            daggerHtml(line.text)
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  </div>
+                  <svg
+                    width={1}
+                    height={1}
+                    overflow="visible"
+                    style={{
+                      position: "absolute",
+                      left: 0,
+                      top: 0,
+                      overflow: "visible",
+                    }}
+                  >
+                  <g>
+                  {/* (The corner sits in the OVER-text svg: the label and
+                      context blocks are HTML above the first svg and span the
+                      box's width, so a hit rect under them took no pointer.) */}
                   {/* The goal's corner control, top-right (user direction),
                       VS Code's fold control (2026-10-04). OPEN: a
                       `chevron-down` in the gutter's folding ink, faded in
@@ -8249,175 +8596,6 @@ export default function ProofTreeView({
                         onPointerDown={dropCornerPreview}
                       />
                     </>
-                  )}
-
-                  {taggedLines ? (
-                    <foreignObject
-                      x={-w / 2 + NODE_PAD}
-                      y={labelTop}
-                      width={w - 2 * NODE_PAD}
-                      height={lines.length * LINE_H}
-                      style={{ overflow: "visible" }}
-                      visibility={hideForEdit ? "hidden" : undefined}
-                    >
-                      <div
-                        style={{
-                          fontFamily: getCodeFontFamily(),
-                          fontSize: NODE_FONT_PX,
-                          lineHeight: `${LINE_H}px`,
-                          letterSpacing: 0,
-                          whiteSpace: "pre",
-                          color: NODE_TEXT,
-                          fontWeight: targetBold ? TARGET_WEIGHT : undefined,
-                        }}
-                      >
-                        {taggedLines.map((line, j) => (
-                          <div
-                            key={j}
-
-                            data-ptw-lineidx={j}
-
-                            onClick={
-                              rowKeys?.[j] ? (e) => toggleRow(e, j) : undefined
-                            }
-                            onDoubleClick={
-                              rowKeys?.[j]
-                                ? (e) => e.stopPropagation()
-                                : undefined
-                            }
-                            onMouseEnter={
-                              rowKeys?.[j]
-                                ? () => setMoreHover(rowKeys[j])
-                                : undefined
-                            }
-                            onMouseLeave={
-                              rowKeys?.[j]
-                                ? () =>
-                                    setMoreHover((h) =>
-                                      h === rowKeys[j] ? null : h,
-                                    )
-                                : undefined
-                            }
-                            title={rowKeys?.[j] ? rowTitle(j) : undefined}
-                            style={{
-                              height: LINE_H,
-
-                              paddingLeft: lines[j].indent,
-                              ...(rowKeys?.[j]
-                                ? {
-                                    position: "relative" as const,
-                                    cursor: "pointer",
-
-                                    backgroundColor:
-                                      moreHover === rowKeys[j]
-                                        ? `color-mix(in srgb, ${style.stroke} 16%, transparent)`
-                                        : chainOpen.has(rowKeys[j])
-                                          ? `color-mix(in srgb, ${style.stroke} 9%, transparent)`
-                                          : undefined,
-                                    borderRadius: CHROME_RADIUS,
-                                  }
-                                : null),
-                            }}
-                          >
-                            {rowKeys?.[j] ? (
-                              // The row's DISCLOSURE in its reserved gutter
-                              // (layout.ts `LEDGER_INDENT`/`LEDGER_MARK_PX`):
-                              // the fold chevrons, dim until the row is
-                              // hovered — a `+` beside arithmetic read as a
-                              // plus sign.
-                              <span
-                                style={{
-                                  position: "absolute",
-                                  left: 0,
-                                  top: (LINE_H - LEDGER_MARK_PX) / 2,
-                                }}
-                              >
-                                <Codicon
-                                  name={
-                                    chainOpen.has(rowKeys[j])
-                                      ? ICON["ledger.rowShown"]
-                                      : ICON["ledger.rowHidden"]
-                                  }
-                                  size={LEDGER_MARK_PX}
-                                  color={style.stroke}
-                                  opacity={
-                                    moreHover === rowKeys[j] ? 1 : DIM_OPACITY
-                                  }
-                                />
-                              </span>
-                            ) : null}
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    </foreignObject>
-                  ) : (
-                    <text
-                      textAnchor="start"
-                      fontSize={NODE_FONT_PX}
-                      fontFamily={getCodeFontFamily()}
-
-                      fontStyle={
-                        node.data.proseLabel ||
-                        // A ghost leans for the author's sentence (`.none`)
-                        // and for any SEEDED cut — `ghostSize` measures it
-                        // italic under exactly the same test.
-                        (isMarker &&
-                          (!!node.data.elidedCut?.note ||
-                            !!node.data.elidedCut?.seeded))
-                          ? "italic"
-                          : undefined
-                      }
-
-                      fill={
-                        node.data.proseLabel
-                          ? PROSE_FILL
-                          : // A B4 TRACE LEAF is not the author's text — it is
-                            // the elaborator's report — so it reads in comment
-                            // ink inside its dashed box, the same voice a
-                            // ghost speaks in.
-                            isMarker || node.data.traceLeaf
-                            ? accent
-                              ? SEQ_STROKE
-                              : "var(--ptw-comment)"
-                            : NODE_TEXT
-                      }
-
-                      fontWeight={targetBold ? TARGET_WEIGHT : undefined}
-                      style={{ letterSpacing: 0 }}
-
-                      xmlSpace="preserve"
-                      visibility={hideForEdit ? "hidden" : undefined}
-                    >
-                      {lines.map((line, j) => (
-                        <tspan
-                          key={j}
-
-                          x={-w / 2 + NODE_PAD + line.indent}
-                          y={labelTop + (j + 0.5) * LINE_H}
-                          dy="0.32em"
-                        >
-                          {/* The goal's `⊢` in the infoview's turnstile ink
-                              (colour only: the characters are unchanged). */}
-                          {j === 0 &&
-                          type === "goal" &&
-                          !isMarker &&
-                          line.text.startsWith(TURNSTILE) ? (
-                            <>
-                              <tspan fill={TURNSTILE_FILL} fontWeight={400}>
-                                {TURNSTILE.trim()}
-                              </tspan>
-                              {daggerSvg(
-                                line.text.slice(TURNSTILE.trim().length),
-                                NODE_FONT_PX,
-                              )}
-                            </>
-                          ) : (
-                            daggerSvg(line.text, NODE_FONT_PX)
-                          )}
-                        </tspan>
-                      ))}
-                    </text>
                   )}
 
                   {/* THE CLOSING MARK: `∎` after the last line, where the
@@ -8784,9 +8962,27 @@ export default function ProofTreeView({
                       ]}
                     />
                   )}
-                </g>
+                  </g>
+                  </svg>
+                </div>
               );
             })}
+        </div>
+        <svg
+          width={svgW * zoom}
+          height={svgH * zoom}
+          viewBox={`0 0 ${svgW} ${svgH}`}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            pointerEvents: "none",
+          }}
+        >
+          <g
+            transform={`translate(${MARGIN.left + PAD_X},${MARGIN.top + PAD_Y})`}
+            style={{ pointerEvents: "auto" }}
+          >
 
             {/* B2 — THE PROVENANCE CONNECTOR. Drawn ABOVE every node so it
                 reads as one continuous line from the hypothesis to the step
@@ -8912,6 +9108,7 @@ export default function ProofTreeView({
             )}
           </g>
         </svg>
+        </div>
       </div>
       {/* THE IN-PAGE TOOLTIP, above every floater (tip.tsx). */}
       <TipLayer />

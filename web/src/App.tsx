@@ -250,18 +250,25 @@ const HYP_MARK_STUB =
 /** See the effect in `App` that installs this. Everything is DOM-derived. */
 function installDriver() {
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-  const gs = () => [...document.querySelectorAll<SVGGElement>("g[data-node]")];
-  // One entry per drawn LINE: a hyp block is one <text> with a <tspan> per
-  // hypothesis, so a per-<text> split would glue `n : ℕ` and `key : …`.
-  const textsOf = (g: SVGGElement) =>
-    [...g.querySelectorAll("text")].flatMap((t) => {
+  const gs = () => [...document.querySelectorAll<HTMLElement>("[data-node]")];
+  // One entry per drawn LINE. The words are HTML (one `<div>` per line in the
+  // context block, the label and the comment strip); what is still SVG text
+  // (the case badge, `+N`) is one entry per `<tspan>`, or per `<text>`.
+  const textsOf = (g: Element) => [
+    ...[
+      ...g.querySelectorAll(
+        "[data-ptw-hyps] > div, [data-ptw-label] > div > div, [data-ptw-strip] > div",
+      ),
+    ].map((d) => d.textContent ?? ""),
+    ...[...g.querySelectorAll("text")].flatMap((t) => {
       const spans = [...t.querySelectorAll("tspan")];
       return spans.length
         ? spans.map((s) => s.textContent ?? "")
         : [t.textContent ?? ""];
-    });
+    }),
+  ];
   type Node = { id: string; texts: string[]; goal: boolean; brk: boolean };
-  const node = (g: SVGGElement): Node => {
+  const node = (g: Element): Node => {
     const id = g.getAttribute("data-node") ?? "";
     const texts = textsOf(g);
     return {
@@ -273,7 +280,7 @@ function installDriver() {
   };
   const nodes = () => gs().map(node);
   const el = (id: string) =>
-    document.querySelector<SVGGElement>(`g[data-node="${id}"]`);
+    document.querySelector<HTMLElement>(`[data-node="${id}"]`);
   const fire = (
     target: Element | null,
     type: string,
@@ -379,7 +386,7 @@ function ProofHarness() {
   // through the browser tools can select a proof, find a node by what it
   // shows, click it (with modifiers) and count what is drawn — in one
   // expression instead of a hand-rolled querySelector each time. It knows
-  // nothing about the view's internals (ids come off `g[data-node]`, text off
+  // nothing about the view's internals (ids come off `[data-node]`, text off
   // the `<text>` elements, buttons off their titles), which is the point: it
   // measures what a reader sees. Installed once, standalone app only.
   useEffect(() => {

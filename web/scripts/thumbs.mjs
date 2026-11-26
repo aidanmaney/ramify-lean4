@@ -92,7 +92,8 @@ const inkBox = () => {
   const f = document.querySelector("[data-ptw-scroll]");
   const fr = f.getBoundingClientRect();
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const el of f.querySelectorAll("svg rect, svg path, svg text, svg foreignObject")) {
+  // SVG ink, and the nodes' HTML words (label, context lines, comment strip).
+  for (const el of f.querySelectorAll("svg rect, svg path, svg text, svg foreignObject, [data-ptw-label] > div > div, [data-ptw-hyps] > div, [data-ptw-strip] > div")) {
     if (el.getAttribute("fill") === "transparent") continue; // hit regions
     const b = el.getBoundingClientRect();
     if (!b.width && !b.height) continue;
@@ -136,7 +137,7 @@ async function treeShot(page, url, out) {
   const clip = await page.evaluate(
     ({ bb, pad, max, wide }) => {
       const st = document.createElement("style");
-      st.textContent = "header{visibility:hidden}[data-ptw-scroll]~*,[data-ptw-scroll]>:not(svg){visibility:hidden!important}";
+      st.textContent = "header{visibility:hidden}[data-ptw-scroll]~*,[data-ptw-scroll]>:not([data-ptw-stage]){visibility:hidden!important}";
       document.head.append(st);
       const f = document.querySelector("[data-ptw-scroll]");
       const w = Math.min(bb.w, max.w) + 2 * pad;

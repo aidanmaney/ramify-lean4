@@ -5,6 +5,7 @@
 Released together with extension 1.1.0; the release-table row in INSTALL.md is added when it is tagged.
 
 **Follows Lean**
+- Built for Lean v4.35.0, with Mathlib v4.35.0 and ProofWidgets v0.0.116 (was v4.32.2 / v0.0.105). The playground's WebAssembly engine stays on v4.32.2.
 - A weekly job moves Ramify to each new Lean release (with Mathlib's matching tag and the ProofWidgets it pins), builds the package, elaborates the demo and the tour, and opens a pull request (`scripts/bump-toolchain.sh`, `.github/workflows/toolchain-bump.yml`). INSTALL.md lists which release is built for which Lean.
 
 **The tree**
